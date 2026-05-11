@@ -113,7 +113,7 @@ describe('FounderOrgSetupPage', () => {
     vi.clearAllMocks()
   })
 
-  it('submits founder and org setup, then routes to the org first-run flow', async () => {
+  it('submits founder and org setup, then routes to the org page', async () => {
     mocks.fetchJson.mockResolvedValue({
       operator: {
         id: 'founder-1',
@@ -154,7 +154,7 @@ describe('FounderOrgSetupPage', () => {
     })
 
     await vi.waitFor(() => {
-      expect(document.body.querySelector('[data-testid="location"]')?.textContent).toBe('/org?firstRun=true')
+      expect(document.body.querySelector('[data-testid="location"]')?.textContent).toBe('/org')
     })
   })
 
@@ -200,7 +200,7 @@ describe('FounderOrgSetupPage', () => {
     })
 
     await vi.waitFor(() => {
-      expect(document.body.querySelector('[data-testid="location"]')?.textContent).toBe('/org?firstRun=true')
+      expect(document.body.querySelector('[data-testid="location"]')?.textContent).toBe('/org')
     })
   })
 })

@@ -1,5 +1,9 @@
 import { useState } from 'react'
 import { useAuth0 } from '@auth0/auth0-react'
+import {
+  ensureFreshAuthClientBeforeRedirect,
+  resolveAuthReturnTo,
+} from '@/lib/auth-build-guard'
 
 interface LandingPageProps {
   onApiKeySubmit?: (key: string) => void
@@ -100,7 +104,14 @@ export function LandingPage({ onApiKeySubmit }: LandingPageProps) {
         <div className="divider-ink mb-10" />
 
         <button
-          onClick={() => void loginWithRedirect()}
+          onClick={() => {
+            const returnTo = resolveAuthReturnTo()
+            void ensureFreshAuthClientBeforeRedirect(returnTo).then((isFresh) => {
+              if (isFresh) {
+                void loginWithRedirect({ appState: { returnTo } })
+              }
+            })
+          }}
           disabled={isLoading}
           className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed"
         >

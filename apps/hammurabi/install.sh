@@ -27,11 +27,7 @@ ok()   { printf "${GREEN}✓${NC} %s\n" "$*"; }
 warn() { printf "${YELLOW}!${NC} %s\n" "$*"; }
 fail() { printf "${RED}✗${NC} %s\n" "$*" >&2; exit 1; }
 
-# Piped mode: when invoked via `curl ... | bash`, BASH_SOURCE[0] is empty
-# and there is no local checkout to install from. Clone the public Hervald
-# repo (or refresh an existing clone) and re-exec the in-tree installer.
-SCRIPT_PATH="${BASH_SOURCE[0]:-}"
-if [ -z "$SCRIPT_PATH" ] || [ ! -f "$SCRIPT_PATH" ]; then
+clone_and_exec_installer() {
   command -v git >/dev/null || fail "git not found (required when piping the installer)"
   REPO_URL="${HERVALD_REPO_URL:-https://github.com/NickGuAI/Hervald.git}"
   REPO_REF="${HERVALD_REPO_REF:-main}"
@@ -47,12 +43,26 @@ if [ -z "$SCRIPT_PATH" ] || [ ! -f "$SCRIPT_PATH" ]; then
     git clone --quiet --branch "$REPO_REF" --single-branch "$REPO_URL" "$CHECKOUT_DIR"
   fi
 
-  exec bash "$CHECKOUT_DIR/apps/hammurabi/install.sh"
+  exec bash "$CHECKOUT_DIR/apps/hammurabi/install.sh" "$@"
+}
+
+# Piped mode: when invoked via `curl ... | bash`, BASH_SOURCE[0] is empty
+# and there is no local checkout to install from. Clone the public Hervald
+# repo (or refresh an existing clone) and re-exec the in-tree installer.
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [ -z "$SCRIPT_PATH" ] || [ ! -f "$SCRIPT_PATH" ]; then
+  clone_and_exec_installer "$@"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 if [ -f "$SCRIPT_DIR/apps/hammurabi/install.sh" ]; then
   exec bash "$SCRIPT_DIR/apps/hammurabi/install.sh" "$@"
+fi
+
+if [ ! -f "$SCRIPT_DIR/package.json" ] \
+  || [ ! -f "$SCRIPT_DIR/../../pnpm-workspace.yaml" ] \
+  || [ ! -d "$SCRIPT_DIR/../../packages/hammurabi-cli" ]; then
+  clone_and_exec_installer "$@"
 fi
 
 APP_DIR="$SCRIPT_DIR"
@@ -351,6 +361,7 @@ command -v curl >/dev/null || fail "curl not found"
 command -v git >/dev/null || fail "git not found"
 command -v tar >/dev/null || fail "tar not found"
 ensure_node
+export PATH="$NODE_HOME/bin:$PATH"
 ensure_pnpm
 export PATH="$PNPM_HOME/bin:$NODE_HOME/bin:$PATH"
 

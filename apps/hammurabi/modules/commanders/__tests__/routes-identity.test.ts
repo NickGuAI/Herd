@@ -249,6 +249,18 @@ describe('commanders identity routes', () => {
       await mkdir(join(commanderRoot, '.memory'), { recursive: true })
       await writeFile(join(commanderRoot, 'COMMANDER.md'), '# Exported Commander\n', 'utf8')
       await writeFile(join(commanderRoot, '.memory', 'MEMORY.md'), '# Commander Memory\n\n- exported fact\n', 'utf8')
+      const profileResponse = await fetch(`${server.baseUrl}/api/commanders/${created.id}/profile`, {
+        method: 'PATCH',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          borderColor: 'var(--hv-accent-plum)',
+          accentColor: 'var(--hv-accent-pine)',
+        }),
+      })
+      expect(profileResponse.status).toBe(200)
 
       const archiveResponse = await fetch(`${server.baseUrl}/api/commanders/${created.id}/archive`, {
         method: 'POST',
@@ -278,7 +290,14 @@ describe('commanders identity routes', () => {
       const exported = (await exportResponse.json()) as {
         schemaVersion: number
         sourceCommanderId: string
-        commander: { displayName: string; maxTurns?: number }
+        commander: {
+          displayName: string
+          maxTurns?: number
+          profile?: {
+            borderColor?: string
+            accentColor?: string
+          }
+        }
         commanderMd: string
         memorySnapshot: { memoryMd: string; syncRevision: number }
         skillBindings: unknown[]
@@ -289,6 +308,10 @@ describe('commanders identity routes', () => {
         commander: {
           displayName: 'Template Source',
           maxTurns: 42,
+          profile: {
+            borderColor: 'var(--hv-accent-plum)',
+            accentColor: 'var(--hv-accent-pine)',
+          },
         },
       })
       expect(exported.commanderMd).toBe('# Exported Commander\n')
@@ -308,15 +331,96 @@ describe('commanders identity routes', () => {
         id: string
         displayName: string
         templateId?: string
+        ui?: {
+          borderColor?: string
+          accentColor?: string
+        }
         url?: string
       }
       expect(imported.id).not.toBe(created.id)
       expect(imported.displayName).toBe('Template Source Copy')
       expect(imported.templateId).toBe(created.id)
+      expect(imported.ui).toMatchObject({
+        borderColor: 'var(--hv-accent-plum)',
+        accentColor: 'var(--hv-accent-pine)',
+      })
       expect(imported.url).toBe(`/command-room?commander=${imported.id}`)
 
       await expect(readFile(join(memoryBasePath, imported.id, 'COMMANDER.md'), 'utf8')).resolves.toBe('# Exported Commander\n')
       await expect(readFile(join(memoryBasePath, imported.id, '.memory', 'MEMORY.md'), 'utf8')).resolves.toContain('exported fact')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('replicates explicit commander colors and defaults missing legacy profile colors', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-commanders-replicate-profile-'))
+    tempDirs.push(dir)
+    const storePath = join(dir, 'sessions.json')
+    const memoryBasePath = join(dir, 'memory')
+
+    const server = await startServer({ sessionStorePath: storePath, memoryBasePath })
+    try {
+      const source = await createCommander(server, 'profile-source')
+      const profileResponse = await fetch(`${server.baseUrl}/api/commanders/${source.id}/profile`, {
+        method: 'PATCH',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          borderColor: 'var(--hv-accent-bronze)',
+          accentColor: 'var(--hv-accent-red)',
+        }),
+      })
+      expect(profileResponse.status).toBe(200)
+
+      const explicitReplicaResponse = await fetch(`${server.baseUrl}/api/commanders/${source.id}/replicate`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          displayName: 'Profile Source Replica',
+        }),
+      })
+      expect(explicitReplicaResponse.status).toBe(201)
+      const explicitReplica = (await explicitReplicaResponse.json()) as {
+        id: string
+        ui?: {
+          borderColor?: string
+          accentColor?: string
+        }
+      }
+      expect(explicitReplica.ui).toMatchObject({
+        borderColor: 'var(--hv-accent-bronze)',
+        accentColor: 'var(--hv-accent-red)',
+      })
+
+      const legacySource = await createCommander(server, 'legacy-profile-source')
+      await rm(join(memoryBasePath, legacySource.id, '.memory', 'profile.json'), { force: true })
+
+      const defaultReplicaResponse = await fetch(`${server.baseUrl}/api/commanders/${legacySource.id}/replicate`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          displayName: 'Legacy Profile Source Replica',
+        }),
+      })
+      expect(defaultReplicaResponse.status).toBe(201)
+      const defaultReplica = (await defaultReplicaResponse.json()) as {
+        id: string
+        ui?: {
+          borderColor?: string
+          accentColor?: string
+        }
+      }
+      expect(defaultReplica.ui?.borderColor).toMatch(/^var\(--hv-accent-/)
+      expect(defaultReplica.ui?.accentColor).toMatch(/^var\(--hv-accent-/)
     } finally {
       await server.close()
     }

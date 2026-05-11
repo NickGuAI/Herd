@@ -1,22 +1,29 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { Router } from 'express'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
+import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../claude-effort.js'
 import {
   profileForApiResponse,
   readCommanderUiProfile,
   resolveCommanderAvatarPath,
+  writeCommanderUiProfile,
 } from '../commanders/commander-profile.js'
+import { ensureCommanderVisualProfile } from '../commanders/commander-visual-profile.js'
 import { ConversationStore } from '../commanders/conversation-store.js'
+import { createDefaultHeartbeatConfig } from '../commanders/heartbeat.js'
+import { setCommanderDisplayName } from '../commanders/names-lock.js'
 import {
   resolveCommanderDataDir,
   resolveCommanderNamesPath,
   resolveCommanderSessionStorePath,
 } from '../commanders/paths.js'
 import { QuestStore } from '../commanders/quest-store.js'
+import { createDefaultCommanderRuntimeConfig } from '../commanders/runtime-config.shared.js'
 import { CommanderSessionStore, type CommanderSession } from '../commanders/store.js'
+import { scaffoldCommanderWorkflow } from '../commanders/templates/workflow.js'
 import { defaultOperatorStorePath, OperatorStore } from '../operators/store.js'
 import { FOUNDER_OPERATOR_NOT_FOUND_ERROR } from '../operators/constants.js'
 import type { Operator } from '../operators/types.js'
@@ -29,9 +36,9 @@ import { buildOrgTree, type BuildOrgTreeDependencies, type OrgCommanderRecord } 
 
 export interface OrgRouterOptions {
   operatorStore?: BuildOrgTreeDependencies['operatorStore']
-  sessionStore?: Pick<CommanderSessionStore, 'list'>
+  sessionStore?: OrgSessionStore
   automationStore?: BuildOrgTreeDependencies['automationStore']
-  conversationStore?: BuildOrgTreeDependencies['conversationStore']
+  conversationStore?: OrgConversationStore
   questStore?: BuildOrgTreeDependencies['questStore']
   profileStore?: BuildOrgTreeDependencies['profileStore']
   orgIdentityStore?: OrgIdentityStore
@@ -53,6 +60,21 @@ type FutureCommanderOrgFields = {
   archived?: boolean
   archivedAt?: string
 }
+
+type OrgSessionStore = Pick<CommanderSessionStore, 'list'> &
+  Partial<Pick<CommanderSessionStore, 'create'>>
+
+type OrgConversationStore = BuildOrgTreeDependencies['conversationStore'] &
+  Partial<Pick<ConversationStore, 'ensureDefaultConversation'>>
+
+const GAIA_HOST = 'gaia'
+const GAIA_DISPLAY_NAME = 'Gaia'
+const GAIA_TEMPLATE_ID = 'gaia-onboarding'
+const GAIA_SPEAKING_TONE = 'Mother-of-all onboarding'
+const GAIA_PERSONA = [
+  'Gaia is the mother-of-all onboarding commander for Hervald.',
+  'She helps the founder understand the organization, create and manage commanders, and keep onboarding decisions routed through backend APIs instead of fragile frontend-only logic.',
+].join(' ')
 
 type DiskBackedOperatorStore = BuildOrgTreeDependencies['operatorStore'] & {
   getFounderForUser(user: AuthUser | undefined): Promise<Operator | null>
@@ -122,7 +144,7 @@ function createProfileStore(commanderDataDir: string): BuildOrgTreeDependencies[
       return avatarPath ? `/api/commanders/${encodeURIComponent(commanderId)}/avatar` : null
     },
     async getProfile(commanderId: string) {
-      return profileForApiResponse(await readCommanderUiProfile(commanderId, commanderDataDir))
+      return profileForApiResponse(commanderId, await readCommanderUiProfile(commanderId, commanderDataDir))
     },
   }
 }
@@ -263,6 +285,68 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
   const profileStore = options.profileStore ?? createProfileStore(commanderDataDir)
   const orgIdentityStore = options.orgIdentityStore ?? new OrgIdentityStore()
   let automationStorePromise: Promise<BuildOrgTreeDependencies['automationStore']> | null = null
+  let gaiaSeedPromise: Promise<void> | null = null
+
+  async function ensureGaiaCommanderSeed(): Promise<CommanderSession[]> {
+    const sessions = await sessionStore.list()
+    const activeSessions = sessions.filter((session) => session.archived !== true)
+    if (activeSessions.length > 0 || typeof sessionStore.create !== 'function') {
+      return sessions
+    }
+    const createSession = sessionStore.create.bind(sessionStore)
+
+    gaiaSeedPromise ??= (async () => {
+      const latestSessions = await sessionStore.list()
+      if (latestSessions.some((session) => session.archived !== true)) {
+        return
+      }
+
+      const runtimeConfig = createDefaultCommanderRuntimeConfig()
+      const createdAt = new Date().toISOString()
+      const session: CommanderSession = {
+        id: randomUUID(),
+        host: GAIA_HOST,
+        persona: GAIA_PERSONA,
+        state: 'idle',
+        created: createdAt,
+        agentType: 'claude',
+        effort: DEFAULT_CLAUDE_EFFORT_LEVEL,
+        heartbeat: createDefaultHeartbeatConfig(),
+        maxTurns: runtimeConfig.defaults.maxTurns,
+        contextMode: 'thin',
+        taskSource: null,
+        templateId: GAIA_TEMPLATE_ID,
+      }
+
+      const created = await createSession(session)
+      const sideEffects = [
+        typeof conversationStore.ensureDefaultConversation === 'function'
+          ? conversationStore.ensureDefaultConversation({
+            commanderId: created.id,
+            surface: 'ui',
+            createdAt: created.created,
+            currentTask: null,
+          })
+          : Promise.resolve(),
+        scaffoldCommanderWorkflow(created.id, {}, commanderDataDir),
+        setCommanderDisplayName(commanderDataDir, created.id, GAIA_DISPLAY_NAME),
+        writeCommanderUiProfile(created.id, commanderDataDir, ensureCommanderVisualProfile(created.id, {
+          speakingTone: GAIA_SPEAKING_TONE,
+        })),
+      ]
+      const results = await Promise.allSettled(sideEffects)
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.warn('[org] Gaia seed side effect failed:', result.reason)
+        }
+      }
+    })().finally(() => {
+      gaiaSeedPromise = null
+    })
+
+    await gaiaSeedPromise
+    return sessionStore.list()
+  }
 
   const requireReadAccess = combinedAuth({
     apiKeyStore: options.apiKeyStore,
@@ -356,7 +440,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
       : loadAutomationStore()
     const automationStore = await automationStorePromise
     const includeArchived = req.query.includeArchived === 'true'
-    const sessions = await sessionStore.list()
+    const sessions = await ensureGaiaCommanderSeed()
     const archivedCommandersCount = sessions.filter((session) => session.archived === true).length
 
     const [orgIdentity, orgTree] = await Promise.all([

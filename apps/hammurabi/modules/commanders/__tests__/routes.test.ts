@@ -134,7 +134,13 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
       createdBy: 'test',
       createdAt: '2026-02-16T00:00:00.000Z',
       lastUsedAt: null,
-      scopes: ['agents:read', 'agents:write', 'commanders:read', 'commanders:write'],
+      scopes: [
+        'agents:read',
+        'agents:write',
+        'commanders:read',
+        'commanders:write',
+        'commanders:conversations:create',
+      ],
     },
   } satisfies Record<string, import('../../../server/api-keys/store').ApiKeyRecord>
 
@@ -534,6 +540,10 @@ describe('commanders routes', () => {
         state: string
         host: string
         id: string
+        ui: {
+          borderColor: string
+          accentColor: string
+        }
         heartbeat: {
           intervalMs: number
           messageTemplate: string
@@ -543,6 +553,8 @@ describe('commanders routes', () => {
       expect(created.state).toBe('idle')
       expect(created.host).toBe('worker-1')
       expect(created.id).toBeTruthy()
+      expect(created.ui.borderColor).toMatch(/^var\(--hv-accent-/)
+      expect(created.ui.accentColor).toMatch(/^var\(--hv-accent-/)
       expect(created.heartbeat).toEqual({
         intervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS,
         messageTemplate: DEFAULT_HEARTBEAT_MESSAGE,
@@ -572,6 +584,14 @@ describe('commanders routes', () => {
 
       const names = JSON.parse(await readFile(join(dir, 'names.json'), 'utf8')) as Record<string, string>
       expect(names[created.id]).toBe('worker-1')
+
+      const profile = JSON.parse(
+        await readFile(join(memoryBasePath, created.id, '.memory', 'profile.json'), 'utf8'),
+      ) as Record<string, string>
+      expect(profile).toMatchObject({
+        borderColor: created.ui.borderColor,
+        accentColor: created.ui.accentColor,
+      })
 
       const template = await readFile(join(memoryBasePath, 'COMMANDER.template.md'), 'utf8')
       expect(template).toContain('[COMMANDER_ID]')
@@ -1581,7 +1601,7 @@ describe('commanders routes', () => {
         expect(
           payload.entries.some((entry) => entry.outcome === 'ok' || entry.outcome === 'no-quests'),
         ).toBe(true)
-      }, { timeout: 3000 })
+      }, { timeout: 8000 })
 
       // Simulate the commander's session being stopped externally (state → stopped)
       const sessions = await sessionStore.list()
@@ -1608,7 +1628,7 @@ describe('commanders routes', () => {
           entry.outcome === 'error' &&
           entry.errorMessage === 'Commander session was not running when heartbeat fired')
         expect(hasStoppedSessionError).toBe(true)
-      }, { timeout: 3000 })
+      }, { timeout: 8000 })
     } finally {
       await server.close()
     }

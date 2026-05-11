@@ -83,6 +83,7 @@ import {
   fetchCommanderActiveConversation,
   useCreateConversation,
   useDeleteConversation,
+  useConversationMessages,
   useConversationMessage,
   useConversations,
   useStartConversation,
@@ -98,7 +99,10 @@ import type { HervaldCommander } from './desktop/CenterColumn'
 import { TeamColumn } from './desktop/TeamColumn'
 import { WorkspaceModal } from './desktop/WorkspaceModal'
 import { getWorkspaceSourceKey, type WorkspaceSource } from '@modules/workspace/use-workspace'
-import { mapSessionMessagesToTranscript } from './transcript'
+import {
+  mapSessionMessagesToTranscript,
+  mergeHistoricalAndLiveTranscript,
+} from './transcript'
 import { MobileCommandRoom } from './mobile/MobileCommandRoom'
 
 const gridStyle: CSSProperties = {
@@ -375,7 +379,7 @@ export function CommandRoom() {
     () => conversations.filter((conversation) => conversation.isDefaultConversation !== true),
     [conversations],
   )
-  // Per #1362 contract: selection is driven by explicit user actions (clicks)
+  // Per issue 1362 contract: selection is driven by explicit user actions (clicks)
   // and one-shot deep-link hydration. Never by a passive polling hook. The
   // synthetic-default conversation is filtered here so a stale URL pointing
   // at one renders the Create panel instead of a fake selected chat shell.
@@ -534,7 +538,11 @@ export function CommandRoom() {
     enabled: selectedConversationRunning,
     onQueueUpdate: setQueueSnapshot,
   })
-  // Per #1362 contract: an idle selected conversation (no live session) must
+  const conversationMessagesQuery = useConversationMessages(
+    selectedConversation?.id ?? null,
+    activeTab === 'chat' && Boolean(selectedConversation),
+  )
+  // Per issue 1362 contract: an idle selected conversation (no live session) must
   // NOT enable normal send/queue. The only valid send target on the
   // conversation branch is an active conversation backed by a real
   // conversation-scoped live session — anything else means the message would
@@ -552,7 +560,30 @@ export function CommandRoom() {
     : activeStandaloneSession
       ? streamStatus === 'connected'
       : false
-  const transcript = mapSessionMessagesToTranscript(sessionMessages)
+  const liveTranscript = mapSessionMessagesToTranscript(sessionMessages)
+  const historicalConversationMessages = useMemo(() => {
+    const pages = conversationMessagesQuery.data?.pages ?? []
+    return [...pages]
+      .reverse()
+      .flatMap((page) => page.messages)
+  }, [conversationMessagesQuery.data?.pages])
+  const transcript = selectedConversation
+    ? mergeHistoricalAndLiveTranscript(historicalConversationMessages, liveTranscript)
+    : liveTranscript
+  const hasOlderConversationMessages = Boolean(
+    selectedConversation && conversationMessagesQuery.hasNextPage,
+  )
+  const loadingOlderConversationMessages = conversationMessagesQuery.isFetchingNextPage
+  const handleLoadOlderConversationMessages = useCallback(() => {
+    if (!hasOlderConversationMessages || loadingOlderConversationMessages) {
+      return
+    }
+    void conversationMessagesQuery.fetchNextPage()
+  }, [
+    conversationMessagesQuery,
+    hasOlderConversationMessages,
+    loadingOlderConversationMessages,
+  ])
   const sessionCommanders: Commander[] = useMemo(() => [
     GLOBAL_COMMANDER_ROW,
     ...commanderState.commanders.map((commander) => ({
@@ -592,7 +623,7 @@ export function CommandRoom() {
   }, [panelParam, searchParamsString, setSearchParams])
 
   const handleSelectCommanderId = useCallback(async (commanderId: string) => {
-    // Per #1362 contract: a single user click → a single backend lookup →
+    // Per issue 1362 contract: a single user click → a single backend lookup →
     // an atomic URL+state write. No effect-driven re-selection loop. The
     // previous polling-based design caused image-6/image-7 oscillation
     // because state and URL settled on different ticks.
@@ -645,10 +676,6 @@ export function CommandRoom() {
     setSelectedConversationId(conversationId)
     setSelectedChatSessionId(null)
 
-    if (isMobile) {
-      return
-    }
-
     const nextParams = new URLSearchParams(searchParamsString)
     if (commanderId && !isGlobalCommanderId(commanderId)) {
       nextParams.set('commander', commanderId)
@@ -656,7 +683,23 @@ export function CommandRoom() {
     nextParams.set('conversation', conversationId)
     nextParams.delete('panel')
     setSearchParams(nextParams, { replace: true })
-  }, [isMobile, searchParamsString, selectedCommanderId, setSearchParams])
+  }, [searchParamsString, selectedCommanderId, setSearchParams])
+
+  const handleClearConversationSelection = useCallback((
+    commanderId = selectedCommanderId,
+  ) => {
+    setRequestedNewChatCommanderId(null)
+    setSelectedConversationId(null)
+    setSelectedChatSessionId(null)
+
+    const nextParams = new URLSearchParams(searchParamsString)
+    if (commanderId && !isGlobalCommanderId(commanderId)) {
+      nextParams.set('commander', commanderId)
+    }
+    nextParams.delete('conversation')
+    nextParams.delete('panel')
+    setSearchParams(nextParams, { replace: true })
+  }, [searchParamsString, selectedCommanderId, setSearchParams])
 
   const handleSelectStandaloneChat = useCallback((chatSessionId: string) => {
     setRequestedNewChatCommanderId(null)
@@ -1254,7 +1297,7 @@ export function CommandRoom() {
         ...(agentType ? { agentType } : {}),
         ...(model !== undefined ? { model } : {}),
       })
-      // Per #1362 contract: creation is the explicit user action and never
+      // Per issue 1362 contract: creation is the explicit user action and never
       // auto-starts. We select the new (idle) conversation so the user sees
       // the dedicated chat surface, where the explicit Start affordance lives.
       handleSelectConversationId(created.id, created.commanderId)
@@ -1267,7 +1310,7 @@ export function CommandRoom() {
   }, [createConversation, handleSelectConversationId])
 
   const handleRequestNewChatForCommander = useCallback((commanderId: string) => {
-    // Per #1362 contract: + click does NOT auto-create. We keep the target
+    // Per issue 1362 contract: + click does NOT auto-create. We keep the target
     // commander selected, clear the current chat selection, and let the shared
     // CreateConversationPanel collect the provider before any POST happens.
     setRequestedNewChatCommanderId(commanderId)
@@ -1358,28 +1401,21 @@ export function CommandRoom() {
         conversationId,
         status: 'archived',
       })
-      // Per #1362 contract: archive clears selection. The next render lets the
+      // Per issue 1362 contract: archive clears selection. The next render lets the
       // backend active-chat query pick the next active/idle chat (or return
       // null, which surfaces the Create Conversation panel). Re-selecting the
       // archived id here would render an archived chat shell.
       if (selectedConversationId === conversationId || normalizedConversationParam === conversationId) {
-        setSelectedConversationId(null)
-        if (!isMobile) {
-          const nextParams = new URLSearchParams(searchParamsString)
-          nextParams.delete('conversation')
-          setSearchParams(nextParams, { replace: true })
-        }
+        handleClearConversationSelection()
       }
     } catch (error) {
       setSessionActionError(formatError(error, 'Failed to close conversation'))
       throw error
     }
   }, [
-    isMobile,
+    handleClearConversationSelection,
     normalizedConversationParam,
-    searchParamsString,
     selectedConversationId,
-    setSearchParams,
     updateConversation,
   ])
 
@@ -1393,12 +1429,7 @@ export function CommandRoom() {
       })
       setSelectedChatSessionId((current) => current === conversationId ? null : current)
       if (selectedConversationId === conversationId || normalizedConversationParam === conversationId) {
-        setSelectedConversationId(null)
-        if (!isMobile) {
-          const nextParams = new URLSearchParams(searchParamsString)
-          nextParams.delete('conversation')
-          setSearchParams(nextParams, { replace: true })
-        }
+        handleClearConversationSelection()
       } else {
         setSelectedConversationId((current) => current === conversationId ? null : current)
       }
@@ -1408,11 +1439,9 @@ export function CommandRoom() {
     }
   }, [
     deleteConversation,
-    isMobile,
+    handleClearConversationSelection,
     normalizedConversationParam,
-    searchParamsString,
     selectedConversationId,
-    setSearchParams,
   ])
 
   const handleOpenCreateCommander = useCallback(() => {
@@ -1496,6 +1525,9 @@ export function CommandRoom() {
         selectedCommanderRunning={selectedCommanderRunning}
         selectedCommanderAgentType={selectedCommander?.agentType}
         transcript={transcript}
+        hasOlderMessages={hasOlderConversationMessages}
+        loadingOlderMessages={loadingOlderConversationMessages}
+        onLoadOlderMessages={handleLoadOlderConversationMessages}
         onAnswer={(toolId, answers) => {
           answerQuestion(toolId, answers)
         }}
@@ -1508,15 +1540,13 @@ export function CommandRoom() {
         isStreaming={isStreaming}
         streamStatus={streamStatus}
         conversations={visibleConversations}
-        selectedConversationId={selectedConversation?.id ?? null}
+        selectedConversationId={selectedConversationId}
         onSelectConversationId={(conversationId) => {
           if (conversationId) {
             handleSelectConversationId(conversationId)
             return
           }
-          setRequestedNewChatCommanderId(null)
-          setSelectedConversationId(null)
-          setSelectedChatSessionId(null)
+          handleClearConversationSelection()
         }}
         queueSnapshot={queueSnapshot}
         queueError={queueError}
@@ -1587,6 +1617,9 @@ export function CommandRoom() {
           hasSelectedConversation={Boolean(selectedConversation)}
           activeChatSession={activeChatSession}
           transcript={transcript}
+          hasOlderMessages={hasOlderConversationMessages}
+          loadingOlderMessages={loadingOlderConversationMessages}
+          onLoadOlderMessages={handleLoadOlderConversationMessages}
           workers={commanderWorkers.map((w) => ({
             id: w.id,
             name: w.name,

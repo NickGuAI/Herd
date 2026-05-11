@@ -102,7 +102,7 @@ export function AuthenticatedAppRouter({
       <Suspense fallback={<Loading />}>
         <Routes>
           <Route path="/" element={<Navigate to="/org" replace />} />
-          <Route path={FOUNDER_SETUP_PATH} element={<Navigate to="/command-room" replace />} />
+          <Route path={FOUNDER_SETUP_PATH} element={<Navigate to="/org" replace />} />
           <Route path="/automations" element={<AutomationsPage />} />
           <Route path="/command-room/automations" element={<Navigate to="/automations" replace />} />
           {shellModuleRoutes.map((route) => (

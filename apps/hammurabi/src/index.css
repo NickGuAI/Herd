@@ -25,8 +25,8 @@
   /*
    * Dark-mode selection: brand-aligned vermillion wash, tuned brighter than the
    * --vermillion-seal token (#C23B22) so dark-adapted eyes pick up the chromatic
-   * contrast. 40% opacity gives ~80 luminosity-delta + saturated red/orange
-   * punch on #151515 page bg and #1C1C1C raised bubbles. Explicit color: var(--hv-fg)
+   * contrast. 40% opacity gives clear luminosity delta and saturated red/orange
+   * punch on Sumi-e dark ink surfaces. Explicit color: var(--hv-fg)
    * keeps selected text readable on the wash. Mirrors the light-mode brand
    * choice (vermillion at 22% on cream paper); see issue/1065.
    */
@@ -39,6 +39,7 @@
   }
 
   body {
+    font-family: var(--hv-font-body);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -125,23 +126,23 @@
   }
 
   .badge-active {
-    background: rgba(107, 123, 94, 0.12);
-    color: #6B7B5E;
+    background: var(--hv-badge-success-bg);
+    color: var(--hv-badge-success-fg);
   }
 
   .badge-idle {
-    background: rgba(212, 118, 58, 0.1);
-    color: #D4763A;
+    background: var(--hv-badge-warning-bg);
+    color: var(--hv-badge-warning-fg);
   }
 
   .badge-stale {
-    background: rgba(194, 59, 34, 0.08);
-    color: #C23B22;
+    background: var(--hv-badge-critical-bg);
+    color: var(--hv-badge-critical-fg);
   }
 
   .badge-error {
-    background: rgba(194, 59, 34, 0.15);
-    color: #C23B22;
+    background: var(--hv-badge-critical-bg);
+    color: var(--hv-badge-critical-fg);
   }
 
   .badge-completed {
@@ -171,7 +172,9 @@
 
   .sheet {
     @apply fixed bottom-0 left-0 right-0 z-[9999] overflow-y-auto;
-    background: var(--washi-white, #FAF8F5);
+    background: var(--hv-bg, #FAF8F5);
+    color: var(--hv-fg, #1C1C1C);
+    border-top: 1px solid var(--hv-border-hair, rgba(28, 28, 28, 0.06));
     border-radius: 24px 24px 0 0;
     transform: translateY(100%);
     transition: transform 0.5s cubic-bezier(0.23, 1, 0.32, 1);
@@ -189,7 +192,7 @@
   }
 
   .sheet-backdrop--hervald-dark {
-    background: rgba(0, 0, 0, 0.58);
+    background: var(--hv-bg-overlay);
   }
 
   .sheet--hervald {
@@ -200,20 +203,9 @@
   }
 
   .sheet--hervald-dark {
-    --hv-fg: #f2eee7;
-    --hv-fg-muted: #d4cdc4;
-    --hv-fg-subtle: #a9a197;
-    --hv-fg-faint: #7f786f;
-    --hv-fg-inverse: #141414;
-    --hv-bg: #151515;
-    --hv-bg-raised: #1c1c1c;
-    --hv-border-hair: rgba(250, 248, 245, 0.08);
-    --hv-border-soft: rgba(250, 248, 245, 0.14);
-    --hv-border-firm: rgba(250, 248, 245, 0.22);
-    --hv-ink-wash-02: rgba(250, 248, 245, 0.05);
-    background: #151515;
-    border-color: rgba(250, 248, 245, 0.08);
-    box-shadow: 0 16px 56px rgba(0, 0, 0, 0.42);
+    background: var(--hv-bg);
+    border-color: var(--hv-border-hair);
+    box-shadow: var(--hv-shadow-modal);
   }
 
   .sheet--hervald .sheet-handle-bar {
@@ -290,7 +282,7 @@
     width: 36px;
     height: 4px;
     border-radius: 2px;
-    background: #C4C4C4;
+    background: var(--hv-fg-faint, #A8A19A);
   }
 
   .add-to-chat-sheet-backdrop {
@@ -298,7 +290,7 @@
   }
 
   .hv-dark .add-to-chat-sheet-backdrop {
-    background: rgba(0, 0, 0, 0.58);
+    background: var(--hv-bg-overlay);
   }
 
   .add-to-chat-sheet {
@@ -396,7 +388,7 @@
   /* ── Terminal Overlay (mobile) ──────────────────── */
   .terminal-overlay {
     @apply fixed inset-0 z-40 flex flex-col;
-    background: #1a1a1a;
+    background: var(--hv-bg);
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
     animation: fade-in 0.3s cubic-bezier(0.23, 1, 0.32, 1);
@@ -404,22 +396,22 @@
 
   /* ── Session View Overlay (mobile stream-json) ── */
   .session-view-overlay {
-    --msg-bg: #1a1a1a;
-    --msg-surface: #242424;
-    --msg-surface-elevated: #2a2a2a;
-    --msg-border: rgba(224, 221, 213, 0.08);
-    --msg-border-subtle: rgba(224, 221, 213, 0.04);
-    --msg-text: #e0ddd5;
-    --msg-text-secondary: #a09d95;
-    --msg-text-muted: #6b6860;
-    --msg-accent-blue: #7bafd4;
-    --msg-accent-green: #8ba87a;
-    --msg-accent-amber: #c4a055;
-    --msg-accent-red: #c47a6e;
+    --msg-bg: var(--hv-bg);
+    --msg-surface: var(--hv-surface-card);
+    --msg-surface-elevated: var(--hv-bg-raised);
+    --msg-border: var(--hv-border-hair);
+    --msg-border-subtle: var(--hv-border-soft);
+    --msg-text: var(--hv-fg);
+    --msg-text-secondary: var(--hv-fg-muted);
+    --msg-text-muted: var(--hv-fg-faint);
+    --msg-accent-blue: var(--hv-accent-info);
+    --msg-accent-green: var(--hv-accent-success);
+    --msg-accent-amber: var(--hv-accent-warning);
+    --msg-accent-red: var(--hv-accent-danger);
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: env(safe-area-inset-bottom, 0px);
     --ease-gentle: cubic-bezier(0.23, 1, 0.32, 1);
-    --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+    --font-mono: var(--hv-font-mono);
 
     @apply fixed inset-0 z-40 flex flex-col;
     background: var(--msg-bg);

@@ -93,8 +93,8 @@ describe('AgentAvatar — live commander shape', () => {
     const avatar = document.querySelector('[data-testid="agent-avatar"]') as HTMLElement | null
     expect(avatar).not.toBeNull()
     expect(avatar?.textContent).toBe('S')
-    // Some non-empty color is applied (deterministic palette entry).
-    expect(avatar?.style.color).not.toBe('')
+    // Deterministic fallback uses the semantic token palette.
+    expect(avatar?.getAttribute('style')).toContain('--hv-avatar-accent')
   })
 
   it('derives the initial from host when displayName is empty', async () => {

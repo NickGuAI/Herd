@@ -57,13 +57,13 @@ export function SelectedDetailCard({
       {/* Header row: "Selected" label + blocking status pill */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
         <span
+          className="font-body"
           style={{
             fontSize: 10,
             letterSpacing: '0.14em',
             textTransform: 'uppercase',
             color: 'var(--hv-fg-subtle)',
             fontWeight: 500,
-            fontFamily: 'var(--hv-font-body)',
           }}
         >
           Selected
@@ -86,8 +86,8 @@ export function SelectedDetailCard({
 
       {/* Worker name */}
       <div
+        className="font-mono"
         style={{
-          fontFamily: 'var(--hv-font-mono)',
           fontSize: 13.5,
           color: 'var(--hv-fg)',
           marginBottom: 4,
@@ -98,12 +98,12 @@ export function SelectedDetailCard({
 
       {/* Worker label */}
       <div
+        className="font-body"
         style={{
           fontSize: 11.5,
           color: 'var(--hv-fg-subtle)',
           fontStyle: 'italic',
           marginBottom: approval ? 10 : 14,
-          fontFamily: 'var(--hv-font-body)',
         }}
       >
         {worker.label ?? worker.kind}
@@ -112,19 +112,19 @@ export function SelectedDetailCard({
       {/* Action label — only shown when a pending approval exists */}
       {approval && (
         <div
+          className="font-body"
           style={{
             fontSize: 10.5,
             letterSpacing: '0.14em',
             textTransform: 'uppercase',
             color: 'var(--vermillion-seal)',
             marginBottom: 12,
-            fontFamily: 'var(--hv-font-body)',
           }}
         >
           action{' · '}
           <span
+            className="font-mono"
             style={{
-              fontFamily: 'var(--hv-font-mono)',
               letterSpacing: 0,
               textTransform: 'none',
             }}
@@ -162,12 +162,12 @@ export function SelectedDetailCard({
       </div>
       {isExited && onDismiss && (
         <div
+          className="font-body"
           style={{
             marginTop: 10,
             fontSize: 11,
             lineHeight: 1.5,
             color: 'var(--hv-fg-subtle)',
-            fontFamily: 'var(--hv-font-body)',
           }}
         >
           Dismiss removes this exited worker from the team list
@@ -186,7 +186,6 @@ function btnStyle(kind: 'primary' | 'ghost-vermillion' | 'ghost' | 'ghost-critic
     fontSize: 11,
     letterSpacing: '0.04em',
     cursor: 'pointer',
-    fontFamily: 'var(--hv-font-body)',
     border: '1px solid transparent',
   }
   if (kind === 'primary') {

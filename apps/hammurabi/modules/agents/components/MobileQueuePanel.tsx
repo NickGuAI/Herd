@@ -1,6 +1,5 @@
-import { useEffect } from 'react'
 import { ArrowDown, ArrowUp, X } from 'lucide-react'
-import { createPortal } from 'react-dom'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import type { SessionQueueSnapshot } from '@/types'
 import { cn } from '@/lib/utils'
 import {
@@ -32,25 +31,7 @@ export function MobileQueuePanel({
   onRemoveQueuedMessage,
   onClose,
 }: MobileQueuePanelProps) {
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Escape') {
-        return
-      }
-
-      event.preventDefault()
-      onClose()
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, open])
-
-  if (!open || typeof document === 'undefined') {
+  if (!open) {
     return null
   }
 
@@ -61,28 +42,27 @@ export function MobileQueuePanel({
   const canClearQueue = (totalQueuedCount > 0 || currentQueuedMessage !== null) && !isQueueMutating && Boolean(onClearQueue)
   const themeRootClassName = theme === 'dark' ? 'hv-dark' : 'hv-light'
 
-  return createPortal(
-    <>
-      <div
-        className={cn(
-          'sheet-backdrop visible sheet-backdrop--hervald',
-          theme === 'dark' && 'sheet-backdrop--hervald-dark',
-        )}
-        onClick={onClose}
-      />
-
-      <div
-        className={cn(
-          'sheet visible sheet--hervald',
-          theme === 'dark' && 'sheet--hervald-dark',
-          themeRootClassName,
-        )}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="mobile-queue-panel-title"
-        data-testid="mobile-queue-panel"
-        onClick={(event) => event.stopPropagation()}
-      >
+  return (
+    <DismissibleOverlay
+      open={open}
+      onClose={onClose}
+      title="Queue"
+      position="bottom-sheet"
+      portalThemeClassName={themeRootClassName}
+      backdropClassName={cn(
+        'sheet-backdrop--hervald',
+        theme === 'dark' && 'sheet-backdrop--hervald-dark',
+      )}
+      contentClassName={cn(
+        'sheet visible sheet--hervald',
+        theme === 'dark' && 'sheet--hervald-dark',
+        themeRootClassName,
+      )}
+      contentProps={{
+        'aria-labelledby': 'mobile-queue-panel-title',
+        'data-testid': 'mobile-queue-panel',
+      }}
+    >
         <div className="sheet-handle">
           <div className="sheet-handle-bar" />
         </div>
@@ -202,8 +182,6 @@ export function MobileQueuePanel({
             </div>
           ) : null}
         </div>
-      </div>
-    </>,
-    document.body,
+    </DismissibleOverlay>
   )
 }

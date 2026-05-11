@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { mapSessionMessagesToTranscript } from '../components/transcript'
+import type { MsgItem } from '@modules/agents/messages/model'
+import {
+  mapSessionMessagesToTranscript,
+  mergeHistoricalAndLiveTranscript,
+} from '../components/transcript'
 
 describe('mapSessionMessagesToTranscript', () => {
   it('preserves the rich MsgItem transcript shape for Hervald rendering parity', () => {
@@ -28,5 +32,26 @@ describe('mapSessionMessagesToTranscript', () => {
     ]
 
     expect(mapSessionMessagesToTranscript(messages)).toEqual(messages)
+  })
+})
+
+describe('mergeHistoricalAndLiveTranscript', () => {
+  it('drops only replayed historical messages when live messages overlap', () => {
+    const historicalMessages: MsgItem[] = [
+      { id: 'history-1', kind: 'agent', text: 'same' },
+      { id: 'history-2', kind: 'agent', text: 'older' },
+      { id: 'history-3', kind: 'agent', text: 'same' },
+    ]
+    const liveMessages: MsgItem[] = [
+      { id: 'live-1', kind: 'agent', text: 'same' },
+      { id: 'live-2', kind: 'agent', text: 'newer' },
+    ]
+
+    expect(mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)).toEqual([
+      { id: 'history-1', kind: 'agent', text: 'same' },
+      { id: 'history-2', kind: 'agent', text: 'older' },
+      { id: 'live-1', kind: 'agent', text: 'same' },
+      { id: 'live-2', kind: 'agent', text: 'newer' },
+    ])
   })
 })

@@ -35,6 +35,7 @@ const TONE_STYLES: Record<StatusTone, React.CSSProperties> = {
 export function StatusPill({ tone, children }: StatusPillProps) {
   return (
     <span
+      className="font-body"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -43,7 +44,6 @@ export function StatusPill({ tone, children }: StatusPillProps) {
         fontSize: 10,
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
-        fontFamily: 'var(--hv-font-body)',
         fontWeight: 500,
         ...TONE_STYLES[tone],
       }}

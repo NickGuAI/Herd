@@ -11,6 +11,8 @@ export const API_KEY_SCOPES = [
   'agents:admin',
   'commanders:read',
   'commanders:write',
+  'commanders:conversations:create',
+  'commanders:channels:write',
   'org:write',
   'services:read',
   'services:write',
@@ -20,9 +22,9 @@ export const API_KEY_SCOPES = [
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number]
 
-export const DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES = API_KEY_SCOPES.filter(
-  (scope): scope is ApiKeyScope => scope !== 'agents:admin',
-)
+export const DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES: readonly ApiKeyScope[] = [
+  ...API_KEY_SCOPES,
+]
 
 const API_KEY_SCOPE_SET = new Set<string>(API_KEY_SCOPES)
 

@@ -1,4 +1,5 @@
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { useHvTokens } from '@/lib/hv-tokens'
 
 interface EconomyPoint {
   time: string
@@ -15,6 +16,8 @@ function formatUsd(value: number): string {
 
 export function EconomyScreen({ history }: EconomyScreenProps) {
   const latest = history.length > 0 ? history[history.length - 1].totalCost : 0
+  const chartTokens = useHvTokens(['--hv-accent-success'])
+  const successColor = chartTokens['--hv-accent-success'] || 'currentColor'
 
   return (
     <section className="h-[100dvh] w-full overflow-hidden bg-zinc-950 text-white">
@@ -52,8 +55,8 @@ export function EconomyScreen({ history }: EconomyScreenProps) {
               <Area
                 type="monotone"
                 dataKey="totalCost"
-                stroke="#22c55e"
-                fill="#22c55e"
+                stroke={successColor}
+                fill={successColor}
                 fillOpacity={0.25}
                 strokeWidth={2}
                 isAnimationActive={false}

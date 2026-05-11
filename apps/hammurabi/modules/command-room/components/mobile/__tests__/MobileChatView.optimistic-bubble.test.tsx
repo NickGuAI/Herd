@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   usePendingApprovals: vi.fn(),
   useActiveConversation: vi.fn(),
   useConversations: vi.fn(),
+  useConversationMessages: vi.fn(() => ({
+    data: { pages: [] },
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+  })),
   useCreateConversation: vi.fn(),
   useDeleteConversation: vi.fn(),
   useStartConversation: vi.fn(),
@@ -65,6 +71,7 @@ vi.mock('@modules/commanders/hooks/useCommander', () => ({
 vi.mock('@modules/conversation/hooks/use-conversations', () => ({
   useActiveConversation: mocks.useActiveConversation,
   useConversations: mocks.useConversations,
+  useConversationMessages: mocks.useConversationMessages,
   useCreateConversation: mocks.useCreateConversation,
   useDeleteConversation: mocks.useDeleteConversation,
   useStartConversation: mocks.useStartConversation,

@@ -21,10 +21,7 @@ export function WorkspaceGitPanel({
   readOnly = false,
   onInit,
   initializing = false,
-  variant = 'light',
 }: WorkspaceGitPanelProps) {
-  const dark = variant === 'dark'
-
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-sumi-diluted">
@@ -51,9 +48,7 @@ export function WorkspaceGitPanel({
       <div
         className={cn(
           'flex h-full flex-col items-center justify-center rounded-lg border border-dashed px-4 text-center',
-          dark
-            ? 'border-white/[0.08] text-white/45'
-            : 'border-ink-border text-sumi-diluted',
+          'border-ink-border text-sumi-diluted',
         )}
       >
         <GitBranch size={18} className="mb-3" />
@@ -75,8 +70,8 @@ export function WorkspaceGitPanel({
 
   return (
     <div className="grid h-full min-h-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <section className={cn('min-h-0 rounded-lg border overflow-hidden', dark ? 'border-white/[0.08] bg-[#1b1b1b]' : 'border-ink-border bg-washi-white')}>
-        <header className={cn('border-b px-3 py-2', dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-ink-border bg-washi-aged/60')}>
+      <section className="min-h-0 overflow-hidden rounded-lg border border-ink-border bg-washi-white">
+        <header className="border-b border-ink-border bg-washi-aged/60 px-3 py-2">
           <p className="section-title flex items-center gap-2">
             <GitBranch size={13} />
             Pending Changes
@@ -99,8 +94,8 @@ export function WorkspaceGitPanel({
         </div>
       </section>
 
-      <section className={cn('min-h-0 rounded-lg border overflow-hidden', dark ? 'border-white/[0.08] bg-[#1b1b1b]' : 'border-ink-border bg-washi-white')}>
-        <header className={cn('border-b px-3 py-2', dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-ink-border bg-washi-aged/60')}>
+      <section className="min-h-0 overflow-hidden rounded-lg border border-ink-border bg-washi-white">
+        <header className="border-b border-ink-border bg-washi-aged/60 px-3 py-2">
           <p className="section-title flex items-center gap-2">
             <GitCommitHorizontal size={13} />
             Recent Commits

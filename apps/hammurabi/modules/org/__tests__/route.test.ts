@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
+import { CommanderSessionStore } from '../../commanders/store'
+import { ConversationStore } from '../../commanders/conversation-store'
+import { createDefaultHeartbeatConfig } from '../../commanders/heartbeat'
 import { createOrgRouter } from '../route'
 
 const API_KEY_HEADERS = {
@@ -25,6 +28,10 @@ const previousEnv = {
 interface RunningServer {
   baseUrl: string
   close: () => Promise<void>
+}
+
+interface StartServerOptions {
+  realCommanderStores?: boolean
 }
 
 function createTestApiKeyStore(): ApiKeyStoreLike {
@@ -69,9 +76,13 @@ function restoreEnvVar(key: 'HAMMURABI_DATA_DIR' | 'COMMANDER_DATA_DIR' | 'HAMMU
   process.env[key] = value
 }
 
-async function startServer(dataDir: string): Promise<RunningServer> {
+async function startServer(
+  dataDir: string,
+  options: StartServerOptions = {},
+): Promise<RunningServer> {
   const app = express()
   app.use(express.json())
+  const commanderDataDir = join(dataDir, 'commander')
   app.use('/api/org', createOrgRouter({
     apiKeyStore: createTestApiKeyStore(),
     verifyAuth0Token: async (token) => {
@@ -89,13 +100,17 @@ async function startServer(dataDir: string): Promise<RunningServer> {
         },
       }
     },
-    commanderDataDir: join(dataDir, 'commander'),
-    sessionStore: {
+    commanderDataDir,
+    sessionStore: options.realCommanderStores
+      ? new CommanderSessionStore(join(commanderDataDir, 'sessions.json'))
+      : {
       async list() {
         return []
       },
     },
-    conversationStore: {
+    conversationStore: options.realCommanderStores
+      ? new ConversationStore(commanderDataDir)
+      : {
       async listByCommander() {
         return []
       },
@@ -105,7 +120,7 @@ async function startServer(dataDir: string): Promise<RunningServer> {
         return []
       },
     },
-    profileStore: {
+    profileStore: options.realCommanderStores ? undefined : {
       async getAvatarUrl() {
         return null
       },
@@ -344,6 +359,117 @@ describe('org route', () => {
       const persistedOrg = JSON.parse(await readFile(join(dataDir, 'org.json'), 'utf8')) as Record<string, unknown>
       expect(persistedOrg).toMatchObject({
         name: 'Gehirn Inc.',
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('seeds Gaia once for a fresh org with no commanders', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
+    tempDirs.push(dataDir)
+    process.env.HAMMURABI_DATA_DIR = dataDir
+
+    const server = await startServer(dataDir, { realCommanderStores: true })
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/org`, {
+        method: 'POST',
+        headers: {
+          ...API_KEY_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          displayName: 'Gehirn Inc.',
+          founder: {
+            displayName: 'Nick Gu',
+            email: 'nick@example.com',
+          },
+        }),
+      })
+      expect(createResponse.status).toBe(201)
+
+      const firstRead = await fetch(`${server.baseUrl}/api/org`, {
+        headers: API_KEY_HEADERS,
+      })
+      expect(firstRead.status).toBe(200)
+      const firstPayload = await firstRead.json()
+      expect(firstPayload.commanders).toHaveLength(1)
+      expect(firstPayload.commanders[0]).toMatchObject({
+        displayName: 'Gaia',
+        status: 'idle',
+        templateId: 'gaia-onboarding',
+        profile: {
+          borderColor: expect.stringMatching(/^var\(--hv-accent-/),
+          accentColor: expect.stringMatching(/^var\(--hv-accent-/),
+          speakingTone: 'Mother-of-all onboarding',
+        },
+      })
+
+      const secondRead = await fetch(`${server.baseUrl}/api/org`, {
+        headers: API_KEY_HEADERS,
+      })
+      expect(secondRead.status).toBe(200)
+      const secondPayload = await secondRead.json()
+      expect(secondPayload.commanders).toHaveLength(1)
+      expect(secondPayload.commanders[0].id).toBe(firstPayload.commanders[0].id)
+
+      const sessionState = JSON.parse(
+        await readFile(join(dataDir, 'commander', 'sessions.json'), 'utf8'),
+      ) as { sessions: Array<Record<string, unknown>> }
+      const sessions = sessionState.sessions
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]).toMatchObject({
+        host: 'gaia',
+        contextMode: 'thin',
+        templateId: 'gaia-onboarding',
+      })
+
+      const names = JSON.parse(
+        await readFile(join(dataDir, 'commander', 'names.json'), 'utf8'),
+      ) as Record<string, string>
+      expect(names[firstPayload.commanders[0].id as string]).toBe('Gaia')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('normalizes legacy commander profiles in GET /api/org', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
+    tempDirs.push(dataDir)
+    process.env.HAMMURABI_DATA_DIR = dataDir
+
+    const commanderDataDir = join(dataDir, 'commander')
+    const sessionStore = new CommanderSessionStore(join(commanderDataDir, 'sessions.json'))
+    await sessionStore.create({
+      id: '00000000-0000-4000-a000-000000000123',
+      host: 'legacy-no-profile',
+      state: 'idle',
+      created: '2026-05-08T00:00:00.000Z',
+      agentType: 'claude',
+      effort: 'medium',
+      heartbeat: createDefaultHeartbeatConfig(),
+      maxTurns: 20,
+      contextMode: 'thin',
+      taskSource: null,
+    })
+
+    const server = await startServer(dataDir, { realCommanderStores: true })
+
+    try {
+      const response = await fetch(`${server.baseUrl}/api/org`, {
+        headers: AUTH0_HEADERS,
+      })
+
+      expect(response.status).toBe(200)
+      const payload = await response.json()
+      expect(payload.commanders).toHaveLength(1)
+      expect(payload.commanders[0]).toMatchObject({
+        id: '00000000-0000-4000-a000-000000000123',
+        profile: {
+          borderColor: expect.stringMatching(/^var\(--hv-accent-/),
+          accentColor: expect.stringMatching(/^var\(--hv-accent-/),
+        },
       })
     } finally {
       await server.close()

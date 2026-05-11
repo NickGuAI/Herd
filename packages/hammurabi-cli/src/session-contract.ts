@@ -14,6 +14,8 @@ export interface CommanderOwnedSessionLike {
 
 export type ConversationSurface = 'discord' | 'telegram' | 'whatsapp' | 'ui' | 'cli' | 'api'
 export type ConversationStatus = 'active' | 'idle' | 'archived'
+export type ConversationCreationSource = 'ui' | 'cli' | 'api' | 'channel' | 'system-default' | 'unknown'
+export type ConversationCreatedByKind = 'human' | 'api-key' | 'system' | 'channel' | 'unknown'
 
 export interface ProviderContext {
   providerId: string
@@ -40,6 +42,12 @@ export interface Conversation {
   heartbeatTickCount: number
   completedTasks: number
   totalCostUsd: number
+  creationSource?: ConversationCreationSource
+  createdByKind?: ConversationCreatedByKind
+  createdById?: string
+  createdBySessionName?: string
+  createdByConversationId?: string
+  requestId?: string
   createdAt: string
   lastMessageAt: string
 }

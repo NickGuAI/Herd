@@ -12,6 +12,9 @@ import {
   type CommanderChannelReplyDispatchInput,
   type CommandersRouterOptions,
 } from '../routes'
+import { CommanderChannelBindingStore, CommanderChannelBindingConflictError } from '../../channels/store'
+import { registerChannelAdapter, resetChannelAdaptersForTests } from '../../channels/registry'
+import type { ChannelAdapter } from '../../channels/types'
 import {
   CommanderSessionStore,
   DEFAULT_COMMANDER_CONTEXT_MODE,
@@ -25,6 +28,10 @@ const COMMANDER_B = '00000000-0000-4000-a000-0000000000bb'
 
 const AUTH_HEADERS = {
   'x-hammurabi-api-key': 'test-key',
+}
+
+const AGENT_RUNTIME_AUTH_HEADERS = {
+  'x-hammurabi-api-key': 'agent-runtime-key',
 }
 
 interface RunningServer {
@@ -75,6 +82,7 @@ async function sleep(ms: number): Promise<void> {
 
 afterEach(async () => {
   await sleep(75)
+  resetChannelAdaptersForTests()
   await Promise.all(
     tempDirs.splice(0).map((directory) =>
       rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }),
@@ -89,6 +97,22 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
       name: 'Test Key',
       keyHash: 'hash',
       prefix: 'hmrb_test',
+      createdBy: 'test',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      lastUsedAt: null,
+      scopes: [
+        'agents:read',
+        'agents:write',
+        'commanders:read',
+        'commanders:write',
+        'commanders:channels:write',
+      ],
+    },
+    'agent-runtime-key': {
+      id: 'agent-runtime-key-id',
+      name: 'Agent Runtime Key',
+      keyHash: 'hash-agent-runtime',
+      prefix: 'hmrb_agent',
       createdBy: 'test',
       createdAt: '2026-03-01T00:00:00.000Z',
       lastUsedAt: null,
@@ -192,23 +216,72 @@ function createMockSessionsInterface(): MockSessionsInterface {
 
 function createMockChannelReplyDispatchers(): MockChannelReplyDispatchers {
   const calls: CommanderChannelReplyDispatchInput[] = []
-  const capture = async (input: CommanderChannelReplyDispatchInput): Promise<void> => {
-    calls.push({
-      commanderId: input.commanderId,
-      message: input.message,
-      channelMeta: { ...input.channelMeta },
-      lastRoute: { ...input.lastRoute },
-    })
+  for (const provider of ['whatsapp', 'telegram', 'discord'] as const) {
+    const adapter: ChannelAdapter = {
+      provider,
+      capabilities: {
+        voiceNotes: false,
+        media: false,
+        threading: provider !== 'whatsapp',
+        typingIndicators: false,
+        presence: false,
+        reactions: false,
+        markdownDialect: provider,
+      },
+      start: vi.fn(async () => ({ provider, accountId: 'default' })),
+      stop: vi.fn(async () => undefined),
+      beginPairing: vi.fn(async () => ({ provider })),
+      completePairing: vi.fn(async () => {
+        throw new Error('not implemented')
+      }),
+      checkInboundAllowed: vi.fn(async () => ({ allowed: true })),
+      send: vi.fn(async (_runtime, conversation, payload) => {
+        if (!conversation.channelMeta || !conversation.lastRoute) {
+          throw new Error('missing channel route')
+        }
+        calls.push({
+          commanderId: conversation.commanderId,
+          message: payload.text ?? '',
+          channelMeta: { ...conversation.channelMeta },
+          lastRoute: { ...conversation.lastRoute, channel: provider },
+        })
+        return { success: true }
+      }),
+    }
+    registerChannelAdapter(adapter)
   }
 
   return {
-    dispatchers: {
-      whatsapp: capture,
-      telegram: capture,
-      discord: capture,
-    },
+    dispatchers: {},
     calls,
   }
+}
+
+async function seedOpenChannelBindings(storePath: string): Promise<CommanderChannelBindingStore> {
+  const dataDir = dirname(storePath)
+  const channelStore = new CommanderChannelBindingStore(join(dataDir, 'channels.json'))
+  const commanderStore = new CommanderSessionStore(storePath)
+  const commanders = await commanderStore.list()
+  for (const commander of commanders) {
+    for (const provider of ['whatsapp', 'telegram', 'discord'] as const) {
+      for (const accountId of provider === 'whatsapp' ? ['default', 'work'] : ['default']) {
+        try {
+          await channelStore.create({
+            commanderId: commander.id,
+            provider,
+            accountId,
+            displayName: `${provider} ${accountId}`,
+            config: { dmPolicy: 'open', groupPolicy: 'open' },
+          })
+        } catch (error) {
+          if (!(error instanceof CommanderChannelBindingConflictError)) {
+            throw error
+          }
+        }
+      }
+    }
+  }
+  return channelStore
 }
 
 async function seedCommander(
@@ -249,6 +322,7 @@ async function startServer(options: {
     memoryBasePath,
     sessionsInterface: options.sessionsInterface,
     channelReplyDispatchers: options.channelReplyDispatchers,
+    channelBindingStore: await seedOpenChannelBindings(options.sessionStorePath),
   })
   app.use('/api/commanders', commanders.router)
 
@@ -286,11 +360,12 @@ async function startServer(options: {
 async function postChannelMessage(
   baseUrl: string,
   body: Record<string, unknown>,
+  headers: Record<string, string> = AUTH_HEADERS,
 ): Promise<Response> {
   return fetch(`${baseUrl}/api/commanders/channel-message`, {
     method: 'POST',
     headers: {
-      ...AUTH_HEADERS,
+      ...headers,
       'content-type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -313,6 +388,35 @@ async function postChannelReply(
 }
 
 describe('POST /api/commanders/channel-message', () => {
+  it('rejects agent-runtime API keys without the channel ingest scope', async () => {
+    const dir = await createTempDir('hammurabi-channel-auth-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const mock = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: mock.interface,
+    })
+
+    try {
+      const response = await postChannelMessage(server.baseUrl, {
+        commanderId: COMMANDER_A,
+        provider: 'whatsapp',
+        accountId: 'default',
+        chatType: 'direct',
+        peerId: '15551234567',
+        displayName: '+1 555 123 4567',
+        message: 'hello',
+      }, AGENT_RUNTIME_AUTH_HEADERS)
+
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: 'Insufficient API key scope' })
+    } finally {
+      await server.close()
+    }
+  })
+
   it('upserts WhatsApp conversations under one commander instead of forking identities', async () => {
     const dir = await createTempDir('hammurabi-channel-whatsapp-')
     const storePath = join(dir, 'sessions.json')
@@ -425,6 +529,47 @@ describe('POST /api/commanders/channel-message', () => {
       expect(mock.createCalls.map((call) => call.conversationId).sort()).toEqual(
         [firstBody.conversationId, thirdBody.conversationId].sort(),
       )
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('accepts missing displayName and persists peerId as the generic fallback', async () => {
+    const dir = await createTempDir('hammurabi-channel-display-name-fallback-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const mock = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: mock.interface,
+    })
+
+    try {
+      const response = await postChannelMessage(server.baseUrl, {
+        commanderId: COMMANDER_A,
+        provider: 'whatsapp',
+        accountId: 'default',
+        chatType: 'direct',
+        peerId: '15551234567',
+        message: 'hello without display name',
+      })
+      expect(response.status).toBe(201)
+
+      const conversationsResponse = await fetch(
+        `${server.baseUrl}/api/commanders/${COMMANDER_A}/conversations`,
+        { headers: AUTH_HEADERS },
+      )
+      expect(conversationsResponse.status).toBe(200)
+      const conversations = await conversationsResponse.json() as Array<{
+        channelMeta?: { displayName?: string; peerId?: string; sessionKey?: string }
+      }>
+      expect(conversations).toHaveLength(1)
+      expect(conversations[0]?.channelMeta).toMatchObject({
+        peerId: '15551234567',
+        displayName: '15551234567',
+        sessionKey: 'whatsapp:default:direct:15551234567',
+      })
     } finally {
       await server.close()
     }
@@ -550,8 +695,7 @@ describe('POST /api/commanders/channel-message', () => {
         provider: 'discord',
         accountId: 'default',
         chatType: 'channel',
-        peerId: 'thread-111',
-        parentPeerId: 'chan-ops',
+        peerId: 'chan-ops',
         threadId: 'thread-111',
         displayName: '#partner-support / Engineering',
         message: 'thread one message',
@@ -574,8 +718,7 @@ describe('POST /api/commanders/channel-message', () => {
         provider: 'discord',
         accountId: 'default',
         chatType: 'channel',
-        peerId: 'thread-111',
-        parentPeerId: 'chan-ops',
+        peerId: 'chan-ops',
         threadId: 'thread-111',
         displayName: '#partner-support / Engineering',
         message: 'thread one repeat',
@@ -593,8 +736,7 @@ describe('POST /api/commanders/channel-message', () => {
         provider: 'discord',
         accountId: 'default',
         chatType: 'channel',
-        peerId: 'thread-222',
-        parentPeerId: 'chan-ops',
+        peerId: 'chan-ops',
         threadId: 'thread-222',
         displayName: '#partner-support / Engineering',
         message: 'thread two message',
@@ -645,8 +787,7 @@ describe('POST /api/commanders/channel-message', () => {
         provider: 'discord',
         accountId: 'default',
         chatType: 'channel',
-        peerId: 'thread-333',
-        parentPeerId: 'chan-ops',
+        peerId: 'chan-ops',
         threadId: 'thread-333',
         displayName: '#partner-support / Engineering',
         message: '@atlas please take this thread',
@@ -677,8 +818,7 @@ describe('POST /api/commanders/channel-message', () => {
         provider: 'discord',
         accountId: 'default',
         chatType: 'channel',
-        peerId: 'thread-444',
-        parentPeerId: 'chan-ops',
+        peerId: 'chan-ops',
         threadId: 'thread-444',
         displayName: '#partner-support / Engineering',
         message: '@atlas please take this thread',
@@ -786,8 +926,7 @@ describe('POST /api/commanders/:id/channel-reply', () => {
         provider: 'discord',
         accountId: 'default',
         chatType: 'channel',
-        peerId: 'thread-111',
-        parentPeerId: 'chan-ops',
+        peerId: 'chan-ops',
         threadId: 'thread-111',
         displayName: '#partner-support / Engineering',
         message: 'thread one message',
@@ -799,8 +938,7 @@ describe('POST /api/commanders/:id/channel-reply', () => {
         provider: 'discord',
         accountId: 'default',
         chatType: 'channel',
-        peerId: 'thread-222',
-        parentPeerId: 'chan-ops',
+        peerId: 'chan-ops',
         threadId: 'thread-222',
         displayName: '#partner-support / Engineering',
         message: 'thread two message',

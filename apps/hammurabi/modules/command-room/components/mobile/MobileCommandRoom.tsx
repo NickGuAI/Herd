@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useApprovalDecision, type PendingApproval } from '@/hooks/use-approvals'
 import { cn } from '@/lib/utils'
@@ -53,6 +53,9 @@ export interface MobileCommandRoomProps {
   selectedCommanderRunning: boolean
   selectedCommanderAgentType?: CommanderAgentType
   transcript: MsgItem[]
+  hasOlderMessages?: boolean
+  loadingOlderMessages?: boolean
+  onLoadOlderMessages?: () => void
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   composerSessionName: string
   composerEnabled: boolean
@@ -106,6 +109,9 @@ export function MobileCommandRoom({
   selectedCommanderRunning,
   selectedCommanderAgentType,
   transcript,
+  hasOlderMessages = false,
+  loadingOlderMessages = false,
+  onLoadOlderMessages,
   onAnswer,
   composerSessionName,
   composerEnabled,
@@ -142,7 +148,6 @@ export function MobileCommandRoom({
   const [searchParams] = useSearchParams()
   const commanderParam = searchParams.get('commander')?.trim() || null
   const commanderId = commanderParam === 'global' ? GLOBAL_COMMANDER_ID : commanderParam
-  const conversationId = searchParams.get('conversation')?.trim() || null
   const tab = resolveMobileTab(location.pathname)
   const inChat = tab === 'sessions' && commanderId !== null && !isGlobalCommanderId(commanderId)
   const [sheet, setSheet] = useState<SheetKind>(null)
@@ -155,13 +160,6 @@ export function MobileCommandRoom({
     () => workspaceSource ? getWorkspaceSourceKey(workspaceSource) : `none:${composerSessionName}`,
     [composerSessionName, workspaceSource],
   )
-
-  useEffect(() => {
-    if (!commanderId || commanderId === selectedCommanderId) {
-      return
-    }
-    onSelectCommanderId(commanderId)
-  }, [commanderId, onSelectCommanderId, selectedCommanderId])
 
   useEffect(() => {
     if (location.pathname !== '/command-room' || commanderId !== GLOBAL_COMMANDER_ID) {
@@ -232,18 +230,6 @@ export function MobileCommandRoom({
     ),
     [activeCommander?.id, conversations],
   )
-  const visibleConversationsRef = useRef<ConversationRecord[]>(visibleConversations)
-  visibleConversationsRef.current = visibleConversations
-  const selectedConversationIdRef = useRef<string | null>(selectedConversationId)
-  selectedConversationIdRef.current = selectedConversationId
-  const activeCommanderIdRef = useRef<string | null>(activeCommander?.id ?? null)
-  activeCommanderIdRef.current = activeCommander?.id ?? null
-  const locationRef = useRef({ pathname: location.pathname, search: location.search })
-  locationRef.current = { pathname: location.pathname, search: location.search }
-  const routeInChatRef = useRef(inChat)
-  routeInChatRef.current = inChat
-  const hasConversationModeRef = useRef(hasConversationMode)
-  hasConversationModeRef.current = hasConversationMode
   const [durationSec, setDurationSec] = useState<number | undefined>(undefined)
   const selectedApproval = pendingApprovals.find((approval) => approval.id === selectedApprovalId) ?? null
 
@@ -279,36 +265,8 @@ export function MobileCommandRoom({
   }
 
   const handleSelectConversationId = useCallback((conversationId: string | null) => {
-    if (conversationId !== selectedConversationIdRef.current) {
-      onSelectConversationId(conversationId)
-    }
-
-    if (!hasConversationModeRef.current || !routeInChatRef.current) {
-      return
-    }
-
-    const activeCommanderId = activeCommanderIdRef.current
-    if (!activeCommanderId) {
-      return
-    }
-
-    const { pathname, search } = locationRef.current
-    const params = new URLSearchParams()
-    const surface = searchParams.get('surface')
-    if (surface) params.set('surface', surface)
-    params.set('commander', activeCommanderId)
-    if (conversationId) params.set('conversation', conversationId)
-    const nextSearch = params.toString()
-    const currentSearch = search.startsWith('?')
-      ? search.slice(1)
-      : search
-    const nextPathname = '/command-room'
-    if (pathname === nextPathname && currentSearch === nextSearch) {
-      return
-    }
-
-    navigate(`${nextPathname}${nextSearch ? `?${nextSearch}` : ''}`, { replace: true })
-  }, [navigate, onSelectConversationId, searchParams])
+    onSelectConversationId(conversationId)
+  }, [onSelectConversationId])
 
   useEffect(() => {
     if (!inChat || activeCommander || commanders.length === 0) {
@@ -320,58 +278,6 @@ export function MobileCommandRoom({
     )
   }, [activeCommander, commanders, inChat, navigate, surfaceSearch])
 
-  useEffect(() => {
-    if (!hasConversationMode) {
-      return
-    }
-    if (!inChat || !activeCommander) {
-      return
-    }
-    if (commanderId && commanderId !== selectedCommanderId) {
-      return
-    }
-    if (requestedNewChatCommanderId === activeCommander.id) {
-      if (selectedConversationIdRef.current !== null) {
-        handleSelectConversationId(null)
-      }
-      return
-    }
-
-    const currentVisibleConversations = visibleConversationsRef.current
-
-    if (currentVisibleConversations.length === 0) {
-      if (selectedConversationIdRef.current !== null) {
-        handleSelectConversationId(null)
-      }
-      return
-    }
-
-    const requestedConversationId = conversationId
-    const requestedConversation = requestedConversationId
-      ? currentVisibleConversations.find((conversation) => conversation.id === requestedConversationId)
-      : null
-    const nextConversationId = requestedConversation?.id
-      ?? currentVisibleConversations.find((conversation) => (
-        conversation.status === 'active'
-        || (conversation.status as string) === 'running'
-      ))?.id
-      ?? currentVisibleConversations[0]?.id
-      ?? null
-
-    if (nextConversationId !== selectedConversationIdRef.current) {
-      handleSelectConversationId(nextConversationId)
-    }
-  }, [
-    activeCommander?.id,
-    commanderId,
-    conversationId,
-    handleSelectConversationId,
-    inChat,
-    requestedNewChatCommanderId,
-    selectedCommanderId,
-    hasConversationMode,
-  ])
-
   function openApproval(approvalId: string | null) {
     setSelectedApprovalId(approvalId ?? null)
     setSheet('approval')
@@ -379,32 +285,6 @@ export function MobileCommandRoom({
 
   function handleSelectCommander(id: string) {
     onSelectCommanderId(id)
-    const params = new URLSearchParams()
-    const surface = searchParams.get('surface')
-    if (surface) {
-      params.set('surface', surface)
-    }
-    if (id === GLOBAL_COMMANDER_ID) {
-      params.set('commander', 'global')
-      params.set('panel', 'automation')
-      navigate(`/command-room?${params.toString()}`)
-      return
-    }
-
-    params.set('commander', id)
-    const activeConversationId = orderMobileConversations(
-      (conversations ?? []).filter((conversation) => (
-        conversation.commanderId === id
-        && conversation.status !== 'archived'
-      )),
-    ).find((conversation) => (
-      conversation.status === 'active'
-      || (conversation.status as string) === 'running'
-    ))?.id ?? null
-    if (activeConversationId) {
-      params.set('conversation', activeConversationId)
-    }
-    navigate(`/command-room?${params.toString()}`)
   }
 
   function handleAddContextFilePath(filePath: string) {
@@ -422,7 +302,7 @@ export function MobileCommandRoom({
       className={cn(
         // Viewport containment lives at Shell (overflow-x on <main>); this
         // component is a normal flex-fill route body, not a viewport overlay.
-        // overflow-x-hidden kept here as defence-in-depth. See #1107.
+        // overflow-x-hidden kept here as defence-in-depth. See issue 1107.
         'flex min-h-0 flex-1 w-full flex-col overflow-x-hidden',
         'bg-washi-aged/35',
       )}
@@ -434,6 +314,9 @@ export function MobileCommandRoom({
             commander={activeCommander}
             workers={activeCommanderWorkers}
             transcript={transcript}
+            hasOlderMessages={hasOlderMessages}
+            loadingOlderMessages={loadingOlderMessages}
+            onLoadOlderMessages={onLoadOlderMessages}
             approvals={activeCommanderApprovals}
             sessionName={composerSessionName}
             composerEnabled={composerEnabled}

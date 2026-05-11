@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -9,6 +10,9 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/theme-context', () => ({
+  getHervaldThemeClassName: (theme: 'light' | 'dark') => (
+    mocks.theme === 'dark' || theme === 'dark' ? 'hv-dark' : 'hv-light'
+  ),
   useTheme: () => ({
     theme: mocks.theme,
     setTheme: () => undefined,
@@ -30,7 +34,10 @@ function setDocumentTheme(themeClassName: 'hv-light' | 'hv-dark'): void {
   document.documentElement.classList.add(themeClassName)
 }
 
-async function renderModal(themeClassName: 'hv-light' | 'hv-dark'): Promise<void> {
+async function renderModal(
+  themeClassName: 'hv-light' | 'hv-dark',
+  props: { desktopClassName?: string; mobileClassName?: string } = {},
+): Promise<void> {
   mocks.theme = themeClassName === 'hv-dark' ? 'dark' : 'light'
   setDocumentTheme(themeClassName)
   container = document.createElement('div')
@@ -38,16 +45,25 @@ async function renderModal(themeClassName: 'hv-light' | 'hv-dark'): Promise<void
   root = createRoot(container)
 
   await act(async () => {
-    root?.render(
-      <ModalFormContainer key={themeClassName} open title="Edit Commander" onClose={() => undefined}>
-        <div
-          data-testid="modal-theme-swatch"
-          className="rounded-lg border border-ink-border bg-washi-white px-3 py-2 text-sumi-black"
+    flushSync(() => {
+      root?.render(
+        <ModalFormContainer
+          key={themeClassName}
+          open
+          title="Edit Commander"
+          onClose={() => undefined}
+          desktopClassName={props.desktopClassName}
+          mobileClassName={props.mobileClassName}
         >
-          Theme swatch
-        </div>
-      </ModalFormContainer>,
-    )
+          <div
+            data-testid="modal-theme-swatch"
+            className="rounded-lg border border-ink-border bg-washi-white px-3 py-2 text-sumi-black"
+          >
+            Theme swatch
+          </div>
+        </ModalFormContainer>,
+      )
+    })
     await Promise.resolve()
   })
 }
@@ -63,8 +79,8 @@ describe('ModalFormContainer', () => {
         --hv-border-hair: rgba(28, 28, 28, 0.08);
       }
       .hv-dark {
-        --hv-bg: #151515;
-        --hv-fg: #f2eee7;
+        --hv-bg: #1C1C1C;
+        --hv-fg: #FAF8F5;
         --hv-border-hair: rgba(250, 248, 245, 0.08);
       }
       .bg-washi-white { background-color: var(--hv-bg); }
@@ -110,7 +126,7 @@ describe('ModalFormContainer', () => {
       document.body.querySelectorAll<HTMLElement>('[data-testid="modal-theme-swatch"]'),
     )
     expect(swatches).toHaveLength(2)
-    expect(document.body.querySelectorAll('.hv-light')).toHaveLength(2)
+    expect(document.body.querySelectorAll('.hv-light')).toHaveLength(3)
     for (const swatch of swatches) {
       const themedRoot = swatch.closest('.hv-light')
       expect(themedRoot).not.toBeNull()
@@ -129,11 +145,26 @@ describe('ModalFormContainer', () => {
       document.body.querySelectorAll<HTMLElement>('[data-testid="modal-theme-swatch"]'),
     )
     expect(swatches).toHaveLength(2)
-    expect(document.body.querySelectorAll('.hv-dark')).toHaveLength(2)
+    expect(document.body.querySelectorAll('.hv-dark')).toHaveLength(3)
     for (const swatch of swatches) {
       const themedRoot = swatch.closest('.hv-dark')
       expect(themedRoot).not.toBeNull()
-      expect(window.getComputedStyle(themedRoot as HTMLElement).getPropertyValue('--hv-bg').trim()).toBe('#151515')
+      expect(window.getComputedStyle(themedRoot as HTMLElement).getPropertyValue('--hv-bg').trim()).toBe('#1C1C1C')
     }
+  })
+
+  it('applies dedicated mobile and desktop sizing classes to the dialog roots', async () => {
+    await renderModal('hv-light', {
+      desktopClassName: 'max-w-[96rem] max-h-[92dvh]',
+      mobileClassName: 'max-h-[96dvh]',
+    })
+
+    const dialogs = Array.from(document.body.querySelectorAll<HTMLElement>('[role="dialog"]'))
+    const mobileDialog = dialogs.find((dialog) => dialog.className.includes('sheet'))
+    const desktopDialog = dialogs.find((dialog) => dialog.className.includes('card-sumi'))
+
+    expect(mobileDialog?.className).toContain('max-h-[96dvh]')
+    expect(desktopDialog?.className).toContain('max-w-[96rem]')
+    expect(desktopDialog?.className).toContain('max-h-[92dvh]')
   })
 })

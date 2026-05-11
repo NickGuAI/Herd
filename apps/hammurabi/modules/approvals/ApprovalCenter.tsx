@@ -18,6 +18,7 @@ import {
   useApprovalNotifications,
   usePendingApprovals,
 } from '@/hooks/use-approvals'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import { useIsMobile } from '@/hooks/use-is-mobile'
 import { cn, timeAgo } from '@/lib/utils'
 import ApprovalCard from './ApprovalCard'
@@ -77,7 +78,7 @@ function HistoryDecisionBadge({ entry }: { entry: ApprovalHistoryEntry }) {
 
 function ApprovalHistoryCard({ entry }: { entry: ApprovalHistoryEntry }) {
   return (
-    <article className="rounded-xl border border-ink-border/60 bg-white/70 px-4 py-3">
+    <article className="rounded-xl border border-ink-border/60 bg-washi-aged px-4 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -144,23 +145,6 @@ export function ApprovalCenter({
     }
   }, [panelMessage])
 
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') {
-        setOpen(false)
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [open])
-
   const listError = pendingApprovalsQuery.error instanceof Error
     ? pendingApprovalsQuery.error.message
     : null
@@ -204,6 +188,7 @@ export function ApprovalCenter({
           type="button"
           onClick={() => setOpen((current) => !current)}
           className="card-sumi group inline-flex items-center gap-3 bg-washi-white px-4 py-3 text-left transition-all hover:-translate-y-0.5"
+          aria-label="Approvals"
           aria-expanded={open}
           aria-controls="approval-center-panel"
         >
@@ -264,22 +249,22 @@ export function ApprovalCenter({
         </div>
       )}
 
-      {effectiveMode === 'drawer' && (
-        <button
-          type="button"
-          aria-label="Close approvals panel"
-          className={cn(
-            'approval-fab fixed inset-0 z-[79] bg-sumi-black/35 transition-opacity md:bg-sumi-black/20',
-            open ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
-          )}
-          onClick={() => setOpen(false)}
-        />
-      )}
-
-      <aside
-        id="approval-center-panel"
-        className={cn('approval-fab', panelShellClasses)}
-        aria-hidden={!open}
+      <DismissibleOverlay
+        open={open}
+        onClose={() => {
+          if (previewApproval) {
+            setPreviewApproval(null)
+            return
+          }
+          setOpen(false)
+        }}
+        title={title}
+        position="modal"
+        backdropClassName={effectiveMode === 'drawer' ? 'bg-sumi-black/35 md:bg-sumi-black/20' : 'bg-sumi-black/20'}
+        contentClassName={cn('approval-fab', panelShellClasses)}
+        contentProps={{
+          id: 'approval-center-panel',
+        }}
       >
         <div className="flex h-full flex-col">
           <div className="border-b border-ink-border/70 px-5 py-4">
@@ -395,7 +380,7 @@ export function ApprovalCenter({
             </section>
           </div>
         </div>
-      </aside>
+      </DismissibleOverlay>
 
       <ApprovalSheet
         approval={previewApproval}

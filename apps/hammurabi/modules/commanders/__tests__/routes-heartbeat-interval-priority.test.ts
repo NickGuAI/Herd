@@ -36,7 +36,13 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
       createdBy: 'test',
       createdAt: '2026-02-16T00:00:00.000Z',
       lastUsedAt: null,
-      scopes: ['agents:read', 'agents:write', 'commanders:read', 'commanders:write'],
+      scopes: [
+        'agents:read',
+        'agents:write',
+        'commanders:read',
+        'commanders:write',
+        'commanders:conversations:create',
+      ],
     },
   } satisfies Record<string, import('../../../server/api-keys/store').ApiKeyRecord>
 

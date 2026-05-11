@@ -5,6 +5,7 @@ import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import { parseSessionId } from '../commanders/route-parsers.js'
 import { CommanderSessionStore } from '../commanders/store.js'
 import {
+  CommanderChannelBindingConflictError,
   CommanderChannelBindingStore,
   CommanderChannelValidationError,
 } from './store.js'
@@ -70,6 +71,10 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
       res.status(404).json({ error: `Commander "${commanderId}" not found` })
       return
     }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, 'commanderId')) {
+      res.status(400).json({ error: 'commanderId is read from the URL path and must not be provided in the body' })
+      return
+    }
 
     try {
       const created = await store.create({
@@ -84,6 +89,10 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
     } catch (error) {
       if (error instanceof CommanderChannelValidationError) {
         res.status(400).json({ error: error.message })
+        return
+      }
+      if (error instanceof CommanderChannelBindingConflictError) {
+        res.status(409).json({ error: error.message })
         return
       }
       throw error

@@ -53,6 +53,9 @@ export interface MobileSessionShellProps {
   costUsd?: number
   durationSec?: number
   messages: MsgItem[]
+  hasOlderMessages?: boolean
+  loadingOlderMessages?: boolean
+  onLoadOlderMessages?: () => void
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   approvals?: PendingApproval[]
   onApprovalDecision?: (
@@ -130,6 +133,9 @@ export function MobileSessionShell({
   costUsd,
   durationSec,
   messages,
+  hasOlderMessages = false,
+  loadingOlderMessages = false,
+  onLoadOlderMessages,
   onAnswer,
   approvals,
   onApprovalDecision,
@@ -274,6 +280,24 @@ export function MobileSessionShell({
     setShowConversationProviderMenu(false)
     setShowOverflowMenu(false)
   }, [])
+
+  useEffect(() => {
+    if (!showOverflowMenu) {
+      return
+    }
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key !== 'Escape') {
+        return
+      }
+
+      event.preventDefault()
+      closeOverflowMenu()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [closeOverflowMenu, showOverflowMenu])
 
   const handleKill = useCallback(async () => {
     if (!onKill || isKilling) {
@@ -444,9 +468,7 @@ export function MobileSessionShell({
     <section
       className={cn(
         'flex min-h-0 flex-1 flex-col overflow-hidden',
-        theme === 'dark'
-          ? 'bg-[#17171a] text-washi-white'
-          : 'bg-washi-white text-sumi-black',
+        'bg-washi-white text-sumi-black',
         rootClassName,
       )}
       data-testid={dataTestId ?? 'mobile-session-shell'}
@@ -454,9 +476,7 @@ export function MobileSessionShell({
       <header
         className={cn(
           'session-header border-b px-3 pb-3 pt-4',
-          theme === 'dark'
-            ? 'border-white/10'
-            : 'border-ink-border bg-washi-white',
+          'border-ink-border bg-washi-white',
         )}
       >
         <div className="flex items-center gap-2">
@@ -464,9 +484,7 @@ export function MobileSessionShell({
             type="button"
             className={cn(
               'session-back inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md transition-colors',
-              theme === 'dark'
-                ? 'text-washi-white/75 hover:bg-white/5'
-                : 'text-sumi-diluted hover:bg-ink-wash',
+              'text-sumi-diluted hover:bg-ink-wash',
             )}
             onClick={onBack}
             aria-label="Back to org"
@@ -477,7 +495,7 @@ export function MobileSessionShell({
           <div className="session-header-center min-w-0 flex-1 text-center">
             <p className={cn(
               'session-header-name truncate font-mono text-sm',
-              theme === 'dark' ? 'text-washi-white' : 'text-sumi-black',
+              'text-sumi-black',
             )}
             >
               {sessionLabel}
@@ -491,7 +509,7 @@ export function MobileSessionShell({
               <p
                 className={cn(
                   'session-header-meta mt-1 text-[11px] uppercase tracking-[0.08em]',
-                  theme === 'dark' ? 'text-white/45' : 'text-sumi-mist',
+                  'text-sumi-mist',
                 )}
               >
                 {wsStatus && (
@@ -516,10 +534,7 @@ export function MobileSessionShell({
               <button
                 type="button"
                 className={cn(
-                  'inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/55 backdrop-blur-[2px] transition-colors',
-                  theme === 'dark'
-                    ? 'text-washi-white/65 hover:bg-white/5'
-                    : 'text-sumi-diluted hover:bg-ink-wash',
+                  'inline-flex h-9 w-9 items-center justify-center rounded-full border border-ink-border bg-washi-aged/80 text-sumi-diluted backdrop-blur-[2px] transition-colors hover:bg-ink-wash',
                 )}
                 onClick={() => {
                   if (showOverflowMenu) {
@@ -537,6 +552,7 @@ export function MobileSessionShell({
 
               {showOverflowMenu && (
                 <>
+                  {/* Inline anchored menu: keep bespoke backdrop/Esc behavior aligned with the panel doctrine. */}
                   <div
                     className="fixed inset-0 z-40"
                     onClick={closeOverflowMenu}
@@ -545,9 +561,7 @@ export function MobileSessionShell({
                   <div
                     className={cn(
                       'absolute right-0 top-full z-50 mt-1 min-w-[188px] overflow-hidden rounded-[3px_10px_3px_10px] border p-1 text-sumi-black shadow-ink-md',
-                      theme === 'dark'
-                        ? 'border-white/10 bg-[#242428]'
-                        : 'border-ink-border bg-washi-white',
+                      'border-ink-border bg-washi-white',
                     )}
                     data-testid="mobile-session-overflow-menu"
                   >
@@ -631,9 +645,7 @@ export function MobileSessionShell({
                           <div
                             className={cn(
                               'ml-auto inline-flex items-center gap-1 rounded-[2px_10px_2px_10px] border p-1',
-                              theme === 'dark'
-                                ? 'border-white/10 bg-black/20'
-                                : 'border-ink-border bg-washi-aged/60',
+                              'border-ink-border bg-washi-aged/60',
                             )}
                           >
                             <button
@@ -642,9 +654,7 @@ export function MobileSessionShell({
                                 'inline-flex items-center gap-1 rounded-[2px_8px_2px_8px] px-2 py-1 text-[10px] font-medium transition-colors',
                                 theme === 'light'
                                   ? 'bg-sumi-black text-washi-white'
-                                  : theme === 'dark'
-                                    ? 'text-white/60 hover:text-washi-white'
-                                    : 'text-sumi-diluted hover:text-sumi-black',
+                                  : 'text-sumi-diluted hover:text-sumi-black',
                               )}
                               aria-label="Use light theme"
                               aria-pressed={theme === 'light'}
@@ -859,6 +869,18 @@ export function MobileSessionShell({
       ) : (
         <>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {hasOlderMessages && onLoadOlderMessages && (
+              <div className="flex justify-center px-4 pt-3">
+                <button
+                  type="button"
+                  className="rounded-[2px_8px_2px_8px] border border-ink-border bg-washi-aged/70 px-3 py-1.5 text-[11px] uppercase tracking-[0.08em] text-sumi-diluted disabled:cursor-wait disabled:opacity-60"
+                  onClick={onLoadOlderMessages}
+                  disabled={loadingOlderMessages}
+                >
+                  {loadingOlderMessages ? 'Loading...' : 'Load older'}
+                </button>
+              </div>
+            )}
             <Transcript
               messages={messages}
               sessionId={sessionName}
@@ -866,10 +888,7 @@ export function MobileSessionShell({
               dark={theme === 'dark'}
               className={usesOverlayChrome
                 ? undefined
-                : cn(
-                  'h-full flex-1 px-4 py-4',
-                  theme === 'dark' ? 'hervald-chat-pane hv-dark' : 'bg-washi-aged/30',
-                )}
+                : 'h-full flex-1 px-4 py-4 hervald-chat-pane'}
               agentAvatarUrl={agentAvatarUrl}
               agentAccentColor={agentAccentColor}
             />
@@ -882,9 +901,7 @@ export function MobileSessionShell({
           <div
             className={cn(
               'border-t px-3 py-2',
-              theme === 'dark'
-                ? 'border-white/10 bg-[#1d1d21]'
-                : 'border-ink-border bg-washi-white',
+              'border-ink-border bg-washi-white',
             )}
           >
             <SessionComposer

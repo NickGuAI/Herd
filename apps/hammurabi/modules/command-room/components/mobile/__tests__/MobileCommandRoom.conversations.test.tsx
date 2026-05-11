@@ -155,6 +155,14 @@ function renderHarness({
 
     function handleSelectConversationId(conversationId: string | null) {
       setSelectedConversationId(conversationId)
+      const params = new URLSearchParams(window.location.search)
+      params.set('commander', commander.id)
+      if (conversationId) {
+        params.set('conversation', conversationId)
+      } else {
+        params.delete('conversation')
+      }
+      window.history.replaceState({}, '', `/command-room?${params.toString()}`)
       onConversationSelected?.(conversationId, { refreshConversations })
     }
 
@@ -411,7 +419,36 @@ describe('MobileCommandRoom conversation mode', () => {
     expect(pageIds).toEqual(['conv-1', 'conv-2', 'conv-3', 'conv-4'])
   })
 
-  it('prefers the active conversation when the URL omits a conversation id', async () => {
+  it('does not replace an explicit URL conversation with a visible fallback while selection is loading', async () => {
+    const onConversationSelected = vi.fn()
+
+    renderHarness({
+      conversations: [
+        buildConversation({
+          id: 'conv-active',
+          name: 'Active chat',
+          status: 'active',
+          createdAt: '2026-05-01T08:05:00.000Z',
+        }),
+      ],
+      initialConversationId: null,
+      path: '/command-room?surface=mobile&commander=cmd-1&conversation=conv-target',
+      onConversationSelected,
+    })
+
+    await flushTimers()
+
+    expect(document.body.querySelector('[data-testid="selected-conversation-id"]')?.textContent).toBe('')
+    expect(window.location.pathname).toBe('/command-room')
+    expect(window.location.search).toContain('commander=cmd-1')
+    expect(window.location.search).toContain('conversation=conv-target')
+    expect(window.location.search).not.toContain('conversation=conv-active')
+    expect(onConversationSelected).not.toHaveBeenCalled()
+  })
+
+  it('leaves backend active-chat selection to the parent when the URL omits a conversation id', async () => {
+    const onConversationSelected = vi.fn()
+
     renderHarness({
       conversations: [
         buildConversation({
@@ -428,17 +465,16 @@ describe('MobileCommandRoom conversation mode', () => {
         }),
       ],
       path: '/command-room?surface=mobile&commander=cmd-1',
+      onConversationSelected,
     })
 
     await flushTimers()
 
-    await vi.waitFor(() => {
-      expect(document.body.querySelector('[data-testid="selected-conversation-id"]')?.textContent).toBe('conv-active')
-      expect(window.location.pathname).toBe('/command-room')
-      expect(window.location.search).toContain('commander=cmd-1')
-      expect(window.location.search).toContain('conversation=conv-active')
-      expect(window.location.search).not.toContain('conversation=conv-idle')
-    })
+    expect(document.body.querySelector('[data-testid="selected-conversation-id"]')?.textContent).toBe('')
+    expect(window.location.pathname).toBe('/command-room')
+    expect(window.location.search).toContain('commander=cmd-1')
+    expect(window.location.search).not.toContain('conversation=')
+    expect(onConversationSelected).not.toHaveBeenCalled()
   })
 
   it('shows registry provider/model pickers and creates an explicitly chosen chat from the empty-state CTA', async () => {

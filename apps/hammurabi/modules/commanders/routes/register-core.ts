@@ -11,9 +11,11 @@ import {
   mimeTypeForAvatarFile,
   readCommanderUiProfile,
   resolveCommanderAvatarPath,
+  sanitizeUiProfile,
   writeCommanderUiProfile,
   type CommanderUiProfile,
 } from '../commander-profile.js'
+import { ensureCommanderVisualProfile } from '../commander-visual-profile.js'
 import {
   createDefaultHeartbeatConfig,
   mergeHeartbeatConfig,
@@ -112,6 +114,7 @@ interface CommanderTemplatePackage {
     contextConfig?: HeartbeatContextConfig
     cwd?: string
     taskSource?: CommanderTaskSource | null
+    profile?: CommanderUiProfile | null
   }
   commanderMd: string | null
   memorySnapshot: {
@@ -350,7 +353,7 @@ async function writeCommanderAvatarBytes(
 
   const existing = await readCommanderUiProfile(commanderId, basePath)
   await writeCommanderUiProfile(commanderId, basePath, {
-    ...(existing ?? {}),
+    ...ensureCommanderVisualProfile(commanderId, existing),
     avatar: avatarFileName,
   } satisfies CommanderUiProfile)
 }
@@ -521,8 +524,12 @@ export function registerCoreRoutes(
   const persistCreatedCommander = async (
     session: CommanderSession,
     displayName: string,
-    heartbeat = session.heartbeat,
+    options: {
+      heartbeat?: CommanderSession['heartbeat']
+      uiProfile?: CommanderUiProfile | null
+    } = {},
   ) => {
+    const heartbeat = options.heartbeat ?? session.heartbeat
     const created = await context.sessionStore.create({
       ...session,
       heartbeat,
@@ -554,6 +561,11 @@ export function registerCoreRoutes(
       )
 
       await upsertCommanderDisplayName(context.commanderDataDir, created.id, displayName)
+      await writeCommanderUiProfile(
+        created.id,
+        context.commanderBasePath,
+        ensureCommanderVisualProfile(created.id, options.uiProfile),
+      )
     } catch (error) {
       await rollbackCreatedCommander()
       throw error
@@ -757,12 +769,12 @@ export function registerCoreRoutes(
     }
 
     const existing = await readCommanderUiProfile(commanderId, context.commanderBasePath)
-    const merged: CommanderUiProfile = {
+    const merged: CommanderUiProfile = ensureCommanderVisualProfile(commanderId, {
       ...(existing ?? {}),
       ...(req.body?.borderColor !== undefined ? { borderColor } : {}),
       ...(req.body?.accentColor !== undefined ? { accentColor } : {}),
       ...(req.body?.speakingTone !== undefined ? { speakingTone } : {}),
-    }
+    })
     await writeCommanderUiProfile(commanderId, context.commanderBasePath, merged)
 
     if (req.body?.persona !== undefined || req.body?.effort !== undefined) {
@@ -1021,7 +1033,7 @@ export function registerCoreRoutes(
     }
 
     try {
-      const created = await persistCreatedCommander(session, displayName, heartbeat)
+      const created = await persistCreatedCommander(session, displayName, { heartbeat })
       res.status(201).json(
         displayName !== created.host
           ? { ...created, displayName }
@@ -1058,6 +1070,7 @@ export function registerCoreRoutes(
         readCommanderWorkflowMarkdown(commanderId, context.commanderBasePath),
         exportRemoteMemorySnapshot(commanderId, context.commanderBasePath),
       ])
+      const profile = await readCommanderUiProfile(commanderId, context.commanderBasePath)
 
       const payload: CommanderTemplatePackage = {
         schemaVersion: 1,
@@ -1076,6 +1089,7 @@ export function registerCoreRoutes(
           ...(session.contextConfig ? { contextConfig: { ...session.contextConfig } } : {}),
           ...(session.cwd ? { cwd: session.cwd } : {}),
           taskSource: session.taskSource ? { ...session.taskSource } : null,
+          ...(profile ? { profile } : {}),
         },
         commanderMd,
         memorySnapshot,
@@ -1195,6 +1209,7 @@ export function registerCoreRoutes(
       ? (memorySnapshot.memoryMd as string)
       : undefined
     const importedAgentType = parsedAgentType ?? 'claude'
+    const importedProfile = sanitizeUiProfile(commander.profile)
     const importedModelValidation = validateModelForAgentType(importedAgentType, parsedModel.value ?? null)
     if (!importedModelValidation.ok) {
       res.status(400).json({ error: importedModelValidation.error, validIds: importedModelValidation.validIds })
@@ -1219,7 +1234,9 @@ export function registerCoreRoutes(
     }
 
     try {
-      const created = await persistCreatedCommander(session, displayName)
+      const created = await persistCreatedCommander(session, displayName, {
+        uiProfile: importedProfile,
+      })
       if (commanderMd !== null) {
         const { commanderRoot } = resolveCommanderPaths(session.id, context.commanderBasePath)
         await mkdir(commanderRoot, { recursive: true })
@@ -1317,7 +1334,10 @@ export function registerCoreRoutes(
     }
 
     try {
-      const created = await persistCreatedCommander(session, displayName)
+      const sourceProfile = await readCommanderUiProfile(sourceCommanderId, context.commanderBasePath)
+      const created = await persistCreatedCommander(session, displayName, {
+        uiProfile: sourceProfile,
+      })
       res.status(201).json(
         displayName !== created.host
           ? { ...created, displayName }

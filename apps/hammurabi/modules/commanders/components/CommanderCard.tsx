@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { ClipboardCheck, Clock3, MessageSquare, Pencil, Play, Square, Trash2, Zap } from 'lucide-react'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { cn } from '@/lib/utils'
+import { AgentAvatar } from '@modules/components/hervald'
+import { ensureCommanderVisualProfile } from '../commander-visual-profile'
 import type { CommanderAgentType, CommanderSession } from '../hooks/useCommander'
 
 export interface CommanderCardProps {
@@ -26,10 +28,15 @@ const STATE_BADGE_CLASSES: Record<CommanderSession['state'], string> = {
   stopped: 'badge-stale',
 }
 
-const CHANNEL_PROVIDER_LABELS: Record<'whatsapp' | 'telegram' | 'discord', string> = {
+const CHANNEL_PROVIDER_LABELS: Record<string, string> = {
   whatsapp: 'WhatsApp',
+  slack: 'Slack',
   telegram: 'Telegram',
   discord: 'Discord',
+  email: 'Email',
+  circle: 'Circle',
+  imessage: 'iMessage',
+  matrix: 'Matrix',
 }
 
 const ACTION_CONTROL_CLASSES =
@@ -43,6 +50,8 @@ declare module '../hooks/useCommander' {
     channelMeta?: {
       provider: 'whatsapp' | 'telegram' | 'discord'
       displayName: string
+      sessionKey?: string
+      subject?: string
     }
   }
 }
@@ -52,7 +61,7 @@ function resolveDisplayName(commander: CommanderSession): string {
   if (!channelMeta) {
     return commander.host
   }
-  const providerLabel = CHANNEL_PROVIDER_LABELS[channelMeta.provider]
+  const providerLabel = CHANNEL_PROVIDER_LABELS[channelMeta.provider] ?? channelMeta.provider
   const baseLabel = channelMeta.displayName.trim() || commander.host
   return `${providerLabel} - ${baseLabel}`
 }
@@ -81,32 +90,29 @@ export function CommanderCard({
   const questCount = commander.questCount ?? 0
   const scheduleCount = commander.scheduleCount ?? 0
 
-  const customBorder = commander.ui?.borderColor?.trim()
+  const visualProfile = ensureCommanderVisualProfile(commander.id, commander.ui ?? null)
 
   const currentTaskTitle = commander.currentTask?.title?.trim()
   const tone = commander.ui?.speakingTone?.trim()
 
   return (
     <div
-      className={cn('card-sumi border-2 p-4', !customBorder && 'border-sumi-mist')}
-      style={customBorder ? { borderColor: customBorder } : undefined}
+      className="card-sumi border-2 p-4"
+      style={{ borderColor: visualProfile.borderColor }}
     >
       {/* Identity, quest/schedule pills, state */}
       <div className="flex flex-wrap items-center gap-2">
-        {commander.avatarUrl ? (
-          <img
-            src={commander.avatarUrl}
-            alt=""
-            className="h-10 w-10 shrink-0 rounded-full border-2 border-sumi-mist object-cover"
-          />
-        ) : (
-          <div
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 border-sumi-mist bg-sumi-mist font-mono text-sm font-semibold text-sumi-black"
-            aria-hidden
-          >
-            {displayName.slice(0, 1).toUpperCase()}
-          </div>
-        )}
+        <AgentAvatar
+          commander={{
+            id: commander.id,
+            displayName,
+            host: commander.host,
+            avatarUrl: commander.avatarUrl,
+            ui: visualProfile,
+          }}
+          size={40}
+          active={isRunning}
+        />
         <p className="min-w-0 flex-1 font-mono text-sm text-sumi-black truncate">{displayName}</p>
         <Link
           to={`/quests?commander=${commander.id}`}

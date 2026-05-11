@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/api'
 import type { AgentSession, AgentType } from '@/types'
+import type { MsgItem } from '@modules/agents/messages/model'
 import type { CommanderCurrentTask } from '@modules/commanders/hooks/useCommander'
 import type { ClaudeAdaptiveThinkingMode } from '@modules/claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '@modules/claude-effort.js'
@@ -17,6 +18,7 @@ const ACTIVE_CONVERSATION_STALE_MS = 30_000
 const COMMANDER_CONVERSATIONS_QUERY_KEY = ['commanders', 'conversations'] as const
 const COMMANDER_ACTIVE_CONVERSATION_QUERY_KEY = ['commanders', 'conversations', 'active'] as const
 const CONVERSATION_DETAIL_QUERY_KEY = ['conversations', 'detail'] as const
+const CONVERSATION_MESSAGES_QUERY_KEY = ['conversations', 'messages'] as const
 
 export interface ConversationRecord extends Omit<ConversationContract, 'currentTask' | 'status' | 'surface'> {
   currentTask: CommanderCurrentTask | null
@@ -74,6 +76,18 @@ interface ConversationMessageResponse {
   accepted: boolean
   createdSession: boolean
   conversation: ConversationRecord
+}
+
+export interface ConversationMessagesPage {
+  conversationId: string
+  sessionName: string
+  source: 'live' | 'transcript' | 'empty'
+  limit: number
+  before: string | null
+  nextBefore: string | null
+  hasMore: boolean
+  totalMessages: number
+  messages: MsgItem[]
 }
 
 interface StartConversationResponse {
@@ -135,6 +149,10 @@ export function conversationDetailQueryKey(conversationId: string) {
   return [...CONVERSATION_DETAIL_QUERY_KEY, conversationId] as const
 }
 
+export function conversationMessagesQueryKey(conversationId: string) {
+  return [...CONVERSATION_MESSAGES_QUERY_KEY, conversationId] as const
+}
+
 async function fetchCommanderConversations(commanderId: string): Promise<ConversationRecord[]> {
   return fetchJson<ConversationRecord[]>(
     `/api/commanders/${encodeURIComponent(commanderId)}/conversations`,
@@ -154,6 +172,25 @@ export const ACTIVE_CONVERSATION_FETCH_STALE_MS = ACTIVE_CONVERSATION_STALE_MS
 async function fetchConversation(conversationId: string): Promise<ConversationRecord> {
   return fetchJson<ConversationRecord>(
     `/api/conversations/${encodeURIComponent(conversationId)}`,
+  )
+}
+
+async function fetchConversationMessagesPage(input: {
+  conversationId: string
+  before?: string | null
+  limit?: number
+}): Promise<ConversationMessagesPage> {
+  const params = new URLSearchParams()
+  if (input.limit !== undefined) {
+    params.set('limit', String(input.limit))
+  }
+  if (input.before) {
+    params.set('before', input.before)
+  }
+
+  const query = params.toString()
+  return fetchJson<ConversationMessagesPage>(
+    `/api/conversations/${encodeURIComponent(input.conversationId)}/messages${query ? `?${query}` : ''}`,
   )
 }
 
@@ -291,6 +328,9 @@ function updateConversationCaches(
   void queryClient.invalidateQueries({
     queryKey: commanderActiveConversationQueryKey(conversation.commanderId),
   })
+  void queryClient.invalidateQueries({
+    queryKey: conversationMessagesQueryKey(conversation.id),
+  })
 }
 
 function removeConversationCaches(
@@ -299,6 +339,10 @@ function removeConversationCaches(
 ) {
   queryClient.removeQueries({
     queryKey: conversationDetailQueryKey(payload.id),
+    exact: true,
+  })
+  queryClient.removeQueries({
+    queryKey: conversationMessagesQueryKey(payload.id),
     exact: true,
   })
   queryClient.setQueryData(
@@ -378,6 +422,29 @@ export function useActiveConversation(
     queryFn: () => fetchCommanderActiveConversation(safeCommanderId ?? ''),
     enabled: Boolean(safeCommanderId) && enabled,
     staleTime: ACTIVE_CONVERSATION_STALE_MS,
+  })
+}
+
+export function useConversationMessages(
+  conversationId?: string | null,
+  enabled = true,
+) {
+  const safeConversationId = typeof conversationId === 'string' && conversationId.trim().length > 0
+    ? conversationId.trim()
+    : null
+
+  return useInfiniteQuery({
+    queryKey: safeConversationId
+      ? conversationMessagesQueryKey(safeConversationId)
+      : [...CONVERSATION_MESSAGES_QUERY_KEY, 'none'],
+    queryFn: ({ pageParam }) => fetchConversationMessagesPage({
+      conversationId: safeConversationId ?? '',
+      before: pageParam,
+    }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextBefore ?? undefined,
+    enabled: Boolean(safeConversationId) && enabled,
+    staleTime: 5_000,
   })
 }
 

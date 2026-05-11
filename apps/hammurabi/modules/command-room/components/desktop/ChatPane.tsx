@@ -12,6 +12,9 @@ interface ChatPaneProps {
   agentAvatarUrl?: string | null
   agentAccentColor?: string | null
   sessionId?: string
+  hasOlderMessages?: boolean
+  loadingOlderMessages?: boolean
+  onLoadOlderMessages?: () => void
 }
 
 function ApprovalDivider() {
@@ -44,6 +47,9 @@ export function ChatPane({
   agentAvatarUrl,
   agentAccentColor,
   sessionId = 'hervald-chat',
+  hasOlderMessages = false,
+  loadingOlderMessages = false,
+  onLoadOlderMessages,
 }: ChatPaneProps) {
   return (
     <div
@@ -52,6 +58,30 @@ export function ChatPane({
         padding: '20px 32px 16px',
       }}
     >
+      {hasOlderMessages && onLoadOlderMessages && (
+        <div style={{ display: 'flex', justifyContent: 'center', paddingBottom: 12 }}>
+          <button
+            type="button"
+            className="font-body"
+            onClick={onLoadOlderMessages}
+            disabled={loadingOlderMessages}
+            style={{
+              border: '1px solid var(--hv-border-hair)',
+              borderRadius: '2px 8px 2px 8px',
+              background: 'var(--hv-bg-raised)',
+              color: 'var(--hv-fg-subtle)',
+              cursor: loadingOlderMessages ? 'wait' : 'pointer',
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              padding: '6px 10px',
+              textTransform: 'uppercase',
+            }}
+          >
+            {loadingOlderMessages ? 'Loading...' : 'Load older'}
+          </button>
+        </div>
+      )}
+
       <Transcript
         messages={messages}
         sessionId={sessionId}

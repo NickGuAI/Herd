@@ -35,13 +35,24 @@ const DEFAULT_CONTEXT_PRESSURE_INPUT_TOKEN_THRESHOLD = 150_000
 
 export type CommanderMessageMode = 'collect' | 'followup'
 
+export type ParsedChannelMessageChannelMeta = Omit<CommanderChannelMeta, 'displayName'> & {
+  displayName?: string
+}
+
 export interface ParsedChannelMessageInput {
   message: string
   mode: CommanderMessageMode
-  channelMeta: CommanderChannelMeta
+  channelMeta: ParsedChannelMessageChannelMeta
   lastRoute: CommanderLastRoute
   commanderId?: string
   host: string
+  audio?: {
+    buffer: Buffer
+    mimeType: string
+    durationMs?: number
+  }
+  rawTimestamp: string | number
+  rawSourceId: string
 }
 
 export function isObject(value: unknown): value is Record<string, unknown> {
@@ -280,15 +291,63 @@ export function parseOptionalPersona(
 }
 
 function parseChannelProvider(raw: unknown): CommanderChannelMeta['provider'] | null {
-  return raw === 'whatsapp' || raw === 'telegram' || raw === 'discord'
-    ? raw
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const normalized = raw.trim().toLowerCase()
+  return /^[a-z][a-z0-9_-]{1,63}$/i.test(normalized)
+    ? normalized as CommanderChannelMeta['provider']
     : null
 }
 
 function parseChannelChatType(raw: unknown): CommanderChannelMeta['chatType'] | null {
-  return raw === 'direct' || raw === 'group' || raw === 'channel' || raw === 'forum-topic'
-    ? raw
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const normalized = raw.trim().toLowerCase()
+  return /^[a-z][a-z0-9_-]{1,63}$/i.test(normalized)
+    ? normalized as CommanderChannelMeta['chatType']
     : null
+}
+
+function parseAudioBuffer(raw: unknown): Buffer | null {
+  if (Buffer.isBuffer(raw)) {
+    return raw
+  }
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    return Buffer.from(raw.trim(), 'base64')
+  }
+  if (Array.isArray(raw) && raw.every((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255)) {
+    return Buffer.from(raw)
+  }
+  if (
+    isObject(raw) &&
+    raw.type === 'Buffer' &&
+    Array.isArray(raw.data) &&
+    raw.data.every((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255)
+  ) {
+    return Buffer.from(raw.data)
+  }
+  return null
+}
+
+function parseChannelAudio(raw: unknown): ParsedChannelMessageInput['audio'] | undefined {
+  if (!isObject(raw)) {
+    return undefined
+  }
+  const buffer = parseAudioBuffer(raw.buffer)
+  const mimeType = parseMessage(raw.mimeType)
+  if (!buffer || !mimeType) {
+    return undefined
+  }
+  const durationMs = typeof raw.durationMs === 'number' && Number.isFinite(raw.durationMs) && raw.durationMs >= 0
+    ? Math.floor(raw.durationMs)
+    : undefined
+  return {
+    buffer,
+    mimeType,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  }
 }
 
 function normalizeChannelHostToken(raw: string): string {
@@ -330,7 +389,7 @@ export function parseChannelMessageInput(
 
   const provider = parseChannelProvider(raw.provider)
   if (!provider) {
-    return { valid: false, error: 'provider must be one of: whatsapp, telegram, discord' }
+    return { valid: false, error: 'provider must be a channel provider id' }
   }
 
   const accountId = parseMessage(raw.accountId)
@@ -338,9 +397,11 @@ export function parseChannelMessageInput(
     return { valid: false, error: 'accountId is required' }
   }
 
-  const parsedChatType = parseChannelChatType(raw.chatType)
+  const parsedChatType = raw.chatType === undefined
+    ? 'direct'
+    : parseChannelChatType(raw.chatType)
   if (!parsedChatType) {
-    return { valid: false, error: 'chatType must be one of: direct, group, channel, forum-topic' }
+    return { valid: false, error: 'chatType must be a channel chat type id' }
   }
 
   const parsedPeerId = parseMessage(raw.peerId)
@@ -348,9 +409,10 @@ export function parseChannelMessageInput(
     return { valid: false, error: 'peerId is required' }
   }
 
-  const message = parseMessage(raw.message)
-  if (!message) {
-    return { valid: false, error: 'message must be a non-empty string' }
+  const audio = parseChannelAudio(raw.audio)
+  const message = parseMessage(raw.message) ?? parseMessage(raw.text)
+  if (!message && !audio) {
+    return { valid: false, error: 'message must be a non-empty string when audio is absent' }
   }
 
   const mode = raw.mode === undefined ? 'followup' : parseMessageMode(raw.mode)
@@ -369,73 +431,25 @@ export function parseChannelMessageInput(
   const subject = parseMessage(raw.subject)
   const space = parseMessage(raw.space)
   const groupId = parseMessage(raw.groupId)
-  const parentPeerId = parseMessage(raw.parentPeerId)
   const threadId = parseMessage(raw.threadId)
 
-  let chatType = parsedChatType
-  let peerId = parsedPeerId
-  let routeThreadId: string | undefined
-  let canonicalParentPeerId = parentPeerId ?? undefined
-
-  if (provider === 'whatsapp') {
-    if (chatType !== 'direct' && chatType !== 'group') {
-      return { valid: false, error: 'whatsapp chatType must be direct or group' }
-    }
-    if (threadId) {
-      return { valid: false, error: 'whatsapp does not support threadId routing' }
-    }
-  }
-
-  if (provider === 'telegram') {
-    if (chatType !== 'direct' && chatType !== 'group' && chatType !== 'forum-topic') {
-      return { valid: false, error: 'telegram chatType must be direct, group, or forum-topic' }
-    }
-    if (chatType === 'forum-topic') {
-      if (!threadId) {
-        return { valid: false, error: 'telegram forum-topic requires threadId' }
-      }
-      routeThreadId = threadId
-    } else if (threadId) {
-      return { valid: false, error: 'telegram threadId is only valid for forum-topic chatType' }
-    }
-  }
-
-  if (provider === 'discord') {
-    if (chatType !== 'direct' && chatType !== 'channel') {
-      return { valid: false, error: 'discord chatType must be direct or channel' }
-    }
-    if (threadId) {
-      if (chatType !== 'channel') {
-        return { valid: false, error: 'discord threadId can only be used with channel chatType' }
-      }
-      const parent = parentPeerId ?? parsedPeerId
-      if (!parent) {
-        return { valid: false, error: 'discord thread routing requires parentPeerId or channel peerId' }
-      }
-      chatType = 'channel'
-      peerId = parent
-      routeThreadId = threadId
-      canonicalParentPeerId = parent
-    }
-  }
-
-  const resolvedDisplayName = displayName ?? subject ?? peerId
-  const channelMeta: CommanderChannelMeta = {
+  const chatType = parsedChatType
+  const peerId = parsedPeerId
+  const channelMeta: ParsedChannelMessageChannelMeta = {
     provider,
     chatType,
     accountId,
     peerId,
-    ...(canonicalParentPeerId ? { parentPeerId: canonicalParentPeerId } : {}),
     ...(groupId ? { groupId } : {}),
-    ...(routeThreadId ? { threadId: routeThreadId } : {}),
+    ...(threadId ? { threadId } : {}),
     sessionKey: buildCommanderSessionKeyFromChannelMeta({
       provider,
       accountId,
       chatType,
       peerId,
-      threadId: routeThreadId,
+      threadId: threadId ?? undefined,
     }),
-    displayName: resolvedDisplayName,
+    ...(displayName ? { displayName } : {}),
     ...(subject ? { subject } : {}),
     ...(space ? { space } : {}),
   }
@@ -444,29 +458,39 @@ export function parseChannelMessageInput(
     channel: provider,
     to: peerId,
     accountId,
-    ...(routeThreadId ? { threadId: routeThreadId } : {}),
+    ...(threadId ? { threadId } : {}),
   }
 
   return {
     valid: true,
     value: {
-      message,
+      message: message ?? '',
       mode,
       ...(commanderId ? { commanderId } : {}),
       channelMeta,
       lastRoute,
       host: buildChannelCommanderHost(channelMeta),
+      ...(audio ? { audio } : {}),
+      rawTimestamp: typeof raw.rawTimestamp === 'number' || typeof raw.rawTimestamp === 'string'
+        ? raw.rawTimestamp
+        : new Date().toISOString(),
+      rawSourceId: parseMessage(raw.rawSourceId) ?? channelMeta.sessionKey,
     },
   }
 }
 
 export function formatChannelCommanderDisplayName(meta: CommanderChannelMeta): string {
-  const providerLabels: Record<CommanderChannelMeta['provider'], string> = {
+  const providerLabels: Record<string, string> = {
     whatsapp: 'WhatsApp',
+    slack: 'Slack',
     telegram: 'Telegram',
     discord: 'Discord',
+    email: 'Email',
+    circle: 'Circle',
+    imessage: 'iMessage',
+    matrix: 'Matrix',
   }
-  return `${providerLabels[meta.provider]} • ${meta.displayName}`
+  return `${providerLabels[meta.provider] ?? meta.provider} • ${meta.displayName}`
 }
 
 export function parseOptionalCommanderAgentType(

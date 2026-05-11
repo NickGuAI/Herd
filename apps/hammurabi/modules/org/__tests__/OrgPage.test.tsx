@@ -26,11 +26,20 @@ vi.mock('@modules/commanders/components/CreateCommanderWizard', () => ({
   CreateCommanderWizard: ({
     onAdd,
     onClose,
+    onBusyChange,
   }: {
     onAdd: (input: { host: string }) => Promise<void>
     onClose: () => void
+    onBusyChange?: (busy: boolean) => void
   }) => (
     <div data-testid="mock-create-commander-wizard">
+      <button
+        type="button"
+        data-testid="mock-create-commander-busy"
+        onClick={() => onBusyChange?.(true)}
+      >
+        Mark wizard busy
+      </button>
       <button
         type="button"
         data-testid="mock-create-commander-confirm"
@@ -642,7 +651,34 @@ describe('OrgPage', () => {
     expect(document.body.querySelectorAll('[data-testid="commander-tile"]')).toHaveLength(1)
   })
 
-  it('auto-opens the wizard once when the first-run onboarding signal is present', async () => {
+  it('asks before closing an active hire wizard session', async () => {
+    mocks.useOrgTree.mockReturnValue({
+      data: createOrgTree(),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    await renderOrgPage()
+    await click('[data-testid="commander-hire-button"]')
+    await click('[data-testid="mock-create-commander-busy"]')
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      await pressEscape()
+      expect(confirmSpy).toHaveBeenCalledTimes(1)
+      expect(document.body.querySelector('[data-testid="mock-create-commander-wizard"]')).not.toBeNull()
+
+      confirmSpy.mockReturnValue(true)
+      await pressEscape()
+      expect(confirmSpy).toHaveBeenCalledTimes(2)
+      expect(document.body.querySelector('[data-testid="mock-create-commander-wizard"]')).toBeNull()
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('clears the first-run onboarding signal without auto-opening the hire wizard', async () => {
     mocks.useOrgTree.mockReturnValue({
       data: createOrgTree({ commanders: [] }),
       isLoading: false,
@@ -655,7 +691,8 @@ describe('OrgPage', () => {
     await vi.waitFor(() => {
       expect(document.body.querySelector('[data-testid="location"]')?.textContent).toBe('/org')
     })
-    expect(document.body.querySelector('[data-testid="mock-create-commander-wizard"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="mock-create-commander-wizard"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="empty-org-hire-button"]')).not.toBeNull()
   })
 
   it('does not auto-open the wizard for a regular zero-commander org page', async () => {

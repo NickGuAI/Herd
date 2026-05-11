@@ -23,7 +23,6 @@ const DESKTOP_SELECT_LABEL_STYLE: CSSProperties = {
   borderRadius: '2px 10px 2px 10px',
   background: 'var(--hv-bg-raised)',
   color: 'var(--hv-fg-subtle)',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 11,
   letterSpacing: '0.12em',
   textTransform: 'uppercase',
@@ -33,7 +32,6 @@ const DESKTOP_SELECT_STYLE: CSSProperties = {
   border: 'none',
   background: 'transparent',
   color: 'var(--hv-fg)',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 13,
   letterSpacing: '0.02em',
   textTransform: 'none',
@@ -109,6 +107,7 @@ export function CommanderStartControl({
   return (
     <div style={DESKTOP_CONTAINER_STYLE}>
       <button
+        className="font-body"
         type="button"
         data-testid="commander-start-button"
         onClick={() => onStart(agentType)}
@@ -120,7 +119,6 @@ export function CommanderStartControl({
           borderRadius: '2px 14px 2px 14px',
           background: 'var(--hv-fg)',
           color: 'var(--hv-fg-inverse)',
-          fontFamily: 'var(--hv-font-body)',
           fontSize: 15,
           letterSpacing: '0.02em',
           cursor: disabled ? 'not-allowed' : 'pointer',
@@ -134,9 +132,10 @@ export function CommanderStartControl({
         <Triangle size={11} className="fill-current" />
         Start {commanderName}
       </button>
-      <label style={DESKTOP_SELECT_LABEL_STYLE}>
+      <label className="font-body" style={DESKTOP_SELECT_LABEL_STYLE}>
         <span>Provider</span>
         <select
+          className="font-body"
           aria-label="Commander provider"
           data-testid="commander-start-agent-type"
           value={agentType}

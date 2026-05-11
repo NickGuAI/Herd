@@ -33,6 +33,11 @@
   --vermillion-seal:     #C23B22;
   --moss-stone:          #6B7B5E;
   --persimmon:           #D4763A;
+  --washi-blue:          #4A6FA5;
+  --muted-plum:          #7D5A8B;
+  --aged-bronze:         #8A6B3C;
+  --pine-stone:          #5E7B6B;
+  --sumi-red:            #A85A5A;
 
   /* ------------------------------------------------------------
      SEMANTIC — foreground
@@ -50,6 +55,12 @@
   --hv-bg-raised:        var(--aged-paper);
   --hv-bg-sunken:        var(--tokonoma-shadow);
   --hv-bg-overlay:       rgba(28, 28, 28, 0.20);
+  --hv-bg-elevated:      var(--aged-paper);
+  --hv-bg-canvas-subtle: var(--tokonoma-shadow);
+  --hv-surface-card:     var(--washi-white);
+  --hv-surface-field:    rgba(28, 28, 28, 0.02);
+  --hv-surface-hover:    rgba(28, 28, 28, 0.03);
+  --hv-surface-selected: rgba(28, 28, 28, 0.04);
 
   /* ------------------------------------------------------------
      BORDERS
@@ -66,11 +77,59 @@
   --hv-ink-wash-03:      rgba(28, 28, 28, 0.08);
 
   /* ------------------------------------------------------------
+     SEMANTIC ACCENTS — named by role, not component
+     ------------------------------------------------------------ */
+  --hv-accent-danger:       var(--vermillion-seal);
+  --hv-accent-success:      #5E6B52;
+  --hv-accent-warning:      #9C4E22;
+  --hv-accent-info:         var(--washi-blue);
+  --hv-accent-plum:         var(--muted-plum);
+  --hv-accent-bronze:       var(--aged-bronze);
+  --hv-accent-pine:         var(--pine-stone);
+  --hv-accent-red:          var(--sumi-red);
+  --hv-accent-danger-wash:  rgba(194, 59, 34, 0.08);
+  --hv-accent-success-wash: rgba(107, 123, 94, 0.10);
+  --hv-accent-warning-wash: rgba(212, 118, 58, 0.10);
+  --hv-accent-info-wash:    rgba(74, 111, 165, 0.10);
+  --hv-chart-primary:       var(--hv-fg);
+  --hv-chart-secondary:     var(--hv-fg-muted);
+  --hv-chart-tertiary:      var(--hv-fg-subtle);
+  --hv-chart-quaternary:    var(--ink-mist);
+
+  --hv-button-primary-bg:       var(--hv-fg);
+  --hv-button-primary-fg:       var(--hv-fg-inverse);
+  --hv-button-primary-hover-bg: var(--hv-fg-muted);
+  --hv-button-ghost-fg:         var(--hv-fg-muted);
+  --hv-button-ghost-border:     rgba(28, 28, 28, 0.15);
+  --hv-button-ghost-hover-bg:   var(--hv-surface-hover);
+  --hv-button-seal-bg:          var(--vermillion-seal);
+  --hv-button-seal-fg:          var(--washi-white);
+
+  --hv-field-bg:                var(--hv-surface-field);
+  --hv-field-border:            var(--hv-border-hair);
+  --hv-field-focus-border:      var(--sumi-black);
+  --hv-field-placeholder:       var(--hv-fg-subtle);
+
+  --hv-badge-neutral-bg:        var(--hv-ink-wash-02);
+  --hv-badge-neutral-fg:        var(--hv-fg-muted);
+  --hv-badge-critical-bg:       var(--hv-accent-danger-wash);
+  --hv-badge-critical-fg:       var(--hv-accent-danger);
+  --hv-badge-success-bg:        var(--hv-accent-success-wash);
+  --hv-badge-success-fg:        var(--hv-accent-success);
+  --hv-badge-warning-bg:        var(--hv-accent-warning-wash);
+  --hv-badge-warning-fg:        var(--hv-accent-warning);
+  --hv-progress-track:          var(--hv-border-hair);
+  --hv-progress-fill:           linear-gradient(90deg, var(--hv-fg-subtle), var(--hv-fg));
+
+  /* ------------------------------------------------------------
      TYPOGRAPHY — fonts & scale
      ------------------------------------------------------------ */
   --hv-font-primary:     'Cormorant Garamond', 'Hiragino Mincho Pro', 'Yu Mincho', 'Times New Roman', serif;
   --hv-font-body:        'Source Sans 3', -apple-system, 'Hiragino Kaku Gothic Pro', 'Helvetica Neue', sans-serif;
   --hv-font-mono:        'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --font-primary:        var(--hv-font-primary);
+  --font-body:           var(--hv-font-body);
+  --font-mono:           var(--hv-font-mono);
 
   --hv-text-display:     32px;
   --hv-text-heading:     22px;
@@ -140,39 +199,178 @@
      ------------------------------------------------------------ */
   --hv-measure-reading:  680px;
   --hv-measure-app:      1120px;
+
+  --bg:                  var(--hv-bg);
+  --bg-raised:           var(--hv-bg-raised);
+  --bg-sunken:           var(--hv-bg-sunken);
+  --bg-overlay:          var(--hv-bg-overlay);
+  --fg:                  var(--hv-fg);
+  --fg-muted:            var(--hv-fg-muted);
+  --fg-subtle:           var(--hv-fg-subtle);
+  --fg-faint:            var(--hv-fg-faint);
+  --fg-inverse:          var(--hv-fg-inverse);
+  --border-hair:         var(--hv-border-hair);
+  --border-soft:         var(--hv-border-soft);
+  --border-firm:         var(--hv-border-firm);
+  --ink-wash-01:         var(--hv-ink-wash-01);
+  --ink-wash-02:         var(--hv-ink-wash-02);
+  --ink-wash-03:         var(--hv-ink-wash-03);
+  --surface-card:        var(--hv-surface-card);
+  --surface-field:       var(--hv-surface-field);
+  --surface-hover:       var(--hv-surface-hover);
+  --surface-selected:    var(--hv-surface-selected);
+  --button-primary-bg:   var(--hv-button-primary-bg);
+  --button-primary-fg:   var(--hv-button-primary-fg);
+  --button-primary-hover-bg: var(--hv-button-primary-hover-bg);
+  --button-ghost-fg:     var(--hv-button-ghost-fg);
+  --button-ghost-border: var(--hv-button-ghost-border);
+  --button-ghost-hover-bg: var(--hv-button-ghost-hover-bg);
+  --button-seal-bg:      var(--hv-button-seal-bg);
+  --button-seal-fg:      var(--hv-button-seal-fg);
+  --field-bg:            var(--hv-field-bg);
+  --field-border:        var(--hv-field-border);
+  --field-focus-border:  var(--hv-field-focus-border);
+  --field-placeholder:   var(--hv-field-placeholder);
+  --badge-neutral-bg:    var(--hv-badge-neutral-bg);
+  --badge-neutral-fg:    var(--hv-badge-neutral-fg);
+  --badge-critical-bg:   var(--hv-badge-critical-bg);
+  --badge-critical-fg:   var(--hv-badge-critical-fg);
+  --badge-success-bg:    var(--hv-badge-success-bg);
+  --badge-success-fg:    var(--hv-badge-success-fg);
+  --badge-warning-bg:    var(--hv-badge-warning-bg);
+  --badge-warning-fg:    var(--hv-badge-warning-fg);
+  --progress-track:      var(--hv-progress-track);
+  --progress-fill:       var(--hv-progress-fill);
 }
 
 .hv-light {
   color-scheme: light;
+
+  --hv-bg:               var(--washi-white);
+  --hv-bg-raised:        var(--aged-paper);
+  --hv-bg-sunken:        var(--tokonoma-shadow);
+  --hv-bg-overlay:       rgba(28, 28, 28, 0.20);
+  --hv-bg-elevated:      var(--aged-paper);
+  --hv-bg-canvas-subtle: var(--tokonoma-shadow);
+  --hv-surface-card:     var(--washi-white);
+  --hv-surface-field:    rgba(28, 28, 28, 0.02);
+  --hv-surface-hover:    rgba(28, 28, 28, 0.03);
+  --hv-surface-selected: rgba(28, 28, 28, 0.04);
+
+  --hv-accent-danger:       var(--vermillion-seal);
+  --hv-accent-success:      #5E6B52;
+  --hv-accent-warning:      #9C4E22;
+  --hv-accent-info:         var(--washi-blue);
+  --hv-accent-plum:         var(--muted-plum);
+  --hv-accent-bronze:       var(--aged-bronze);
+  --hv-accent-pine:         var(--pine-stone);
+  --hv-accent-red:          var(--sumi-red);
+  --hv-accent-danger-wash:  rgba(194, 59, 34, 0.08);
+  --hv-accent-success-wash: rgba(107, 123, 94, 0.10);
+  --hv-accent-warning-wash: rgba(212, 118, 58, 0.10);
+  --hv-accent-info-wash:    rgba(74, 111, 165, 0.10);
+  --hv-chart-primary:       var(--hv-fg);
+  --hv-chart-secondary:     var(--hv-fg-muted);
+  --hv-chart-tertiary:      var(--hv-fg-subtle);
+  --hv-chart-quaternary:    var(--ink-mist);
+
+  --hv-button-primary-bg:       var(--sumi-black);
+  --hv-button-primary-fg:       var(--washi-white);
+  --hv-button-primary-hover-bg: var(--brushed-gray);
+  --hv-button-ghost-fg:         var(--brushed-gray);
+  --hv-button-ghost-border:     rgba(28, 28, 28, 0.15);
+  --hv-button-ghost-hover-bg:   var(--hv-surface-hover);
+  --hv-button-seal-bg:          var(--vermillion-seal);
+  --hv-button-seal-fg:          var(--washi-white);
+  --hv-field-bg:                var(--hv-surface-field);
+  --hv-field-border:            var(--hv-border-hair);
+  --hv-field-focus-border:      var(--sumi-black);
+  --hv-field-placeholder:       var(--hv-fg-subtle);
+  --hv-badge-neutral-bg:        var(--hv-ink-wash-02);
+  --hv-badge-neutral-fg:        var(--brushed-gray);
+  --hv-badge-critical-bg:       var(--hv-accent-danger-wash);
+  --hv-badge-critical-fg:       var(--hv-accent-danger);
+  --hv-badge-success-bg:        var(--hv-accent-success-wash);
+  --hv-badge-success-fg:        var(--hv-accent-success);
+  --hv-badge-warning-bg:        var(--hv-accent-warning-wash);
+  --hv-badge-warning-fg:        var(--hv-accent-warning);
+  --hv-progress-track:          var(--hv-border-hair);
+  --hv-progress-fill:           linear-gradient(90deg, var(--hv-fg-subtle), var(--hv-fg));
 }
 
 .hv-dark {
   color-scheme: dark;
 
-  --hv-fg:               #f2eee7;
-  --hv-fg-muted:         #d4cdc4;
-  --hv-fg-subtle:        #a9a197;
-  --hv-fg-faint:         #7f786f;
-  --hv-fg-inverse:       #141414;
+  --hv-fg:               var(--washi-white);
+  --hv-fg-muted:         var(--tokonoma-shadow);
+  --hv-fg-subtle:        var(--ink-mist);
+  --hv-fg-faint:         var(--stone-gray);
+  --hv-fg-inverse:       var(--sumi-black);
 
-  --hv-bg:               #151515;
-  --hv-bg-raised:        #1c1c1c;
-  --hv-bg-sunken:        #101010;
-  --hv-bg-overlay:       rgba(0, 0, 0, 0.58);
+  --hv-bg:               var(--sumi-black);
+  --hv-bg-raised:        #33302D;
+  --hv-bg-sunken:        #151413;
+  --hv-bg-overlay:       rgba(0, 0, 0, 0.42);
+  --hv-bg-elevated:      #33302D;
+  --hv-bg-canvas-subtle: #292826;
+  --hv-surface-card:     #292826;
+  --hv-surface-field:    rgba(250, 248, 245, 0.04);
+  --hv-surface-hover:    rgba(250, 248, 245, 0.05);
+  --hv-surface-selected: rgba(250, 248, 245, 0.08);
 
   --hv-border-hair:      rgba(250, 248, 245, 0.08);
   --hv-border-soft:      rgba(250, 248, 245, 0.14);
-  --hv-border-firm:      rgba(250, 248, 245, 0.22);
+  --hv-border-firm:      rgba(250, 248, 245, 0.26);
 
-  --hv-ink-wash-01:      rgba(250, 248, 245, 0.02);
-  --hv-ink-wash-02:      rgba(250, 248, 245, 0.05);
+  --hv-ink-wash-01:      rgba(250, 248, 245, 0.03);
+  --hv-ink-wash-02:      rgba(250, 248, 245, 0.06);
   --hv-ink-wash-03:      rgba(250, 248, 245, 0.10);
 
+  --hv-accent-danger:       #D95C47;
+  --hv-accent-success:      #A2AD93;
+  --hv-accent-warning:      #E0A06F;
+  --hv-accent-info:         #7bafd4;
+  --hv-accent-plum:         #b08ac0;
+  --hv-accent-bronze:       #b89458;
+  --hv-accent-pine:         #7fa28d;
+  --hv-accent-red:          #d78181;
+  --hv-accent-danger-wash:  rgba(217, 92, 71, 0.16);
+  --hv-accent-success-wash: rgba(162, 173, 147, 0.14);
+  --hv-accent-warning-wash: rgba(224, 160, 111, 0.14);
+  --hv-accent-info-wash:    rgba(123, 175, 212, 0.14);
+  --hv-chart-primary:       var(--hv-fg);
+  --hv-chart-secondary:     var(--hv-fg-muted);
+  --hv-chart-tertiary:      var(--hv-fg-subtle);
+  --hv-chart-quaternary:    var(--hv-fg-faint);
+
   --hv-shadow-whisper:   0 1px 2px rgba(0, 0, 0, 0.24);
-  --hv-shadow-rest:      0 2px 6px rgba(0, 0, 0, 0.24), 0 12px 40px rgba(0, 0, 0, 0.28);
-  --hv-shadow-lift:      0 6px 24px rgba(0, 0, 0, 0.34);
-  --hv-shadow-float:     0 8px 32px rgba(0, 0, 0, 0.36);
-  --hv-shadow-modal:     0 16px 56px rgba(0, 0, 0, 0.42);
-  --hv-shadow-carved:    inset 0 1px 0 rgba(250, 248, 245, 0.04);
-  --hv-shadow-inner-hi:  inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --hv-button-primary-bg:       var(--washi-white);
+  --hv-button-primary-fg:       var(--sumi-black);
+  --hv-button-primary-hover-bg: var(--tokonoma-shadow);
+  --hv-button-ghost-fg:         var(--tokonoma-shadow);
+  --hv-button-ghost-border:     rgba(250, 248, 245, 0.18);
+  --hv-button-ghost-hover-bg:   var(--hv-surface-hover);
+  --hv-button-seal-bg:          var(--hv-accent-danger);
+  --hv-button-seal-fg:          var(--sumi-black);
+  --hv-field-bg:                var(--hv-surface-field);
+  --hv-field-border:            var(--hv-border-hair);
+  --hv-field-focus-border:      var(--washi-white);
+  --hv-field-placeholder:       var(--hv-fg-faint);
+  --hv-badge-neutral-bg:        rgba(250, 248, 245, 0.08);
+  --hv-badge-neutral-fg:        var(--tokonoma-shadow);
+  --hv-badge-critical-bg:       var(--hv-accent-danger-wash);
+  --hv-badge-critical-fg:       var(--hv-accent-danger);
+  --hv-badge-success-bg:        var(--hv-accent-success-wash);
+  --hv-badge-success-fg:        var(--hv-accent-success);
+  --hv-badge-warning-bg:        var(--hv-accent-warning-wash);
+  --hv-badge-warning-fg:        var(--hv-accent-warning);
+  --hv-progress-track:          rgba(250, 248, 245, 0.08);
+  --hv-progress-fill:           linear-gradient(90deg, var(--stone-gray), var(--washi-white));
+
+  --hv-shadow-rest:      0 2px 4px rgba(0, 0, 0, 0.24), 0 12px 40px rgba(0, 0, 0, 0.22);
+  --hv-shadow-lift:      0 4px 20px rgba(0, 0, 0, 0.28);
+  --hv-shadow-float:     0 8px 32px rgba(0, 0, 0, 0.32);
+  --hv-shadow-modal:     0 12px 48px rgba(0, 0, 0, 0.36);
+  --hv-shadow-carved:    inset 0 2px 8px rgba(0, 0, 0, 0.24);
+  --hv-shadow-inner-hi:  inset 0 1px 0 rgba(250, 248, 245, 0.08);
 }

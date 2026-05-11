@@ -25,7 +25,7 @@ export function CreateConversationPanel({
   defaultAgentType?: AgentType
   providerOptions?: readonly ProviderRegistryEntry[]
 }) {
-  // The corrected #1362 contract: the empty-state panel must NOT create
+  // The corrected issue 1362 contract: the empty-state panel must NOT create
   // anything until the user explicitly confirms (with provider choice). The
   // dropdown sits next to the Create button, and the POST only fires on the
   // button click — never on render, never on commander selection.
@@ -118,6 +118,7 @@ export function CreateConversationPanel({
           >
             <span>Provider</span>
             <select
+              className="font-body"
               data-testid="create-chat-provider-select"
               value={agentType ?? ''}
               onChange={(event) => handleAgentTypeChange(event.target.value as AgentType)}
@@ -126,7 +127,6 @@ export function CreateConversationPanel({
                 background: 'transparent',
                 border: 'none',
                 color: 'var(--hv-fg)',
-                fontFamily: 'var(--hv-font-body)',
                 fontSize: 13,
                 padding: '8px 4px',
                 cursor: disabled ? 'not-allowed' : 'pointer',
@@ -154,6 +154,7 @@ export function CreateConversationPanel({
           >
             <span>Model</span>
             <select
+              className="font-body"
               data-testid="create-chat-model-select"
               value={model ?? ''}
               onChange={(event) => setModel(event.target.value || null)}
@@ -162,7 +163,6 @@ export function CreateConversationPanel({
                 background: 'transparent',
                 border: 'none',
                 color: 'var(--hv-fg)',
-                fontFamily: 'var(--hv-font-body)',
                 fontSize: 13,
                 padding: '8px 4px',
                 cursor: disabled ? 'not-allowed' : 'pointer',
@@ -176,6 +176,7 @@ export function CreateConversationPanel({
             </select>
           </label>
           <button
+            className="font-body"
             type="button"
             data-testid="create-chat-panel-button"
             onClick={() => {
@@ -197,7 +198,6 @@ export function CreateConversationPanel({
               color: 'var(--washi-white)',
               cursor: disabled ? 'not-allowed' : 'pointer',
               opacity: onCreateChat ? 1 : 0.55,
-              fontFamily: 'var(--hv-font-body)',
               fontSize: 13,
               letterSpacing: '0.04em',
             }}

@@ -139,8 +139,8 @@ export function SessionRow({
             }}
           >
             <span
+              className="font-mono"
               style={{
-                fontFamily: 'var(--hv-font-mono)',
                 fontSize: 13,
                 color: 'var(--hv-fg)',
                 letterSpacing: '-0.01em',
@@ -151,6 +151,7 @@ export function SessionRow({
 
             {pendingCount > 0 && (
               <span
+                className="font-body"
                 style={{
                   fontSize: 10,
                   padding: '1px 6px',
@@ -159,7 +160,6 @@ export function SessionRow({
                   borderRadius: '2px 6px 2px 6px',
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  fontFamily: 'var(--hv-font-body)',
                   fontWeight: 500,
                   flexShrink: 0,
                   marginLeft: 6,
@@ -172,6 +172,7 @@ export function SessionRow({
 
           {commander.description && (
             <div
+              className="font-body"
               style={{
                 fontSize: 11.5,
                 color: 'var(--hv-fg-subtle)',
@@ -180,7 +181,6 @@ export function SessionRow({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                fontFamily: 'var(--hv-font-body)',
               }}
             >
               {commander.description.split('.')[0].toLowerCase()}
@@ -193,6 +193,7 @@ export function SessionRow({
         <div style={{ padding: '2px 0 8px' }}>
           <div style={{ padding: '0 20px 6px 36px' }}>
             <button
+              className="font-mono"
               type="button"
               data-testid="commander-new-chat-button"
               onClick={onCreateChat}
@@ -207,7 +208,6 @@ export function SessionRow({
                 color: 'var(--hv-fg-subtle)',
                 cursor: 'pointer',
                 padding: '3px 8px',
-                fontFamily: 'var(--hv-font-mono)',
                 fontSize: 11,
                 letterSpacing: '0.04em',
               }}

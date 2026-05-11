@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -41,11 +42,13 @@ async function renderChannelsCard(commander = createCommander()) {
   root = createRoot(container)
 
   await act(async () => {
-    root?.render(
-      <MemoryRouter>
-        <ChannelsCard commander={commander} />
-      </MemoryRouter>,
-    )
+    flushSync(() => {
+      root?.render(
+        <MemoryRouter>
+          <ChannelsCard commander={commander} />
+        </MemoryRouter>,
+      )
+    })
     await Promise.resolve()
   })
 }

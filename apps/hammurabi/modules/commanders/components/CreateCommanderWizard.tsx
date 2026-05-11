@@ -67,11 +67,13 @@ export function CreateCommanderWizard({
   isPending,
   onClose,
   onWizardCreated,
+  onBusyChange,
 }: {
   onAdd: (input: CommanderCreateInput) => Promise<void>
   isPending: boolean
   onClose: () => void
   onWizardCreated?: () => Promise<void> | void
+  onBusyChange?: (busy: boolean) => void
 }) {
   const initialArchetype = resolvedInitialArchetype()
   const runtimeConfigQuery = useQuery({
@@ -119,6 +121,12 @@ export function CreateCommanderWizard({
       setMaxTurns(String(runtimeConfig.defaults.maxTurns))
     }
   }, [maxTurnsDirty, runtimeConfig.defaults.maxTurns])
+
+  useEffect(() => {
+    if (mode !== 'chat') {
+      onBusyChange?.(isPending)
+    }
+  }, [isPending, mode, onBusyChange])
 
   const currentProvider = useMemo(
     () => providers.find((provider) => provider.id === agentType) ?? null,
@@ -300,6 +308,7 @@ export function CreateCommanderWizard({
       <WizardChatPanel
         onCancel={() => setMode('choice')}
         onCreated={handleWizardCreated}
+        onBusyChange={onBusyChange}
       />
     )
   }

@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { fetchJson, getAccessToken } from '@/lib/api'
 import { getWsBase } from '@/lib/api-base'
 import { useIsMobile } from '@/hooks/use-is-mobile'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import type {
   AgentType,
   SessionQueueSnapshot,
@@ -93,7 +94,6 @@ export function MobileSessionView({
 
   const wsRef = useRef<WebSocket | null>(null)
   const sessionNameRef = useRef(sessionName)
-  const workersMenuRef = useRef<HTMLDivElement>(null)
   const initialWorkersRef = useRef<string[]>(initialSpawnedWorkers ?? [])
 
   useEffect(() => {
@@ -262,27 +262,6 @@ export function MobileSessionView({
       window.clearInterval(interval)
     }
   }, [knownWorkerNames.length, refreshWorkers])
-
-  useEffect(() => {
-    if (isMobile || !workersOpen) {
-      return
-    }
-
-    const handleOutsideClick = (event: MouseEvent) => {
-      const target = event.target as Node | null
-      if (!target) {
-        return
-      }
-      if (!workersMenuRef.current?.contains(target)) {
-        setWorkersOpen(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleOutsideClick)
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick)
-    }
-  }, [isMobile, workersOpen])
 
   useEffect(() => {
     resetMessages()
@@ -757,58 +736,66 @@ export function MobileSessionView({
       />
 
       {!isMobile && dispatchOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-sumi-black/50 px-4">
-          <div className="w-full max-w-md rounded-xl border border-ink-border bg-washi-white p-4 shadow-ink-md">
-            <div className="mb-3 text-sm font-mono text-sumi-black">Dispatch Worker</div>
-            <form onSubmit={handleDispatch} className="space-y-3">
-              <div>
-                <label className="mb-1 block text-whisper text-sumi-diluted">Initial task</label>
-                <textarea
-                  value={dispatchTask}
-                  onChange={(event) => setDispatchTask(event.target.value)}
-                  rows={3}
-                  className="w-full resize-none rounded-lg border border-ink-border px-3 py-2 text-sm text-sumi-black"
-                  placeholder="Optional. Leave blank to create the worker first, then send a command."
-                />
-              </div>
-              {dispatchError && (
-                <div className="text-whisper text-accent-vermillion">{dispatchError}</div>
-              )}
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  className="rounded-lg border border-ink-border px-3 py-1.5 text-sm text-sumi-diluted"
-                  onClick={() => setDispatchOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-sumi-black px-3 py-1.5 text-sm text-white disabled:opacity-60"
-                  disabled={isDispatching}
-                >
-                  {isDispatching ? 'Dispatching...' : 'Dispatch'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <DismissibleOverlay
+          open
+          onClose={() => setDispatchOpen(false)}
+          title="Dispatch Worker"
+          position="modal"
+          containerClassName="z-[60] px-4"
+          contentClassName="w-full max-w-md rounded-xl border border-ink-border bg-washi-white p-4 shadow-ink-md"
+        >
+          <div className="mb-3 text-sm font-mono text-sumi-black">Dispatch Worker</div>
+          <form onSubmit={handleDispatch} className="space-y-3">
+            <div>
+              <label className="mb-1 block text-whisper text-sumi-diluted">Initial task</label>
+              <textarea
+                value={dispatchTask}
+                onChange={(event) => setDispatchTask(event.target.value)}
+                rows={3}
+                className="w-full resize-none rounded-lg border border-ink-border px-3 py-2 text-sm text-sumi-black"
+                placeholder="Optional. Leave blank to create the worker first, then send a command."
+              />
+            </div>
+            {dispatchError && (
+              <div className="text-whisper text-accent-vermillion">{dispatchError}</div>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-ink-border px-3 py-1.5 text-sm text-sumi-diluted"
+                onClick={() => setDispatchOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded-lg bg-sumi-black px-3 py-1.5 text-sm text-white disabled:opacity-60"
+                disabled={isDispatching}
+              >
+                {isDispatching ? 'Dispatching...' : 'Dispatch'}
+              </button>
+            </div>
+          </form>
+        </DismissibleOverlay>
       )}
 
-      {isMobile && (
-        <>
-          <div
-            className={cn('sheet-backdrop', (workersOpen || dispatchOpen) && 'visible')}
-            onClick={() => {
-              setWorkersOpen(false)
-              setDispatchOpen(false)
-            }}
-          />
-
-          <div
-            className={cn('sheet', workersOpen && 'visible')}
-            style={{ maxHeight: '50vh', height: '50vh' }}
-          >
+      {isMobile && (workersOpen || dispatchOpen) && (
+        <DismissibleOverlay
+          open={workersOpen || dispatchOpen}
+          onClose={() => {
+            setWorkersOpen(false)
+            setDispatchOpen(false)
+          }}
+          title={dispatchOpen ? 'Dispatch Worker' : 'Workers'}
+          position="bottom-sheet"
+          contentClassName="sheet visible"
+          contentStyle={{
+            maxHeight: dispatchOpen ? '42vh' : '50vh',
+            height: dispatchOpen ? '42vh' : '50vh',
+          }}
+        >
+          {!dispatchOpen ? (
+            <>
             <div className="sheet-handle">
               <div className="sheet-handle-bar" />
             </div>
@@ -865,18 +852,16 @@ export function MobileSessionView({
                 )}
                 onClick={() => {
                   setDispatchError(null)
+                  setWorkersOpen(false)
                   setDispatchOpen(true)
                 }}
               >
                 + Dispatch New
               </button>
             </div>
-          </div>
-
-          <div
-            className={cn('sheet', dispatchOpen && 'visible')}
-            style={{ maxHeight: '42vh', height: '42vh' }}
-          >
+            </>
+          ) : (
+            <>
             <div className="sheet-handle">
               <div className="sheet-handle-bar" />
             </div>
@@ -915,14 +900,20 @@ export function MobileSessionView({
                 </button>
               </form>
             </div>
-          </div>
-        </>
+            </>
+          )}
+        </DismissibleOverlay>
       )}
 
       {!isMobile && workersOpen && (
-        <div ref={workersMenuRef}>
-          <div className="fixed inset-0 z-40" onClick={() => setWorkersOpen(false)} />
-          <div className="fixed right-4 top-16 z-50 w-72 rounded-xl border border-ink-border bg-washi-white shadow-ink-md">
+        <DismissibleOverlay
+          open
+          onClose={() => setWorkersOpen(false)}
+          title="Workers"
+          position="modal"
+          backdropClassName="bg-transparent"
+          contentClassName="fixed right-4 top-16 z-50 w-72 rounded-xl border border-ink-border bg-washi-white shadow-ink-md"
+        >
             <div className="border-b border-ink-border px-3 py-2 text-xs font-mono text-sumi-diluted">Workers</div>
             <div className="max-h-64 overflow-y-auto">
               {workerRows.map((worker) => (
@@ -966,8 +957,7 @@ export function MobileSessionView({
                 + Dispatch
               </button>
             </div>
-          </div>
-        </div>
+        </DismissibleOverlay>
       )}
 
       {workspaceSource && (

@@ -14,6 +14,7 @@ import {
 import { findProviderEntry, useProviderRegistry } from '@/hooks/use-providers'
 import { cn } from '@/lib/utils'
 import { useIsMobile } from '@/hooks/use-is-mobile'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import type { AgentType, SessionTransportType } from '@/types'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -310,12 +311,13 @@ export default function AgentsPage() {
           </div>
 
           {isMobile ? (
-            <>
-              <div
-                className={cn('sheet-backdrop', showNewSessionForm && 'visible')}
-                onClick={() => setShowNewSessionForm(false)}
-              />
-              <div className={cn('sheet', showNewSessionForm && 'visible')}>
+            <DismissibleOverlay
+              open={showNewSessionForm}
+              onClose={() => setShowNewSessionForm(false)}
+              title="New Session"
+              position="bottom-sheet"
+              contentClassName="sheet visible"
+            >
                 <div className="sheet-handle">
                   <div className="sheet-handle-bar" />
                 </div>
@@ -348,8 +350,7 @@ export default function AgentsPage() {
                     onSubmit={handleCreateSession}
                   />
                 </div>
-              </div>
-            </>
+            </DismissibleOverlay>
           ) : (
             showNewSessionForm && (
               <div className="mt-5 card-sumi p-4">

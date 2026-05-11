@@ -30,7 +30,7 @@ export function resolveCommanderDataDir(env: NodeJS.ProcessEnv = process.env): s
     return alternateConfigured
   }
 
-  return resolveModuleDataDir('commander')
+  return resolveModuleDataDir('commander', env)
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

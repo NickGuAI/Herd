@@ -73,7 +73,10 @@ describe('bootstrapDefaultMasterKey', () => {
     const [record] = await store.listKeys()
     expect(record?.name).toBe('Bootstrap Master Key')
     expect(record?.createdBy).toBe('system')
-    expect(record?.scopes).not.toContain('agents:admin')
+    // The bootstrap master key is the founder's full-admin key. It includes
+    // agents:admin so the founder can manage their own API keys via the
+    // /keys management routes without hand-editing the on-disk store.
+    expect(record?.scopes).toContain('agents:admin')
   })
 
   it('logs the random plaintext exactly once for operator retrieval', async () => {

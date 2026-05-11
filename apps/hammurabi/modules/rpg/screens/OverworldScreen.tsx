@@ -153,7 +153,7 @@ function QuestBoard({ onClose }: { onClose: () => void }) {
   }, [quests])
 
   return (
-    <div className="absolute inset-x-6 bottom-6 top-12 z-40 flex overflow-hidden rounded border border-amber-700/50 bg-[#1a1108]/95 shadow-2xl shadow-black/60 backdrop-blur-sm">
+    <div className="absolute inset-x-6 bottom-6 top-12 z-40 flex overflow-hidden rounded border border-amber-700/50 bg-amber-950/95 shadow-2xl shadow-black/60 backdrop-blur-sm">
       {/* Left pane — commander + quest list */}
       <div className="flex w-[320px] shrink-0 flex-col border-r border-amber-900/40">
         {/* Header */}
@@ -510,7 +510,7 @@ function AgentControl({ onClose }: { onClose: () => void }) {
   })
 
   return (
-    <div className="absolute inset-x-6 bottom-6 top-12 z-40 flex flex-col overflow-hidden rounded border border-cyan-800/50 bg-[#0a1118]/95 shadow-2xl shadow-black/60 backdrop-blur-sm">
+    <div className="absolute inset-x-6 bottom-6 top-12 z-40 flex flex-col overflow-hidden rounded border border-cyan-800/50 bg-cyan-950/95 shadow-2xl shadow-black/60 backdrop-blur-sm">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-cyan-800/40 px-5 py-3">
         <h2 className="font-serif text-lg font-bold tracking-wide text-cyan-100">Agent Control</h2>
@@ -653,7 +653,7 @@ function AgentControl({ onClose }: { onClose: () => void }) {
       {showRecruit ? (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 backdrop-blur-sm">
           <form
-            className="w-[400px] rounded border border-cyan-700/50 bg-[#0a1118] p-5 shadow-xl"
+            className="w-[400px] rounded border border-cyan-700/50 bg-cyan-950 p-5 shadow-xl"
             onSubmit={(e) => {
               e.preventDefault()
               const fd = new FormData(e.currentTarget)

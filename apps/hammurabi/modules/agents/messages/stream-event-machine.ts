@@ -38,6 +38,7 @@ export type StreamEventProcessorContext = {
   nextId: () => string
   setMessages: (updater: (prev: MsgItem[]) => MsgItem[]) => void
   setIsStreaming: (value: boolean) => void
+  capMessages?: (msgs: MsgItem[]) => MsgItem[]
   onWorkspaceMutation?: () => void
 }
 
@@ -91,7 +92,12 @@ function appendPlanningMessage(
   context: StreamEventProcessorContext,
   event: Extract<StreamEvent, { type: 'planning' }>,
 ) {
-  context.setMessages((prev) => capMessages([...prev, toPlanningMessage(context.nextId(), event)]))
+  context.setMessages((prev) =>
+    (context.capMessages ?? capMessages)([
+      ...prev,
+      toPlanningMessage(context.nextId(), event),
+    ]),
+  )
 }
 
 function appendPlanningToolUse(
@@ -220,19 +226,19 @@ function appendSubagentSystemMessage(
     }
 
     if (parentIndex === -1) {
-      return capMessages([...prev, childMsg])
+      return (context.capMessages ?? capMessages)([...prev, childMsg])
     }
 
     const updated = [...prev]
     const parent = updated[parentIndex]
     if (parent.kind !== 'tool') {
-      return capMessages([...prev, childMsg])
+      return (context.capMessages ?? capMessages)([...prev, childMsg])
     }
     updated[parentIndex] = {
       ...parent,
       children: [...(parent.children ?? []), childMsg],
     }
-    return capMessages(updated)
+    return (context.capMessages ?? capMessages)(updated)
   })
 }
 
@@ -248,7 +254,10 @@ export function processStreamEvent(
       ?? extractAgentMessageText(event)
     if (text) {
       context.setMessages((prev) =>
-        capMessages([...prev, { id: context.nextId(), kind: 'agent', text }]),
+        (context.capMessages ?? capMessages)([
+          ...prev,
+          { id: context.nextId(), kind: 'agent', text },
+        ]),
       )
     }
     return
@@ -273,7 +282,12 @@ export function processStreamEvent(
             continue
           }
           const id = context.nextId()
-          context.setMessages((prev) => capMessages([...prev, { id, kind: 'agent', text }]))
+          context.setMessages((prev) =>
+            (context.capMessages ?? capMessages)([
+              ...prev,
+              { id, kind: 'agent', text },
+            ]),
+          )
         } else if (block.type === 'thinking') {
           const text =
             (typeof block.thinking === 'string' ? block.thinking : undefined)
@@ -328,7 +342,10 @@ export function processStreamEvent(
               }
 
               const id = context.nextId()
-              return capMessages([...prev, { id, kind: 'thinking', text }])
+              return (context.capMessages ?? capMessages)([
+                ...prev,
+                { id, kind: 'thinking', text },
+              ])
             })
 
             if (context.state.currentBlock?.type === 'thinking') {
@@ -344,10 +361,9 @@ export function processStreamEvent(
             // we have a signature, render a deterministic redaction stub so the
             // pill still renders and signals upstream re-encryption.
             const trimmed = text.trim()
-            const signature =
-              typeof (block as { signature?: unknown }).signature === 'string'
-                ? ((block as { signature: string }).signature)
-                : ''
+            const signature = typeof block.signature === 'string'
+              ? block.signature
+              : ''
             let body: string | null = null
             if (trimmed.length > 0) {
               body = trimmed
@@ -358,7 +374,12 @@ export function processStreamEvent(
               continue
             }
             const id = context.nextId()
-            context.setMessages((prev) => capMessages([...prev, { id, kind: 'thinking', text: body! }]))
+            context.setMessages((prev) =>
+              (context.capMessages ?? capMessages)([
+                ...prev,
+                { id, kind: 'thinking', text: body! },
+              ]),
+            )
             continue
           }
 
@@ -367,16 +388,26 @@ export function processStreamEvent(
             continue
           }
           const id = context.nextId()
-          context.setMessages((prev) => capMessages([...prev, { id, kind: 'thinking', text }]))
+          context.setMessages((prev) =>
+            (context.capMessages ?? capMessages)([
+              ...prev,
+              { id, kind: 'thinking', text },
+            ]),
+          )
         } else if ((block as { type?: string }).type === 'agent_message') {
           const text = extractAgentMessageText(block)
           if (!text) {
             continue
           }
           const id = context.nextId()
-          context.setMessages((prev) => capMessages([...prev, { id, kind: 'agent', text }]))
+          context.setMessages((prev) =>
+            (context.capMessages ?? capMessages)([
+              ...prev,
+              { id, kind: 'agent', text },
+            ]),
+          )
         } else if (block.type === 'tool_use') {
-          if (isPlanningToolName(block.name)) {
+          if (typeof block.id === 'string' && isPlanningToolName(block.name)) {
             context.state.planningToolNames[block.id] = block.name
             appendPlanningToolUse(context, block.name, block.input)
             continue
@@ -402,7 +433,7 @@ export function processStreamEvent(
                 updated[existingIdx] = { ...existing, askQuestions: nextQuestions }
                 return updated
               }
-              return capMessages([
+              return (context.capMessages ?? capMessages)([
                 ...prev,
                 {
                   id,
@@ -425,7 +456,7 @@ export function processStreamEvent(
                 ? extractSubagentDescription(block.input) ?? SUBAGENT_WORKING_LABEL
                 : undefined
             context.setMessages((prev) =>
-              capMessages([
+              (context.capMessages ?? capMessages)([
                 ...prev,
                 {
                   id,
@@ -461,7 +492,10 @@ export function processStreamEvent(
           break
         }
         context.setMessages((prev) =>
-          capMessages([...prev, createUserMessage(context.nextId(), content.trim())]),
+          (context.capMessages ?? capMessages)([
+            ...prev,
+            createUserMessage(context.nextId(), content.trim()),
+          ]),
         )
         break
       }
@@ -489,7 +523,7 @@ export function processStreamEvent(
             }
           }
           context.setMessages((prev) =>
-            capMessages([
+            (context.capMessages ?? capMessages)([
               ...prev,
               createUserMessage(context.nextId(), text, images),
             ]),
@@ -511,12 +545,13 @@ export function processStreamEvent(
             result.tool_use_id ? context.state.planningToolNames[result.tool_use_id] : undefined
           if (planningToolName) {
             if (planningToolName === 'ExitPlanMode') {
-              updated.push(
-                toPlanningMessage(
-                  context.nextId(),
-                  parsePlanningToolResult(result.content ?? event.tool_use_result, result.is_error),
-                ),
+              const planningEvent = parsePlanningToolResult(
+                result.content ?? event.tool_use_result,
+                result.is_error,
               )
+              if (planningEvent) {
+                updated.push(toPlanningMessage(context.nextId(), planningEvent))
+              }
             }
             delete context.state.planningToolNames[result.tool_use_id!]
             continue
@@ -566,7 +601,7 @@ export function processStreamEvent(
             }
           }
         }
-        return capMessages(updated)
+        return (context.capMessages ?? capMessages)(updated)
       })
       if (shouldTriggerWorkspaceRefresh) {
         context.onWorkspaceMutation?.()
@@ -579,19 +614,29 @@ export function processStreamEvent(
       if (block.type === 'text') {
         const id = context.nextId()
         context.state.currentBlock = { type: 'text', msgId: id }
-        context.setMessages((prev) => capMessages([...prev, { id, kind: 'agent', text: '' }]))
+        context.setMessages((prev) =>
+          (context.capMessages ?? capMessages)([
+            ...prev,
+            { id, kind: 'agent', text: '' },
+          ]),
+        )
         if (!isReplay) {
           context.setIsStreaming(true)
         }
       } else if (block.type === 'thinking') {
         const id = context.nextId()
         context.state.currentBlock = { type: 'thinking', msgId: id }
-        context.setMessages((prev) => capMessages([...prev, { id, kind: 'thinking', text: '' }]))
+        context.setMessages((prev) =>
+          (context.capMessages ?? capMessages)([
+            ...prev,
+            { id, kind: 'thinking', text: '' },
+          ]),
+        )
         if (!isReplay) {
           context.setIsStreaming(true)
         }
       } else if (block.type === 'tool_use') {
-        if (isPlanningToolName(block.name)) {
+        if (typeof block.id === 'string' && isPlanningToolName(block.name)) {
           context.state.planningToolNames[block.id] = block.name
           if (block.name === 'EnterPlanMode') {
             context.state.currentBlock = null
@@ -621,7 +666,7 @@ export function processStreamEvent(
         }
         if (block.name !== 'AskUserQuestion') {
           context.setMessages((prev) =>
-            capMessages([
+            (context.capMessages ?? capMessages)([
               ...prev,
               {
                 id,
@@ -728,7 +773,7 @@ export function processStreamEvent(
               updated[existingIdx] = { ...existing, askQuestions: questions }
               return updated
             }
-            return capMessages([
+            return (context.capMessages ?? capMessages)([
               ...prev,
               {
                 id: currentBlock.msgId,
@@ -789,7 +834,7 @@ export function processStreamEvent(
       const resultStatus = event.is_error ? ('error' as const) : ('success' as const)
       const isSubagentResult = !event.duration_ms
       context.setMessages((prev) =>
-        capMessages([
+        (context.capMessages ?? capMessages)([
           ...prev.map((message) =>
             message.kind === 'tool' && message.toolStatus === 'running'
               ? { ...message, toolStatus: resultStatus }
@@ -812,12 +857,12 @@ export function processStreamEvent(
           (message) => message.kind === 'tool' && message.toolStatus === 'running',
         )
         if (!hasRunning) {
-          return capMessages([
+          return (context.capMessages ?? capMessages)([
             ...prev,
             { id: context.nextId(), kind: 'system', text: 'Session ended' },
           ])
         }
-        return capMessages([
+        return (context.capMessages ?? capMessages)([
           ...prev.map((message) =>
             message.kind === 'tool' && message.toolStatus === 'running'
               ? { ...message, toolStatus: 'error' as const }
@@ -871,7 +916,10 @@ export function processStreamEvent(
         break
       }
       context.setMessages((prev) =>
-        capMessages([...prev, { id: context.nextId(), kind: 'system', text: event.text ?? '' }]),
+        (context.capMessages ?? capMessages)([
+          ...prev,
+          { id: context.nextId(), kind: 'system', text: event.text ?? '' },
+        ]),
       )
       break
     }

@@ -268,7 +268,9 @@ describe('ApiKeyJsonStore', () => {
 
     const [refreshed] = await store.listKeys()
     expect(refreshed?.scopes).toEqual([...DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES])
-    expect(refreshed?.scopes).not.toContain('agents:admin')
+    // Backfill brings the on-disk key up to the current bootstrap shape, which
+    // includes agents:admin so the founder can manage their own API keys.
+    expect(refreshed?.scopes).toContain('agents:admin')
 
     const verification = await store.verifyKey(rawKey, {
       requiredScopes: ['skills:read'],
@@ -292,6 +294,10 @@ describe('ApiKeyJsonStore', () => {
     })
     expect(verification).toMatchObject({ ok: true })
     expect(API_KEY_SCOPES).toContain('agents:admin')
-    expect(DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES).not.toContain('agents:admin')
+    // The bootstrap master key is the founder's full-admin key. It must include
+    // agents:admin so the founder can manage their own API keys (rotate, mint
+    // scoped keys, etc.) via the /keys management routes without hand-editing
+    // the on-disk store.
+    expect(DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES).toContain('agents:admin')
   })
 })

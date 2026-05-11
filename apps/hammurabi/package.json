@@ -8,7 +8,7 @@
   },
   "scripts": {
     "generate:provider-registry": "node ./scripts/generate-provider-registry.mjs",
-    "build:deps": "pnpm run generate:provider-registry && pnpm --filter @gehirn/hammurabi-cli build && pnpm --filter @gehirn/auth-providers build && pnpm --filter @gehirn/telemetry build && pnpm --filter @gehirn/sse-streaming build",
+    "build:deps": "pnpm run generate:provider-registry && pnpm --filter @gehirn/hammurabi-cli build && pnpm --filter @gehirn/auth-providers build && pnpm --filter @gehirn/telemetry build && pnpm --filter @gehirn/sse-streaming build && pnpm --filter @gehirn/transcription build",
     "dev": "pnpm run build:deps && concurrently \"vite\" \"tsx watch server/index.ts\"",
     "dev:client": "vite",
     "dev:server": "tsx watch server/index.ts",
@@ -32,6 +32,7 @@
     "@gehirn/hammurabi-cli": "workspace:*",
     "@gehirn/sse-streaming": "workspace:*",
     "@gehirn/telemetry": "workspace:*",
+    "@gehirn/transcription": "workspace:*",
     "@lydell/node-pty": "1.2.0-beta.3",
     "@pixi/react": "^8.0.5",
     "@tanstack/react-query": "^5.62.0",

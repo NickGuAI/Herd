@@ -1,7 +1,7 @@
 /**
  * Hervald — Dark top bar.
  *
- * Replaces the left sidebar. Full-width, 48px, #0e0e10 background.
+ * Replaces the left sidebar. Full-width Hervald chrome.
  * Vermillion dot + italic "Hervald" branding, breadcrumb nav,
  * inline tab navigation, status counters, and ops overflow.
  */
@@ -53,12 +53,12 @@ const headerStyle: CSSProperties = {
   height: 48,
   flexShrink: 0,
   padding: '0 22px',
-  background: '#0e0e10',
-  color: 'var(--washi-white)',
+  background: 'var(--hv-bg-raised)',
+  color: 'var(--hv-fg)',
   display: 'flex',
   alignItems: 'center',
   gap: 16,
-  borderBottom: '1px solid #000',
+  borderBottom: '1px solid var(--hv-border-hair)',
 }
 
 const brandingStyle: CSSProperties = {
@@ -76,23 +76,21 @@ const dotStyle: CSSProperties = {
 }
 
 const nameStyle: CSSProperties = {
-  fontFamily: 'var(--hv-font-primary)',
   fontStyle: 'italic',
   fontSize: 15,
-  color: 'var(--washi-white)',
+  color: 'var(--hv-fg)',
 }
 
 const separatorStyle: CSSProperties = {
-  color: '#3a3a3d',
+  color: 'var(--hv-fg-faint)',
   margin: '0 4px',
 }
 
 const breadcrumbStyle: CSSProperties = {
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 11,
   letterSpacing: '0.18em',
   textTransform: 'uppercase',
-  color: 'var(--washi-white)',
+  color: 'var(--hv-fg)',
 }
 
 const tabBase: CSSProperties = {
@@ -100,9 +98,8 @@ const tabBase: CSSProperties = {
   border: 'none',
   cursor: 'pointer',
   padding: '4px 10px',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 13,
-  color: 'var(--washi-white)',
+  color: 'var(--hv-fg)',
   letterSpacing: '0.14em',
   textTransform: 'uppercase',
   textDecoration: 'none',
@@ -115,11 +112,11 @@ const countersStyle: CSSProperties = {
   fontSize: 10.5,
   letterSpacing: '0.16em',
   textTransform: 'uppercase',
-  color: '#a09d96',
+  color: 'var(--hv-fg-subtle)',
 }
 
 const countValueStyle: CSSProperties = {
-  color: 'var(--washi-white)',
+  color: 'var(--hv-fg)',
   fontWeight: 500,
 }
 
@@ -136,10 +133,10 @@ const overflowMenuStyle: CSSProperties = {
   right: 0,
   minWidth: 180,
   padding: 8,
-  background: '#18181b',
-  border: '1px solid #26262b',
+  background: 'var(--hv-bg-elevated)',
+  border: '1px solid var(--hv-border-soft)',
   borderRadius: 10,
-  boxShadow: '0 16px 32px rgba(0, 0, 0, 0.35)',
+  boxShadow: 'var(--hv-shadow-modal)',
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
@@ -149,10 +146,10 @@ const overflowMenuStyle: CSSProperties = {
 const iconButtonStyle: CSSProperties = {
   width: 30,
   height: 30,
-  border: '1px solid rgba(250, 248, 245, 0.16)',
+  border: '1px solid var(--hv-border-soft)',
   borderRadius: 8,
-  background: 'rgba(250, 248, 245, 0.04)',
-  color: 'var(--washi-white)',
+  background: 'var(--hv-ink-wash-02)',
+  color: 'var(--hv-fg)',
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -211,13 +208,13 @@ export function TopBar({ modules, counts }: TopBarProps) {
       {/* Branding */}
       <div style={brandingStyle}>
         <span style={dotStyle} />
-        <span style={nameStyle}>Hervald</span>
+        <span className="font-display" style={nameStyle}>Hervald</span>
       </div>
 
       <span style={separatorStyle}>/</span>
 
       {/* Breadcrumb — current page */}
-      <span style={breadcrumbStyle}>{breadcrumb}</span>
+      <span className="font-body" style={breadcrumbStyle}>{breadcrumb}</span>
 
       {/* Spacer */}
       <span style={{ flex: 1 }} />
@@ -228,11 +225,12 @@ export function TopBar({ modules, counts }: TopBarProps) {
           <NavLink
             key={mod.name}
             to={mod.path}
+            className="font-body"
             style={({ isActive }) => ({
               ...tabBase,
-              color: isActive ? 'var(--washi-white)' : 'var(--washi-white)',
+              color: 'var(--hv-fg)',
               borderBottom: isActive
-                ? '1px solid var(--washi-white)'
+                ? '1px solid var(--hv-fg)'
                 : '1px solid transparent',
             })}
           >
@@ -243,12 +241,13 @@ export function TopBar({ modules, counts }: TopBarProps) {
           <div ref={overflowRef} style={{ position: 'relative' }}>
             <button
               type="button"
+              className="font-body"
               style={{
                 ...overflowButtonStyle,
-                color: activeSecondary || showOverflow ? 'var(--washi-white)' : 'var(--washi-white)',
+                color: 'var(--hv-fg)',
                 borderBottom:
                   activeSecondary || showOverflow
-                    ? '1px solid var(--washi-white)'
+                    ? '1px solid var(--hv-fg)'
                     : '1px solid transparent',
               }}
               onClick={() => setShowOverflow((current) => !current)}
@@ -262,13 +261,14 @@ export function TopBar({ modules, counts }: TopBarProps) {
                     key={mod.name}
                     to={mod.path}
                     onClick={() => setShowOverflow(false)}
+                    className="font-body"
                     style={({ isActive }) => ({
                       ...tabBase,
-                      color: isActive ? 'var(--washi-white)' : 'var(--washi-white)',
+                      color: 'var(--hv-fg)',
                       borderBottom: 'none',
                       padding: '8px 10px',
                       borderRadius: 8,
-                      background: isActive ? 'rgba(255,255,255,0.06)' : 'transparent',
+                      background: isActive ? 'var(--hv-ink-wash-02)' : 'transparent',
                     })}
                   >
                     {TAB_LABELS[mod.name] || mod.label}

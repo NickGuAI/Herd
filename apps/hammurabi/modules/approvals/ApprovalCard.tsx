@@ -56,7 +56,7 @@ export default function ApprovalCard({
   return (
     <article
       className={cn(
-        'card-sumi bg-white/90',
+        'card-sumi',
         compact ? 'px-3 py-3' : 'px-4 py-4',
         className,
       )}
@@ -103,14 +103,19 @@ export default function ApprovalCard({
       )}
 
       {(approval.summary || approval.previewText) && (
-        <div className="mt-4 rounded-xl border border-ink-border/60 bg-white/60 px-4 py-3">
+        <div className="mt-4 rounded-xl border border-ink-border/60 bg-ink-wash px-4 py-3">
           {approval.summary && (
             <p className="text-sm leading-relaxed text-sumi-gray">{approval.summary}</p>
           )}
           {approval.previewText && (
-            <p className={cn('text-sm leading-relaxed text-sumi-gray', approval.summary && 'mt-2')}>
-              {approval.previewText}
-            </p>
+            <details className={cn('group text-sm text-sumi-gray', approval.summary && 'mt-2')}>
+              <summary className="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-sumi-diluted">
+                Full preview
+              </summary>
+              <pre className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-ink-border/60 bg-washi-aged/50 px-3 py-2 text-xs leading-relaxed">
+                {approval.previewText}
+              </pre>
+            </details>
           )}
         </div>
       )}

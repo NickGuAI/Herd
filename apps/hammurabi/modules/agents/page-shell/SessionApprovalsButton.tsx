@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Check, Loader2, ShieldAlert, X } from 'lucide-react'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import { getProviderLabel, useProviderRegistry } from '@/hooks/use-providers'
 import {
   type PendingApproval,
@@ -65,16 +66,6 @@ function SessionApprovalsButtonView({
   const hasPending = pendingCount > 0
   const countLabel = pendingCount > 9 ? '9+' : String(pendingCount)
 
-  useEffect(() => {
-    if (!open) return
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') onOpenChange(false)
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onOpenChange, open])
-
   return (
     <div
       className={cn(
@@ -108,16 +99,17 @@ function SessionApprovalsButtonView({
       </button>
 
       {open && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => onOpenChange(false)}
-          />
-          <div
-            className="absolute right-0 top-full z-50 mt-1 w-80 max-w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-ink-border bg-washi-white shadow-ink-md"
-            role="dialog"
-            aria-label="Pending approvals"
-          >
+        <DismissibleOverlay
+          open={open}
+          onClose={() => onOpenChange(false)}
+          title="Pending approvals"
+          position="modal"
+          backdropClassName="bg-transparent"
+          contentClassName={cn(
+            'fixed right-3 z-50 w-80 max-w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border border-ink-border bg-washi-white shadow-ink-md',
+            layout === 'row' ? 'top-20' : 'top-14',
+          )}
+        >
             <div className="flex items-start justify-between gap-2 border-b border-ink-border/70 px-3 py-2.5">
               <div className="min-w-0">
                 <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-sumi-mist">
@@ -200,8 +192,7 @@ function SessionApprovalsButtonView({
                 })
               )}
             </div>
-          </div>
-        </>
+        </DismissibleOverlay>
       )}
     </div>
   )

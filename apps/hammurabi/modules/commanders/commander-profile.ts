@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveCommanderPaths } from './paths.js'
+import { ensureCommanderVisualProfile } from './commander-visual-profile.js'
 
 export const COMMANDER_PROFILE_FILE = 'profile.json'
 
@@ -50,6 +51,9 @@ function trimAvatarPath(value: unknown): string | undefined {
 function isReasonableCssColor(value: string): boolean {
   if (value.length > 80) {
     return false
+  }
+  if (/^var\(--[a-z0-9-]+\)$/i.test(value)) {
+    return true
   }
   if (/^#[0-9a-f]{3,8}$/i.test(value)) {
     return true
@@ -131,16 +135,18 @@ export async function resolveCommanderAvatarPath(
 }
 
 export function profileForApiResponse(
+  commanderId: string,
   profile: CommanderUiProfile | null,
-): { borderColor?: string; accentColor?: string; speakingTone?: string } | null {
-  if (!profile) {
-    return null
+): { borderColor: string; accentColor: string; speakingTone?: string } {
+  const { borderColor, accentColor, speakingTone } = ensureCommanderVisualProfile(
+    commanderId,
+    profile,
+  )
+  return {
+    borderColor,
+    accentColor,
+    ...(speakingTone ? { speakingTone } : {}),
   }
-  const { borderColor, accentColor, speakingTone } = profile
-  if (!borderColor && !accentColor && !speakingTone) {
-    return null
-  }
-  return { borderColor, accentColor, speakingTone }
 }
 
 const MIME_BY_EXT: Record<string, string> = {

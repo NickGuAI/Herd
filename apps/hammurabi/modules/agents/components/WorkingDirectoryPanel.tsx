@@ -16,7 +16,6 @@ import { cn } from '@/lib/utils'
 export function WorkingDirectoryPanel({
   cwd,
   position = 'side',
-  variant = 'light',
   onClose,
   onInsertPath,
 }: {
@@ -114,13 +113,12 @@ export function WorkingDirectoryPanel({
 
   // Compact mode (mobile): collapsible header
   if (position === 'compact') {
-    const dark = variant === 'dark'
     return (
       <div
         className={cn(
           'border-b',
-          dark ? 'border-white/[0.08] bg-[#242424]' : 'border-ink-border bg-washi-aged',
-          isDragOver && (dark ? 'ring-2 ring-inset ring-white/20' : 'ring-2 ring-inset ring-accent-indigo/30'),
+          'border-ink-border bg-washi-aged',
+          isDragOver && 'ring-2 ring-inset ring-accent-indigo/30',
         )}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -130,13 +128,13 @@ export function WorkingDirectoryPanel({
           onClick={() => setIsOpen(!isOpen)}
           className="w-full flex items-center gap-2 px-4 py-2.5 text-left"
         >
-          <FolderOpen size={14} className={dark ? 'text-white/40 shrink-0' : 'text-sumi-diluted shrink-0'} />
-          <span className={cn('font-mono text-xs truncate flex-1', dark ? 'text-white/60' : 'text-sumi-gray')}>{browsePath}</span>
+          <FolderOpen size={14} className="shrink-0 text-sumi-diluted" />
+          <span className="flex-1 truncate font-mono text-xs text-sumi-gray">{browsePath}</span>
           <ChevronRight
             size={12}
             className={cn(
               'transition-transform duration-200',
-              dark ? 'text-white/30' : 'text-sumi-mist',
+              'text-sumi-mist',
               isOpen && 'rotate-90',
             )}
           />
@@ -145,7 +143,7 @@ export function WorkingDirectoryPanel({
           <div className="px-4 pb-3">
             <div className={cn(
               'rounded-lg border max-h-40 overflow-y-auto',
-              dark ? 'border-white/[0.08] bg-[#1a1a1a]' : 'border-ink-border bg-washi-white',
+              'border-ink-border bg-washi-white',
             )}>
               {data?.files.map((f) => (
                 <div
@@ -155,18 +153,18 @@ export function WorkingDirectoryPanel({
                   {f.isDirectory ? (
                     <button
                       onClick={() => handleItemClick(f.name, true)}
-                      className={cn('flex items-center gap-2 flex-1 text-left transition-colors', dark ? 'hover:text-white/90' : 'hover:text-sumi-black')}
+                      className="flex flex-1 items-center gap-2 text-left transition-colors hover:text-sumi-black"
                     >
-                      <Folder size={12} className={dark ? 'text-white/30 shrink-0' : 'text-sumi-mist shrink-0'} />
-                      <span className={cn('font-mono', dark ? 'text-white/60' : 'text-sumi-gray')}>{f.name}/</span>
+                      <Folder size={12} className="shrink-0 text-sumi-mist" />
+                      <span className="font-mono text-sumi-gray">{f.name}/</span>
                     </button>
                   ) : (
                     <button
                       onClick={() => handleItemClick(f.name, false)}
-                      className={cn('flex items-center gap-2 flex-1 text-left', dark ? 'hover:text-white/90' : '')}
+                      className="flex flex-1 items-center gap-2 text-left hover:text-sumi-black"
                     >
-                      <FileText size={12} className={dark ? 'text-white/30 shrink-0' : 'text-sumi-mist shrink-0'} />
-                      <span className={cn('font-mono', dark ? 'text-white/60' : 'text-sumi-gray')}>{f.name}</span>
+                      <FileText size={12} className="shrink-0 text-sumi-mist" />
+                      <span className="font-mono text-sumi-gray">{f.name}</span>
                     </button>
                   )}
                 </div>
@@ -178,11 +176,11 @@ export function WorkingDirectoryPanel({
                 disabled={browsePath === cwd}
                 className={cn(
                   'p-1.5 rounded border transition-colors disabled:opacity-30',
-                  dark ? 'border-white/[0.08] bg-[#1a1a1a] hover:bg-white/[0.06]' : 'border-ink-border bg-washi-white hover:bg-ink-wash',
+                  'border-ink-border bg-washi-white hover:bg-ink-wash',
                 )}
                 aria-label="Parent directory"
               >
-                <ChevronUp size={12} className={dark ? 'text-white/50' : ''} />
+                <ChevronUp size={12} />
               </button>
               <input
                 ref={fileInputRef}
@@ -196,7 +194,7 @@ export function WorkingDirectoryPanel({
                 disabled={uploading}
                 className={cn(
                   'flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded border text-xs disabled:opacity-60 transition-colors',
-                  dark ? 'border-white/[0.08] bg-[#1a1a1a] hover:bg-white/[0.06] text-white/60' : 'border-ink-border bg-washi-white hover:bg-ink-wash',
+                  'border-ink-border bg-washi-white hover:bg-ink-wash text-sumi-diluted',
                 )}
               >
                 {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}

@@ -353,6 +353,19 @@ function mockConversationEndpoints(
     if (path === '/api/conversations/conversation-1') {
       return conversation
     }
+    if (path.startsWith('/api/conversations/conversation-1/messages')) {
+      return {
+        conversationId: 'conversation-1',
+        sessionName: LIVE_CONVERSATION_SESSION_NAME,
+        source: 'empty',
+        limit: 100,
+        before: null,
+        nextBefore: null,
+        hasMore: false,
+        totalMessages: 0,
+        messages: [],
+      }
+    }
     if (path === '/api/conversations/conversation-1/message') {
       return {
         accepted: true,

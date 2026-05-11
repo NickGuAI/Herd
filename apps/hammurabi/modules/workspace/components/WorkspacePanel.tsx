@@ -60,7 +60,6 @@ export function WorkspacePanel({
   onInsertPath?: (path: string) => void
   refreshToken?: number
 }) {
-  const dark = variant === 'dark'
   const sourceKey = getWorkspaceSourceKey(source)
   const actions = useWorkspaceActions(source)
   const [isOpen, setIsOpen] = useState(position !== 'compact')
@@ -331,11 +330,11 @@ export function WorkspacePanel({
       onClick={() => setIsOpen((prev) => !prev)}
       className="flex w-full items-center gap-2 px-4 py-2.5 text-left"
     >
-      <FolderOpen size={14} className={dark ? 'text-white/40' : 'text-sumi-diluted'} />
-      <span className={cn('flex-1 truncate font-mono text-xs', dark ? 'text-white/70' : 'text-sumi-gray')}>
+      <FolderOpen size={14} className="text-sumi-diluted" />
+      <span className="flex-1 truncate font-mono text-xs text-sumi-gray">
         Workspace
       </span>
-      <span className={cn('text-whisper', dark ? 'text-white/35' : 'text-sumi-mist')}>
+      <span className="text-whisper text-sumi-mist">
         {isOpen ? 'Hide' : 'Show'}
       </span>
     </button>
@@ -343,12 +342,12 @@ export function WorkspacePanel({
 
   const panelBody = (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className={cn('flex items-center justify-between gap-3 border-b px-3 py-2.5', dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-ink-border bg-washi-aged/60')}>
+      <div className="flex items-center justify-between gap-3 border-b border-ink-border bg-washi-aged/60 px-3 py-2.5">
         <div className="min-w-0">
-          <p className={cn('font-mono text-xs uppercase tracking-wide', dark ? 'text-white/45' : 'text-sumi-diluted')}>
+          <p className="font-mono text-xs uppercase tracking-wide text-sumi-diluted">
             Workspace
           </p>
-          <p className={cn('truncate text-sm', dark ? 'text-white/80' : 'text-sumi-black')}>
+          <p className="truncate text-sm text-sumi-black">
             {sourceKey}
           </p>
         </div>
@@ -405,7 +404,7 @@ export function WorkspacePanel({
             onChange={(event) => void handleUpload(event.target.files)}
           />
           <div className={cn('grid flex-1 min-h-0 gap-3 p-3', position === 'embedded' ? 'xl:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]' : 'grid-cols-1')}>
-            <div className={cn('min-h-0 overflow-auto rounded-lg border', dark ? 'border-white/[0.08] bg-[#1b1b1b]' : 'border-ink-border bg-washi-white')}>
+            <div className="min-h-0 overflow-auto rounded-lg border border-ink-border bg-washi-white">
               {nodesByParent[''] ? (
                 <div className="p-2">
                   <WorkspaceTree
@@ -468,7 +467,7 @@ export function WorkspacePanel({
 
   if (position === 'compact') {
     return (
-      <div className={cn('border-b', dark ? 'border-white/[0.08] bg-[#242424]' : 'border-ink-border bg-washi-aged')}>
+      <div className="border-b border-ink-border bg-washi-aged">
         {compactHeader}
         {isOpen && <div className="h-[32rem] max-h-[70vh]">{panelBody}</div>}
       </div>
@@ -481,9 +480,7 @@ export function WorkspacePanel({
         position === 'side'
           ? 'w-80 border-l'
           : 'h-full min-h-[28rem] rounded-xl border',
-        dark
-          ? 'border-white/[0.08] bg-[#242424]'
-          : 'border-ink-border bg-washi-aged',
+        'border-ink-border bg-washi-aged',
       )}
     >
       {panelBody}

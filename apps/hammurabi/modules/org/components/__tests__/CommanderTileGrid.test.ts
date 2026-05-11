@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { defaultCommanderVisualProfile } from '@modules/commanders/commander-visual-profile'
 import type { OrgNode } from '../../types'
 import { buildCommanderChromaItems } from '../CommanderTileGrid'
 
@@ -37,7 +38,7 @@ describe('buildCommanderChromaItems', () => {
       handle: '@atlas-prime',
       location: 'Running',
       borderColor: '#1c1c1c',
-      gradient: 'linear-gradient(165deg,#c23b22,#000)',
+      gradient: 'linear-gradient(165deg,#c23b22,var(--hv-bg-sunken))',
     })
     expect(item.image).toMatch(/^data:image\/svg\+xml/)
 
@@ -72,7 +73,10 @@ describe('buildCommanderChromaItems', () => {
     expect(item.subtitle).toBe('Commander')
     expect(item.location).toBe('Archived')
     expect(item.cardClassName).toContain('opacity-60')
-    expect(item.gradient).toBeUndefined()
+    expect(item.borderColor).toBe(defaultCommanderVisualProfile('cmd-2').borderColor)
+    expect(item.gradient).toBe(
+      `linear-gradient(165deg,${defaultCommanderVisualProfile('cmd-2').accentColor},var(--hv-bg-sunken))`,
+    )
 
     item.onClick?.()
     expect(onSelect).toHaveBeenCalledWith('cmd-2')

@@ -63,14 +63,21 @@ describe('CommanderChannelBindingStore', () => {
     expect(persisted.bindings).toEqual([])
   })
 
-  it('rejects unknown providers', async () => {
+  it('rejects duplicate commander/provider/account triples', async () => {
     const { store } = await createTempStore()
+
+    await store.create({
+      commanderId: 'cmd-1',
+      provider: 'telegram',
+      accountId: 'bot-main',
+      displayName: 'Telegram',
+    })
 
     await expect(store.create({
       commanderId: 'cmd-1',
-      provider: 'signal' as 'telegram',
+      provider: 'telegram',
       accountId: 'bot-main',
-      displayName: 'Signal',
-    })).rejects.toThrow('provider must be whatsapp, telegram, or discord')
+      displayName: 'Telegram duplicate',
+    })).rejects.toThrow('Channel binding already exists')
   })
 })

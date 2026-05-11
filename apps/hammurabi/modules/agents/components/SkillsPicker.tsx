@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { Zap, X } from 'lucide-react'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import { useSkills } from '@/hooks/use-skills'
 import { cn } from '@/lib/utils'
 
@@ -26,25 +26,23 @@ export function SkillsPicker({
     return skills.filter((skill) => skill.name.toLowerCase().includes(normalized))
   }, [skills, query])
 
-  return createPortal(
-    <>
-      <div
-        className={cn(
-          'sheet-backdrop',
-          visible && 'visible',
-          variant === 'hervald' && 'sheet-backdrop--hervald',
-          variant === 'hervald' && theme === 'dark' && 'sheet-backdrop--hervald-dark',
-        )}
-        onClick={onClose}
-      />
-      <div
-        className={cn(
-          'sheet',
-          visible && 'visible',
-          variant === 'hervald' && 'sheet--hervald',
-          variant === 'hervald' && theme === 'dark' && 'sheet--hervald-dark',
-        )}
-      >
+  return (
+    <DismissibleOverlay
+      open={visible}
+      onClose={onClose}
+      title="Skills"
+      position="bottom-sheet"
+      portalThemeClassName={theme === 'dark' ? 'hv-dark' : 'hv-light'}
+      backdropClassName={cn(
+        variant === 'hervald' && 'sheet-backdrop--hervald',
+        variant === 'hervald' && theme === 'dark' && 'sheet-backdrop--hervald-dark',
+      )}
+      contentClassName={cn(
+        'sheet visible',
+        variant === 'hervald' && 'sheet--hervald',
+        variant === 'hervald' && theme === 'dark' && 'sheet--hervald-dark',
+      )}
+    >
         <div className="sheet-handle">
           <div className="sheet-handle-bar" />
         </div>
@@ -155,8 +153,6 @@ export function SkillsPicker({
             )}
           </div>
         </div>
-      </div>
-    </>,
-    document.body,
+    </DismissibleOverlay>
   )
 }

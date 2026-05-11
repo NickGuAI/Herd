@@ -63,8 +63,8 @@ export function QueueDock({
       >
         <div style={{ minWidth: 0 }}>
           <div
+            className="font-mono"
             style={{
-              fontFamily: 'var(--hv-font-mono)',
               fontSize: 10,
               letterSpacing: '0.18em',
               textTransform: 'uppercase',
@@ -87,6 +87,7 @@ export function QueueDock({
         </div>
 
         <button
+          className="font-body"
           type="button"
           onClick={onClearQueue}
           disabled={!canClearQueue}
@@ -96,7 +97,6 @@ export function QueueDock({
             border: '1px solid var(--hv-border-firm)',
             background: 'transparent',
             color: canClearQueue ? 'var(--hv-fg-muted)' : 'var(--hv-fg-faint)',
-            fontFamily: 'var(--hv-font-body)',
             fontSize: 11,
             letterSpacing: '0.04em',
             cursor: canClearQueue ? 'pointer' : 'not-allowed',
@@ -126,19 +126,19 @@ export function QueueDock({
             }}
           >
             <span
+              className="font-body"
               style={{
                 fontSize: 10,
                 letterSpacing: '0.16em',
                 textTransform: 'uppercase',
                 color: 'var(--moss-stone)',
-                fontFamily: 'var(--hv-font-body)',
               }}
             >
               Working On
             </span>
             <span
+              className="font-mono"
               style={{
-                fontFamily: 'var(--hv-font-mono)',
                 fontSize: 10,
                 letterSpacing: '0.08em',
                 textTransform: 'uppercase',
@@ -201,8 +201,8 @@ export function QueueDock({
                     }}
                   >
                     <span
+                      className="font-mono"
                       style={{
-                        fontFamily: 'var(--hv-font-mono)',
                         fontSize: 10.5,
                         color: 'var(--hv-fg-faint)',
                       }}
@@ -210,12 +210,12 @@ export function QueueDock({
                       #{index + 1}
                     </span>
                     <span
+                      className="font-body"
                       style={{
                         fontSize: 10,
                         letterSpacing: '0.14em',
                         textTransform: 'uppercase',
                         color: 'var(--hv-fg-subtle)',
-                        fontFamily: 'var(--hv-font-body)',
                       }}
                     >
                       {getQueuedMessageLabel(message)}

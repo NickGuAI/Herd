@@ -57,6 +57,9 @@ export interface CenterColumnProps {
   hasSelectedConversation?: boolean
   activeChatSession?: ChatSession | null
   transcript?: MsgItem[]
+  hasOlderMessages?: boolean
+  loadingOlderMessages?: boolean
+  onLoadOlderMessages?: () => void
   workers?: Worker[]
   activeTab: string
   setActiveTab: (tab: string) => void
@@ -134,7 +137,7 @@ const TABS = [
 /* ---- helpers ---- */
 
 function normalizeCommanderStatus(status: string): string {
-  // TODO(#1359-followup): once Part A is verified across all surfaces,
+  // TODO(issue 1359-followup): once Part A is verified across all surfaces,
   // the 'running' -> 'connected' mapping below is dead code (status fed in
   // is ConversationStatus only). Remove in a follow-up sweep.
   if (status === 'running') {
@@ -195,6 +198,9 @@ export function CenterColumn({
   hasSelectedConversation = false,
   activeChatSession = null,
   transcript = [],
+  hasOlderMessages = false,
+  loadingOlderMessages = false,
+  onLoadOlderMessages,
   workers = [],
   activeTab,
   setActiveTab,
@@ -336,6 +342,9 @@ export function CenterColumn({
           agentAvatarUrl={commander.avatarUrl}
           agentAccentColor={commander.ui?.accentColor ?? null}
           sessionId={composerSessionName}
+          hasOlderMessages={hasOlderMessages}
+          loadingOlderMessages={loadingOlderMessages}
+          onLoadOlderMessages={onLoadOlderMessages}
         />
       )
     }
@@ -398,6 +407,7 @@ export function CenterColumn({
           const isActive = currentTab === tab.id
           return (
             <button
+              className="font-body"
               key={tab.id}
               type="button"
               onClick={() => handleTabChange(tab.id)}
@@ -406,7 +416,6 @@ export function CenterColumn({
                 background: 'transparent',
                 border: 'none',
                 cursor: 'pointer',
-                fontFamily: 'var(--hv-font-body)',
                 fontSize: 11,
                 letterSpacing: '0.14em',
                 textTransform: 'uppercase',
@@ -434,6 +443,7 @@ export function CenterColumn({
           }}
         >
           <div
+            className="font-body"
             data-testid="conversation-status-indicator"
             style={{
               display: 'inline-flex',
@@ -443,7 +453,6 @@ export function CenterColumn({
               letterSpacing: '0.14em',
               textTransform: 'uppercase',
               color: 'var(--hv-fg-faint)',
-              fontFamily: 'var(--hv-font-body)',
             }}
           >
             <StatusDot state={commanderState} pulse={commanderStatePulse} size={7} />
@@ -466,6 +475,7 @@ export function CenterColumn({
           </span>
           {hasCommander && commander.status === 'running' && onStopCommander && (
             <button
+              className="font-body"
               type="button"
               onClick={onStopCommander}
               data-testid="commander-stop-button"
@@ -479,7 +489,6 @@ export function CenterColumn({
                 background: 'transparent',
                 color: 'var(--hv-fg-subtle)',
                 cursor: 'pointer',
-                fontFamily: 'var(--hv-font-body)',
                 fontSize: 11,
                 letterSpacing: '0.08em',
                 textTransform: 'uppercase',
@@ -541,6 +550,7 @@ export function CenterColumn({
             }}
           >
             <span
+              className="font-body"
               style={{
                 fontSize: 10,
                 letterSpacing: '0.18em',
@@ -615,7 +625,6 @@ function themeToggleButtonStyle(active: boolean) {
     background: active ? 'var(--hv-bg)' : 'transparent',
     color: active ? 'var(--hv-fg)' : 'var(--hv-fg-subtle)',
     cursor: 'pointer',
-    fontFamily: 'var(--hv-font-body)',
     fontSize: 11,
     letterSpacing: '0.04em',
   } satisfies CSSProperties

@@ -7,6 +7,7 @@
  * Import them as named exports wherever needed.
  */
 import type { CSSProperties, ReactNode } from 'react'
+import { deterministicCommanderAccentColor } from '@modules/commanders/commander-visual-profile'
 import { ICONS } from './icons'
 
 /* ============================================================
@@ -119,34 +120,6 @@ export function StatusDot({
    consistent.
    ============================================================ */
 
-/**
- * Deterministic fallback palette — used when a commander has no
- * explicit `ui.accentColor`. Hashes the commander id so the same
- * commander always gets the same color.
- */
-const AVATAR_PALETTE = [
-  '#C23B22', // vermillion-seal
-  '#D4763A', // persimmon
-  '#6B7B5E', // moss-stone
-  '#4A6FA5', // washi-blue
-  '#7D5A8B', // muted-plum
-  '#8A6B3C', // aged-bronze
-  '#5E7B6B', // pine-stone
-  '#A85A5A', // sumi-red
-] as const
-
-function deterministicAccent(seed: string | undefined): string {
-  if (!seed) {
-    return AVATAR_PALETTE[0]
-  }
-  let hash = 0
-  for (let index = 0; index < seed.length; index += 1) {
-    hash = (hash * 31 + seed.charCodeAt(index)) | 0
-  }
-  const bucket = Math.abs(hash) % AVATAR_PALETTE.length
-  return AVATAR_PALETTE[bucket]
-}
-
 function initialFromCommander(commander: AgentAvatarCommander): string {
   const source =
     commander.displayName?.trim() ||
@@ -184,7 +157,12 @@ export function AgentAvatar({
   const accent =
     commander.ui?.accentColor?.trim() ||
     commander.ui?.borderColor?.trim() ||
-    deterministicAccent(commander.id)
+    deterministicCommanderAccentColor(commander.id)
+  const accentIsToken = accent.startsWith('var(')
+  const accentStyle = accentIsToken
+    ? ({ '--hv-avatar-accent': accent } as CSSProperties)
+    : {}
+  const accentPaint = accentIsToken ? 'var(--hv-avatar-accent)' : accent
   const initial = initialFromCommander(commander)
 
   const wrapperStyle: CSSProperties = {
@@ -194,11 +172,16 @@ export function AgentAvatar({
     borderRadius: '50%',
     overflow: 'hidden',
     background: 'var(--aged-paper)',
-    border: active ? `1.5px solid ${accent}` : `1px solid ${accent}33`,
+    border: active
+      ? `1.5px solid ${accentPaint}`
+      : accentIsToken
+        ? '1px solid var(--hv-border-soft)'
+        : `1px solid ${accent}33`,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    ...accentStyle,
     ...style,
   }
 
@@ -221,12 +204,12 @@ export function AgentAvatar({
 
   return (
     <div
+      className="font-display"
       style={{
         ...wrapperStyle,
-        fontFamily: 'var(--hv-font-primary)',
         fontSize: size * 0.44,
         fontStyle: 'italic',
-        color: accent,
+        color: accentPaint,
         fontWeight: 400,
         letterSpacing: 0,
       }}
@@ -254,16 +237,16 @@ const CHIP_TONES: Record<ChipTone, CSSProperties> = {
     color: 'var(--hv-fg-muted)',
   },
   critical: {
-    background: 'rgba(194,59,34,0.08)',
-    color: 'var(--vermillion-seal)',
+    background: 'var(--hv-accent-danger-wash)',
+    color: 'var(--hv-accent-danger)',
   },
   success: {
-    background: 'rgba(107,123,94,0.10)',
-    color: 'var(--moss-stone)',
+    background: 'var(--hv-accent-success-wash)',
+    color: 'var(--hv-accent-success)',
   },
   warning: {
-    background: 'rgba(212,118,58,0.10)',
-    color: 'var(--persimmon)',
+    background: 'var(--hv-accent-warning-wash)',
+    color: 'var(--hv-accent-warning)',
   },
   ink: {
     background: 'var(--sumi-black)',
@@ -274,6 +257,7 @@ const CHIP_TONES: Record<ChipTone, CSSProperties> = {
 export function Chip({ children, tone = 'neutral', style = {} }: ChipProps) {
   return (
     <span
+      className="font-body"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -283,7 +267,6 @@ export function Chip({ children, tone = 'neutral', style = {} }: ChipProps) {
         letterSpacing: '0.08em',
         textTransform: 'uppercase',
         borderRadius: '2px 8px 2px 8px',
-        fontFamily: 'var(--hv-font-body)',
         fontWeight: 500,
         ...CHIP_TONES[tone],
         ...style,
@@ -323,8 +306,8 @@ export function MetaRow({
       }}
     >
       <span
+        className="font-body"
         style={{
-          fontFamily: 'var(--hv-font-body)',
           fontSize: 10.5,
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
@@ -334,8 +317,8 @@ export function MetaRow({
         {label}
       </span>
       <span
+        className={mono ? 'font-mono' : 'font-body'}
         style={{
-          fontFamily: mono ? 'var(--hv-font-mono)' : 'var(--hv-font-body)',
           fontSize: mono ? 12 : 13,
           color: 'var(--hv-fg)',
         }}

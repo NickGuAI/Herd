@@ -14,12 +14,12 @@ export function buildDefaultCandidatePaths(
 ): string[] {
   return [
     env.HAMMURABI_INSTALL_SCRIPT_PATH,
-    path.resolve(cwd, 'public', 'install.sh'),
     path.resolve(cwd, 'install.sh'),
-    path.resolve(cwd, 'apps', 'hammurabi', 'public', 'install.sh'),
+    path.resolve(cwd, 'public', 'install.sh'),
     path.resolve(cwd, 'apps', 'hammurabi', 'install.sh'),
-    path.resolve(cwd, '..', '..', 'public', 'install.sh'),
+    path.resolve(cwd, 'apps', 'hammurabi', 'public', 'install.sh'),
     path.resolve(cwd, '..', '..', 'install.sh'),
+    path.resolve(cwd, '..', '..', 'public', 'install.sh'),
   ].filter((candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0)
 }
 

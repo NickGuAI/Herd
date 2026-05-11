@@ -35,6 +35,8 @@ import { cn, timeAgo } from '@/lib/utils'
 import { getAccessToken } from '@/lib/api'
 import { getWsBase } from '@/lib/api-base'
 import { useIsMobile } from '@/hooks/use-is-mobile'
+import { readHvTerminalFontFamily, readHvTerminalTheme } from '@/lib/hv-tokens'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import type {
   ServiceInfo,
   ServiceStatus,
@@ -210,11 +212,8 @@ function LogViewer({
       cursorBlink: false,
       disableStdin: true,
       fontSize: 13,
-      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-      theme: {
-        background: '#1a1a1a',
-        foreground: '#e0ddd5',
-      },
+      ['fontFamily']: readHvTerminalFontFamily(),
+      theme: readHvTerminalTheme(),
     })
 
     const fitAddon = new FitAddon()
@@ -240,6 +239,7 @@ function LogViewer({
 
     let ws: WebSocket | null = null
     let resizeObserver: ResizeObserver | null = null
+    let themeObserver: MutationObserver | null = null
     let disposed = false
 
     const connect = async () => {
@@ -306,6 +306,16 @@ function LogViewer({
         })
         resizeObserver.observe(container)
       }
+
+      if (typeof MutationObserver !== 'undefined') {
+        themeObserver = new MutationObserver(() => {
+          terminal.options.theme = readHvTerminalTheme()
+        })
+        themeObserver.observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ['class'],
+        })
+      }
     }
 
     void connect()
@@ -314,6 +324,7 @@ function LogViewer({
       disposed = true
       ws?.close()
       resizeObserver?.disconnect()
+      themeObserver?.disconnect()
       terminal.dispose()
     }
   }, [serviceName])
@@ -777,11 +788,21 @@ function LocalServicesPanel() {
       {/* Log viewer: full-screen overlay on mobile, side panel on desktop */}
       {selectedService && (
         isMobile ? (
-          <LogViewer
-            serviceName={selectedService}
+          <DismissibleOverlay
+            open
             onClose={() => setSelectedService(null)}
-            isMobileOverlay
-          />
+            title="Service logs"
+            position="modal"
+            backdropClassName="bg-sumi-black"
+            contentClassName="contents"
+            contentProps={{ role: 'presentation' }}
+          >
+            <LogViewer
+              serviceName={selectedService}
+              onClose={() => setSelectedService(null)}
+              isMobileOverlay
+            />
+          </DismissibleOverlay>
         ) : (
           <div className="flex-1 animate-fade-in">
             <LogViewer

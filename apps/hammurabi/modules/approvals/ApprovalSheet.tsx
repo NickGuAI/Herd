@@ -1,7 +1,7 @@
-import { type ReactNode, useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { type ReactNode, useState } from 'react'
 import { Check, X, Loader2 } from 'lucide-react'
 import BottomSheet from '@/components/BottomSheet'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import { useIsMobile } from '@/hooks/use-is-mobile'
 import { timeAgo } from '@/lib/utils'
@@ -30,23 +30,6 @@ export default function ApprovalSheet({
 }: ApprovalSheetProps) {
   const isMobile = useIsMobile()
   const [busyDecision, setBusyDecision] = useState<'approve' | 'reject' | null>(null)
-
-  useEffect(() => {
-    if (!approval) {
-      return
-    }
-
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') {
-        onClose()
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [approval, onClose])
 
   if (!approval) {
     return null
@@ -136,7 +119,7 @@ export default function ApprovalSheet({
               {approval.details.map((detail) => (
                 <div
                   key={`${detail.label}:${detail.value}`}
-                  className="rounded-xl border border-ink-border/70 bg-white/60 px-4 py-3"
+                  className="rounded-xl border border-ink-border/70 bg-ink-wash px-4 py-3"
                 >
                   <p className="text-[11px] uppercase tracking-[0.18em] text-sumi-mist">
                     {detail.label}
@@ -149,18 +132,20 @@ export default function ApprovalSheet({
         )}
 
         {approval.previewText && (
-          <PreviewBlock label="Preview">
-            <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-ink-border/70 bg-sumi-black px-4 py-3 text-xs leading-relaxed text-washi-white">
+          <details className="rounded-xl border border-ink-border/70 bg-ink-wash px-4 py-3">
+            <summary className="cursor-pointer section-title">Full Preview</summary>
+            <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl border border-ink-border/70 bg-sumi-black px-4 py-3 text-xs leading-relaxed text-washi-white">
               {approval.previewText}
             </pre>
-          </PreviewBlock>
+          </details>
         )}
 
-        <PreviewBlock label="Raw Payload">
-          <pre className="max-h-[28rem] overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-ink-border/70 bg-washi-aged/60 px-4 py-3 text-xs leading-relaxed text-sumi-gray">
+        <details className="rounded-xl border border-ink-border/70 bg-washi-aged/60 px-4 py-3">
+          <summary className="cursor-pointer section-title">Raw Payload</summary>
+          <pre className="mt-3 max-h-[28rem] overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-ink-border/70 bg-washi-white px-4 py-3 text-xs leading-relaxed text-sumi-gray">
             {JSON.stringify(approval.raw, null, 2)}
           </pre>
-        </PreviewBlock>
+        </details>
       </div>
 
       {actionFooter}
@@ -179,25 +164,17 @@ export default function ApprovalSheet({
     )
   }
 
-  if (typeof document === 'undefined') {
-    return null
-  }
-
-  return createPortal(
-    <div className="fixed inset-0 z-[90]">
-      <button
-        type="button"
-        className="absolute inset-0 bg-sumi-black/40"
-        aria-label="Close approval preview"
-        onClick={onClose}
-      />
-
-      <div className="absolute inset-0 flex items-end justify-center p-3 md:items-center md:p-5">
-        <div className="card-sumi relative flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden bg-washi-white">
-          {content}
-        </div>
-      </div>
-    </div>,
-    document.body,
+  return (
+    <DismissibleOverlay
+      open={Boolean(approval)}
+      onClose={onClose}
+      title="Approval preview"
+      position="modal"
+      containerClassName="z-[90]"
+      backdropClassName="bg-sumi-black/40"
+      contentClassName="card-sumi relative flex max-h-[88dvh] w-full max-w-3xl flex-col overflow-hidden"
+    >
+      {content}
+    </DismissibleOverlay>
   )
 }

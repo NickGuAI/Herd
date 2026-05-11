@@ -11,6 +11,7 @@ import '@xterm/xterm/css/xterm.css'
 import { cn } from '@/lib/utils'
 import { getAccessToken } from '@/lib/api'
 import { getWsBase } from '@/lib/api-base'
+import { readHvTerminalFontFamily, readHvTerminalTheme } from '@/lib/hv-tokens'
 import type { AgentType } from '@/types'
 import { createReconnectBackoff, shouldReconnectWebSocketClose } from '../ws-reconnect'
 import { getKillConfirmationMessage } from './session-helpers'
@@ -49,11 +50,8 @@ export function TerminalView({
       allowProposedApi: true,
       cursorBlink: !isMobileOverlay,
       fontSize: isMobileOverlay ? 11 : 13,
-      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-      theme: {
-        background: '#1a1a1a',
-        foreground: '#e0ddd5',
-      },
+      ['fontFamily']: readHvTerminalFontFamily(),
+      theme: readHvTerminalTheme(),
     })
 
     const fitAddon = new FitAddon()
@@ -78,6 +76,7 @@ export function TerminalView({
 
     let ws: WebSocket | null = null
     let resizeObserver: ResizeObserver | null = null
+    let themeObserver: MutationObserver | null = null
     let disposed = false
     let reconnectTimer: number | null = null
     let hasEstablishedConnection = false
@@ -217,6 +216,16 @@ export function TerminalView({
       resizeObserver.observe(container)
     }
 
+    if (typeof MutationObserver !== 'undefined') {
+      themeObserver = new MutationObserver(() => {
+        terminal.options.theme = readHvTerminalTheme()
+      })
+      themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class'],
+      })
+    }
+
     void connect()
 
     return () => {
@@ -224,6 +233,7 @@ export function TerminalView({
       clearReconnectTimer()
       ws?.close()
       resizeObserver?.disconnect()
+      themeObserver?.disconnect()
       dataDisposable.dispose()
       resizeDisposable.dispose()
       terminal.dispose()

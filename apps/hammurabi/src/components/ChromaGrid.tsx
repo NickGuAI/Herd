@@ -62,8 +62,8 @@ export interface ChromaGridProps {
   spotlightColor?: string
 }
 
-const DEFAULT_CARD_GRADIENT = 'linear-gradient(165deg, rgba(245,241,232,0.08), rgba(28,28,28,0.92))'
-const DEFAULT_CARD_BORDER = 'rgba(245,241,232,0.18)'
+const DEFAULT_CARD_GRADIENT = 'linear-gradient(165deg, var(--hv-surface-card), var(--hv-bg-raised))'
+const DEFAULT_CARD_BORDER = 'var(--hv-border-soft)'
 
 export function ChromaGrid({
   items = [],
@@ -72,7 +72,7 @@ export function ChromaGrid({
   damping = 0.45,
   fadeOut = 0.6,
   ease = 'power3.out',
-  spotlightColor = 'rgba(255,255,255,0.26)',
+  spotlightColor = 'var(--hv-ink-wash-03)',
 }: ChromaGridProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const fadeRef = useRef<HTMLDivElement | null>(null)
@@ -164,14 +164,14 @@ export function ChromaGrid({
           onMouseMove={handleCardMove}
           onClick={() => handleCardClick(item)}
           className={cn(
-            'group relative flex w-full max-w-[300px] flex-col overflow-hidden rounded-[20px] border-2 border-transparent text-left transition-transform duration-300 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80',
+            'group relative flex w-full max-w-[300px] flex-col overflow-hidden rounded-[20px] border-2 border-transparent text-left transition-transform duration-300 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-border-firm',
             item.cardClassName,
           )}
           style={
             {
               borderColor: item.borderColor ?? DEFAULT_CARD_BORDER,
               background: item.gradient ?? DEFAULT_CARD_GRADIENT,
-              boxShadow: '0 18px 48px rgba(0, 0, 0, 0.24)',
+              boxShadow: 'var(--hv-shadow-float)',
               '--spotlight-color': spotlightColor,
             } as CSSProperties
           }
@@ -193,7 +193,7 @@ export function ChromaGrid({
             />
           </div>
 
-          <footer className="relative z-10 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 px-3 pb-3 text-washi-white">
+          <footer className="relative z-10 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 px-3 pb-3 text-sumi-black">
             <h3 className="m-0 truncate text-[1.05rem] font-semibold">{item.title}</h3>
             {item.handle ? (
               <span className="truncate text-right text-[0.95rem] opacity-80">{item.handle}</span>

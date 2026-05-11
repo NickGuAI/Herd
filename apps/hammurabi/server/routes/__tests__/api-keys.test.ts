@@ -6,8 +6,18 @@ import path from 'node:path'
 import {
   API_KEY_SCOPES,
   ApiKeyJsonStore,
-  DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES,
 } from '../../api-keys/store'
+
+// Every API key scope EXCEPT agents:admin. Used to construct a "scoped non-admin"
+// caller fixture below — distinct from the bootstrap master key, which now
+// includes agents:admin. The two regression tests below assert that:
+//   1. (issue/1221) — a non-admin caller with services:write can save the
+//      OpenAI transcription key,
+//   2. agents:admin is still required for /keys management — a non-admin
+//      caller cannot create or list API keys.
+const SCOPED_NON_ADMIN_PERMISSIONS: readonly string[] = API_KEY_SCOPES.filter(
+  (scope) => scope !== 'agents:admin',
+)
 import { ProviderSecretsStore } from '../../api-keys/provider-secrets-store'
 import { createApiKeysRouter } from '../api-keys'
 import { createTelemetryRouterWithHub } from '../../../modules/telemetry/routes'
@@ -82,16 +92,17 @@ async function startServer(): Promise<RunningServer> {
         permissions: ['telemetry:read'],
       },
     }],
-    // Bootstrap admin: every API_KEY_SCOPES entry EXCEPT `agents:admin`.
-    // Mirrors the actual bootstrap master key shape per
-    // `DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES`. Used to test that master-key
-    // management routes (`/keys`) still require `agents:admin` while operator
-    // transcription routes (`/transcription/openai`) accept this caller.
+    // Scoped-non-admin caller: every API_KEY_SCOPES entry EXCEPT `agents:admin`.
+    // Used to test that master-key management routes (`/keys`) still require
+    // `agents:admin` while operator transcription routes
+    // (`/transcription/openai`) accept this caller. Distinct from the
+    // bootstrap master key, which is the founder's full-admin key and
+    // includes `agents:admin`.
     ['valid-auth0-bootstrap-admin-token', {
       id: 'auth0|bootstrap-admin',
       email: 'bootstrap@example.com',
       metadata: {
-        permissions: [...DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES],
+        permissions: [...SCOPED_NON_ADMIN_PERMISSIONS],
       },
     }],
     // Services-read only — should pass GET /transcription/openai but fail PUT/DELETE.
@@ -409,15 +420,20 @@ describe('api key auth routes', () => {
   //
   // Before #1221 the entire /api/auth/* router was gated behind
   // `auth0Middleware({ requiredPermissions: API_KEY_SCOPES })` which forced
-  // every external caller to hold every known scope — including `agents:admin`,
-  // which `DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES` intentionally excludes. That
-  // produced a paradox: the bootstrap master key (the ostensibly-most-
-  // privileged caller) couldn't save the OpenAI transcription key.
+  // every external caller to hold every known scope — including
+  // `agents:admin`, which historically the bootstrap master key was missing.
+  // That produced a paradox: a non-admin caller (the previous bootstrap
+  // shape) couldn't save the OpenAI transcription key.
   //
-  // After #1221 the routes split:
+  // After #1221 the routes split per-scope:
   //   POST/GET/DELETE /keys                   → agents:admin
   //   GET    /transcription/openai            → services:read
   //   PUT/DELETE /transcription/openai        → services:write
+  //
+  // The bootstrap master key now (post-this-PR-series) includes
+  // agents:admin too, but the regression test still uses
+  // `SCOPED_NON_ADMIN_PERMISSIONS` to verify the per-route split holds for
+  // any non-admin caller shape.
   // -----------------------------------------------------------------
 
   it('lets a bootstrap-admin caller (10 scopes, no agents:admin) save the OpenAI transcription key — issue/1221 regression', async () => {
@@ -507,10 +523,14 @@ describe('api key auth routes', () => {
     await server.close()
   })
 
-  it('accepts API-key auth on transcription routes — bootstrap master key (no agents:admin) saves OpenAI key successfully', async () => {
+  it('accepts API-key auth on transcription routes — non-admin caller (no agents:admin) saves OpenAI key successfully', async () => {
     const server = await startServer()
 
-    // First create a master-key-shaped API key via admin auth.
+    // First create a scoped non-admin API key (every scope EXCEPT agents:admin)
+    // via admin auth. This shape exercises the regression path for issue/1221:
+    // a non-admin caller with services:write must still be able to save the
+    // transcription key. Distinct from the bootstrap master key (which is the
+    // founder's full-admin key and DOES include agents:admin).
     const createResponse = await fetch(`${server.baseUrl}/api/auth/keys`, {
       method: 'POST',
       headers: {
@@ -518,8 +538,8 @@ describe('api key auth routes', () => {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        name: 'Bootstrap-shape API key',
-        scopes: [...DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES],
+        name: 'Scoped non-admin API key',
+        scopes: [...SCOPED_NON_ADMIN_PERMISSIONS],
       }),
     })
     expect(createResponse.status).toBe(201)

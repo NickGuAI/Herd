@@ -10,8 +10,6 @@ import { AutomationScheduler } from '../modules/automations/scheduler.js'
 import { AutomationStore } from '../modules/automations/store.js'
 import { AutomationQuestEventBus } from '../modules/automations/quest-event-bus.js'
 import { createProviderRegistryRouter } from '../modules/agents/providers/http-router.js'
-import { registerCommanderCron } from '../modules/commanders/cron.js'
-import { createChannelReplyDispatchers } from '../modules/commanders/channel-dispatchers.js'
 import {
   COMMANDER_EMAIL_POLL_CRON,
   COMMANDER_TRANSCRIPT_MAINTENANCE_CRON,
@@ -27,6 +25,7 @@ import {
   resolveCommanderSessionStorePath,
 } from '../modules/commanders/paths.js'
 import { createCommanderChannelsRouter } from '../modules/channels/route.js'
+import { CommanderChannelBindingStore } from '../modules/channels/store.js'
 import { createCommandersRouter } from '../modules/commanders/routes.js'
 import { CommanderSessionStore } from '../modules/commanders/store.js'
 import { ConversationStore } from '../modules/commanders/conversation-store.js'
@@ -46,10 +45,15 @@ import { createSkillsRouter } from '../modules/skills/routes.js'
 import { createTelemetryRouterWithHub } from '../modules/telemetry/routes.js'
 import { createOtelRouter } from '../modules/telemetry/otel-receiver.js'
 import { createWhatsAppBridgeRouter } from '../modules/whatsapp-bridge/routes.js'
-import type { ProviderSecretsStoreLike } from './api-keys/provider-secrets-store.js'
+import {
+  ProviderSecretsStore,
+  type ProviderSecretsStoreLike,
+} from './api-keys/provider-secrets-store.js'
 import type { ApiKeyStoreLike } from './api-keys/store.js'
 import type { OpenAITranscriptionKeyStoreLike } from './api-keys/transcription-store.js'
 import { createRealtimeProxy } from './realtime/proxy.js'
+import { initializeInboundTranscriptionProvider } from './voice/stt.js'
+import { initializeOutboundSpeechSynthesizer } from './voice/tts.js'
 
 export interface HammurabiModule {
   name: string
@@ -125,6 +129,9 @@ export function createModules(options: ModuleRegistryOptions = {}): ModuleRegist
   const commandRoomMonitorOptions = resolveCommandRoomMonitorOptions()
 
   const commanderDataDir = resolveCommanderDataDir()
+  const providerSecretsStore = options.providerSecretsStore ?? new ProviderSecretsStore()
+  initializeInboundTranscriptionProvider({ providerSecretsStore })
+  initializeOutboundSpeechSynthesizer({ providerSecretsStore })
   const policyStore = new PolicyStore()
   const approvalCoordinator = new ApprovalCoordinator()
   let actionPolicyGate: ActionPolicyGate | null = null
@@ -150,6 +157,7 @@ export function createModules(options: ModuleRegistryOptions = {}): ModuleRegist
   const commanderSessionStorePath = resolveCommanderSessionStorePath(commanderDataDir)
   const commanderConversationStore = new ConversationStore(commanderDataDir)
   const commanderSessionStore = new CommanderSessionStore(commanderSessionStorePath)
+  const commanderChannelBindingStore = new CommanderChannelBindingStore()
   const operatorStore = new OperatorStore()
   const emailConfigStore = new CommanderEmailConfigStore(commanderDataDir)
   const emailStateStore = new CommanderEmailStateStore(commanderDataDir)
@@ -184,7 +192,7 @@ export function createModules(options: ModuleRegistryOptions = {}): ModuleRegist
 
   const commanders = createCommandersRouter({
     apiKeyStore: options.apiKeyStore,
-    providerSecretsStore: options.providerSecretsStore,
+    providerSecretsStore,
     auth0Domain: options.auth0Domain,
     auth0Audience: options.auth0Audience,
     auth0ClientId: options.auth0ClientId,
@@ -194,18 +202,19 @@ export function createModules(options: ModuleRegistryOptions = {}): ModuleRegist
     // Share the same ConversationStore instance the sessionStore writes
     // backfills into, so router-side reads observe the migrated rows.
     conversationStore: commanderConversationStore,
+    channelBindingStore: commanderChannelBindingStore,
     questStore,
     heartbeatBasePath: commanderDataDir,
     memoryBasePath: commanderDataDir,
     automationStore,
     automationScheduler,
     automationSchedulerInitialized,
-    channelReplyDispatchers: createChannelReplyDispatchers(),
     emailConfigStore,
     emailStateStore,
     emailPoller,
   })
   const channels = createCommanderChannelsRouter({
+    store: commanderChannelBindingStore,
     apiKeyStore: options.apiKeyStore,
     auth0Domain: options.auth0Domain,
     auth0Audience: options.auth0Audience,

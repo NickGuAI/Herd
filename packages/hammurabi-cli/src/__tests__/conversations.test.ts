@@ -132,6 +132,37 @@ describe('runConversationsCli', () => {
     )
   })
 
+  it('refuses to create conversations from an agent runtime context', async () => {
+    const previousSessionName = process.env.HAMMURABI_SESSION_NAME
+    process.env.HAMMURABI_SESSION_NAME = 'commander-runtime-session'
+    const fetchImpl = vi.fn<typeof fetch>()
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    try {
+      const exitCode = await runConversationsCli(
+        ['create', '--commander', 'cmdr-2', '--surface', 'cli'],
+        {
+          fetchImpl,
+          readConfig: async () => config,
+          stdout: stdout.writer,
+          stderr: stderr.writer,
+        },
+      )
+
+      expect(exitCode).toBe(1)
+      expect(stdout.read()).toBe('')
+      expect(stderr.read()).toContain('Refusing to create a conversation from an agent runtime context')
+      expect(fetchImpl).not.toHaveBeenCalled()
+    } finally {
+      if (previousSessionName === undefined) {
+        delete process.env.HAMMURABI_SESSION_NAME
+      } else {
+        process.env.HAMMURABI_SESSION_NAME = previousSessionName
+      }
+    }
+  })
+
   it('attaches to an existing conversation through the resume route', async () => {
     const conversationId = '44444444-4444-4444-8444-444444444444'
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(

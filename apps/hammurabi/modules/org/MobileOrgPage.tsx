@@ -5,6 +5,7 @@ import { CommanderRow } from '@modules/org/components/CommanderRow'
 import type { OrgNode, OrgTree } from '@modules/org/types'
 import BottomSheet from '@/components/BottomSheet'
 import { AgentAvatar } from '@modules/components/hervald'
+import { ensureCommanderVisualProfile } from '@modules/commanders/commander-visual-profile'
 
 function statusDotClass(status: string) {
   return status === 'running' || status === 'active'
@@ -34,15 +35,18 @@ function MobileCommanderTile({
   selected: boolean
   onSelect: () => void
 }) {
+  const profile = ensureCommanderVisualProfile(commander.id, commander.profile ?? null)
+
   return (
     <article
       data-testid="mobile-org-commander-tile"
       data-commander-card={commander.id}
       className={[
-        'rounded-[12px] border border-ink-border bg-washi-white transition-colors',
-        selected ? 'border-sumi-black bg-ink-wash/40' : '',
+        'rounded-[12px] border bg-washi-white transition-colors',
+        selected ? 'bg-ink-wash/40 ring-1 ring-ink-border-firm' : '',
         commander.archived ? 'opacity-60' : '',
       ].join(' ').trim()}
+      style={{ borderColor: profile.borderColor }}
     >
       <button
         type="button"
@@ -56,6 +60,7 @@ function MobileCommanderTile({
               id: commander.id,
               displayName: commander.displayName,
               avatarUrl: commander.avatarUrl,
+              ui: profile,
             }}
             size={40}
           />

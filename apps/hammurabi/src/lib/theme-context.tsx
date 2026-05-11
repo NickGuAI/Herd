@@ -52,7 +52,25 @@ function readDocumentTheme(): AppTheme {
   if (typeof document === 'undefined') {
     return 'light'
   }
+  if (document.documentElement.dataset.theme === 'dark') {
+    return 'dark'
+  }
+  if (document.documentElement.dataset.theme === 'light') {
+    return 'light'
+  }
   return document.documentElement.classList.contains('hv-dark') ? 'dark' : 'light'
+}
+
+export function getHervaldThemeClassName(theme: AppTheme): 'hv-light' | 'hv-dark' {
+  if (typeof document !== 'undefined') {
+    if (document.documentElement.classList.contains('hv-dark')) {
+      return 'hv-dark'
+    }
+    if (document.documentElement.classList.contains('hv-light')) {
+      return 'hv-light'
+    }
+  }
+  return theme === 'dark' ? 'hv-dark' : 'hv-light'
 }
 
 function applyDocumentTheme(theme: AppTheme): void {
@@ -62,6 +80,7 @@ function applyDocumentTheme(theme: AppTheme): void {
 
   document.documentElement.classList.remove('hv-light', 'hv-dark')
   document.documentElement.classList.add(theme === 'dark' ? 'hv-dark' : 'hv-light')
+  document.documentElement.dataset.theme = theme
 }
 
 async function fetchSettings(): Promise<AppSettings> {

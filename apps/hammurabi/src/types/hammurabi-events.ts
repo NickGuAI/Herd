@@ -39,6 +39,7 @@ export interface HammurabiThinkingBlock {
   type: 'thinking'
   thinking?: string
   text?: string
+  signature?: string
 }
 
 export interface HammurabiImageBlock {

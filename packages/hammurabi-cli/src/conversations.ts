@@ -34,6 +34,11 @@ export interface ConversationsCliDependencies {
 }
 
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+const AGENT_RUNTIME_CONVERSATION_CREATE_ENV_KEYS = [
+  'HAMMURABI_SESSION_NAME',
+  'HAMMURABI_CONVERSATION_ID',
+  'HAMMURABI_COMMANDER_RUNTIME_CONVERSATION_ID',
+] as const
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -119,6 +124,15 @@ function buildAuthHeaders(config: HammurabiConfig, includeJsonContentType: boole
   }
 
   return headers
+}
+
+function activeAgentRuntimeContextEnvKey(): string | null {
+  for (const key of AGENT_RUNTIME_CONVERSATION_CREATE_ENV_KEYS) {
+    if ((process.env[key] ?? '').trim().length > 0) {
+      return key
+    }
+  }
+  return null
 }
 
 async function fetchJson(
@@ -310,6 +324,14 @@ async function runCreate(
   stdout: Writable,
   stderr: Writable,
 ): Promise<number> {
+  const runtimeEnvKey = activeAgentRuntimeContextEnvKey()
+  if (runtimeEnvKey) {
+    stderr.write(
+      `Refusing to create a conversation from an agent runtime context (${runtimeEnvKey} is set). Conversation creation is operator-controlled.\n`,
+    )
+    return 1
+  }
+
   const url = buildApiUrl(
     config.endpoint,
     `/api/commanders/${encodeURIComponent(options.commanderId)}/conversations`,

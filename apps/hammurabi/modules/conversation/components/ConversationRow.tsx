@@ -101,8 +101,8 @@ export function ConversationRow({
           }}
         >
           <span
+            className="font-body"
             style={{
-              fontFamily: 'var(--hv-font-body)',
               fontSize: 'calc(9.5px * var(--hv-sessions-scale, 1))',
               letterSpacing: '0.16em',
               textTransform: 'uppercase',
@@ -125,8 +125,8 @@ export function ConversationRow({
             aria-hidden
           />
           <span
+            className="font-body"
             style={{
-              fontFamily: 'var(--hv-font-body)',
               fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
               letterSpacing: '0.08em',
               textTransform: 'uppercase',
@@ -162,8 +162,8 @@ export function ConversationRow({
             }}
           >
             <span
+              className="font-mono"
               style={{
-                fontFamily: 'var(--hv-font-mono)',
                 fontSize: 'calc(11.5px * var(--hv-sessions-scale, 1))',
                 color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-subtle)',
                 overflow: 'hidden',
@@ -203,8 +203,8 @@ export function ConversationRow({
             )}
           </div>
           <span
+            className="font-mono"
             style={{
-              fontFamily: 'var(--hv-font-mono)',
               fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
               color: 'var(--hv-fg-faint)',
               flexShrink: 0,
@@ -217,6 +217,7 @@ export function ConversationRow({
       </button>
 
       <button
+        className="font-body"
         type="button"
         onClick={() => handleAttach(conversation.id)}
         aria-label={`Attach to conversation ${conversation.id}`}
@@ -227,7 +228,6 @@ export function ConversationRow({
           border: '1px solid var(--hv-border-hair)',
           background: selected ? 'var(--hv-bg-raised)' : 'transparent',
           color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-subtle)',
-          fontFamily: 'var(--hv-font-body)',
           fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
           letterSpacing: '0.12em',
           textTransform: 'uppercase',

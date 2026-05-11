@@ -96,4 +96,11 @@ describe('CommanderCard', () => {
 
     expect(html).not.toContain('Heartbeat')
   })
+
+  it('uses a deterministic commander border when ui colors are missing', () => {
+    const html = renderCommanderCard(createProps())
+
+    expect(html).toContain('border-color:var(--hv-accent-')
+    expect(html).not.toContain('border-sumi-mist')
+  })
 })

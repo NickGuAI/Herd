@@ -210,7 +210,7 @@ export function AgentMessage({
       </div>
       <div
         className={cn(
-          'msg-agent min-w-0 flex-1 rounded-r-lg rounded-bl-lg border border-white/[0.12] border-l-[3px] bg-[#242424] p-3.5',
+          'msg-agent min-w-0 flex-1 rounded-r-lg rounded-bl-lg border border-white/[0.12] border-l-[3px] bg-washi-aged p-3.5',
           !safeAccent && 'border-l-sky-400/70',
         )}
         style={safeAccent ? { borderLeftColor: safeAccent } : undefined}

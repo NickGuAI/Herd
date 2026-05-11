@@ -10,6 +10,10 @@ import {
   normalizeHeartbeatConfig,
 } from './heartbeat.js'
 import {
+  normalizeVoiceConfig,
+  type VoiceConfigOverride,
+} from './voice-config.js'
+import {
   conversationNamesEqual,
   generateConversationName,
   normalizeConversationName,
@@ -41,6 +45,21 @@ const CHAT_SURFACES = new Set<Conversation['surface']>([
   'cli',
   'ui',
 ])
+const CREATION_SOURCES = new Set<ConversationCreationSource>([
+  'ui',
+  'cli',
+  'api',
+  'channel',
+  'system-default',
+  'unknown',
+])
+const CREATED_BY_KINDS = new Set<ConversationCreatedByKind>([
+  'human',
+  'api-key',
+  'system',
+  'channel',
+  'unknown',
+])
 const DEFAULT_CHAT_STATUSES = new Set<Conversation['status']>([
   'active',
   'idle',
@@ -58,6 +77,7 @@ export interface Conversation {
   surface: CommanderConversationSurface
   channelMeta?: CommanderChannelMeta
   lastRoute?: CommanderLastRoute
+  voiceConfig?: VoiceConfigOverride
   agentType?: AgentType | null
   model?: string | null
   name: string
@@ -68,9 +88,30 @@ export interface Conversation {
   heartbeatTickCount: number
   completedTasks: number
   totalCostUsd: number
+  creationSource: ConversationCreationSource
+  createdByKind: ConversationCreatedByKind
+  createdById?: string
+  createdBySessionName?: string
+  createdByConversationId?: string
+  requestId?: string
   createdAt: string
   lastMessageAt: string
 }
+
+export type ConversationCreationSource =
+  | 'ui'
+  | 'cli'
+  | 'api'
+  | 'channel'
+  | 'system-default'
+  | 'unknown'
+
+export type ConversationCreatedByKind =
+  | 'human'
+  | 'api-key'
+  | 'system'
+  | 'channel'
+  | 'unknown'
 
 export interface ConversationStoreOptions {
   logger?: Pick<Console, 'info' | 'warn'>
@@ -145,19 +186,30 @@ function parseCurrentTask(raw: unknown): CommanderCurrentTask | null {
 }
 
 function parseSurface(raw: unknown): Conversation['surface'] | null {
-  return raw === 'discord' ||
-    raw === 'telegram' ||
-    raw === 'whatsapp' ||
-    raw === 'ui' ||
-    raw === 'cli' ||
-    raw === 'api'
-    ? raw
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const normalized = raw.trim()
+  return /^[a-z][a-z0-9_-]{1,63}$/i.test(normalized)
+    ? normalized as Conversation['surface']
     : null
 }
 
 function parseStatus(raw: unknown): Conversation['status'] | null {
   return typeof raw === 'string' && CONVERSATION_STATUSES.has(raw as Conversation['status'])
     ? raw as Conversation['status']
+    : null
+}
+
+function parseCreationSource(raw: unknown): ConversationCreationSource | null {
+  return typeof raw === 'string' && CREATION_SOURCES.has(raw as ConversationCreationSource)
+    ? raw as ConversationCreationSource
+    : null
+}
+
+function parseCreatedByKind(raw: unknown): ConversationCreatedByKind | null {
+  return typeof raw === 'string' && CREATED_BY_KINDS.has(raw as ConversationCreatedByKind)
+    ? raw as ConversationCreatedByKind
     : null
 }
 
@@ -173,6 +225,12 @@ function cloneConversation(conversation: Conversation): Conversation {
     currentTask: conversation.currentTask ? { ...conversation.currentTask } : null,
     channelMeta: conversation.channelMeta ? { ...conversation.channelMeta } : undefined,
     lastRoute: conversation.lastRoute ? { ...conversation.lastRoute } : undefined,
+    voiceConfig: conversation.voiceConfig
+      ? {
+        ...(conversation.voiceConfig.tts ? { tts: { ...conversation.voiceConfig.tts } } : {}),
+        ...(conversation.voiceConfig.stt ? { stt: { ...conversation.voiceConfig.stt } } : {}),
+      }
+      : undefined,
   }
 }
 
@@ -207,6 +265,8 @@ function parseConversation(raw: unknown): ParsedConversation | null {
   const agentType = parseProviderId(raw.agentType)
   const model = asOptionalNullableString(raw.model)
   const providerContext = parseProviderContext(raw)
+  const creationSource = parseCreationSource(raw.creationSource) ?? 'unknown'
+  const createdByKind = parseCreatedByKind(raw.createdByKind) ?? 'unknown'
 
   return {
     id,
@@ -214,6 +274,7 @@ function parseConversation(raw: unknown): ParsedConversation | null {
     surface,
     channelMeta: parseCommanderChannelMeta(raw.channelMeta),
     lastRoute: parseCommanderLastRoute(raw.lastRoute),
+    voiceConfig: normalizeVoiceConfig(raw.voiceConfig),
     agentType,
     ...(model !== undefined ? { model } : {}),
     ...(asOptionalString(raw.name) ? { name: asOptionalString(raw.name) } : {}),
@@ -224,6 +285,12 @@ function parseConversation(raw: unknown): ParsedConversation | null {
     heartbeatTickCount,
     completedTasks,
     totalCostUsd,
+    creationSource,
+    createdByKind,
+    ...(asOptionalString(raw.createdById) ? { createdById: asOptionalString(raw.createdById) } : {}),
+    ...(asOptionalString(raw.createdBySessionName) ? { createdBySessionName: asOptionalString(raw.createdBySessionName) } : {}),
+    ...(asOptionalString(raw.createdByConversationId) ? { createdByConversationId: asOptionalString(raw.createdByConversationId) } : {}),
+    ...(asOptionalString(raw.requestId) ? { requestId: asOptionalString(raw.requestId) } : {}),
     createdAt,
     lastMessageAt,
   }
@@ -249,7 +316,17 @@ function normalizeConversation(
   if (!CONVERSATION_STATUSES.has(input.status)) {
     throw new Error(`Invalid conversation status "${input.status}"`)
   }
+  if (!CREATION_SOURCES.has(input.creationSource)) {
+    throw new Error(`Invalid conversation creationSource "${input.creationSource}"`)
+  }
+  if (!CREATED_BY_KINDS.has(input.createdByKind)) {
+    throw new Error(`Invalid conversation createdByKind "${input.createdByKind}"`)
+  }
   const model = asOptionalNullableString(input.model)
+  const createdById = asOptionalString(input.createdById)
+  const createdBySessionName = asOptionalString(input.createdBySessionName)
+  const createdByConversationId = asOptionalString(input.createdByConversationId)
+  const requestId = asOptionalString(input.requestId)
 
   return {
     id: input.id,
@@ -257,6 +334,7 @@ function normalizeConversation(
     surface: input.surface,
     ...(input.channelMeta ? { channelMeta: { ...input.channelMeta } } : {}),
     ...(input.lastRoute ? { lastRoute: { ...input.lastRoute } } : {}),
+    ...(input.voiceConfig ? { voiceConfig: normalizeVoiceConfig(input.voiceConfig) } : {}),
     agentType: input.agentType ?? null,
     ...(model !== undefined ? { model } : {}),
     name,
@@ -267,6 +345,12 @@ function normalizeConversation(
     heartbeatTickCount: Math.max(0, Math.floor(input.heartbeatTickCount)),
     completedTasks: Math.max(0, Math.floor(input.completedTasks)),
     totalCostUsd: Math.max(0, input.totalCostUsd),
+    creationSource: input.creationSource,
+    createdByKind: input.createdByKind,
+    ...(createdById ? { createdById } : {}),
+    ...(createdBySessionName ? { createdBySessionName } : {}),
+    ...(createdByConversationId ? { createdByConversationId } : {}),
+    ...(requestId ? { requestId } : {}),
     createdAt: input.createdAt,
     lastMessageAt: input.lastMessageAt,
   }
@@ -275,6 +359,46 @@ function normalizeConversation(
 function toConversationFilePath(dataDir: string, commanderId: string, conversationId: string): string {
   const commanderRoot = resolveCommanderPaths(commanderId, dataDir).commanderRoot
   return path.join(commanderRoot, 'conversations', `${conversationId}.json`)
+}
+
+function inferPersistedCreationProvenance(
+  raw: Record<string, unknown>,
+  parsed: ParsedConversation,
+  canonicalId: string,
+): Pick<Conversation,
+  | 'creationSource'
+  | 'createdByKind'
+  | 'createdById'
+  | 'createdBySessionName'
+  | 'createdByConversationId'
+  | 'requestId'
+> {
+  const parsedCreationSource = parseCreationSource(raw.creationSource)
+  const parsedCreatedByKind = parseCreatedByKind(raw.createdByKind)
+  let creationSource: ConversationCreationSource = parsedCreationSource ?? 'unknown'
+  let createdByKind: ConversationCreatedByKind = parsedCreatedByKind ?? 'unknown'
+
+  if (!parsedCreationSource || !parsedCreatedByKind) {
+    if (canonicalId === buildDefaultCommanderConversationId(parsed.commanderId)) {
+      creationSource = 'system-default'
+      createdByKind = 'system'
+    } else if (parsed.channelMeta) {
+      creationSource = 'channel'
+      createdByKind = 'channel'
+    } else {
+      creationSource = 'unknown'
+      createdByKind = 'unknown'
+    }
+  }
+
+  return {
+    creationSource,
+    createdByKind,
+    ...(asOptionalString(raw.createdById) ? { createdById: asOptionalString(raw.createdById) } : {}),
+    ...(asOptionalString(raw.createdBySessionName) ? { createdBySessionName: asOptionalString(raw.createdBySessionName) } : {}),
+    ...(asOptionalString(raw.createdByConversationId) ? { createdByConversationId: asOptionalString(raw.createdByConversationId) } : {}),
+    ...(asOptionalString(raw.requestId) ? { requestId: asOptionalString(raw.requestId) } : {}),
+  }
 }
 
 export class ConversationStore {
@@ -400,71 +524,6 @@ export class ConversationStore {
     })
   }
 
-  async findOrCreateConversationBySessionKey(
-    commanderId: string,
-    sessionKey: string,
-    defaults: {
-      surface: Conversation['surface']
-      channelMeta: CommanderChannelMeta
-      lastRoute: CommanderLastRoute
-    },
-  ): Promise<{ conversation: Conversation; created: boolean }> {
-    return this.withMutationLock(async () => {
-      await this.ensureLoaded()
-      const normalizedSessionKey = sessionKey.trim()
-      if (!normalizedSessionKey) {
-        throw new Error('sessionKey must be a non-empty string')
-      }
-
-      for (const existing of this.items().values()) {
-        if (
-          existing.commanderId === commanderId &&
-          existing.channelMeta?.sessionKey === normalizedSessionKey
-        ) {
-          const updated: Conversation = normalizeConversation({
-            ...cloneConversation(existing),
-            channelMeta: {
-              ...defaults.channelMeta,
-              sessionKey: normalizedSessionKey,
-            },
-            lastRoute: { ...defaults.lastRoute },
-            lastMessageAt: new Date().toISOString(),
-          })
-          this.items().set(updated.id, cloneConversation(updated))
-          await this.writeConversation(updated)
-          return { conversation: cloneConversation(updated), created: false }
-        }
-      }
-
-      const nowIso = new Date().toISOString()
-      const conversationId = randomUUID()
-      const name = this.resolveConversationName(commanderId)
-      this.assertConversationNameAvailable(commanderId, name)
-      const created = normalizeConversation({
-        id: conversationId,
-        commanderId,
-        surface: defaults.surface,
-        channelMeta: {
-          ...defaults.channelMeta,
-          sessionKey: normalizedSessionKey,
-        },
-        lastRoute: { ...defaults.lastRoute },
-        status: 'idle',
-        currentTask: null,
-        lastHeartbeat: null,
-        heartbeatTickCount: 0,
-        completedTasks: 0,
-        totalCostUsd: 0,
-        name,
-        createdAt: nowIso,
-        lastMessageAt: nowIso,
-      })
-      this.items().set(created.id, cloneConversation(created))
-      await this.writeConversation(created)
-      return { conversation: cloneConversation(created), created: true }
-    })
-  }
-
   async ensureDefaultConversation(input: {
     commanderId: string
     surface?: Conversation['surface']
@@ -487,6 +546,8 @@ export class ConversationStore {
       heartbeatTickCount: 0,
       completedTasks: 0,
       totalCostUsd: 0,
+      creationSource: 'system-default',
+      createdByKind: 'system',
       createdAt: input.createdAt,
       lastMessageAt: input.createdAt,
     })
@@ -661,21 +722,31 @@ export class ConversationStore {
       : parsed.id
     const name = normalizeConversationName(parsed.name)
       ?? generateConversationName(commanderNames)
+    const provenance = inferPersistedCreationProvenance(raw, parsed, canonicalId)
     const normalized = normalizeConversation({
       ...parsed,
       id: canonicalId,
       name,
+      ...provenance,
     })
 
     commanderNames.add(name)
     const heartbeatConfigPresent = Object.prototype.hasOwnProperty.call(raw, 'heartbeat')
-    if (parsed.name && !heartbeatConfigPresent && canonicalId === parsed.id) {
+    const provenancePresent =
+      parseCreationSource(raw.creationSource) !== null &&
+      parseCreatedByKind(raw.createdByKind) !== null
+    if (parsed.name && provenancePresent && !heartbeatConfigPresent && canonicalId === parsed.id) {
       return normalized
     }
 
     if (!parsed.name) {
       this.logger.warn(
         `[commanders][conversations] Backfilled missing name for conversation "${normalized.id}" as "${normalized.name}"`,
+      )
+    }
+    if (!provenancePresent) {
+      this.logger.warn(
+        `[commanders][conversations] Backfilled creation provenance for conversation "${normalized.id}" as "${normalized.creationSource}/${normalized.createdByKind}"`,
       )
     }
     await this.rewriteConversation(filePath, normalized)

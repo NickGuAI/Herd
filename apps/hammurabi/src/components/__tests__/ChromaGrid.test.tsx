@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -50,7 +51,7 @@ describe('ChromaGrid', () => {
     document.body.appendChild(container)
     root = createRoot(container)
 
-    await act(async () => {
+    flushSync(() => {
       root?.render(
         <ChromaGrid
           items={[
@@ -93,7 +94,7 @@ describe('ChromaGrid', () => {
     document.body.appendChild(container)
     root = createRoot(container)
 
-    await act(async () => {
+    flushSync(() => {
       root?.render(
         <ChromaGrid
           items={[

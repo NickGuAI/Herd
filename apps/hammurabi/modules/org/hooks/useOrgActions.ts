@@ -43,6 +43,11 @@ export interface CommanderTemplatePackage {
   commander: {
     id?: string
     displayName: string
+    profile?: {
+      borderColor?: string
+      accentColor?: string
+      speakingTone?: string
+    } | null
   }
   commanderMd: string | null
   memorySnapshot: {

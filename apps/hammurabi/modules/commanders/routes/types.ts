@@ -5,6 +5,8 @@ import type { ProviderSecretsStoreLike } from '../../../server/api-keys/provider
 import type { CommanderSessionsInterface } from '../../agents/routes.js'
 import type { AutomationStore } from '../../automations/store.js'
 import type { AutomationScheduler } from '../../automations/scheduler.js'
+import type { ChannelSurfaceBindingStore } from '../../channels/surface-binding-store.js'
+import type { CommanderChannelBindingStore } from '../../channels/store.js'
 import type { ProviderSessionContext } from '../../agents/providers/provider-session-context.js'
 import type {
   CommanderEmailConfigStore,
@@ -79,6 +81,8 @@ export interface CommandersRouterOptions {
   agentsSessionStorePath?: string
   remoteSyncSharedSecret?: string
   channelReplyDispatchers?: Partial<Record<CommanderChannelMeta['provider'], CommanderChannelReplyDispatcher>>
+  surfaceBindingStore?: ChannelSurfaceBindingStore
+  channelBindingStore?: CommanderChannelBindingStore
 }
 
 export interface CommandersRouterResult {
@@ -196,6 +200,8 @@ export interface CommanderRoutesContext {
   runtimeConfig: CommanderRuntimeConfig
   sessionStore: CommanderSessionStore
   conversationStore: ConversationStore
+  surfaceBindingStore: ChannelSurfaceBindingStore
+  channelBindingStore: CommanderChannelBindingStore
   questStore: QuestStore
   emailConfigStore: CommanderEmailConfigStore
   emailStateStore: CommanderEmailStateStore
@@ -205,6 +211,8 @@ export interface CommanderRoutesContext {
   sessionsInterface?: CommanderSessionsInterface
   requireReadAccess: RequestHandler
   requireWriteAccess: RequestHandler
+  requireConversationCreateAccess: RequestHandler
+  requireChannelIngestAccess: RequestHandler
   /**
    * Auth gate for commander-scoped writes where the `:id` path segment is the
    * authority boundary, such as `POST /:id/workers` and quest claim routes.
@@ -238,6 +246,7 @@ export interface CommanderRoutesContext {
   dispatchCommanderChannelReply: (input: {
     commanderId: string
     message: string
+    conversationId?: string
   }) => Promise<
     | {
       ok: true

@@ -14,6 +14,7 @@ import { useIsMobile } from '@/hooks/use-is-mobile'
 import { ApprovalCenter } from '../modules/approvals/ApprovalCenter'
 
 const API_KEY_STORAGE = 'hammurabi_api_key'
+const DEFAULT_SIGN_IN_PATH = '/org'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -143,6 +144,13 @@ export default function App() {
     if (!trimmed) return
     localStorage.setItem(API_KEY_STORAGE, trimmed)
     setAccessTokenResolver(() => Promise.resolve(trimmed))
+    if (typeof window !== 'undefined') {
+      const { pathname } = window.location
+      const onDefaultEntryPath = !pathname || pathname === '/' || pathname === '/welcome'
+      if (onDefaultEntryPath) {
+        window.history.replaceState({}, document.title, DEFAULT_SIGN_IN_PATH)
+      }
+    }
     setApiKeyState(trimmed)
   }
 
@@ -190,8 +198,19 @@ export default function App() {
     <Auth0Provider
       domain={domain}
       clientId={clientId}
+      onRedirectCallback={(appState) => {
+        const returnTo = typeof appState?.returnTo === 'string'
+          ? appState.returnTo
+          : DEFAULT_SIGN_IN_PATH
+        window.history.replaceState({}, document.title, returnTo)
+      }}
       authorizationParams={{
         audience,
+        // Auth0 callback URL must match the dashboard whitelist exactly.
+        // Keep this static at the origin; post-login routing to a specific
+        // app path is handled by `onRedirectCallback` reading
+        // `appState.returnTo` (set by `loginWithRedirect({ appState })` in
+        // LandingPage). See issue #1425.
         redirect_uri: window.location.origin,
       }}
     >

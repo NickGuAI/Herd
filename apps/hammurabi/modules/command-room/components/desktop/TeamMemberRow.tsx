@@ -37,6 +37,7 @@ function stateTone(state: string) {
 export function TeamMemberRow({ worker, selected, onClick, approvalCount }: TeamMemberRowProps) {
   return (
     <button
+      className="font-body"
       onClick={onClick}
       style={{
         display: 'flex',
@@ -52,7 +53,6 @@ export function TeamMemberRow({ worker, selected, onClick, approvalCount }: Team
         boxShadow: selected ? 'var(--hv-shadow-whisper)' : 'none',
         cursor: 'pointer',
         textAlign: 'left',
-        fontFamily: 'var(--hv-font-body)',
         transition: 'border-color 0.15s var(--hv-ease-gentle), box-shadow 0.15s var(--hv-ease-gentle)',
       }}
     >
@@ -63,8 +63,8 @@ export function TeamMemberRow({ worker, selected, onClick, approvalCount }: Team
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span
+            className="font-mono"
             style={{
-              fontFamily: 'var(--hv-font-mono)',
               fontSize: 12.5,
               color: 'var(--hv-fg)',
             }}
@@ -76,8 +76,8 @@ export function TeamMemberRow({ worker, selected, onClick, approvalCount }: Team
           </Chip>
           {worker.kind === 'tool' && (
             <span
+              className="font-mono"
               style={{
-                fontFamily: 'var(--hv-font-mono)',
                 fontSize: 10.5,
                 color: 'var(--hv-fg-faint)',
               }}
@@ -87,6 +87,7 @@ export function TeamMemberRow({ worker, selected, onClick, approvalCount }: Team
           )}
         </div>
         <div
+          className="font-body"
           style={{
             fontSize: 11,
             color: 'var(--hv-fg-subtle)',
@@ -95,7 +96,6 @@ export function TeamMemberRow({ worker, selected, onClick, approvalCount }: Team
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            fontFamily: 'var(--hv-font-body)',
           }}
         >
           {worker.label ?? worker.kind}
@@ -105,10 +105,10 @@ export function TeamMemberRow({ worker, selected, onClick, approvalCount }: Team
       {/* Approval badge — vermillion count */}
       {approvalCount > 0 && (
         <span
+          className="font-mono"
           style={{
             fontSize: 10,
             color: 'var(--vermillion-seal)',
-            fontFamily: 'var(--hv-font-mono)',
             marginTop: 6,
             flexShrink: 0,
           }}

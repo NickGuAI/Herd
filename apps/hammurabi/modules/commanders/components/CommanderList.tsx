@@ -4,6 +4,7 @@ import { Clock3, ExternalLink, MessageSquare, Plus, Square, Trash2, Triangle } f
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { cn, formatCost, timeAgo } from '@/lib/utils'
 import { fetchJson } from '../../../src/lib/api'
+import { ensureCommanderVisualProfile } from '../commander-visual-profile'
 import type {
   CommanderAgentType,
   CommanderCreateInput,
@@ -38,10 +39,15 @@ const STATE_BADGE_CLASSES: Record<CommanderSession['state'], string> = {
   stopped: 'badge-stale',
 }
 
-const CHANNEL_PROVIDER_LABELS: Record<'whatsapp' | 'telegram' | 'discord', string> = {
+const CHANNEL_PROVIDER_LABELS: Record<string, string> = {
   whatsapp: 'WhatsApp',
+  slack: 'Slack',
   telegram: 'Telegram',
   discord: 'Discord',
+  email: 'Email',
+  circle: 'Circle',
+  imessage: 'iMessage',
+  matrix: 'Matrix',
 }
 
 function resolveCommanderDisplayName(session: CommanderSessionCard): string {
@@ -50,7 +56,7 @@ function resolveCommanderDisplayName(session: CommanderSessionCard): string {
     return session.displayName?.trim() || session.host
   }
 
-  const providerLabel = CHANNEL_PROVIDER_LABELS[channelMeta.provider]
+  const providerLabel = CHANNEL_PROVIDER_LABELS[channelMeta.provider] ?? channelMeta.provider
   const baseLabel = channelMeta.displayName.trim() || session.displayName?.trim() || session.host
   return `${providerLabel} • ${baseLabel}`
 }
@@ -218,6 +224,7 @@ export function CommanderList({
             manualHeartbeatMutation.variables === session.id
           const manualHeartbeatRunId = manualHeartbeatRunIdByCommander[session.id]
           const manualHeartbeatError = manualHeartbeatErrorByCommander[session.id]
+          const visualProfile = ensureCommanderVisualProfile(session.id, session.ui ?? null)
 
           return (
             <div
@@ -232,9 +239,10 @@ export function CommanderList({
                 }
               }}
               className={cn(
-                'cursor-pointer rounded-lg border border-ink-border p-3 transition-all duration-300',
+                'cursor-pointer rounded-lg border p-3 transition-all duration-300',
                 selected ? 'bg-washi-aged/70 shadow-ink-sm ring-1 ring-sumi-black/10' : 'bg-washi-white hover:bg-washi-aged/40',
               )}
+              style={{ borderColor: visualProfile.borderColor }}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -255,7 +263,7 @@ export function CommanderList({
                 <div className="flex items-center gap-2 shrink-0">
                   {session.channelMeta && (
                     <span className="badge-sumi badge-idle">
-                      {CHANNEL_PROVIDER_LABELS[session.channelMeta.provider]}
+                      {CHANNEL_PROVIDER_LABELS[session.channelMeta.provider] ?? session.channelMeta.provider}
                     </span>
                   )}
                   <span className={cn('badge-sumi', STATE_BADGE_CLASSES[session.state])}>

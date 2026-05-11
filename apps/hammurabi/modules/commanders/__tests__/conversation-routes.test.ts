@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
 import {
+  appendTranscriptEvent,
   resetTranscriptStoreRoot,
   setTranscriptStoreRoot,
 } from '../../agents/transcript-store'
@@ -13,6 +14,7 @@ import { createCommandersRouter, type CommandersRouterOptions } from '../routes'
 import type { CommanderSessionsInterface } from '../../agents/routes'
 import type { AgentType } from '../../agents/types'
 import { buildConversationSessionName } from '../routes/conversation-runtime'
+import { CommanderChannelBindingStore, CommanderChannelBindingConflictError } from '../../channels/store'
 import {
   buildDefaultCommanderConversationId,
   CommanderSessionStore,
@@ -36,6 +38,22 @@ const READ_ONLY_AUTH_HEADERS = {
 
 const WRITE_ONLY_AUTH_HEADERS = {
   'x-hammurabi-api-key': 'write-only-key',
+}
+
+const AGENT_RUNTIME_AUTH_HEADERS = {
+  'x-hammurabi-api-key': 'agent-runtime-key',
+}
+
+function assistantTextEvent(index: number, text: string) {
+  return {
+    type: 'assistant',
+    timestamp: new Date(Date.UTC(2026, 4, 1, 0, 0, index)).toISOString(),
+    message: {
+      id: `assistant-${index}`,
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+    },
+  }
 }
 
 interface RunningServer {
@@ -107,7 +125,14 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
       createdBy: 'test',
       createdAt: '2026-02-16T00:00:00.000Z',
       lastUsedAt: null,
-      scopes: ['agents:read', 'agents:write', 'commanders:read', 'commanders:write'],
+      scopes: [
+        'agents:read',
+        'agents:write',
+        'commanders:read',
+        'commanders:write',
+        'commanders:conversations:create',
+        'commanders:channels:write',
+      ],
     },
     'read-only-key': {
       id: 'read-only-key-id',
@@ -128,6 +153,16 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
       createdAt: '2026-02-16T00:00:00.000Z',
       lastUsedAt: null,
       scopes: ['commanders:write'],
+    },
+    'agent-runtime-key': {
+      id: 'agent-runtime-key-id',
+      name: 'Agent Runtime Key',
+      keyHash: 'hash-agent-runtime',
+      prefix: 'hmrb_agent',
+      createdBy: 'test',
+      createdAt: '2026-02-16T00:00:00.000Z',
+      lastUsedAt: null,
+      scopes: ['agents:read', 'agents:write', 'commanders:read', 'commanders:write'],
     },
   } satisfies Record<string, import('../../../server/api-keys/store').ApiKeyRecord>
 
@@ -329,6 +364,38 @@ async function seedCommander(
   })
 }
 
+async function seedOpenChannelBindings(storePath: string): Promise<CommanderChannelBindingStore> {
+  const dataDir = dirname(storePath)
+  const channelStore = new CommanderChannelBindingStore(join(dataDir, 'channels.json'))
+  const commanderStore = new CommanderSessionStore(storePath)
+  const commanders = await commanderStore.list()
+
+  for (const commander of commanders) {
+    for (const provider of ['whatsapp', 'telegram', 'discord'] as const) {
+      const accountIds = provider === 'whatsapp'
+        ? ['default', 'work', 'acct-autostart', 'acct-collect', 'acct-orphan']
+        : ['default']
+      for (const accountId of accountIds) {
+        try {
+          await channelStore.create({
+            commanderId: commander.id,
+            provider,
+            accountId,
+            displayName: `${provider} ${accountId}`,
+            config: { dmPolicy: 'open', groupPolicy: 'open' },
+          })
+        } catch (error) {
+          if (!(error instanceof CommanderChannelBindingConflictError)) {
+            throw error
+          }
+        }
+      }
+    }
+  }
+
+  return channelStore
+}
+
 async function startServer(
   options: Partial<CommandersRouterOptions> & {
     sessionsInterface?: CommanderSessionsInterface
@@ -343,12 +410,15 @@ async function startServer(
 
   const app = express()
   app.use(express.json())
+  const channelBindingStore = options.channelBindingStore
+    ?? await seedOpenChannelBindings(sessionStorePath)
 
   const commanders = createCommandersRouter({
     apiKeyStore: createTestApiKeyStore(),
     ...options,
     sessionStorePath,
     memoryBasePath,
+    channelBindingStore,
   })
   app.use('/api/commanders', commanders.router)
   app.use('/api/conversations', commanders.conversationRouter)
@@ -427,6 +497,201 @@ async function startConversation(
 }
 
 describe('conversation routes', () => {
+  it('requires the conversation-create API-key scope for raw conversation creation', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-create-auth-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const server = await startServer({ sessionStorePath: storePath })
+
+    try {
+      const response = await fetch(`${server.baseUrl}/api/commanders/${COMMANDER_A}/conversations`, {
+        method: 'POST',
+        headers: {
+          ...AGENT_RUNTIME_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: CONVERSATION_A,
+          surface: 'cli',
+        }),
+      })
+
+      expect(response.status).toBe(403)
+      expect(await response.json()).toEqual({ error: 'Insufficient API key scope' })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('records API-key creation provenance on allowed conversation creation', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-provenance-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const server = await startServer({ sessionStorePath: storePath })
+
+    try {
+      const response = await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })
+
+      expect(response.status).toBe(201)
+      expect(await response.json()).toEqual(expect.objectContaining({
+        id: CONVERSATION_A,
+        creationSource: 'api',
+        createdByKind: 'api-key',
+        createdById: 'full-scope-key-id',
+      }))
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('returns transcript-backed conversation messages with default last-ten paging', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-messages-')
+    const storePath = join(dir, 'sessions.json')
+    setTranscriptStoreRoot(join(dir, 'transcripts'))
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      const createResponse = await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'ui',
+      })
+      expect(createResponse.status).toBe(201)
+      const conversation = await createResponse.json() as {
+        id: string
+        commanderId: string
+      }
+      const sessionName = buildConversationSessionName(conversation as Parameters<typeof buildConversationSessionName>[0])
+
+      for (let index = 0; index < 12; index += 1) {
+        await appendTranscriptEvent(sessionName, assistantTextEvent(index, `history ${index}`))
+      }
+
+      const response = await fetch(
+        `${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages`,
+        { headers: READ_ONLY_AUTH_HEADERS },
+      )
+      expect(response.status).toBe(200)
+      const payload = await response.json() as {
+        source: string
+        limit: number
+        nextBefore: string | null
+        hasMore: boolean
+        totalMessages: number
+        messages: Array<{ kind: string; text: string }>
+      }
+      expect(payload.source).toBe('transcript')
+      expect(payload.limit).toBe(10)
+      expect(payload.nextBefore).toBe('2')
+      expect(payload.hasMore).toBe(true)
+      expect(payload.totalMessages).toBe(12)
+      expect(payload.messages.map((message) => message.text)).toEqual([
+        'history 2',
+        'history 3',
+        'history 4',
+        'history 5',
+        'history 6',
+        'history 7',
+        'history 8',
+        'history 9',
+        'history 10',
+        'history 11',
+      ])
+
+      const olderResponse = await fetch(
+        `${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages?before=2`,
+        { headers: READ_ONLY_AUTH_HEADERS },
+      )
+      expect(olderResponse.status).toBe(200)
+      const olderPayload = await olderResponse.json() as {
+        nextBefore: string | null
+        hasMore: boolean
+        messages: Array<{ text: string }>
+      }
+      expect(olderPayload.nextBefore).toBeNull()
+      expect(olderPayload.hasMore).toBe(false)
+      expect(olderPayload.messages.map((message) => message.text)).toEqual([
+        'history 0',
+        'history 1',
+      ])
+    } finally {
+      sessions.dispose()
+      await server.close()
+    }
+  })
+
+  it('uses the live session buffer when it is fresher than the transcript store', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-live-messages-')
+    const storePath = join(dir, 'sessions.json')
+    setTranscriptStoreRoot(join(dir, 'transcripts'))
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'ui',
+      })).status).toBe(201)
+      expect((await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })).status).toBe(200)
+
+      const sessionName = buildConversationSessionName({
+        id: CONVERSATION_A,
+        commanderId: COMMANDER_A,
+      } as Parameters<typeof buildConversationSessionName>[0])
+      const activeSession = sessions.activeSessions.get(sessionName)
+      if (!activeSession) {
+        throw new Error('Expected active conversation session')
+      }
+      activeSession.events = Array.from(
+        { length: 12 },
+        (_, index) => assistantTextEvent(index, `live ${index}`),
+      )
+
+      const response = await fetch(
+        `${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages`,
+        { headers: READ_ONLY_AUTH_HEADERS },
+      )
+      expect(response.status).toBe(200)
+      const payload = await response.json() as {
+        source: string
+        messages: Array<{ text: string }>
+      }
+      expect(payload.source).toBe('live')
+      expect(payload.messages.map((message) => message.text)).toEqual([
+        'live 2',
+        'live 3',
+        'live 4',
+        'live 5',
+        'live 6',
+        'live 7',
+        'live 8',
+        'live 9',
+        'live 10',
+        'live 11',
+      ])
+    } finally {
+      sessions.dispose()
+      await server.close()
+    }
+  })
+
   it('returns the backend-selected default chat for a commander', async () => {
     const dir = await createTempDir('hammurabi-commanders-active-chat-')
     const storePath = join(dir, 'sessions.json')
@@ -1673,6 +1938,7 @@ describe('conversation routes', () => {
           accountId: 'acct-autostart',
           chatType: 'direct',
           peerId: 'peer-autostart',
+          displayName: 'peer-autostart',
           message: 'Hello, atlas.',
           commanderId: COMMANDER_A,
         }),
@@ -1721,6 +1987,7 @@ describe('conversation routes', () => {
           accountId: 'acct-collect',
           chatType: 'direct',
           peerId: 'peer-collect',
+          displayName: 'peer-collect',
           message: 'first inbound',
           commanderId: COMMANDER_A,
         }),
@@ -1737,6 +2004,7 @@ describe('conversation routes', () => {
           accountId: 'acct-collect',
           chatType: 'direct',
           peerId: 'peer-collect',
+          displayName: 'peer-collect',
           message: 'collect inbound',
           mode: 'collect',
           commanderId: COMMANDER_A,
@@ -1777,6 +2045,7 @@ describe('conversation routes', () => {
           accountId: 'acct-orphan',
           chatType: 'direct',
           peerId: 'peer-orphan',
+          displayName: 'peer-orphan',
           message: 'first contact',
           commanderId: COMMANDER_A,
         }),
@@ -1806,6 +2075,7 @@ describe('conversation routes', () => {
           accountId: 'acct-orphan',
           chatType: 'direct',
           peerId: 'peer-orphan',
+          displayName: 'peer-orphan',
           message: 'inbound after commander delete',
         }),
       })

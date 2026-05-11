@@ -255,14 +255,12 @@ describe('WorkspaceOverlay', () => {
     await dispatchEventAndFlush(logButton, new MouseEvent('click', { bubbles: true }))
     expect(document.body.textContent).toContain('Extract workspace overlay tabs')
 
-    const backdrop = Array.from(document.body.querySelectorAll('div')).find((element) =>
-      typeof element.className === 'string' && element.className.includes('z-[9998]'),
-    )
-    if (!backdrop) {
-      throw new Error('expected workspace backdrop')
+    const overlay = document.body.querySelector<HTMLElement>('[data-testid="dismissible-overlay"]')
+    if (!overlay) {
+      throw new Error('expected workspace overlay')
     }
 
-    await dispatchEventAndFlush(backdrop, new MouseEvent('click', { bubbles: true }))
+    await dispatchEventAndFlush(overlay, new MouseEvent('mousedown', { bubbles: true }))
     expect(onClose).toHaveBeenCalledTimes(1)
 
     await act(async () => {
@@ -300,7 +298,14 @@ describe('WorkspaceOverlay', () => {
     )
     expect(document.body.textContent).toContain('Previewing src/index.ts')
 
-    await dispatchEventAndFlush(document.body, new MouseEvent('mousedown', { bubbles: true }))
+    const overlays = Array.from(
+      document.body.querySelectorAll<HTMLElement>('[data-testid="dismissible-overlay"]'),
+    )
+    const previewOverlay = overlays.at(-1)
+    if (!previewOverlay) {
+      throw new Error('expected preview overlay')
+    }
+    await dispatchEventAndFlush(previewOverlay, new MouseEvent('mousedown', { bubbles: true }))
     expect(document.body.textContent).not.toContain('Previewing src/index.ts')
     expect(onClose).not.toHaveBeenCalled()
 

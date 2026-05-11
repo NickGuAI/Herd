@@ -1,12 +1,18 @@
 import { access, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import multer from 'multer'
-import { type Request, type Response as ExpressResponse } from 'express'
+import { type Request, type RequestHandler, type Response as ExpressResponse } from 'express'
 import { ProviderSecretsStore } from '../../../server/api-keys/provider-secrets-store.js'
 import { generateGeminiImage } from '../../../server/image-generation/gemini-client.js'
 import { combinedAuth } from '../../../server/middleware/combined-auth.js'
+import { authUserHasRequiredPermissions } from '../../../server/middleware/auth0.js'
 import type { CommanderSessionsInterface } from '../../agents/routes.js'
 import { AutomationStore } from '../../automations/store.js'
+import {
+  ChannelSurfaceBindingStore,
+  channelSurfaceBindingStorePathForDataRoot,
+} from '../../channels/surface-binding-store.js'
+import { CommanderChannelBindingStore } from '../../channels/store.js'
 import { resolveModuleDataDir } from '../../data-dir.js'
 import {
   resolveWorkspaceRoot,
@@ -31,6 +37,7 @@ import {
   CommanderEmailStateStore,
 } from '../email-config.js'
 import { EmailPoller } from '../email-poller.js'
+import { dispatchChannelReply } from '../channel-dispatchers.js'
 import {
   CommanderHeartbeatManager,
   createDefaultHeartbeatConfig,
@@ -70,7 +77,6 @@ import {
   resolveEffectiveBasePrompt,
 } from '../workflow-resolution.js'
 import type {
-  CommanderChannelReplyDispatchInput,
   CommanderRoutesContext,
   CommanderRuntime,
   CommanderConversationRuntimeView,
@@ -85,8 +91,39 @@ import type {
 const STARTUP_PROMPT = 'Commander runtime started. Acknowledge readiness and await instructions.'
 const COMMANDER_SESSION_NAME_PREFIX = 'commander-'
 const COLLECT_MODE_DEBOUNCE_MS = 1_000
+const CONVERSATION_CREATE_SCOPE = 'commanders:conversations:create'
+const CHANNEL_INGEST_SCOPE = 'commanders:channels:write'
 
 export { BASE_SYSTEM_PROMPT, STARTUP_PROMPT }
+
+function composeRequestHandlers(
+  first: RequestHandler,
+  second: RequestHandler,
+): RequestHandler {
+  return (req, res, next) => {
+    first(req, res, (error?: unknown) => {
+      if (error) {
+        next(error)
+        return
+      }
+      second(req, res, next)
+    })
+  }
+}
+
+function requireAdditionalApiKeyScope(scope: string): RequestHandler {
+  return (req, res, next) => {
+    if (
+      req.authMode !== 'api-key' ||
+      authUserHasRequiredPermissions(req.user, [scope])
+    ) {
+      next()
+      return
+    }
+
+    res.status(403).json({ error: 'Insufficient API key scope' })
+  }
+}
 
 export function toCommanderSessionName(commanderId: string): string {
   return `${COMMANDER_SESSION_NAME_PREFIX}${commanderId}`
@@ -681,6 +718,13 @@ export function buildCommandersContext(
   })
   const conversationStore = options.conversationStore
     ?? new ConversationStore(commanderDataDir)
+  const surfaceBindingDataRoot = path.basename(commanderDataDir) === 'commander'
+    ? path.dirname(commanderDataDir)
+    : commanderDataDir
+  const surfaceBindingStore = options.surfaceBindingStore
+    ?? new ChannelSurfaceBindingStore(channelSurfaceBindingStorePathForDataRoot(surfaceBindingDataRoot))
+  const channelBindingStore = options.channelBindingStore
+    ?? new CommanderChannelBindingStore(path.join(surfaceBindingDataRoot, 'channels.json'))
   const sessionStore = options.sessionStore
     ?? new CommanderSessionStore(options.sessionStorePath, { runtimeConfig })
   const emailStoresDataDir = parseMessage(options.memoryBasePath)
@@ -761,7 +805,6 @@ export function buildCommandersContext(
     heartbeatDataDir ? { dataDir: heartbeatDataDir } : undefined,
   )
   const sessionsInterface = options.sessionsInterface
-  const channelReplyDispatchers = options.channelReplyDispatchers ?? {}
   const agentsSessionStorePath = path.resolve(
     options.agentsSessionStorePath ?? defaultAgentsSessionStorePath(),
   )
@@ -807,6 +850,16 @@ export function buildCommandersContext(
     clientId: options.auth0ClientId,
     verifyToken: options.verifyAuth0Token,
   })
+
+  const requireConversationCreateAccess = composeRequestHandlers(
+    requireWorkerDispatchAccess,
+    requireAdditionalApiKeyScope(CONVERSATION_CREATE_SCOPE),
+  )
+
+  const requireChannelIngestAccess = composeRequestHandlers(
+    requireWriteAccess,
+    requireAdditionalApiKeyScope(CHANNEL_INGEST_SCOPE),
+  )
 
   const onSubagentLifecycleEvent = (
     commanderId: string,
@@ -1270,6 +1323,7 @@ export function buildCommandersContext(
   const dispatchCommanderChannelReply = async (input: {
     commanderId: string
     message: string
+    conversationId?: string
   }): Promise<
     | {
       ok: true
@@ -1284,10 +1338,16 @@ export function buildCommandersContext(
       return { ok: false, status: 404, error: `Commander "${input.commanderId}" not found` }
     }
 
-    const channelConversation = await resolveLatestChannelConversationForCommander(
-      input.commanderId,
-      conversationStore,
-    )
+    const channelConversation = input.conversationId
+      ? await conversationStore.get(input.conversationId)
+      : await resolveLatestChannelConversationForCommander(input.commanderId, conversationStore)
+    if (channelConversation && channelConversation.commanderId !== input.commanderId) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Conversation "${channelConversation.id}" belongs to commander "${channelConversation.commanderId}"`,
+      }
+    }
     if (!channelConversation?.channelMeta || !channelConversation.lastRoute) {
       return {
         ok: false,
@@ -1297,29 +1357,20 @@ export function buildCommandersContext(
     }
 
     const provider = channelConversation.channelMeta.provider
-    const dispatcher = channelReplyDispatchers[provider]
-    if (!dispatcher) {
-      return {
-        ok: false,
-        status: 501,
-        error: `No outbound dispatcher configured for provider "${provider}"`,
-      }
-    }
-
     const normalizedLastRoute: CommanderLastRoute = {
       ...channelConversation.lastRoute,
       channel: provider,
     }
 
     try {
-      await dispatcher({
-        commanderId: input.commanderId,
-        message: input.message,
-        channelMeta: {
-          ...channelConversation.channelMeta,
+      await dispatchChannelReply({
+        conversation: {
+          ...channelConversation,
+          lastRoute: normalizedLastRoute,
         },
-        lastRoute: normalizedLastRoute,
-      } satisfies CommanderChannelReplyDispatchInput)
+        message: input.message,
+        surfaceBindingStore,
+      })
     } catch (error) {
       const details = error instanceof Error ? parseMessage(error.message) : null
       return {
@@ -1359,7 +1410,7 @@ export function buildCommandersContext(
     const avatarPath = await resolveCommanderAvatarPath(commanderId, commanderBasePath, profile)
     return {
       ...payload,
-      ui: profileForApiResponse(profile),
+      ui: profileForApiResponse(commanderId, profile),
       avatarUrl: avatarPath ? `/api/commanders/${encodeURIComponent(commanderId)}/avatar` : null,
     }
   }
@@ -1376,6 +1427,8 @@ export function buildCommandersContext(
     runtimeConfig,
     sessionStore,
     conversationStore,
+    surfaceBindingStore,
+    channelBindingStore,
     questStore,
     emailConfigStore,
     emailStateStore,
@@ -1385,6 +1438,8 @@ export function buildCommandersContext(
     sessionsInterface,
     requireReadAccess,
     requireWriteAccess,
+    requireConversationCreateAccess,
+    requireChannelIngestAccess,
     requireWorkerDispatchAccess,
     heartbeatManager,
     runtimes,

@@ -28,11 +28,41 @@ import {
   useTelemetrySummary,
 } from '@/hooks/use-telemetry'
 import { fetchJson } from '@/lib/api'
+import { useHvTokens } from '@/lib/hv-tokens'
 import { timeAgo, formatCost, formatTokens, cn } from '@/lib/utils'
 import type { SessionStatus, TelemetrySession, TelemetrySummary } from '@/types'
 
 const RETENTION_STORAGE_KEY = 'hammurabi:telemetry:retentionDays'
 const DEFAULT_RETENTION_DAYS = 90
+const TELEMETRY_TOKEN_NAMES = [
+  '--hv-fg',
+  '--hv-fg-muted',
+  '--hv-fg-subtle',
+  '--hv-fg-faint',
+  '--hv-bg',
+  '--hv-border-hair',
+  '--hv-chart-primary',
+  '--hv-chart-secondary',
+  '--hv-chart-tertiary',
+  '--hv-chart-quaternary',
+] as const
+
+function useTelemetryChartTokens() {
+  const tokens = useHvTokens(TELEMETRY_TOKEN_NAMES)
+
+  return {
+    fg: tokens['--hv-fg'] || 'currentColor',
+    fgMuted: tokens['--hv-fg-muted'] || 'currentColor',
+    fgSubtle: tokens['--hv-fg-subtle'] || 'currentColor',
+    fgFaint: tokens['--hv-fg-faint'] || 'currentColor',
+    bg: tokens['--hv-bg'] || 'Canvas',
+    borderHair: tokens['--hv-border-hair'] || 'currentColor',
+    chartPrimary: tokens['--hv-chart-primary'] || 'currentColor',
+    chartSecondary: tokens['--hv-chart-secondary'] || 'currentColor',
+    chartTertiary: tokens['--hv-chart-tertiary'] || 'currentColor',
+    chartQuaternary: tokens['--hv-chart-quaternary'] || 'currentColor',
+  }
+}
 
 function getStoredRetentionDays(): number {
   try {
@@ -79,6 +109,7 @@ function CostTrendChart({
   const [retentionDays, setRetentionDays] = useState(getStoredRetentionDays)
   const [compacting, setCompacting] = useState(false)
   const [compactMsg, setCompactMsg] = useState<string | null>(null)
+  const chartTokens = useTelemetryChartTokens()
 
   const cutoff = new Date()
   cutoff.setUTCDate(cutoff.getUTCDate() - PERIOD_DAYS[period])
@@ -134,19 +165,19 @@ function CostTrendChart({
           <AreaChart data={chartData}>
             <defs>
               <linearGradient id="trendGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#1C1C1C" stopOpacity={0.15} />
-                <stop offset="100%" stopColor="#1C1C1C" stopOpacity={0} />
+                <stop offset="0%" stopColor={chartTokens.chartPrimary} stopOpacity={0.15} />
+                <stop offset="100%" stopColor={chartTokens.chartPrimary} stopOpacity={0} />
               </linearGradient>
             </defs>
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 10, fill: '#8B8B8B' }}
+              tick={{ fontSize: 10, fill: chartTokens.fgSubtle }}
               axisLine={false}
               tickLine={false}
               tickFormatter={(v: string) => v.slice(5)}
             />
             <YAxis
-              tick={{ fontSize: 10, fill: '#8B8B8B' }}
+              tick={{ fontSize: 10, fill: chartTokens.fgSubtle }}
               axisLine={false}
               tickLine={false}
               tickFormatter={(v: number) => `$${v.toFixed(2)}`}
@@ -154,16 +185,17 @@ function CostTrendChart({
             <Tooltip
               formatter={(value: number) => [formatCost(value), 'Cost']}
               contentStyle={{
-                background: '#FAF8F5',
-                border: '1px solid rgba(28,28,28,0.06)',
+                background: chartTokens.bg,
+                border: `1px solid ${chartTokens.borderHair}`,
                 borderRadius: '4px 12px 4px 12px',
+                color: chartTokens.fg,
                 fontSize: 12,
               }}
             />
             <Area
               type="monotone"
               dataKey="cost"
-              stroke="#1C1C1C"
+              stroke={chartTokens.chartPrimary}
               strokeWidth={1.5}
               fill="url(#trendGradient)"
             />
@@ -209,8 +241,6 @@ const STATUS_CLASSES: Record<SessionStatus, string> = {
   stale: 'badge-stale',
   completed: 'badge-completed',
 }
-
-const PIE_COLORS = ['#1C1C1C', '#4A4A4A', '#8B8B8B', '#C4C4C4']
 
 function SummaryCard({
   label,
@@ -333,6 +363,7 @@ function SessionDetail({
   onBack: () => void
 }) {
   const { data, isLoading } = useTelemetrySessionDetail(sessionId)
+  const chartTokens = useTelemetryChartTokens()
 
   if (isLoading || !data) {
     return (
@@ -401,19 +432,19 @@ function SessionDetail({
             <ComposedChart data={chartData}>
               <defs>
                 <linearGradient id="costGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#1C1C1C" stopOpacity={0.12} />
-                  <stop offset="100%" stopColor="#1C1C1C" stopOpacity={0} />
+                  <stop offset="0%" stopColor={chartTokens.chartPrimary} stopOpacity={0.12} />
+                  <stop offset="100%" stopColor={chartTokens.chartPrimary} stopOpacity={0} />
                 </linearGradient>
               </defs>
               <XAxis
                 dataKey="time"
-                tick={{ fontSize: 11, fill: '#8B8B8B' }}
+                tick={{ fontSize: 11, fill: chartTokens.fgSubtle }}
                 axisLine={false}
                 tickLine={false}
               />
               <YAxis
                 yAxisId="cost"
-                tick={{ fontSize: 11, fill: '#8B8B8B' }}
+                tick={{ fontSize: 11, fill: chartTokens.fgSubtle }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={(v: number) => `$${v.toFixed(2)}`}
@@ -421,16 +452,17 @@ function SessionDetail({
               <YAxis
                 yAxisId="tokens"
                 orientation="right"
-                tick={{ fontSize: 11, fill: '#8B8B8B' }}
+                tick={{ fontSize: 11, fill: chartTokens.fgSubtle }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={(v: number) => formatTokens(v)}
               />
               <Tooltip
                 contentStyle={{
-                  background: '#FAF8F5',
-                  border: '1px solid rgba(28,28,28,0.06)',
+                  background: chartTokens.bg,
+                  border: `1px solid ${chartTokens.borderHair}`,
                   borderRadius: '4px 12px 4px 12px',
+                  color: chartTokens.fg,
                   fontSize: 12,
                 }}
               />
@@ -438,7 +470,7 @@ function SessionDetail({
                 type="monotone"
                 dataKey="cost"
                 yAxisId="cost"
-                stroke="#1C1C1C"
+                stroke={chartTokens.chartPrimary}
                 strokeWidth={1.5}
                 fill="url(#costGradient)"
               />
@@ -447,7 +479,7 @@ function SessionDetail({
                 dataKey="inputTokens"
                 yAxisId="tokens"
                 name="Input tokens"
-                stroke="#5C5C5C"
+                stroke={chartTokens.chartSecondary}
                 strokeWidth={1.2}
                 dot={false}
               />
@@ -456,7 +488,7 @@ function SessionDetail({
                 dataKey="outputTokens"
                 yAxisId="tokens"
                 name="Output tokens"
-                stroke="#A6A6A6"
+                stroke={chartTokens.chartTertiary}
                 strokeWidth={1.2}
                 dot={false}
               />
@@ -507,6 +539,7 @@ function SessionDetail({
 
 function GlobalSummary() {
   const { data: baseSummary, isLoading: baseLoading } = useTelemetrySummary()
+  const chartTokens = useTelemetryChartTokens()
   const [summaryPeriod, setSummaryPeriod] = useState<SummaryPeriodMode>('month:current')
   const [pickedMonth, setPickedMonth] = useState<string>(getCurrentMonthValue)
   const [summaryQueryClient] = useState(() => new QueryClient())
@@ -556,6 +589,12 @@ function GlobalSummary() {
     name: m.model,
     value: m.cost,
   }))
+  const pieColors = [
+    chartTokens.chartPrimary,
+    chartTokens.chartSecondary,
+    chartTokens.chartTertiary,
+    chartTokens.chartQuaternary,
+  ]
 
   return (
     <div className="space-y-6 mb-8">
@@ -673,15 +712,16 @@ function GlobalSummary() {
                   stroke="none"
                 >
                   {modelPieData.map((_, i) => (
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                    <Cell key={i} fill={pieColors[i % pieColors.length]} />
                   ))}
                 </Pie>
                 <Tooltip
                   formatter={(value: number) => formatCost(value)}
                   contentStyle={{
-                    background: '#FAF8F5',
-                    border: '1px solid rgba(28,28,28,0.06)',
+                    background: chartTokens.bg,
+                    border: `1px solid ${chartTokens.borderHair}`,
                     borderRadius: '4px 12px 4px 12px',
+                    color: chartTokens.fg,
                     fontSize: 12,
                   }}
                 />
@@ -694,7 +734,7 @@ function GlobalSummary() {
                 <div className="flex items-center gap-2">
                   <div
                     className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+                    style={{ backgroundColor: pieColors[i % pieColors.length] }}
                   />
                   <span className="text-sumi-gray font-mono">{m.model}</span>
                 </div>
@@ -723,7 +763,7 @@ function GlobalSummary() {
                       className="h-full rounded-full transition-all duration-500 ease-gentle"
                       style={{
                         width: `${width}%`,
-                        background: 'linear-gradient(90deg, #8B8B8B, #1C1C1C)',
+                        background: `linear-gradient(90deg, ${chartTokens.chartTertiary}, ${chartTokens.chartPrimary})`,
                       }}
                     />
                   </div>

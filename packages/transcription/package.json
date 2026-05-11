@@ -1,0 +1,36 @@
+{
+  "name": "@gehirn/transcription",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider-agnostic transcription interfaces with OpenAI and Gemini adapters.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@google/generative-ai": "*",
+    "openai": "*"
+  },
+  "peerDependenciesMeta": {
+    "@google/generative-ai": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build": "npx --yes -p typescript tsc -p tsconfig.json",
+    "typecheck": "npx --yes -p typescript tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  }
+}

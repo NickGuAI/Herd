@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import {
+  type PendingApproval,
+  useApprovalDecision,
+  usePendingApprovals,
+} from '@/hooks/use-approvals'
 import { fetchJson, fetchVoid, getAccessToken } from '../../../src/lib/api'
 import { getWsBase } from '../../../src/lib/api-base'
+import Transcript from '../../agents/components/Transcript'
+import type { MsgItem } from '../../agents/messages/model'
 import { createReconnectBackoff, shouldReconnectWebSocketClose } from '../../agents/ws-reconnect'
+import ApprovalCard from '../../approvals/ApprovalCard'
 
 const MAX_WIZARD_LINES = 400
 
@@ -30,6 +38,11 @@ function splitLines(raw: string): string[] {
     .filter((line) => line.length > 0)
 }
 
+function normalizeMessageText(raw: string): string | null {
+  const normalized = raw.replaceAll('\r', '').trim()
+  return normalized.length > 0 ? normalized : null
+}
+
 function assistantLinesFromPayload(payload: Record<string, unknown>): string[] {
   const message = payload.message
   if (!isRecord(message) || !Array.isArray(message.content)) {
@@ -42,31 +55,22 @@ function assistantLinesFromPayload(payload: Record<string, unknown>): string[] {
       continue
     }
     if (block.type === 'text' && typeof block.text === 'string') {
-      lines.push(...splitLines(block.text))
+      const text = normalizeMessageText(block.text)
+      if (text) {
+        lines.push(text)
+      }
       continue
     }
     if (block.type === 'thinking' && typeof block.thinking === 'string') {
-      lines.push(...splitLines(block.thinking))
+      const text = normalizeMessageText(block.thinking)
+      if (text) {
+        lines.push(text)
+      }
       continue
     }
     if (block.type === 'tool_use' && typeof block.name === 'string') {
       lines.push(`[tool] ${block.name}`)
     }
-  }
-  return lines
-}
-
-function userToolLinesFromPayload(payload: Record<string, unknown>): string[] {
-  const toolUseResult = payload.tool_use_result
-  if (!isRecord(toolUseResult)) {
-    return []
-  }
-  const lines: string[] = []
-  if (typeof toolUseResult.stdout === 'string') {
-    lines.push(...splitLines(toolUseResult.stdout))
-  }
-  if (typeof toolUseResult.stderr === 'string') {
-    lines.push(...splitLines(toolUseResult.stderr))
   }
   return lines
 }
@@ -81,9 +85,6 @@ function eventToLines(event: Record<string, unknown>): WizardLine[] {
   }
   if (eventType === 'result' && typeof event.result === 'string') {
     return splitLines(event.result).map((text) => ({ id: 0, role: 'system', text }))
-  }
-  if (eventType === 'user') {
-    return userToolLinesFromPayload(event).map((text) => ({ id: 0, role: 'system', text }))
   }
   return []
 }
@@ -169,16 +170,33 @@ function keepLatestLines(lines: WizardLine[]): WizardLine[] {
   return lines.slice(-MAX_WIZARD_LINES)
 }
 
+function wizardLineToMessage(line: WizardLine): MsgItem {
+  return {
+    id: `wizard-${line.id}`,
+    kind: line.role === 'assistant' ? 'agent' : line.role,
+    text: line.text,
+  }
+}
+
 function isWizardCreateSuccessLine(text: string): boolean {
   return /^WIZARD_CREATE_SUCCESS\s+\S+\s+\S+$/.test(text.trim())
+}
+
+function approvalBelongsToWizardSession(approval: PendingApproval, sessionName: string | null): boolean {
+  if (!sessionName) {
+    return false
+  }
+  return approval.sessionName === sessionName
 }
 
 export function WizardChatPanel({
   onCancel,
   onCreated,
+  onBusyChange,
 }: {
   onCancel?: () => void
   onCreated?: () => void
+  onBusyChange?: (busy: boolean) => void
 }) {
   const [sessionName, setSessionName] = useState<string | null>(null)
   const [status, setStatus] = useState<'starting' | 'ready' | 'failed'>('starting')
@@ -191,6 +209,18 @@ export function WizardChatPanel({
   const [isSending, setIsSending] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
+  const pendingApprovalsQuery = usePendingApprovals({
+    enabled: Boolean(sessionName),
+    refetchIntervalMs: 2_000,
+  })
+  const approvalDecision = useApprovalDecision()
+  const wizardApprovals = useMemo(
+    () => (pendingApprovalsQuery.data ?? []).filter((approval) => (
+      approvalBelongsToWizardSession(approval, sessionName)
+    )),
+    [pendingApprovalsQuery.data, sessionName],
+  )
+  const wizardMessages = useMemo(() => lines.map(wizardLineToMessage), [lines])
 
   const nextLineId = useRef(1)
   const completedRef = useRef(false)
@@ -200,6 +230,20 @@ export function WizardChatPanel({
   useEffect(() => {
     sessionNameRef.current = sessionName
   }, [sessionName])
+
+  useEffect(() => {
+    onBusyChange?.(
+      status === 'starting' ||
+      Boolean(sessionName) ||
+      isSending ||
+      isClosing ||
+      wizardApprovals.length > 0,
+    )
+  }, [isClosing, isSending, onBusyChange, sessionName, status, wizardApprovals.length])
+
+  useEffect(() => () => {
+    onBusyChange?.(false)
+  }, [onBusyChange])
 
   useEffect(() => {
     setStatus('starting')
@@ -423,6 +467,19 @@ export function WizardChatPanel({
     onCancel?.()
   }, [onCancel])
 
+  const handleApprovalDecision = useCallback(async (
+    approval: PendingApproval,
+    decision: 'approve' | 'reject',
+  ) => {
+    setActionError(null)
+    try {
+      await approvalDecision.mutateAsync({ approval, decision })
+      await pendingApprovalsQuery.refetch()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to resolve approval.')
+    }
+  }, [approvalDecision, pendingApprovalsQuery])
+
   return (
     <div className="rounded-lg border border-dashed border-ink-border p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -461,51 +518,83 @@ export function WizardChatPanel({
           </button>
         </div>
       ) : (
-        <>
-          <div
-            ref={feedRef}
-            className="h-72 overflow-y-auto rounded-lg border border-ink-border bg-washi-white p-3 space-y-2"
-          >
-            {status === 'starting' && lines.length === 0 && (
-              <p className="text-sm text-sumi-diluted">Starting wizard session...</p>
-            )}
-            {status === 'ready' && lines.length === 0 && (
-              <p className="text-sm text-sumi-diluted">Waiting for the wizard to respond...</p>
-            )}
-            {lines.map((line) => (
-              <div
-                key={line.id}
-                className={
-                  line.role === 'user'
-                    ? 'text-sm text-sumi-black'
-                    : line.role === 'assistant'
-                      ? 'text-sm text-sumi-gray'
-                      : 'text-whisper text-sumi-diluted'
-                }
+        <div
+          className={
+            wizardApprovals.length > 0 || pendingApprovalsQuery.isError
+              ? 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_26rem]'
+              : 'space-y-3'
+          }
+        >
+          <div className="min-w-0 space-y-3">
+            <div
+              ref={feedRef}
+              className="h-[min(48dvh,34rem)] min-h-80 overflow-y-auto rounded-lg border border-ink-border bg-washi-white p-3 space-y-3"
+            >
+              {status === 'starting' && lines.length === 0 && (
+                <p className="text-sm text-sumi-diluted">Starting wizard session...</p>
+              )}
+              {status === 'ready' && lines.length === 0 && (
+                <p className="text-sm text-sumi-diluted">Waiting for the wizard to respond...</p>
+              )}
+              {wizardMessages.length > 0 && (
+                <div className="hervald-chat-pane p-0">
+                  <Transcript
+                    messages={wizardMessages}
+                    sessionId={sessionName ?? 'commander-wizard'}
+                    className="hervald-chat-transcript"
+                  />
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={(event) => void handleSend(event)} className="flex gap-2">
+              <input
+                value={composerValue}
+                onChange={(event) => setComposerValue(event.target.value)}
+                placeholder="Type a message..."
+                className="flex-1 rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-white focus:outline-none focus:ring-1 focus:ring-sumi-black/20 placeholder:text-sumi-mist"
+                disabled={!sessionName || isSending || isClosing}
+              />
+              <button
+                type="submit"
+                disabled={!sessionName || !composerValue.trim() || isSending || isClosing}
+                className="rounded-lg border border-ink-border px-3 py-1.5 text-sm min-h-[44px] min-w-[44px] hover:bg-ink-wash disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
               >
-                {line.role === 'user' ? 'You: ' : line.role === 'assistant' ? 'Agent: ' : ''}
-                {line.text}
-              </div>
-            ))}
+                {isSending ? 'Sending...' : 'Send'}
+              </button>
+            </form>
           </div>
 
-          <form onSubmit={(event) => void handleSend(event)} className="flex gap-2">
-            <input
-              value={composerValue}
-              onChange={(event) => setComposerValue(event.target.value)}
-              placeholder="Type a message..."
-              className="flex-1 rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-white focus:outline-none focus:ring-1 focus:ring-sumi-black/20 placeholder:text-sumi-mist"
-              disabled={!sessionName || isSending || isClosing}
-            />
-            <button
-              type="submit"
-              disabled={!sessionName || !composerValue.trim() || isSending || isClosing}
-              className="rounded-lg border border-ink-border px-3 py-1.5 text-sm min-h-[44px] min-w-[44px] hover:bg-ink-wash disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          {(wizardApprovals.length > 0 || pendingApprovalsQuery.isError) && (
+            <aside
+              className="min-w-0 rounded-lg border border-ink-border bg-washi-aged/50 p-3"
+              data-testid="wizard-inline-approvals"
             >
-              {isSending ? 'Sending...' : 'Send'}
-            </button>
-          </form>
-        </>
+              <p className="section-title">Inline Approvals</p>
+              <p className="mt-1 text-xs text-sumi-diluted">
+                Review requests from this setup chat without closing the panel.
+              </p>
+              {pendingApprovalsQuery.error instanceof Error ? (
+                <p className="mt-3 text-sm text-accent-vermillion">
+                  {pendingApprovalsQuery.error.message}
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {wizardApprovals.map((approval) => (
+                    <ApprovalCard
+                      key={approval.id}
+                      approval={approval}
+                      compact
+                      className="shadow-none"
+                      onApprove={() => handleApprovalDecision(approval, 'approve')}
+                      onDeny={() => handleApprovalDecision(approval, 'reject')}
+                    />
+                  ))}
+                </div>
+              )}
+            </aside>
+          )}
+        </div>
       )}
 
       {actionError && status !== 'failed' && (

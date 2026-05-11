@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { FolderOpen, Search, X } from 'lucide-react'
+import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import { cn } from '@/lib/utils'
 import {
   getWorkspaceSourceKey,
@@ -75,28 +75,6 @@ export function WorkspaceOverlay({
     setActiveTab('files')
   }, [sourceKey])
 
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Escape') {
-        return
-      }
-
-      event.preventDefault()
-      if (selectedPreviewPath) {
-        closePreview()
-        return
-      }
-      onClose()
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [closePreview, onClose, open, selectedPreviewPath])
-
   if (!open) {
     return null
   }
@@ -107,21 +85,18 @@ export function WorkspaceOverlay({
   const previewDraftContent =
     preview?.kind === 'text' ? preview.content ?? '' : ''
 
-  return createPortal(
+  return (
     <>
-      <div
-        className="fixed inset-0 z-[9998] bg-sumi-black/50"
-        onClick={onClose}
-      />
-
-      <div className="fixed inset-0 z-[9999] flex items-end justify-center md:items-center md:p-5">
-        <div
-          className={cn(
-            'flex w-full flex-col overflow-hidden bg-washi-white',
-            'max-h-[85dvh] rounded-t-2xl md:max-w-2xl md:rounded-xl',
-          )}
-          onClick={(event) => event.stopPropagation()}
-        >
+      <DismissibleOverlay
+        open={open}
+        onClose={selectedPreviewPath ? closePreview : onClose}
+        title="Workspace"
+        position="bottom-sheet"
+        contentClassName={cn(
+          'flex w-full flex-col overflow-hidden bg-washi-white',
+          'max-h-[85dvh] rounded-t-2xl md:max-w-2xl md:rounded-xl',
+        )}
+      >
           <div className="flex justify-center pb-1 pt-2 md:hidden">
             <div className="h-1 w-8 rounded-full bg-ink-border" />
           </div>
@@ -206,8 +181,7 @@ export function WorkspaceOverlay({
               />
             )}
           </div>
-        </div>
-      </div>
+      </DismissibleOverlay>
 
       <PreviewPopup
         open={activeTab === 'files' && Boolean(selectedPreviewPath)}
@@ -218,7 +192,6 @@ export function WorkspaceOverlay({
         error={previewError}
         onClose={closePreview}
       />
-    </>,
-    document.body,
+    </>
   )
 }

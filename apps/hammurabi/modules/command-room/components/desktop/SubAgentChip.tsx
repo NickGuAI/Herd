@@ -23,6 +23,7 @@ export function SubAgentChip({ worker }: SubAgentChipProps) {
 
   return (
     <span
+      className="font-mono"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -30,7 +31,6 @@ export function SubAgentChip({ worker }: SubAgentChipProps) {
         padding: '3px 10px',
         border: '1px solid var(--hv-border-soft)',
         borderRadius: '2px 8px 2px 8px',
-        fontFamily: 'var(--hv-font-mono)',
         fontSize: 11.5,
         color: 'var(--hv-fg-muted)',
       }}

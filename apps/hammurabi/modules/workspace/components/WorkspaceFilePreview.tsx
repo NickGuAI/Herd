@@ -122,9 +122,7 @@ export function WorkspaceFilePreview({
       <div
         className={cn(
           'flex h-full items-center justify-center rounded-lg border border-dashed text-sm',
-          dark
-            ? 'border-white/[0.08] text-white/45'
-            : 'border-ink-border text-sumi-diluted',
+          'border-ink-border text-sumi-diluted',
         )}
       >
         Select a file to preview it
@@ -154,13 +152,13 @@ export function WorkspaceFilePreview({
   }
 
   return (
-    <div className={cn('h-full min-h-0 rounded-lg border flex flex-col overflow-hidden', dark ? 'border-white/[0.08] bg-[#1b1b1b]' : 'border-ink-border bg-washi-white')}>
-      <div className={cn('flex items-center justify-between gap-3 border-b px-3 py-2', dark ? 'border-white/[0.08] bg-white/[0.03]' : 'border-ink-border bg-washi-aged/60')}>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-ink-border bg-washi-white">
+      <div className="flex items-center justify-between gap-3 border-b border-ink-border bg-washi-aged/60 px-3 py-2">
         <div className="min-w-0">
-          <p className={cn('truncate font-mono text-xs', dark ? 'text-white/75' : 'text-sumi-gray')}>
+          <p className="truncate font-mono text-xs text-sumi-gray">
             {preview.path}
           </p>
-          <p className={cn('text-whisper', dark ? 'text-white/45' : 'text-sumi-diluted')}>
+          <p className="text-whisper text-sumi-diluted">
             {preview.kind} • {preview.size} bytes
           </p>
         </div>
@@ -250,7 +248,7 @@ export function WorkspaceFilePreview({
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-auto border-t px-6 py-4',
-                dark ? 'border-white/[0.08] bg-[#121212]' : 'border-ink-border bg-washi-white',
+                'border-ink-border bg-washi-white',
               )}
             >
               <article className={cn('prose prose-sm max-w-none break-words', dark && 'prose-invert')}>
@@ -263,9 +261,7 @@ export function WorkspaceFilePreview({
             <textarea
               className={cn(
                 'flex-1 min-h-[14rem] resize-none border-t p-3 font-mono text-xs outline-none',
-                dark
-                  ? 'border-white/[0.08] bg-[#121212] text-white/80'
-                  : 'border-ink-border bg-washi-white text-sumi-gray',
+                'border-ink-border bg-washi-white text-sumi-gray',
               )}
               value={draftContent}
               onChange={(event) => onDraftChange(event.target.value)}

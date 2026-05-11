@@ -2,9 +2,24 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveHammurabiDataDir } from '../data-dir.js'
-import type { CommanderChannelBinding, CommanderChannelProvider } from './types.js'
+import type {
+  CommanderChannelBinding,
+  CommanderChannelBindingConfig,
+  CommanderChannelProvider,
+  SeededChannelProvider,
+} from './types.js'
 
-const PROVIDERS = new Set<CommanderChannelProvider>(['whatsapp', 'telegram', 'discord'])
+const SEEDED_PROVIDERS: readonly SeededChannelProvider[] = [
+  'whatsapp',
+  'slack',
+  'discord',
+  'email',
+  'telegram',
+  'imessage',
+  'circle',
+  'matrix',
+]
+const PROVIDER_PATTERN = /^[a-z][a-z0-9_-]{1,63}$/i
 
 export interface CreateCommanderChannelBindingInput {
   commanderId: string
@@ -12,19 +27,28 @@ export interface CreateCommanderChannelBindingInput {
   accountId: string
   displayName: string
   enabled?: boolean
-  config?: Record<string, unknown>
+  config?: CommanderChannelBindingConfig
 }
 
 export interface UpdateCommanderChannelBindingInput {
   displayName?: string
   enabled?: boolean
-  config?: Record<string, unknown>
+  config?: CommanderChannelBindingConfig
 }
 
 export class CommanderChannelValidationError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'CommanderChannelValidationError'
+  }
+}
+
+export class CommanderChannelBindingConflictError extends Error {
+  readonly status = 409
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'CommanderChannelBindingConflictError'
   }
 }
 
@@ -44,24 +68,27 @@ function parseNonEmptyString(value: unknown, field: string): string {
 }
 
 function parseProvider(value: unknown): CommanderChannelProvider {
-  if (typeof value === 'string' && PROVIDERS.has(value as CommanderChannelProvider)) {
-    return value as CommanderChannelProvider
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (normalized && PROVIDER_PATTERN.test(normalized)) {
+    return normalized as CommanderChannelProvider
   }
-  throw new CommanderChannelValidationError('provider must be whatsapp, telegram, or discord')
+  throw new CommanderChannelValidationError(
+    `provider must be one of ${SEEDED_PROVIDERS.join(', ')} or another provider id`,
+  )
 }
 
 function parseEnabled(value: unknown): boolean {
   return value === undefined ? true : value === true
 }
 
-function parseConfig(value: unknown): Record<string, unknown> {
+function parseConfig(value: unknown): CommanderChannelBindingConfig {
   if (value === undefined || value === null) {
     return {}
   }
   if (!isObject(value)) {
     throw new CommanderChannelValidationError('config must be an object')
   }
-  return { ...value }
+  return { ...value } as CommanderChannelBindingConfig
 }
 
 function parsePersistedBinding(raw: unknown): CommanderChannelBinding | null {
@@ -123,6 +150,13 @@ export class CommanderChannelBindingStore {
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   }
 
+  async list(): Promise<CommanderChannelBinding[]> {
+    await this.ensureLoaded()
+    return [...this.bindings().values()]
+      .map((binding) => cloneBinding(binding))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  }
+
   async create(input: CreateCommanderChannelBindingInput): Promise<CommanderChannelBinding> {
     return this.withMutationLock(async () => {
       await this.ensureLoaded()
@@ -137,6 +171,17 @@ export class CommanderChannelBindingStore {
         config: parseConfig(input.config),
         createdAt: now,
         updatedAt: now,
+      }
+
+      const duplicate = [...this.bindings().values()].find((existing) => (
+        existing.commanderId === binding.commanderId
+        && existing.provider === binding.provider
+        && existing.accountId === binding.accountId
+      ))
+      if (duplicate) {
+        throw new CommanderChannelBindingConflictError(
+          `Channel binding already exists for ${binding.commanderId}/${binding.provider}/${binding.accountId}`,
+        )
       }
 
       this.bindings().set(binding.id, cloneBinding(binding))

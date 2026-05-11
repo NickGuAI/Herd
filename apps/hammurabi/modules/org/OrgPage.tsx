@@ -82,6 +82,7 @@ export function OrgPage() {
   const { data, isLoading, error, refetch } = useOrgTree({ includeArchived: showArchived })
   const highlightSearchParam = searchParams.get('highlight')
   const [hireWizardOpen, setHireWizardOpen] = useState(false)
+  const [hireWizardBusy, setHireWizardBusy] = useState(false)
   const [editingCommander, setEditingCommander] = useState<OrgNode | null>(null)
   const [replicatingCommander, setReplicatingCommander] = useState<OrgNode | null>(null)
   const [deletingCommander, setDeletingCommander] = useState<OrgNode | null>(null)
@@ -91,8 +92,15 @@ export function OrgPage() {
   const [expandedCommanderId, setExpandedCommanderId] = useState<string | null>(null)
 
   const handleCloseCreateCommander = useCallback(() => {
+    if (
+      hireWizardBusy &&
+      !window.confirm('A commander setup chat is still active. Close and cancel it?')
+    ) {
+      return
+    }
     setHireWizardOpen(false)
-  }, [])
+    setHireWizardBusy(false)
+  }, [hireWizardBusy])
 
   const handleCreateCommander = useCallback(async (
     input: Parameters<typeof commanderState.createCommander>[0],
@@ -151,10 +159,6 @@ export function OrgPage() {
   useEffect(() => {
     if (!data || searchParams.get('firstRun') !== 'true') {
       return
-    }
-
-    if (data.commanders.length === 0) {
-      setHireWizardOpen(true)
     }
 
     const nextSearchParams = new URLSearchParams(searchParams)
@@ -377,11 +381,14 @@ export function OrgPage() {
         open={hireWizardOpen}
         title="New Commander"
         onClose={handleCloseCreateCommander}
+        desktopClassName="max-w-[96rem] max-h-[92dvh]"
+        mobileClassName="max-h-[96dvh]"
       >
         <CreateCommanderWizard
           onAdd={handleCreateCommander}
           isPending={commanderState.createCommanderPending}
           onClose={handleCloseCreateCommander}
+          onBusyChange={setHireWizardBusy}
           onWizardCreated={async () => {
             await queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY })
           }}

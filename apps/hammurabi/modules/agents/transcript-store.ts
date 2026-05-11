@@ -188,6 +188,28 @@ export async function readTranscriptTail(sessionName: string, maxTurns: number):
   }
 }
 
+export async function readTranscriptEvents(sessionName: string): Promise<TranscriptEvent[]> {
+  const transcriptPath = resolveTranscriptPath(sessionName)
+  let raw = ''
+  try {
+    raw = await readFile(transcriptPath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return []
+    }
+    throw error
+  }
+
+  const events: TranscriptEvent[] = []
+  for (const line of raw.split('\n')) {
+    const parsed = parseTranscriptEvent(Buffer.from(line))
+    if (parsed) {
+      events.push(parsed)
+    }
+  }
+  return events
+}
+
 export async function writeSessionMeta(sessionName: string, meta: TranscriptMeta): Promise<void> {
   const metaPath = resolveMetaPath(sessionName)
 

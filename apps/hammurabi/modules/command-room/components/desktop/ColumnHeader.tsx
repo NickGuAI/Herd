@@ -18,6 +18,7 @@ interface ColumnHeaderProps {
 export function ColumnHeader({ label, right, style }: ColumnHeaderProps) {
   return (
     <div
+      className="font-body"
       style={{
         padding: '16px 20px 12px',
         display: 'flex',
@@ -28,7 +29,6 @@ export function ColumnHeader({ label, right, style }: ColumnHeaderProps) {
         letterSpacing: '0.16em',
         textTransform: 'uppercase',
         color: 'var(--hv-fg-subtle)',
-        fontFamily: 'var(--hv-font-body)',
         fontWeight: 500,
         flexShrink: 0,
         ...style,

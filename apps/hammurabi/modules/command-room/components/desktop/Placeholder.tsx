@@ -29,7 +29,6 @@ const cardStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontFamily: 'var(--hv-font-primary)',
   fontSize: 'var(--hv-text-display)',
   fontWeight: 300,
   fontStyle: 'italic',
@@ -41,7 +40,6 @@ const noteStyle: CSSProperties = {
   margin: '14px 0 0',
   color: 'var(--hv-fg-muted)',
   maxWidth: 560,
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 'var(--hv-text-body)',
   lineHeight: 'var(--hv-leading-normal)',
 }

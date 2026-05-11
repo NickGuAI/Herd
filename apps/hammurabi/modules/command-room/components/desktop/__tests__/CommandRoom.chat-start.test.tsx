@@ -16,6 +16,12 @@ const mocks = vi.hoisted(() => ({
   useProviderRegistry: vi.fn(),
   useActiveConversation: vi.fn(),
   useConversations: vi.fn(),
+  useConversationMessages: vi.fn(() => ({
+    data: { pages: [] },
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+  })),
   useCreateConversation: vi.fn(),
   useDeleteConversation: vi.fn(),
   useStartConversation: vi.fn(),
@@ -58,6 +64,7 @@ vi.mock('@modules/commanders/hooks/useCommander', () => ({
 vi.mock('@modules/conversation/hooks/use-conversations', () => ({
   useActiveConversation: mocks.useActiveConversation,
   useConversations: mocks.useConversations,
+  useConversationMessages: mocks.useConversationMessages,
   useCreateConversation: mocks.useCreateConversation,
   useDeleteConversation: mocks.useDeleteConversation,
   useStartConversation: mocks.useStartConversation,
@@ -297,6 +304,12 @@ describe('CommandRoom chat-row Start (one-click resume)', () => {
     mocks.useStopConversation.mockReturnValue({ mutateAsync: vi.fn() })
     mocks.useUpdateConversation.mockReturnValue({ mutateAsync: vi.fn() })
     mocks.useConversationMessage.mockReturnValue({ mutateAsync: vi.fn() })
+    mocks.useConversationMessages.mockReturnValue({
+      data: { pages: [] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+    })
   })
 
   afterEach(async () => {
@@ -377,6 +390,59 @@ describe('CommandRoom chat-row Start (one-click resume)', () => {
       conversationId: 'conv-fresh',
       agentType: 'codex',
     })
+  })
+
+  it('renders backend historical messages for a selected conversation before websocket replay arrives', async () => {
+    const conversation = buildIdleConversation({
+      id: 'conv-history',
+      status: 'active',
+    })
+    mocks.useConversations.mockImplementation((_, selectedConversationId: string | null) => ({
+      conversations: [conversation],
+      selectedConversation: selectedConversationId === conversation.id ? conversation : null,
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    }))
+    const fetchNextPage = vi.fn()
+    mocks.useConversationMessages.mockReturnValue({
+      data: {
+        pages: [{
+          conversationId: conversation.id,
+          sessionName: 'commander-cmd-1-conversation-conv-history',
+          source: 'transcript',
+          limit: 10,
+          before: null,
+          nextBefore: '3',
+          hasMore: true,
+          totalMessages: 13,
+          messages: [
+            { id: 'history-1', kind: 'user', text: 'Earlier user message' },
+            { id: 'history-2', kind: 'agent', text: 'Earlier assistant reply' },
+          ],
+        }],
+      },
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      fetchNextPage,
+    })
+
+    await renderAt('/command-room?commander=cmd-1&conversation=conv-history')
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? '').toContain('Earlier assistant reply')
+    })
+    expect(mocks.useConversationMessages).toHaveBeenCalledWith('conv-history', true)
+    const loadOlderButton = Array.from(document.body.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Load older')) as HTMLButtonElement | undefined
+    expect(loadOlderButton).toBeDefined()
+
+    flushSync(() => {
+      loadOlderButton?.click()
+    })
+
+    expect(fetchNextPage).toHaveBeenCalledTimes(1)
   })
 
   it('shows the provider picker and creates with the explicitly chosen provider from the New Chat row action', async () => {

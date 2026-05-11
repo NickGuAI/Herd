@@ -27,6 +27,7 @@ import {
   migratedProviderContextChanged,
   parseCanonicalProviderContext,
 } from '../../migrations/provider-context.js'
+import type { ChannelChatType, ChannelProvider } from '../channels/types.js'
 
 const COMMANDER_STATES = new Set<CommanderSession['state']>([
   'idle',
@@ -64,8 +65,8 @@ export interface CommanderRemoteOrigin {
 }
 
 export interface CommanderChannelMeta {
-  provider: 'whatsapp' | 'telegram' | 'discord'
-  chatType: 'direct' | 'group' | 'channel' | 'forum-topic'
+  provider: ChannelProvider
+  chatType: ChannelChatType
   accountId: string
   peerId: string
   parentPeerId?: string
@@ -111,11 +112,17 @@ export interface CommanderSession {
 
 export type CommanderConversationSurface =
   | 'discord'
+  | 'slack'
+  | 'email'
+  | 'circle'
+  | 'imessage'
+  | 'matrix'
   | 'telegram'
   | 'whatsapp'
   | 'ui'
   | 'cli'
   | 'api'
+  | (string & {})
 
 interface ParsedCommanderSessions {
   sessions: CommanderSession[]
@@ -224,14 +231,22 @@ function parseOptionalNonEmptyString(raw: unknown): string | undefined {
 }
 
 function parseChannelProvider(raw: unknown): CommanderChannelMeta['provider'] | null {
-  return raw === 'whatsapp' || raw === 'telegram' || raw === 'discord'
-    ? raw
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const normalized = raw.trim().toLowerCase()
+  return /^[a-z][a-z0-9_-]{1,63}$/i.test(normalized)
+    ? normalized as CommanderChannelMeta['provider']
     : null
 }
 
 function parseChannelChatType(raw: unknown): CommanderChannelMeta['chatType'] | null {
-  return raw === 'direct' || raw === 'group' || raw === 'channel' || raw === 'forum-topic'
-    ? raw
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const normalized = raw.trim().toLowerCase()
+  return /^[a-z][a-z0-9_-]{1,63}$/i.test(normalized)
+    ? normalized as CommanderChannelMeta['chatType']
     : null
 }
 

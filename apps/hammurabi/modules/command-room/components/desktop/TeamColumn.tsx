@@ -57,6 +57,7 @@ interface TeamColumnProps {
 function ColumnHeader({ left, right }: { left: ReactNode; right?: ReactNode }) {
   return (
     <div
+      className="font-body"
       style={{
         padding: '16px 20px 12px',
         display: 'flex',
@@ -68,7 +69,6 @@ function ColumnHeader({ left, right }: { left: ReactNode; right?: ReactNode }) {
         textTransform: 'uppercase',
         color: 'var(--hv-fg-subtle)',
         fontWeight: 500,
-        fontFamily: 'var(--hv-font-body)',
       }}
     >
       <span>{left}</span>
@@ -116,12 +116,12 @@ export function TeamColumn({
         right={
           pendCount > 0 ? (
             <span
+              className="font-body"
               style={{
                 fontSize: 10,
                 color: 'var(--vermillion-seal)',
                 letterSpacing: '0.14em',
                 fontWeight: 500,
-                fontFamily: 'var(--hv-font-body)',
               }}
             >
               {pendCount} PEND
@@ -132,9 +132,9 @@ export function TeamColumn({
 
       {/* Commander name subheader */}
       <div
+        className="font-display"
         style={{
           padding: '14px 20px 6px',
-          fontFamily: 'var(--hv-font-primary)',
           fontStyle: 'italic',
           fontSize: 17,
           color: 'var(--hv-fg)',

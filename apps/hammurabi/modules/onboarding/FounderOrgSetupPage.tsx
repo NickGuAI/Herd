@@ -112,7 +112,7 @@ export function FounderOrgSetupPage() {
           email: formState.founderEmail.trim(),
         },
       })
-      navigate('/org?firstRun=true', { replace: true })
+      navigate('/org', { replace: true })
     } catch (error) {
       setSubmitError(formatSetupError(error))
     } finally {

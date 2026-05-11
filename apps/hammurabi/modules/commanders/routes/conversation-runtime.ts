@@ -4,7 +4,10 @@ import {
 } from '../memory/module.js'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
-import type { AgentType, StreamSession } from '../../agents/types.js'
+import type { AgentType, StreamJsonEvent, StreamSession } from '../../agents/types.js'
+import { mapStreamEventsToMessages } from '../../agents/messages/history.js'
+import type { MsgItem } from '../../agents/messages/model.js'
+import { readTranscriptEvents } from '../../agents/transcript-store.js'
 import { STARTUP_PROMPT } from './context.js'
 import type { CommanderSession } from '../store.js'
 import { resolveCommanderWorkflow } from '../workflow-resolution.js'
@@ -22,6 +25,76 @@ export function getLiveConversationSession(
   conversation: Conversation,
 ) {
   return context.sessionsInterface?.getSession(buildConversationSessionName(conversation))
+}
+
+const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 10
+const MAX_CONVERSATION_MESSAGES_LIMIT = 50
+
+export interface ConversationMessagesPageOptions {
+  limit?: number
+  before?: number | null
+}
+
+export interface ConversationMessagesPage {
+  conversationId: string
+  sessionName: string
+  source: 'live' | 'transcript' | 'empty'
+  limit: number
+  before: string | null
+  nextBefore: string | null
+  hasMore: boolean
+  totalMessages: number
+  messages: MsgItem[]
+}
+
+function normalizeConversationMessagesLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return DEFAULT_CONVERSATION_MESSAGES_LIMIT
+  }
+  return Math.max(1, Math.min(MAX_CONVERSATION_MESSAGES_LIMIT, Math.floor(limit)))
+}
+
+export async function getConversationMessagesPage(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  options: ConversationMessagesPageOptions = {},
+): Promise<ConversationMessagesPage> {
+  const sessionName = buildConversationSessionName(conversation)
+  const liveEvents = getLiveConversationSession(context, conversation)?.events ?? []
+  const transcriptEvents = await readTranscriptEvents(sessionName)
+  const hasFresherLiveBuffer = liveEvents.length > transcriptEvents.length
+  const sourceEvents = hasFresherLiveBuffer
+    ? liveEvents
+    : transcriptEvents.length > 0
+      ? transcriptEvents
+      : liveEvents
+  const source: ConversationMessagesPage['source'] = sourceEvents.length === 0
+    ? 'empty'
+    : hasFresherLiveBuffer
+      ? 'live'
+      : transcriptEvents.length > 0
+        ? 'transcript'
+        : 'live'
+  const allMessages = mapStreamEventsToMessages(sourceEvents as readonly StreamJsonEvent[])
+  const limit = normalizeConversationMessagesLimit(options.limit)
+  const endExclusive = options.before === null || options.before === undefined
+    ? allMessages.length
+    : Math.max(0, Math.min(allMessages.length, Math.floor(options.before)))
+  const startInclusive = Math.max(0, endExclusive - limit)
+  const messages = allMessages.slice(startInclusive, endExclusive)
+  const nextBefore = startInclusive > 0 ? String(startInclusive) : null
+
+  return {
+    conversationId: conversation.id,
+    sessionName,
+    source,
+    limit,
+    before: options.before === null || options.before === undefined ? null : String(endExclusive),
+    nextBefore,
+    hasMore: nextBefore !== null,
+    totalMessages: allMessages.length,
+    messages,
+  }
 }
 
 export interface ConversationSpawnOptions {

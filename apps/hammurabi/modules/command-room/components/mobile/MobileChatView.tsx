@@ -15,6 +15,9 @@ interface MobileChatViewProps {
   commander: Commander | null
   workers: Worker[]
   transcript: MsgItem[]
+  hasOlderMessages?: boolean
+  loadingOlderMessages?: boolean
+  onLoadOlderMessages?: () => void
   approvals: PendingApproval[]
   sessionName: string
   composerEnabled: boolean
@@ -129,6 +132,9 @@ export function MobileChatView({
   commander,
   workers,
   transcript,
+  hasOlderMessages = false,
+  loadingOlderMessages = false,
+  onLoadOlderMessages,
   approvals,
   sessionName,
   composerEnabled,
@@ -202,7 +208,7 @@ export function MobileChatView({
       return null
     }
     return visibleConversations.find((conversation) => conversation.id === selectedConversationId)
-      ?? visibleConversations[0]
+      ?? (selectedConversationId ? null : visibleConversations[0])
       ?? null
   }, [conversationMode, selectedConversationId, visibleConversations])
   const activeConversationId = activeConversation?.id ?? null
@@ -349,6 +355,9 @@ export function MobileChatView({
         costUsd={costUsd}
         durationSec={durationSec}
         messages={transcript}
+        hasOlderMessages={hasOlderMessages}
+        loadingOlderMessages={loadingOlderMessages}
+        onLoadOlderMessages={onLoadOlderMessages}
         onAnswer={onAnswer}
         approvals={approvals}
         onApprovalDecision={(approval, decision) =>
@@ -489,6 +498,9 @@ export function MobileChatView({
                 costUsd={isActive ? costUsd : undefined}
                 durationSec={isActive ? durationSec : undefined}
                 messages={isActive ? transcript : []}
+                hasOlderMessages={isActive && hasOlderMessages}
+                loadingOlderMessages={isActive && loadingOlderMessages}
+                onLoadOlderMessages={isActive ? onLoadOlderMessages : undefined}
                 onAnswer={onAnswer}
                 approvals={approvals}
                 onApprovalDecision={(approval, decision) =>

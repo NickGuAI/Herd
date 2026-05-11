@@ -56,6 +56,7 @@ async function seedSkillRepo(
     path.join(repoDir, installerRelativePath),
   )
   await chmod(path.join(repoDir, installerRelativePath), 0o755)
+  await writeFile(path.join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n')
 
   await cp(
     path.join(repoRoot, 'agent-skills', 'install.sh'),
@@ -85,32 +86,6 @@ async function seedSkillRepo(
 }
 
 async function seedFakeBin(binDir: string): Promise<void> {
-  await writeExecutable(
-    path.join(binDir, 'pnpm'),
-    `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "\${1:-}" == "--version" ]]; then
-  printf '10.23.0\\n'
-fi
-`,
-  )
-
-  await writeExecutable(
-    path.join(binDir, 'corepack'),
-    `#!/usr/bin/env bash
-set -euo pipefail
-exit 0
-`,
-  )
-
-  await writeExecutable(
-    path.join(binDir, 'npm'),
-    `#!/usr/bin/env bash
-set -euo pipefail
-exit 0
-`,
-  )
-
   await writeExecutable(
     path.join(binDir, 'curl'),
     `#!/usr/bin/env bash
@@ -144,6 +119,79 @@ exit 0
   )
 }
 
+function hermeticNodeStem(): string {
+  const platform = process.platform === 'darwin' ? 'darwin' : process.platform === 'linux' ? 'linux' : process.platform
+  const arch = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : process.arch
+  return `node-v22.12.0-${platform}-${arch}`
+}
+
+async function seedHermeticToolchain(toolchainDir: string): Promise<void> {
+  const nodeBinDir = path.join(toolchainDir, hermeticNodeStem(), 'bin')
+  const pnpmBinDir = path.join(toolchainDir, 'pnpm-10.23.0', 'bin')
+
+  await writeExecutable(
+    path.join(nodeBinDir, 'node'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "-p" && "\${2:-}" == "process.versions.node" ]]; then
+  printf '22.12.0\\n'
+  exit 0
+fi
+if [[ "\${1:-}" == "--version" ]]; then
+  printf 'v22.12.0\\n'
+  exit 0
+fi
+if [[ "\${1:-}" == */hammurabi.mjs ]]; then
+  data_dir="\${HAMMURABI_DATA_DIR:-\${HOME:-.}/.hammurabi}"
+  mkdir -p "$data_dir"
+  printf 'bootstrap-test-key\\n' > "$data_dir/bootstrap-key.txt"
+  sleep 0.25
+  exit 0
+fi
+exec node "$@"
+`,
+  )
+
+  await writeExecutable(
+    path.join(nodeBinDir, 'npm'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+expected_node_bin="\${HERVALD_EXPECTED_NODE_BIN_DIR:-}"
+if [[ -n "$expected_node_bin" ]]; then
+  case ":\$PATH:" in
+    *":$expected_node_bin:"*) ;;
+    *)
+      printf 'hermetic node bin missing from PATH before npm\\n' >&2
+      exit 127
+      ;;
+  esac
+fi
+exit 0
+`,
+  )
+
+  await writeExecutable(
+    path.join(pnpmBinDir, 'pnpm'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+expected_node_bin="\${HERVALD_EXPECTED_NODE_BIN_DIR:-}"
+if [[ -n "$expected_node_bin" ]]; then
+  case ":\$PATH:" in
+    *":$expected_node_bin:"*) ;;
+    *)
+      printf 'hermetic node bin missing from PATH before pnpm\\n' >&2
+      exit 127
+      ;;
+  esac
+fi
+if [[ "\${1:-}" == "--version" ]]; then
+  printf '10.23.0\\n'
+fi
+exit 0
+`,
+  )
+}
+
 async function assertInstalledSkill(homeDir: string): Promise<void> {
   const expectedSkill = await readFile(sourceSkillPath, 'utf8')
   const claudeSkillPath = path.join(homeDir, '.claude', 'skills', 'write-new-skill', 'SKILL.md')
@@ -170,35 +218,25 @@ describe('Hervald installers bundle write-new-skill by default', () => {
     )
   })
 
-  it.each([
-    {
-      label: 'repo-local installer',
-      installerRelativePath: path.join('apps', 'hammurabi', 'install.sh'),
-      buildArgs: (_workspace: string) => [],
-    },
-    {
-      label: 'hosted installer entrypoint',
-      installerRelativePath: path.join('apps', 'hammurabi', 'public', 'install.sh'),
-      buildArgs: (workspace: string) => ['--target', 'local', '--install-dir', path.join(workspace, 'checkout')],
-    },
-  ])('installs write-new-skill into Claude and Codex homes via $label', async ({
-    installerRelativePath,
-    buildArgs,
-  }) => {
+  it('installs write-new-skill into Claude and Codex homes via the canonical installer', async () => {
     const workspace = await makeTempDir('hammurabi-install-default-skills-')
     const sourceRepo = path.join(workspace, 'source-repo')
     const homeDir = path.join(workspace, 'home')
     const fakeBin = path.join(workspace, 'bin')
+    const toolchainDir = path.join(workspace, 'toolchain')
+    const expectedNodeBinDir = path.join(toolchainDir, hermeticNodeStem(), 'bin')
+    const installerRelativePath = path.join('apps', 'hammurabi', 'install.sh')
 
     await mkdir(homeDir, { recursive: true })
     await mkdir(fakeBin, { recursive: true })
     await seedSkillRepo(sourceRepo, installerRelativePath)
     await seedFakeBin(fakeBin)
+    await seedHermeticToolchain(toolchainDir)
 
     const scriptPath = path.join(sourceRepo, installerRelativePath)
     const result = await execFile(
       'bash',
-      [scriptPath, ...buildArgs(workspace)],
+      [scriptPath],
       {
         cwd: path.dirname(scriptPath),
         env: {
@@ -206,7 +244,9 @@ describe('Hervald installers bundle write-new-skill by default', () => {
           HOME: homeDir,
           PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
           FAKE_GIT_CLONE_SOURCE: sourceRepo,
+          HERVALD_EXPECTED_NODE_BIN_DIR: expectedNodeBinDir,
           HAMMURABI_DATA_DIR: path.join(homeDir, '.hammurabi'),
+          HAMMURABI_TOOLCHAIN_DIR: toolchainDir,
           HAMMURABI_INSTALL_AUTOSTART: '0',
           HAMMURABI_INSTALL_TIMEOUT_SECONDS: '5',
         },
@@ -215,6 +255,55 @@ describe('Hervald installers bundle write-new-skill by default', () => {
     )
 
     expect(result.stdout).toContain('Installing default skills')
+    await assertInstalledSkill(homeDir)
+  })
+
+  it('clones Hervald before running a standalone installer file', async () => {
+    const workspace = await makeTempDir('hammurabi-install-standalone-')
+    const sourceRepo = path.join(workspace, 'source-repo')
+    const homeDir = path.join(workspace, 'home')
+    const fakeBin = path.join(workspace, 'bin')
+    const toolchainDir = path.join(workspace, 'toolchain')
+    const expectedNodeBinDir = path.join(toolchainDir, hermeticNodeStem(), 'bin')
+    const checkoutDir = path.join(workspace, 'checkout')
+    const standaloneDir = path.join(workspace, 'standalone')
+    const installerRelativePath = path.join('apps', 'hammurabi', 'install.sh')
+
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(fakeBin, { recursive: true })
+    await mkdir(standaloneDir, { recursive: true })
+    await seedSkillRepo(sourceRepo, installerRelativePath)
+    await seedFakeBin(fakeBin)
+    await seedHermeticToolchain(toolchainDir)
+
+    const scriptPath = path.join(standaloneDir, 'install.sh')
+    await cp(path.join(sourceRepo, installerRelativePath), scriptPath)
+    await chmod(scriptPath, 0o755)
+
+    const result = await execFile(
+      'bash',
+      [scriptPath],
+      {
+        cwd: standaloneDir,
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+          FAKE_GIT_CLONE_SOURCE: sourceRepo,
+          HERVALD_CHECKOUT_DIR: checkoutDir,
+          HERVALD_EXPECTED_NODE_BIN_DIR: expectedNodeBinDir,
+          HAMMURABI_DATA_DIR: path.join(homeDir, '.hammurabi'),
+          HAMMURABI_TOOLCHAIN_DIR: toolchainDir,
+          HAMMURABI_INSTALL_AUTOSTART: '0',
+          HAMMURABI_INSTALL_TIMEOUT_SECONDS: '5',
+        },
+        maxBuffer: 1024 * 1024,
+      },
+    )
+
+    expect(result.stdout).toContain('Cloning Hervald into')
+    expect(result.stdout).toContain('Installing default skills')
+    await access(path.join(checkoutDir, 'apps', 'hammurabi', 'install.sh'))
     await assertInstalledSkill(homeDir)
   })
 })

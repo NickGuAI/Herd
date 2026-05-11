@@ -28,6 +28,7 @@ import {
   ConversationProviderSwapConflictError,
   ConversationProviderSwapUnavailableError,
   deliverConversationMessage,
+  getConversationMessagesPage,
   getLiveConversationSession,
   startConversationSession,
   stopConversationSession,
@@ -41,6 +42,8 @@ import type { CommanderRoutesContext } from './types.js'
 type ConversationStatusAction = 'pause' | 'resume' | 'archive'
 
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 10
+const MAX_CONVERSATION_MESSAGES_LIMIT = 50
 
 function parseConversationId(raw: unknown): string | null {
   return typeof raw === 'string' && CONVERSATION_ID_PATTERN.test(raw.trim())
@@ -48,14 +51,43 @@ function parseConversationId(raw: unknown): string | null {
     : null
 }
 
+function parseConversationMessagesLimit(raw: unknown): number | null {
+  if (raw === undefined) {
+    return DEFAULT_CONVERSATION_MESSAGES_LIMIT
+  }
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+    return null
+  }
+
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    return null
+  }
+  return Math.min(parsed, MAX_CONVERSATION_MESSAGES_LIMIT)
+}
+
+function parseConversationMessagesBefore(raw: unknown): number | null | undefined {
+  if (raw === undefined) {
+    return undefined
+  }
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+    return null
+  }
+
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    return null
+  }
+  return parsed
+}
+
 function parseConversationSurface(raw: unknown): Conversation['surface'] | null {
-  return raw === 'discord' ||
-    raw === 'telegram' ||
-    raw === 'whatsapp' ||
-    raw === 'ui' ||
-    raw === 'cli' ||
-    raw === 'api'
-    ? raw
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const normalized = raw.trim()
+  return /^[a-z][a-z0-9_-]{1,63}$/i.test(normalized)
+    ? normalized as Conversation['surface']
     : null
 }
 
@@ -126,6 +158,31 @@ function parseConversationModel(
 
   const trimmed = raw.trim()
   return { ok: true, value: trimmed.length > 0 ? trimmed : null }
+}
+
+function requestActorKind(req: import('express').Request): Conversation['createdByKind'] {
+  if (req.authMode === 'auth0') {
+    return 'human'
+  }
+  return 'api-key'
+}
+
+function requestActorId(req: import('express').Request): string | undefined {
+  const metadata = req.user?.metadata
+  if (metadata && typeof metadata === 'object') {
+    const keyId = (metadata as Record<string, unknown>).keyId
+    if (typeof keyId === 'string' && keyId.trim().length > 0) {
+      return keyId.trim()
+    }
+  }
+
+  const id = req.user?.id
+  return typeof id === 'string' && id.trim().length > 0 ? id.trim() : undefined
+}
+
+function requestId(req: import('express').Request): string | undefined {
+  const value = req.get('x-request-id')
+  return value && value.trim().length > 0 ? value.trim() : undefined
 }
 
 function withLiveSession(context: CommanderRoutesContext, conversation: Conversation) {
@@ -260,7 +317,7 @@ export function registerConversationRoutes(
     }
   })
 
-  commanderRouter.post('/:id/conversations', context.requireWorkerDispatchAccess, async (req, res) => {
+  commanderRouter.post('/:id/conversations', context.requireConversationCreateAccess, async (req, res) => {
     const commanderId = parseSessionId(req.params.id)
     if (!commanderId) {
       res.status(400).json({ error: 'Invalid commander id' })
@@ -341,6 +398,10 @@ export function registerConversationRoutes(
       heartbeatTickCount: 0,
       completedTasks: 0,
       totalCostUsd: 0,
+      creationSource: surface === 'cli' ? 'cli' : surface === 'api' ? 'api' : 'ui',
+      createdByKind: requestActorKind(req),
+      ...(requestActorId(req) ? { createdById: requestActorId(req) } : {}),
+      ...(requestId(req) ? { requestId: requestId(req) } : {}),
       createdAt: nowIso,
       lastMessageAt: nowIso,
     })
@@ -486,6 +547,40 @@ export function registerConversationRoutes(
     }
 
     res.json(withLiveSession(context, conversation))
+  })
+
+  conversationRouter.get('/:convId/messages', context.requireReadAccess, async (req, res) => {
+    const conversationId = parseConversationId(req.params.convId)
+    if (!conversationId) {
+      res.status(400).json({ error: 'Invalid conversation id' })
+      return
+    }
+
+    const conversation = await context.conversationStore.get(conversationId)
+    if (!conversation) {
+      res.status(404).json({ error: `Conversation "${conversationId}" not found` })
+      return
+    }
+
+    const limit = parseConversationMessagesLimit(req.query.limit)
+    if (limit === null) {
+      res.status(400).json({ error: 'limit must be a positive integer' })
+      return
+    }
+
+    const before = parseConversationMessagesBefore(req.query.before)
+    if (before === null) {
+      res.status(400).json({ error: 'before must be a non-negative integer cursor' })
+      return
+    }
+
+    try {
+      res.json(await getConversationMessagesPage(context, conversation, { limit, before }))
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to load conversation messages',
+      })
+    }
   })
 
   conversationRouter.post('/:convId/start', context.requireWorkerDispatchAccess, async (req, res) => {

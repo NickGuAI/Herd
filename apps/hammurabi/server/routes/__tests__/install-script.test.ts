@@ -75,16 +75,16 @@ afterEach(async () => {
 })
 
 describe('install script route', () => {
-  it('prefers public/install.sh ahead of repo-local install.sh in the default search order', () => {
+  it('prefers the canonical repo-local install.sh ahead of public mirror paths', () => {
     const candidates = buildDefaultCandidatePaths('/tmp/repo/apps/hammurabi', {})
 
     expect(candidates).toEqual([
-      '/tmp/repo/apps/hammurabi/public/install.sh',
       '/tmp/repo/apps/hammurabi/install.sh',
-      '/tmp/repo/apps/hammurabi/apps/hammurabi/public/install.sh',
+      '/tmp/repo/apps/hammurabi/public/install.sh',
       '/tmp/repo/apps/hammurabi/apps/hammurabi/install.sh',
-      '/tmp/repo/public/install.sh',
+      '/tmp/repo/apps/hammurabi/apps/hammurabi/public/install.sh',
       '/tmp/repo/install.sh',
+      '/tmp/repo/public/install.sh',
     ])
   })
 

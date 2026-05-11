@@ -82,10 +82,10 @@ export function Shell({ modules, children }: ShellProps) {
       {/* Main content — add bottom padding on mobile for the tab bar + safe-area.
           overflowX:hidden contains horizontal overflow at the architectural
           boundary that owns viewport bounds (Shell). Route children do not need
-          their own viewport-frame overlay — see #1107.
+          their own viewport-frame overlay — see issue 1107.
           Padding gate matches the MobileShell mount gate: apply only when
           mobile chrome is visible, so immersive chat (where MobileBottomTabs
-          self-hides) does not leak a ~4rem white bar — see #1152. */}
+          self-hides) does not leak a ~4rem white bar — see issue 1152. */}
       <main
         style={{
           flex: 1,

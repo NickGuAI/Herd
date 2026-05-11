@@ -117,6 +117,22 @@ describe('AuthenticatedAppRouter', () => {
     })
   })
 
+  it('routes completed onboarding visits back to org', async () => {
+    mocks.useFounderSetupStatus.mockReturnValue({
+      data: { needsSetup: false },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    await renderRouter('/welcome')
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="org-page"]')).not.toBeNull()
+    })
+    expect(document.body.querySelector('[data-testid="command-room-page"]')).toBeNull()
+  })
+
   it('redirects the legacy command-room automations path to the top-level route', async () => {
     mocks.useFounderSetupStatus.mockReturnValue({
       data: { needsSetup: false },

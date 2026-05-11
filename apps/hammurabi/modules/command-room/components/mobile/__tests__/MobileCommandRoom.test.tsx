@@ -16,6 +16,12 @@ const mocks = vi.hoisted(() => ({
   usePendingApprovals: vi.fn(),
   useActiveConversation: vi.fn(),
   useConversations: vi.fn(),
+  useConversationMessages: vi.fn(() => ({
+    data: { pages: [] },
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+  })),
   useCreateConversation: vi.fn(),
   useDeleteConversation: vi.fn(),
   useStartConversation: vi.fn(),
@@ -61,6 +67,7 @@ vi.mock('@modules/commanders/hooks/useCommander', () => ({
 vi.mock('@modules/conversation/hooks/use-conversations', () => ({
   useActiveConversation: mocks.useActiveConversation,
   useConversations: mocks.useConversations,
+  useConversationMessages: mocks.useConversationMessages,
   useCreateConversation: mocks.useCreateConversation,
   useDeleteConversation: mocks.useDeleteConversation,
   useStartConversation: mocks.useStartConversation,
@@ -354,6 +361,17 @@ describe('CommandRoom mobile branch', () => {
     })
   })
 
+  it('keeps mobile settings subsection routes on the settings tab', async () => {
+    await renderAt('/command-room/settings/machines?surface=mobile')
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="mobile-settings"]')).not.toBeNull()
+      expect(document.body.textContent).toContain('Machines')
+      expect(window.location.pathname).toBe('/command-room/settings/machines')
+      expect(new URLSearchParams(window.location.search).get('surface')).toBe('mobile')
+    })
+  })
+
   it('normalizes exact /command-room?surface=mobile to global automation search on the root path', async () => {
     await renderAt('/command-room?surface=mobile')
 
@@ -422,6 +440,31 @@ describe('CommandRoom mobile branch', () => {
       expect(window.location.pathname).toBe('/org')
       expect(window.location.search).toBe('')
     })
+  })
+
+  it('keeps an explicit mobile conversation URL while the selected conversation detail is loading', async () => {
+    const visibleActiveConversation = buildConversation({
+      id: 'conv-active',
+      status: 'active',
+      name: 'Visible active chat',
+    })
+    mocks.useConversations.mockReturnValue({
+      conversations: [visibleActiveConversation],
+      selectedConversation: null,
+      isLoading: true,
+    })
+
+    await renderAt('/command-room?surface=mobile&commander=cmd-1&conversation=conv-target')
+
+    await vi.waitFor(() => {
+      expect(mocks.useConversations).toHaveBeenCalledWith('cmd-1', 'conv-target')
+    })
+
+    expect(window.location.pathname).toBe('/command-room')
+    expect(window.location.search).toContain('commander=cmd-1')
+    expect(window.location.search).toContain('conversation=conv-target')
+    expect(window.location.search).not.toContain('conversation=conv-active')
+    expect(mocks.fetchCommanderActiveConversation).not.toHaveBeenCalled()
   })
 
   it('MobileCommandRoom is a normal flex-fill (no fixed-overlay) so BottomNav stays tappable', async () => {

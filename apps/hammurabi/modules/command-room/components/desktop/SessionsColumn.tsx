@@ -88,7 +88,6 @@ const menuItemStyle: React.CSSProperties = {
   color: 'var(--hv-fg)',
   cursor: 'pointer',
   textAlign: 'left',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: '12px',
 }
 
@@ -122,7 +121,6 @@ const modalSecondaryButtonStyle: React.CSSProperties = {
   background: 'transparent',
   color: 'var(--hv-fg-subtle)',
   cursor: 'pointer',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 12,
 }
 
@@ -133,7 +131,6 @@ const modalPrimaryButtonStyle: React.CSSProperties = {
   background: 'var(--sumi-black)',
   color: 'var(--washi-white)',
   cursor: 'pointer',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 12,
 }
 
@@ -144,7 +141,6 @@ const chatSettingsLabelStyle: React.CSSProperties = {
   display: 'grid',
   gap: 4,
   color: 'var(--hv-fg-subtle)',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 10,
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
@@ -157,7 +153,6 @@ const chatSettingsSelectStyle: React.CSSProperties = {
   borderRadius: 8,
   background: 'var(--hv-bg)',
   color: 'var(--hv-fg)',
-  fontFamily: 'var(--hv-font-body)',
   fontSize: 12,
   padding: '7px 8px',
 }
@@ -278,6 +273,7 @@ function SessionListSection({
         }}
       >
         <button
+          className="font-body"
           type="button"
           onClick={onToggle}
           style={{
@@ -289,7 +285,6 @@ function SessionListSection({
             background: 'transparent',
             border: 'none',
             color: 'var(--hv-fg-faint)',
-            fontFamily: 'var(--hv-font-body)',
             fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
             letterSpacing: '0.14em',
             textTransform: 'uppercase',
@@ -305,6 +300,7 @@ function SessionListSection({
         {headerAction}
         {sessions.length > 0 && (
           <button
+            className="font-body"
             type="button"
             onClick={onToggleShowExited}
             aria-pressed={showExited}
@@ -313,7 +309,6 @@ function SessionListSection({
               background: 'transparent',
               border: 'none',
               color: 'var(--hv-fg-subtle)',
-              fontFamily: 'var(--hv-font-body)',
               fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
               letterSpacing: '0.02em',
               cursor: 'pointer',
@@ -348,6 +343,7 @@ function SessionListSection({
             </div>
           ) : (
             <button
+              className="font-mono"
               key={s.id}
               type="button"
               onClick={() => onSelectChat(s.id)}
@@ -368,7 +364,6 @@ function SessionListSection({
                 borderBottom: 'none',
                 cursor: 'pointer',
                 textAlign: 'left',
-                fontFamily: 'var(--hv-font-mono)',
                 fontSize: 'calc(12px * var(--hv-sessions-scale, 1))',
                 color:
                   selectedChatId === s.id ? 'var(--hv-fg)' : 'var(--hv-fg-faint)',
@@ -617,13 +612,13 @@ function ConversationChatRow({
           />
           <span style={{ minWidth: 0, flex: 1 }}>
             <span
+              className="font-mono"
               data-testid="commander-chat-row-label"
               style={{
                 display: 'block',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                fontFamily: 'var(--hv-font-mono)',
                 fontSize: 'calc(11.5px * var(--hv-sessions-scale, 1))',
                 color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-faint)',
               }}
@@ -631,13 +626,13 @@ function ConversationChatRow({
               {formatConversationLabel(conversation)}
             </span>
             <span
+              className="font-body"
               style={{
                 display: 'block',
                 marginTop: 2,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                fontFamily: 'var(--hv-font-body)',
                 fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
                 color: 'var(--hv-fg-subtle)',
                 letterSpacing: '0.04em',
@@ -651,6 +646,7 @@ function ConversationChatRow({
 
         {canStart && onStart && (
           <button
+            className="font-mono"
             type="button"
             data-testid="commander-chat-start-button"
             aria-label="Start chat"
@@ -665,7 +661,6 @@ function ConversationChatRow({
               color: 'var(--hv-fg-subtle)',
               cursor: 'pointer',
               padding: '3px 8px',
-              fontFamily: 'var(--hv-font-mono)',
               fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
               letterSpacing: '0.04em',
               flexShrink: 0,
@@ -677,6 +672,7 @@ function ConversationChatRow({
 
         {canStop && onStop && (
           <button
+            className="font-mono"
             type="button"
             data-testid="commander-chat-stop-button"
             aria-label="Stop chat"
@@ -691,7 +687,6 @@ function ConversationChatRow({
               color: 'var(--hv-fg-subtle)',
               cursor: 'pointer',
               padding: '3px 8px',
-              fontFamily: 'var(--hv-font-mono)',
               fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
               letterSpacing: '0.04em',
               flexShrink: 0,
@@ -1243,6 +1238,7 @@ export function SessionsColumn({
 
       {/* Footer */}
       <div
+        className="font-body"
         data-testid="sessions-footer"
         style={{
           padding: '10px 12px 12px 20px',
@@ -1251,7 +1247,6 @@ export function SessionsColumn({
           letterSpacing: '0.16em',
           textTransform: 'uppercase',
           color: 'var(--hv-fg-faint)',
-          fontFamily: 'var(--hv-font-body)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -1266,6 +1261,7 @@ export function SessionsColumn({
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           <button
+            className="font-body"
             type="button"
             aria-label="Decrease text size"
             onClick={() => adjustScale(-SCALE_STEP)}
@@ -1275,7 +1271,6 @@ export function SessionsColumn({
               border: '1px solid var(--hv-border-hair)',
               color: 'var(--hv-fg-subtle)',
               padding: '1px 6px',
-              fontFamily: 'var(--hv-font-body)',
               fontSize: 10,
               letterSpacing: '0.02em',
               cursor: fontScale <= MIN_SCALE + 1e-6 ? 'not-allowed' : 'pointer',
@@ -1286,6 +1281,7 @@ export function SessionsColumn({
             A−
           </button>
           <button
+            className="font-body"
             type="button"
             aria-label="Increase text size"
             onClick={() => adjustScale(SCALE_STEP)}
@@ -1295,7 +1291,6 @@ export function SessionsColumn({
               border: '1px solid var(--hv-border-hair)',
               color: 'var(--hv-fg-subtle)',
               padding: '1px 6px',
-              fontFamily: 'var(--hv-font-body)',
               fontSize: 12,
               letterSpacing: '0.02em',
               cursor: fontScale >= MAX_SCALE - 1e-6 ? 'not-allowed' : 'pointer',
