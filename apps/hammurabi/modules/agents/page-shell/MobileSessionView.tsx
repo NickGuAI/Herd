@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { fetchJson, getAccessToken } from '@/lib/api'
 import { getWsBase } from '@/lib/api-base'
 import { useIsMobile } from '@/hooks/use-is-mobile'
+import { postInputViaHttpFallback } from '@/hooks/use-agent-session-stream'
 import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import type {
   AgentType,
@@ -14,16 +15,16 @@ import type {
 } from '@/types'
 import { createReconnectBackoff, shouldReconnectWebSocketClose } from '../ws-reconnect'
 import { WorkspaceOverlay } from '../components/WorkspaceOverlay'
-import { capMessages, createUserMessage } from '../components/session-messages'
+import { capMessages, createUserMessage, type MsgItem } from '../components/session-messages'
 import { useStreamEventProcessor } from '../components/use-stream-event-processor'
 import type { SessionComposerSubmitPayload } from '../components/SessionComposer'
-import { supportsQueuedDrafts } from '../queue-capability'
 import { runQueueMutationRequest } from '../queue-mutation'
 import {
   EMPTY_QUEUE_SNAPSHOT,
   normalizeQueueSnapshot,
 } from '../queue-state'
-import type { WorkspaceSource } from '../../workspace/use-workspace'
+import { openWorkspaceTarget, type WorkspaceSource } from '../../workspace/use-workspace'
+import type { WorkspaceContextPayload, WorkspaceTreeNode } from '../../workspace/types'
 import { MobileSessionShell } from './MobileSessionShell'
 import {
   fallbackWorkerSummary,
@@ -34,6 +35,16 @@ import {
   workerStatusSymbol,
   type WorkerInfo,
 } from './session-helpers'
+
+function isProjectedMessages(value: unknown): value is MsgItem[] {
+  return Array.isArray(value) && value.every((message) => (
+    message !== null &&
+    typeof message === 'object' &&
+    typeof (message as { id?: unknown }).id === 'string' &&
+    typeof (message as { kind?: unknown }).kind === 'string' &&
+    typeof (message as { text?: unknown }).text === 'string'
+  ))
+}
 
 export interface MobileSessionViewProps {
   sessionName: string
@@ -67,6 +78,7 @@ export function MobileSessionView({
     messages,
     setMessages,
     processEvent,
+    hydrateReplayMessages,
     resetMessages,
     isStreaming,
     markAskAnswered,
@@ -80,7 +92,7 @@ export function MobileSessionView({
   const [queueSnapshot, setQueueSnapshot] = useState<SessionQueueSnapshot>(EMPTY_QUEUE_SNAPSHOT)
   const [queueError, setQueueError] = useState<string | null>(null)
   const [isQueueMutating, setIsQueueMutating] = useState(false)
-  const queueDraftsSupported = supportsQueuedDrafts(agentType)
+  const queueDraftsSupported = true
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [knownWorkerNames, setKnownWorkerNames] = useState<string[]>(initialSpawnedWorkers ?? [])
   const [workersOpen, setWorkersOpen] = useState(false)
@@ -90,7 +102,9 @@ export function MobileSessionView({
   const [isDispatching, setIsDispatching] = useState(false)
   const [dismissedWorkers, setDismissedWorkers] = useState<Set<string>>(new Set())
   const [fileChips, setFileChips] = useState<string[]>([])
+  const [directoryChips, setDirectoryChips] = useState<string[]>([])
   const [showWorkspaceOverlay, setShowWorkspaceOverlay] = useState(false)
+  const [workspaceSource, setWorkspaceSource] = useState<WorkspaceSource | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const sessionNameRef = useRef(sessionName)
@@ -124,6 +138,7 @@ export function MobileSessionView({
 
   const clearContextFileChips = useCallback(() => {
     setFileChips([])
+    setDirectoryChips([])
   }, [])
 
   const runQueueMutation = useCallback(async (
@@ -360,21 +375,31 @@ export function MobileSessionView({
           const raw = JSON.parse(evt.data as string) as {
             type: string
             events?: StreamEvent[]
+            messages?: unknown
+            projection?: { messages?: unknown }
             usage?: { inputTokens: number; outputTokens: number; costUsd: number }
             toolId?: string
             queue?: SessionQueueSnapshot
           }
           if (raw.type === 'replay' && Array.isArray(raw.events)) {
-            resetMessages()
             if (raw.events.length === 0) {
+              resetMessages()
               setMessages([{ id: `system-${Date.now()}`, kind: 'system', text: 'Session started' }])
+            } else {
+              const projectedMessages = isProjectedMessages(raw.projection?.messages)
+                ? raw.projection.messages
+                : (isProjectedMessages(raw.messages) ? raw.messages : null)
+              if (projectedMessages) {
+                hydrateReplayMessages(projectedMessages, raw.events)
+              } else {
+                resetMessages()
+                for (const event of raw.events) {
+                  processEvent(event, true)
+                }
+              }
             }
             if (raw.queue) {
               setQueueSnapshot(normalizeQueueSnapshot(raw.queue))
-            }
-
-            for (const event of raw.events) {
-              processEvent(event, true)
             }
 
             setUsage(raw.usage ?? { inputTokens: 0, outputTokens: 0, costUsd: 0 })
@@ -443,16 +468,41 @@ export function MobileSessionView({
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [markAskAnswered, processEvent, queueDraftsSupported, refreshQueueSnapshot, resetMessages, sessionName, setMessages])
+  }, [hydrateReplayMessages, markAskAnswered, processEvent, queueDraftsSupported, refreshQueueSnapshot, resetMessages, sessionName, setMessages])
 
-  const handleSend = useCallback((payload: SessionComposerSubmitPayload) => {
-    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+  const buildWorkspaceContextPayload = useCallback((
+    payload: SessionComposerSubmitPayload,
+  ): WorkspaceContextPayload | undefined => {
+    const context = payload.context
+    const hasContext = Boolean(
+      context?.filePaths?.length
+      || context?.directoryPaths?.length
+      || context?.fileAnnotations?.length,
+    )
+    if (!hasContext) {
+      return undefined
+    }
+    return {
+      ...(workspaceSource?.targetId ? { targetId: workspaceSource.targetId } : {}),
+      ...(context?.filePaths?.length ? { filePaths: context.filePaths } : {}),
+      ...(context?.directoryPaths?.length ? { directoryPaths: context.directoryPaths } : {}),
+      ...(context?.fileAnnotations?.length ? { fileAnnotations: context.fileAnnotations } : {}),
+    }
+  }, [workspaceSource?.targetId])
+
+  const handleSend = useCallback((payload: SessionComposerSubmitPayload): boolean | Promise<boolean> => {
+    const socket = wsRef.current
+    if (socket?.readyState !== WebSocket.OPEN) {
       return false
     }
 
     const text = payload.text.trim()
+    const workspaceContext = buildWorkspaceContextPayload(payload)
+    if (socket.readyState !== WebSocket.OPEN) {
+      return false
+    }
     const images = payload.images?.length ? payload.images.slice() : []
-    if (!text && images.length === 0) {
+    if (!text && images.length === 0 && !workspaceContext) {
       return false
     }
 
@@ -461,19 +511,32 @@ export function MobileSessionView({
         ...prev,
         createUserMessage(
           `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          text || '[image]',
+          text || (workspaceContext ? '[workspace context]' : '[image]'),
           images,
         ),
       ]),
     )
 
-    wsRef.current.send(JSON.stringify({
+    if (images.length > 0) {
+      return postInputViaHttpFallback(
+        sessionName,
+        {
+          text,
+          images,
+          workspaceContext,
+        },
+        getAccessToken,
+      )
+    }
+
+    socket.send(JSON.stringify({
       type: 'input',
       text,
       images: images.length > 0 ? images : undefined,
+      workspaceContext,
     }))
     return true
-  }, [setMessages])
+  }, [buildWorkspaceContextPayload, setMessages])
 
   const handleQueueDraft = useCallback(async (payload: SessionComposerSubmitPayload) => {
     if (!queueDraftsSupported) {
@@ -481,8 +544,9 @@ export function MobileSessionView({
     }
 
     const text = payload.text.trim()
+    const workspaceContext = buildWorkspaceContextPayload(payload)
     const images = payload.images?.length ? payload.images : undefined
-    if (!text && !images) {
+    if (!text && !images && !workspaceContext) {
       return false
     }
 
@@ -493,11 +557,11 @@ export function MobileSessionView({
           headers: {
             'content-type': 'application/json',
           },
-          body: JSON.stringify({ text, images }),
+          body: JSON.stringify({ text, images, workspaceContext }),
         }),
       'Failed to queue message',
     )
-  }, [queueDraftsSupported, runQueueMutation, sessionName])
+  }, [buildWorkspaceContextPayload, queueDraftsSupported, runQueueMutation, sessionName])
 
   const handleMoveQueuedMessage = useCallback(async (messageId: string, offset: number) => {
     const currentIndex = queueSnapshot.items.findIndex((message) => message.id === messageId)
@@ -667,16 +731,54 @@ export function MobileSessionView({
     return parts.join(' ') || '+'
   })()
 
-  const workspaceSource: WorkspaceSource | null = sessionCwd
-    ? { kind: 'agent-session', sessionName }
-    : null
+  useEffect(() => {
+    let cancelled = false
+    if (!sessionCwd) {
+      setWorkspaceSource(null)
+      return
+    }
 
-  const handleAddFileChip = useCallback((filePath: string) => {
-    setFileChips((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]))
+    void (async () => {
+      try {
+        const target = await openWorkspaceTarget({ sessionName })
+        if (!cancelled) {
+          setWorkspaceSource({
+            kind: 'target',
+            targetId: target.targetId,
+            label: target.label,
+            readOnly: target.isReadOnly,
+          })
+        }
+      } catch {
+        if (!cancelled) {
+          setWorkspaceSource(null)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [sessionCwd, sessionName])
+
+  const handleAddFileChip = useCallback((filePath: string, type: WorkspaceTreeNode['type'] = 'file') => {
+    const normalizedPath = filePath.trim().replace(/\/+$/u, '')
+    if (!normalizedPath) {
+      return
+    }
+    if (type === 'directory') {
+      setDirectoryChips((prev) => (prev.includes(normalizedPath) ? prev : [...prev, normalizedPath]))
+      return
+    }
+    setFileChips((prev) => (prev.includes(normalizedPath) ? prev : [...prev, normalizedPath]))
   }, [])
 
   const removeFileChip = useCallback((filePath: string) => {
     setFileChips((prev) => prev.filter((entry) => entry !== filePath))
+  }, [])
+
+  const removeDirectoryChip = useCallback((directoryPath: string) => {
+    setDirectoryChips((prev) => prev.filter((entry) => entry !== directoryPath))
   }, [])
 
   return (
@@ -693,7 +795,6 @@ export function MobileSessionView({
         messages={messages}
         onAnswer={handleAnswer}
         agentAvatarUrl={isCommanderSession ? commanderUiPayload?.avatarUrl ?? undefined : undefined}
-        agentAccentColor={isCommanderSession ? commanderUiPayload?.ui?.accentColor ?? undefined : undefined}
         onSend={handleSend}
         onQueue={queueDraftsSupported ? handleQueueDraft : undefined}
         canQueueDraft={queueDraftsSupported}
@@ -729,7 +830,9 @@ export function MobileSessionView({
           : undefined}
         rootClassName="session-view-overlay hv-dark"
         contextFilePaths={fileChips}
+        contextDirectoryPaths={directoryChips}
         onRemoveContextFilePath={removeFileChip}
+        onRemoveContextDirectoryPath={removeDirectoryChip}
         onClearContextFilePaths={clearContextFileChips}
         showComposerWorkspaceShortcut={Boolean(workspaceSource)}
         isStreaming={isStreaming}

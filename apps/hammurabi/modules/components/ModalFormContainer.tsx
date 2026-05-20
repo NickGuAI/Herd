@@ -48,11 +48,11 @@ export function ModalFormContainer({
           </div>
           <div className="px-5 pb-4">
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h3 className="font-display text-heading text-sumi-black">{title}</h3>
+              <h3 className="font-display text-heading text-[color:var(--hv-fg)]">{title}</h3>
               <button
                 type="button"
                 onClick={onClose}
-                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-ink-border p-1 text-sumi-diluted transition-colors hover:border-ink-border-hover hover:text-sumi-black"
+                className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-[color:var(--hv-border-hair)] p-1 text-[color:var(--hv-fg-subtle)] transition-colors hover:border-[color:var(--hv-border-soft)] hover:text-[color:var(--hv-fg)]"
                 aria-label={`Close ${title}`}
               >
                 <X size={14} />
@@ -75,12 +75,12 @@ export function ModalFormContainer({
         )}
         tabIndex={-1}
       >
-        <div className="mb-4 flex items-center justify-between gap-3 border-b border-ink-border pb-3">
-          <h3 className="font-display text-heading text-sumi-black">{title}</h3>
+        <div className="mb-4 flex items-center justify-between gap-3 border-b border-[color:var(--hv-border-hair)] pb-3">
+          <h3 className="font-display text-heading text-[color:var(--hv-fg)]">{title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-ink-border p-1 text-sumi-diluted transition-colors hover:border-ink-border-hover hover:text-sumi-black"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-[color:var(--hv-border-hair)] p-1 text-[color:var(--hv-fg-subtle)] transition-colors hover:border-[color:var(--hv-border-soft)] hover:text-[color:var(--hv-fg)]"
             aria-label={`Close ${title}`}
           >
             <X size={14} />

@@ -23,7 +23,6 @@ interface CommanderSession {
   currentTask: { issueNumber: number; issueUrl: string; startedAt: string } | null
   completedTasks: number
   totalCostUsd: number
-  persona?: string
 }
 
 interface AgentSession {
@@ -581,9 +580,6 @@ function AgentControl({ onClose }: { onClose: () => void }) {
                           {cmd.state}
                         </span>
                       </div>
-                      {cmd.persona ? (
-                        <p className="mt-0.5 truncate text-[10px] italic text-cyan-600">{cmd.persona}</p>
-                      ) : null}
                       <p className="mt-1 text-[10px] text-cyan-700">
                         {cmd.agentType} &middot; ${cmd.totalCostUsd.toFixed(2)} &middot; {cmd.completedTasks} done
                       </p>

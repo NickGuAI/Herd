@@ -1,17 +1,32 @@
 import type { HammurabiEvent } from './hammurabi-events.js'
 import type { ClaudeAdaptiveThinkingMode } from '../../modules/claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../../modules/claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../modules/claude-max-thinking-tokens.js'
+import type { HammurabiUiSurface } from './module-manifest.js'
 export type { HammurabiEvent, HammurabiEventSource } from './hammurabi-events.js'
 
 // Module system types
-export interface FrontendModule {
+export interface FrontendModuleBinding {
   name: string
+  routeId: string
+  componentKey: string
+  component: () => Promise<{ default: React.ComponentType }>
+}
+
+export interface FrontendNavItem {
+  name: string
+  routeId: string
   label: string
   icon: string
   path: string
   hideFromNav?: boolean
   navGroup?: 'primary' | 'secondary'
-  component: () => Promise<{ default: React.ComponentType }>
+  surfaces: readonly HammurabiUiSurface[]
+  order?: number
+  badge?: number
+}
+
+export interface FrontendModule extends FrontendNavItem, FrontendModuleBinding {
 }
 
 // Agents types
@@ -39,6 +54,7 @@ export interface ProviderInfoBanner {
 export interface ProviderUiCapabilities {
   supportsEffort: boolean
   supportsAdaptiveThinking: boolean
+  supportsMaxThinkingTokens: boolean
   supportsSkills: boolean
   supportsLoginMode: boolean
   forcedTransport?: Exclude<SessionTransportType, 'external'>
@@ -50,6 +66,7 @@ export interface ProviderCapabilities {
   supportsAutomation: boolean
   supportsCommanderConversation: boolean
   supportsWorkerDispatch: boolean
+  supportsMessageImages: boolean
 }
 
 export interface ProviderMachineAuthDescriptor {
@@ -68,6 +85,12 @@ export interface ProviderModelOption {
   default?: boolean
 }
 
+export interface ProviderDefaults {
+  transportType: Exclude<SessionTransportType, 'external'>
+  permissionMode: ClaudePermissionMode
+  model: string | null
+}
+
 export interface ProviderRegistryEntry {
   id: ProviderId
   label: string
@@ -75,11 +98,15 @@ export interface ProviderRegistryEntry {
   capabilities: ProviderCapabilities
   uiCapabilities: ProviderUiCapabilities
   availableModels: ProviderModelOption[]
+  supportedTransports: Exclude<SessionTransportType, 'external'>[]
+  defaults: ProviderDefaults
+  disabledReason: string | null
   machineAuth?: ProviderMachineAuthDescriptor
 }
 
 export interface ProviderRegistryResponse {
   providers: ProviderRegistryEntry[]
+  defaultProviderId: ProviderId
 }
 
 export interface SessionCreator {
@@ -127,6 +154,7 @@ export interface AgentSession {
   agentType?: AgentType
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   model?: string
   cwd?: string
   host?: string
@@ -173,11 +201,96 @@ export interface Machine {
   id: string
   label: string
   host: string | null
+  transport?: 'local' | 'ssh' | 'daemon'
   tailscaleHostname?: string
   user?: string
   port?: number
   cwd?: string
   envFile?: string
+  daemon?: {
+    pairedAt: string | null
+    revokedAt: string | null
+    lastSeenAt: string | null
+    daemonVersion: string | null
+  }
+}
+
+export interface MachineDaemonProviderHealth {
+  provider: string
+  installed: boolean
+  authenticated: boolean
+  version: string | null
+  authMethod: string | null
+  detail: string | null
+  checkedAt: string | null
+}
+
+export type MachineDaemonConnectionState =
+  | 'local'
+  | 'ssh-local'
+  | 'not-paired'
+  | 'paired'
+  | 'connected'
+
+export type MachineDaemonProviderAuthState = 'ready' | 'missing' | 'not-checked'
+
+export type MachineDaemonActionId = 'pair' | 'rotate' | 'revoke'
+
+export interface MachineDaemonAction {
+  id: MachineDaemonActionId
+  label: string
+}
+
+export interface MachineDaemonPairCommand {
+  shortCommand: string
+  fullCommand: string
+  disclosureLabel: string
+}
+
+export interface MachineDaemonStatus {
+  machineId: string
+  displayLabel: string
+  paired: boolean
+  connected: boolean
+  connectionState: MachineDaemonConnectionState
+  connectionLabel: string
+  selectedTransport: 'local' | 'ssh' | 'daemon'
+  providerAuthReady: boolean
+  providerAuthState: MachineDaemonProviderAuthState
+  providerAuthLabel: string
+  launchable: boolean
+  launchUnsupportedReason: string | null
+  allowedActions: MachineDaemonAction[]
+  pairedAt: string | null
+  revokedAt: string | null
+  connectedAt: string | null
+  lastSeenAt: string | null
+  connectionId: string | null
+  daemonVersion: string | null
+  protocolVersion: number | null
+  pid: number | null
+  platform: string | null
+  arch: string | null
+  activeProcesses: number | null
+  providerHealth: Record<string, MachineDaemonProviderHealth>
+}
+
+export interface MachineDaemonPairResponse {
+  machine: Machine
+  pairing: {
+    machineId: string
+    token: string
+    websocketPath: string
+    pairedAt: string
+    command: MachineDaemonPairCommand
+  }
+  status: MachineDaemonStatus
+}
+
+export interface MachineDaemonRevokeResponse {
+  machine: Machine
+  status: MachineDaemonStatus
+  revokedAt: string
 }
 
 export interface CreateMachineInput {
@@ -224,6 +337,7 @@ export interface CreateSessionInput {
   agentType?: AgentType
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   host?: string
   resumeFromSession?: string
 }
@@ -300,53 +414,4 @@ export interface TelemetrySummary {
   periodEndKey?: string
   retentionDays?: number
   periodOutsideRetention?: boolean
-}
-
-// Services types
-export type ServiceStatus = 'running' | 'degraded' | 'stopped'
-
-export interface ServiceInfo {
-  name: string
-  port: number
-  script: string
-  status: ServiceStatus
-  healthy: boolean
-  listening: boolean
-  healthUrl: string
-  lastChecked: string
-}
-
-export interface SystemMetrics {
-  cpuCount: number
-  loadAvg: [number, number, number]
-  memTotalBytes: number
-  memFreeBytes: number
-  memUsedPercent: number
-}
-
-export type VercelDeploymentStatus =
-  | 'READY'
-  | 'BUILDING'
-  | 'ERROR'
-  | 'QUEUED'
-  | 'CANCELED'
-  | 'INITIALIZING'
-  | 'UNKNOWN'
-
-export interface VercelDeploymentInfo {
-  id: string
-  name: string
-  url: string | null
-  status: VercelDeploymentStatus
-  branch: string | null
-  commitSha: string | null
-  createdAt: string | null
-}
-
-export interface VercelProjectInfo {
-  id: string
-  name: string
-  framework: string | null
-  productionBranch: string | null
-  latestDeployment: VercelDeploymentInfo | null
 }

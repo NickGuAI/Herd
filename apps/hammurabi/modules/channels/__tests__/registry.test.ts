@@ -4,6 +4,7 @@ import {
   ChannelAdapterAlreadyRegisteredError,
   getChannelAdapter,
   registerChannelAdapter,
+  replaceChannelAdapter,
   resetChannelAdaptersForTests,
 } from '../registry'
 import {
@@ -57,6 +58,16 @@ describe('channel adapter registry', () => {
 
     expect(() => registerChannelAdapter(createMockAdapter('whatsapp')))
       .toThrow(ChannelAdapterAlreadyRegisteredError)
+  })
+
+  it('replaces a provider adapter when rebuilding module runtime wiring', () => {
+    const first = createMockAdapter('whatsapp')
+    const second = createMockAdapter('whatsapp')
+    registerChannelAdapter(first)
+
+    replaceChannelAdapter(second)
+
+    expect(getChannelAdapter('whatsapp')).toBe(second)
   })
 
   it('returns null for unknown providers', () => {

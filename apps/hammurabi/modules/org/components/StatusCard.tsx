@@ -19,7 +19,7 @@ function StatusChip({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-ink-border/70 px-3 py-2 text-left text-sm text-sumi-black transition-colors hover:bg-ink-wash"
+      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-[color:var(--hv-border-hair)] px-3 py-2 text-left text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
     >
       <span className="flex min-w-0 items-center gap-2">
         <Circle size={8} className="shrink-0 fill-current" aria-hidden="true" />
@@ -46,7 +46,7 @@ export function StatusCard({
     <article data-testid="commander-status-card" className="card-sumi flex h-full min-h-40 flex-col gap-4 p-5">
       <div>
         <p className="section-title">Status</p>
-        <p className="mt-1 text-sm text-sumi-diluted">Live work surfaces</p>
+        <p className="mt-1 text-sm text-[color:var(--hv-fg-subtle)]">Live work surfaces</p>
       </div>
       <div className="mt-auto space-y-2">
         <StatusChip

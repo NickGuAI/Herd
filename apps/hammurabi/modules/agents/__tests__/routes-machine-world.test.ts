@@ -258,7 +258,7 @@ describe("agents routes", () => {
       }
     })
 
-  it('returns empty machines list when registry file is missing', async () => {
+  it('returns the backend-owned local machine when registry file is missing', async () => {
       const registry = await createMissingMachinesRegistryPath()
       const server = await startServer({ machinesFilePath: registry.filePath })
 
@@ -268,7 +268,9 @@ describe("agents routes", () => {
         })
 
         expect(response.status).toBe(200)
-        expect(await response.json()).toEqual([])
+        expect(await response.json()).toEqual([
+          { id: 'local', label: 'Local (this server)', host: null },
+        ])
       } finally {
         await server.close()
         await registry.cleanup()
@@ -749,6 +751,154 @@ describe("agents routes", () => {
       }
     })
 
+  it('returns provider auth status for the implicit local machine', async () => {
+      const registry = await createMissingMachinesRegistryPath()
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        mockedSpawn.mockImplementationOnce(() => {
+          const mock = createMockChildProcess()
+          queueMicrotask(() => {
+            mock.emitStdout([
+              'version:claude:1.0.31',
+              'env:claude:missing',
+              'login:claude:1',
+              'version:codex:0.1.2503271400',
+              'env:codex:missing',
+              'login:codex:1',
+              'version:gemini:0.1.18',
+              'env:gemini:missing',
+              'login:gemini:n/a',
+              'version:opencode:missing',
+              'env:opencode:missing',
+              'login:opencode:n/a',
+              '',
+            ].join('\n'))
+            mock.emitExit(0)
+          })
+          return mock.cp as never
+        })
+
+        const response = await fetch(`${server.baseUrl}/api/agents/machines/local/auth-status`, {
+          headers: AUTH_HEADERS,
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({
+          machineId: 'local',
+          envFile: null,
+          checkedAt: expect.any(String),
+          providers: expect.objectContaining({
+            gemini: expect.objectContaining({
+              installed: true,
+              configured: false,
+            }),
+            opencode: expect.objectContaining({
+              installed: false,
+              configured: false,
+            }),
+          }),
+        })
+
+        expect(mockedSpawn.mock.calls[0]?.[0]).toBe('/bin/bash')
+      } finally {
+        await server.close()
+        await registry.cleanup()
+      }
+    })
+
+  it('persists provider secrets for the implicit local machine through auth setup', async () => {
+      const registry = await createMissingMachinesRegistryPath()
+      const localHome = await mkdtemp(join(tmpdir(), 'hammurabi-local-auth-home-'))
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        mockedSpawn.mockImplementation((command, args) => {
+          const shellCommand = Array.isArray(args) ? String(args[1] ?? '') : ''
+
+          if (command === '/bin/bash' && shellCommand.includes('printf %s "$HOME"')) {
+            const mock = createMockChildProcess()
+            queueMicrotask(() => {
+              mock.emitStdout(localHome)
+              mock.emitExit(0)
+            })
+            return mock.cp as never
+          }
+
+          if (command === '/bin/bash' && shellCommand.includes('version:claude:')) {
+            const mock = createMockChildProcess()
+            queueMicrotask(() => {
+              mock.emitStdout([
+                'version:claude:1.0.31',
+                'env:claude:missing',
+                'login:claude:1',
+                'version:codex:0.1.2503271400',
+                'env:codex:missing',
+                'login:codex:1',
+                'version:gemini:0.1.18',
+                'env:gemini:GEMINI_API_KEY',
+                'login:gemini:n/a',
+                'version:opencode:0.1.0',
+                'env:opencode:missing',
+                'login:opencode:n/a',
+                '',
+              ].join('\n'))
+              mock.emitExit(0)
+            })
+            return mock.cp as never
+          }
+
+          const mock = createMockChildProcess()
+          queueMicrotask(() => {
+            mock.emitError(new Error(`Unhandled local command: ${command} ${shellCommand}`))
+          })
+          return mock.cp as never
+        })
+
+        const response = await fetch(`${server.baseUrl}/api/agents/machines/local/auth-setup`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            provider: 'gemini',
+            mode: 'api-key',
+            secret: 'gemini-api-key-value',
+          }),
+        })
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual(expect.objectContaining({
+          machineId: 'local',
+          envFile: join(localHome, '.hammurabi-env'),
+          providers: expect.objectContaining({
+            gemini: expect.objectContaining({
+              configured: true,
+              envSourceKey: 'GEMINI_API_KEY',
+            }),
+          }),
+        }))
+
+        await expect(readFile(join(localHome, '.hammurabi-env'), 'utf8')).resolves.toContain(
+          'export GEMINI_API_KEY=',
+        )
+        const stored = JSON.parse(await readFile(registry.filePath, 'utf8')) as {
+          machines: Array<{ id: string; envFile?: string }>
+        }
+        expect(stored.machines[0]).toEqual({
+          id: 'local',
+          label: 'Local (this server)',
+          host: null,
+          envFile: join(localHome, '.hammurabi-env'),
+        })
+      } finally {
+        await server.close()
+        await registry.cleanup()
+        await rm(localHome, { recursive: true, force: true })
+      }
+    })
+
   it('writes provider secrets only to the worker env file during auth setup', async () => {
       const registry = await createTempMachinesRegistry({
         machines: [
@@ -865,6 +1015,11 @@ describe("agents routes", () => {
         }
         expect(stored.machines).toEqual([
           {
+            id: 'local',
+            label: 'Local (this server)',
+            host: null,
+          },
+          {
             id: 'gpu-1',
             label: 'GPU 1',
             host: '10.0.1.50',
@@ -925,6 +1080,61 @@ describe("agents routes", () => {
       } finally {
         await server.close()
         await registry.cleanup()
+      }
+    })
+
+  it('uses the local machine env file when creating a no-host session', async () => {
+      const previousDataDir = process.env.HAMMURABI_DATA_DIR
+      const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-local-session-data-'))
+      const envDir = await mkdtemp(join(tmpdir(), 'hammurabi-local-session-env-'))
+      process.env.HAMMURABI_DATA_DIR = dataDir
+      const envFile = join(envDir, 'local.env')
+      await writeFile(envFile, 'OPENAI_API_KEY=sk-local-session\n', 'utf8')
+      const registry = await createTempMachinesRegistry({
+        machines: [
+          { id: 'local', label: 'Local', host: null, envFile },
+        ],
+      })
+      const { spawner } = createMockPtySpawner()
+      const server = await startServer({
+        ptySpawner: spawner,
+        machinesFilePath: registry.filePath,
+      })
+
+      try {
+        const response = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'local-env-session',
+            agentType: 'codex',
+            transportType: 'pty',
+          }),
+        })
+
+        expect(response.status).toBe(201)
+        expect(spawner.spawn).toHaveBeenCalledWith(
+          'bash',
+          ['-l'],
+          expect.objectContaining({
+            env: expect.objectContaining({
+              OPENAI_API_KEY: 'sk-local-session',
+            }),
+          }),
+        )
+      } finally {
+        await server.close()
+        await registry.cleanup()
+        await rm(dataDir, { recursive: true, force: true })
+        await rm(envDir, { recursive: true, force: true })
+        if (previousDataDir === undefined) {
+          delete process.env.HAMMURABI_DATA_DIR
+        } else {
+          process.env.HAMMURABI_DATA_DIR = previousDataDir
+        }
       }
     })
 })

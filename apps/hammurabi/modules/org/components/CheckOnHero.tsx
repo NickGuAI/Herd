@@ -1,11 +1,14 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import {
-  ACTIVE_CONVERSATION_FETCH_STALE_MS,
-  commanderActiveConversationQueryKey,
-  fetchCommanderActiveConversation,
-} from '@modules/conversation/hooks/use-conversations'
+  buildCommandRoomLaunchTarget,
+  normalizeCommandRoomRouteMetadata,
+} from '@modules/command-room/route-metadata'
+import { fetchJson } from '@/lib/api'
+import { findModuleGraphUiRouteMetadata } from '@/module-graph-bindings'
+import { useModuleGraphContext } from '@/module-graph-context'
+import type { OrgCheckOnTargetResponse } from '../types'
 import type { OrgNode } from '../types'
 
 export function CheckOnHero({
@@ -14,26 +17,25 @@ export function CheckOnHero({
   commander: OrgNode
 }) {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
+  const moduleGraph = useModuleGraphContext()
+  const routeMetadata = useMemo(
+    () => normalizeCommandRoomRouteMetadata(
+      findModuleGraphUiRouteMetadata(moduleGraph, 'command-room.ui'),
+    ),
+    [moduleGraph],
+  )
 
   const handleClick = async () => {
-    let activeConversationId: string | null = null
     try {
-      const activeConversation = await queryClient.fetchQuery({
-        queryKey: commanderActiveConversationQueryKey(commander.id),
-        queryFn: () => fetchCommanderActiveConversation(commander.id),
-        staleTime: ACTIVE_CONVERSATION_FETCH_STALE_MS,
-      })
-      activeConversationId = activeConversation?.id ?? null
+      const response = await fetchJson<OrgCheckOnTargetResponse>(
+        `/api/org/commanders/${encodeURIComponent(commander.id)}/check-on-target`,
+      )
+      navigate(response.target.path)
+      return
     } catch {
-      activeConversationId = null
+      const fallback = buildCommandRoomLaunchTarget({ commanderId: commander.id }, routeMetadata)
+      navigate(fallback.path)
     }
-
-    const params = new URLSearchParams({ commander: commander.id })
-    if (activeConversationId) {
-      params.set('conversation', activeConversationId)
-    }
-    navigate(`/command-room?${params.toString()}`)
   }
 
   return (
@@ -44,13 +46,13 @@ export function CheckOnHero({
       onClick={() => {
         void handleClick()
       }}
-      className="card-sumi flex w-full items-center gap-4 p-5 text-left transition-colors hover:bg-ink-wash"
+      className="card-sumi flex w-full items-center gap-4 p-5 text-left transition-colors hover:bg-[var(--hv-surface-hover)]"
     >
       <span className="flex min-w-0 items-center gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-wash text-sumi-black">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--hv-surface-selected)] text-[color:var(--hv-fg)]">
           <MessageSquare size={16} aria-hidden="true" />
         </span>
-        <span className="truncate text-lg font-medium text-sumi-black">
+        <span className="truncate text-lg font-medium text-[color:var(--hv-fg)]">
           Check On {commander.displayName}
         </span>
       </span>

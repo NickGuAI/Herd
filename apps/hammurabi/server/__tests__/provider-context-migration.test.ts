@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   migrateProviderContext,
   sanitizeProviderContextForPersistence,
-} from '../../migrations/provider-context'
+} from '../../modules/agents/providers/provider-context-migration'
 import {
   createClaudeProviderContext,
   createGeminiProviderContext,

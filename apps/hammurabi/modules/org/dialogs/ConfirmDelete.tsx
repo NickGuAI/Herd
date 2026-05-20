@@ -8,15 +8,15 @@ import { ORG_QUERY_KEY } from '@modules/org/hooks/useOrgTree'
 import { Field, FormModal } from '../components'
 
 const INPUT_CLASS =
-  'min-h-11 w-full rounded-2xl border border-ink-border bg-washi-white px-4 py-2 text-sm text-sumi-black outline-none transition-colors focus:border-sumi-black'
+  'min-h-11 w-full rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-2 text-sm text-[color:var(--hv-fg)] outline-none transition-colors focus:border-[color:var(--hv-field-focus-border)]'
 const DANGER_BUTTON_CLASS =
-  'rounded-full bg-accent-vermillion px-4 py-2 text-sm text-washi-white transition-colors hover:bg-accent-vermillion/90 disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full bg-[var(--hv-accent-danger-wash)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-accent-danger-wash)] disabled:cursor-not-allowed disabled:opacity-60'
 const SECONDARY_BUTTON_CLASS =
-  'rounded-full border border-ink-border px-4 py-2 text-sm text-sumi-black transition-colors hover:bg-ink-wash disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60'
 const PRIMARY_BUTTON_CLASS =
-  'rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90 disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)] disabled:cursor-not-allowed disabled:opacity-60'
 const REFUSE_BUTTON_CLASS =
-  'rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90'
+  'rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)]'
 
 type DeleteStep = 1 | 2 | 3 | 4
 
@@ -152,10 +152,10 @@ export function ConfirmDelete({
     if (showRefuseVariant) {
       return (
         <div data-testid="delete-commander-refuse-modal" className="space-y-3">
-          <p className="text-sm text-sumi-black">
+          <p className="text-sm text-[color:var(--hv-fg)]">
             {commanderDisplayName} is still active. Open the command room to stop or hand off the live run before changing this commander.
           </p>
-          <p className="text-sm text-sumi-diluted">
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
             The org surface will not archive or delete a running commander.
           </p>
         </div>
@@ -165,10 +165,10 @@ export function ConfirmDelete({
     if (step === 1) {
       return (
         <div className="space-y-3">
-          <p className="text-sm text-sumi-black">
+          <p className="text-sm text-[color:var(--hv-fg)]">
             Delete {commanderDisplayName} permanently? This cannot be undone.
           </p>
-          <p className="text-sm text-sumi-diluted">
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
             The next steps require explicit confirmation before any permanent delete is available.
           </p>
         </div>
@@ -178,10 +178,10 @@ export function ConfirmDelete({
     if (step === 2) {
       return (
         <div className="space-y-3">
-          <p className="text-sm text-sumi-black">
+          <p className="text-sm text-[color:var(--hv-fg)]">
             Are you absolutely sure?
           </p>
-          <p className="text-sm text-sumi-diluted">
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
             Permanent delete removes memory, transcripts, configuration, and all commander history.
           </p>
         </div>
@@ -191,11 +191,11 @@ export function ConfirmDelete({
     if (step === 3) {
       return (
         <div className="space-y-4">
-          <p className="text-sm text-sumi-black">
+          <p className="text-sm text-[color:var(--hv-fg)]">
             Final warning. Type the commander name to confirm.
           </p>
-          <p className="text-sm text-sumi-diluted">
-            Type <span className="font-mono text-sumi-black">{commanderDisplayName}</span>.
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
+            Type <span className="font-mono text-[color:var(--hv-fg)]">{commanderDisplayName}</span>.
           </p>
           <Field
             label="Commander Name"
@@ -216,10 +216,10 @@ export function ConfirmDelete({
 
     return (
       <div className="space-y-3">
-        <p className="text-sm text-sumi-black">
+        <p className="text-sm text-[color:var(--hv-fg)]">
           Or archive instead? Archive is recommended because it preserves memory and transcripts for restore.
         </p>
-        <p className="text-sm text-sumi-diluted">
+        <p className="text-sm text-[color:var(--hv-fg-subtle)]">
           Archived commanders are hidden from the default org view and can be restored from the archived view.
         </p>
       </div>
@@ -311,7 +311,7 @@ export function ConfirmDelete({
       {globalError && !showRefuseVariant ? (
         <div
           data-testid="confirm-delete-error"
-          className="mb-4 rounded-2xl border border-accent-vermillion/30 bg-accent-vermillion/10 px-4 py-3 text-sm text-accent-vermillion"
+          className="mb-4 rounded-2xl border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-4 py-3 text-sm text-[color:var(--hv-accent-danger)]"
         >
           {globalError}
         </div>

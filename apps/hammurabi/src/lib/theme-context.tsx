@@ -13,6 +13,7 @@ export type AppTheme = 'light' | 'dark'
 
 export interface AppSettings {
   theme: AppTheme
+  fontScale: number
   updatedAt?: string
 }
 
@@ -44,6 +45,9 @@ function normalizeSettings(payload: unknown): AppSettings {
 
   return {
     theme: normalizeTheme(source?.theme),
+    fontScale: typeof source?.fontScale === 'number' && Number.isFinite(source.fontScale)
+      ? source.fontScale
+      : 1,
     updatedAt: typeof source?.updatedAt === 'string' ? source.updatedAt : undefined,
   }
 }

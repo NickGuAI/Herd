@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ComponentProps } from 'react'
+import { act } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,11 +12,24 @@ import { MobileSessionShell } from '../page-shell/MobileSessionShell'
 const openImagePickerSpy = vi.fn()
 const openSkillsPickerSpy = vi.fn()
 
+vi.mock('@/hooks/use-providers', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-providers')>('@/hooks/use-providers')
+  const { testProviderRegistry } = await vi.importActual<
+    typeof import('./provider-registry-fixture')
+  >('./provider-registry-fixture')
+  return {
+    ...actual,
+    useProviderRegistry: () => ({ data: testProviderRegistry }),
+  }
+})
+
 vi.mock('@modules/agents/components/Transcript', () => ({
   default: ({
+    className,
     dark,
     sessionId,
   }: {
+    className?: string
     dark?: boolean
     sessionId: string
   }) => (
@@ -23,6 +37,7 @@ vi.mock('@modules/agents/components/Transcript', () => ({
       data-testid="transcript"
       data-dark={String(Boolean(dark))}
       data-session-id={sessionId}
+      className={['messages-area', className].filter(Boolean).join(' ')}
     >
       Transcript
     </div>
@@ -131,11 +146,13 @@ function buildApproval(overrides: Partial<PendingApproval> = {}): PendingApprova
 }
 
 function buildConversation(overrides: Partial<ConversationRecord> = {}): ConversationRecord {
+  const status = overrides.status ?? 'active'
+  const idleLike = status === 'idle'
   return {
     id: 'conv-1',
     commanderId: 'cmd-1',
     surface: 'ui',
-    status: 'active',
+    status,
     currentTask: null,
     lastHeartbeat: null,
     heartbeat: {
@@ -150,6 +167,17 @@ function buildConversation(overrides: Partial<ConversationRecord> = {}): Convers
     updatedAt: '2026-05-01T08:05:00.000Z',
     lastMessageAt: '2026-05-01T08:05:00.000Z',
     name: 'Health Coach',
+    allowedActions: {
+      send: status === 'active',
+      queue: status === 'active',
+      media: status === 'active',
+      start: idleLike,
+      pause: status === 'active',
+      resume: idleLike,
+      archive: true,
+      delete: true,
+      updateProvider: idleLike,
+    },
     ...overrides,
   }
 }
@@ -215,6 +243,11 @@ function findButtonByText(label: string): HTMLButtonElement {
   return button as HTMLButtonElement
 }
 
+function queryButtonByText(label: string): HTMLButtonElement | null {
+  return Array.from(document.body.querySelectorAll('button'))
+    .find((candidate) => candidate.textContent?.includes(label)) as HTMLButtonElement | undefined ?? null
+}
+
 function clickButtonByText(label: string) {
   findButtonByText(label).click()
 }
@@ -250,14 +283,42 @@ function expectSemanticMenuButton(element: Element | null) {
 }
 
 describe('MobileSessionShell', () => {
-  it('renders the header with label and meta', async () => {
-    renderShell()
+  it('renders the compact header row with the required ordered elements', async () => {
+    renderShell({
+      chatLabel: 'granite-cliff',
+      headerAccessory: (
+        <div data-testid="mobile-chat-page-dots">
+          <button type="button" data-testid="mobile-chat-page-dot" aria-label="Go to chat 1" />
+          <button type="button" data-testid="mobile-chat-page-dot" aria-label="Go to chat 2" />
+        </div>
+      ),
+    })
 
-    const headerCenter = document.body.querySelector('.session-header-center')
-    expect(headerCenter?.textContent).toContain('Test Commander')
-    expect(headerCenter?.textContent).toContain('connected')
-    expect(headerCenter?.textContent).toContain('2m 05s')
-    expect(headerCenter?.textContent).not.toContain('$1.23')
+    const header = document.body.querySelector('[data-testid="mobile-session-compact-header"]')
+    expect(header).not.toBeNull()
+    expect(header?.classList.contains('h-12')).toBe(true)
+    expect(header?.classList.contains('max-h-12')).toBe(true)
+    expect(header?.textContent).toContain('Test Commander')
+    expect(header?.textContent).toContain('granite-cliff')
+    expect(header?.textContent).not.toContain('connected')
+    expect(header?.textContent).not.toContain('2m 05s')
+    expect(header?.textContent).not.toContain('$1.23')
+
+    const orderedItems = Array.from(header?.querySelectorAll('[data-mobile-header-item]') ?? [])
+      .map((item) => item.getAttribute('data-mobile-header-item'))
+    expect(orderedItems).toEqual([
+      'back',
+      'avatar',
+      'commander',
+      'separator',
+      'chat',
+      'status',
+      'page-dots',
+      'menu',
+    ])
+    expect(document.body.querySelector('[data-testid="mobile-session-avatar"]')).not.toBeNull()
+    expect(document.body.querySelectorAll('[data-testid="mobile-chat-page-dot"]')).toHaveLength(2)
+    expect(document.body.querySelector('[data-testid="mobile-session-connected-dot"]')?.classList.contains('bg-emerald-500')).toBe(true)
 
     flushSync(() => {
       clickSelector('button[aria-label="Session actions"]')
@@ -267,12 +328,47 @@ describe('MobileSessionShell', () => {
     expect(document.body.textContent).toContain('$1.23')
   })
 
-  it('renders chatLabel as a footnote under the title', async () => {
+  it('renders chatLabel inline with truncation rather than as a second row', async () => {
     renderShell({ chatLabel: 'Health Coach' })
 
     const chatLabel = document.body.querySelector('.session-header-chat')
     expect(chatLabel?.textContent).toBe('Health Coach')
+    expect(chatLabel?.classList.contains('truncate')).toBe(true)
     expect(document.body.querySelector('.session-header-name')?.textContent).toBe('Test Commander')
+    expect(document.body.querySelector('.session-header-name')?.classList.contains('truncate')).toBe(true)
+    expect(document.body.querySelector('.session-header-center')).toBeNull()
+  })
+
+  it('keeps long commander and conversation names constrained to truncating row text', async () => {
+    renderShell({
+      sessionLabel: 'A very long commander name that should never wrap the compact mobile header',
+      chatLabel: 'A very long conversation name that should also truncate instead of wrapping',
+    })
+
+    const header = document.body.querySelector('[data-testid="mobile-session-compact-header"]')
+    const commanderName = document.body.querySelector('[data-testid="mobile-session-commander-name"]')
+    const chatLabel = document.body.querySelector('[data-testid="mobile-session-chat-label"]')
+
+    expect(header?.classList.contains('h-12')).toBe(true)
+    expect(commanderName?.classList.contains('truncate')).toBe(true)
+    expect(commanderName?.classList.contains('min-w-0')).toBe(true)
+    expect(chatLabel?.classList.contains('truncate')).toBe(true)
+    expect(chatLabel?.classList.contains('min-w-0')).toBe(true)
+  })
+
+  it('uses only a binary connected-dot state in the header', async () => {
+    renderShell({ wsStatus: 'disconnected' })
+
+    const disconnectedDot = document.body.querySelector('[data-testid="mobile-session-connected-dot"]')
+    expect(disconnectedDot?.classList.contains('bg-emerald-500')).toBe(false)
+    expect(disconnectedDot?.classList.contains('opacity-0')).toBe(true)
+
+    cleanupShell()
+    renderShell({ wsStatus: 'connected' })
+
+    const connectedDot = document.body.querySelector('[data-testid="mobile-session-connected-dot"]')
+    expect(connectedDot?.classList.contains('bg-emerald-500')).toBe(true)
+    expect(connectedDot?.classList.contains('opacity-100')).toBe(true)
   })
 
   it('surfaces cost in the overflow menu drawer', async () => {
@@ -462,6 +558,45 @@ describe('MobileSessionShell', () => {
     const composer = document.body.querySelector('[data-testid="session-composer"]')
     expect(composer?.getAttribute('data-queue-total')).toBe('1')
     expect(composer?.getAttribute('data-queue-max')).toBe('8')
+  })
+
+  it('reveals Load older only when the message pane reaches the top edge', async () => {
+    const onLoadOlderMessages = vi.fn()
+    renderShell({
+      hasOlderMessages: true,
+      onLoadOlderMessages,
+    })
+
+    expect(queryButtonByText('Load older')).toBeNull()
+
+    const transcript = document.body.querySelector('.messages-area') as HTMLDivElement | null
+    expect(transcript).not.toBeNull()
+    Object.defineProperty(transcript as HTMLDivElement, 'scrollTop', {
+      configurable: true,
+      writable: true,
+      value: 120,
+    })
+
+    await act(async () => {
+      ;(transcript as HTMLDivElement).dispatchEvent(new Event('scroll'))
+    })
+
+    expect(queryButtonByText('Load older')).toBeNull()
+
+    ;(transcript as HTMLDivElement).scrollTop = 0
+    await act(async () => {
+      ;(transcript as HTMLDivElement).dispatchEvent(new Event('scroll'))
+    })
+
+    const loadOlderButton = queryButtonByText('Load older')
+    expect(loadOlderButton).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="mobile-load-older-reveal"]')).not.toBeNull()
+
+    await act(async () => {
+      loadOlderButton?.click()
+    })
+
+    expect(onLoadOlderMessages).toHaveBeenCalledTimes(1)
   })
 
   it('passes the mobile composer variant and streaming state through to SessionComposer', async () => {

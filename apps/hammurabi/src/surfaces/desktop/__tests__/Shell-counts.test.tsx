@@ -57,9 +57,11 @@ async function renderShell() {
           <Shell
             modules={[{
               name: 'command-room',
+              routeId: 'command-room.ui',
               label: 'Command Room',
               icon: 'dot',
               path: '/command-room',
+              surfaces: ['desktop'],
             }]}
           >
             <div>child</div>

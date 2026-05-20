@@ -16,19 +16,19 @@ interface StatusPillProps {
 
 const TONE_STYLES: Record<StatusTone, React.CSSProperties> = {
   waiting: {
-    background: 'rgba(212,118,58,0.12)',
-    color: 'var(--persimmon)',
-    border: '1px solid rgba(212,118,58,0.35)',
+    background: 'var(--hv-accent-warning-wash)',
+    color: 'var(--hv-accent-warning)',
+    border: '1px solid var(--hv-accent-warning)',
   },
   running: {
-    background: 'rgba(107,123,94,0.12)',
-    color: 'var(--moss-stone)',
-    border: '1px solid rgba(107,123,94,0.35)',
+    background: 'var(--hv-accent-success-wash)',
+    color: 'var(--hv-accent-success)',
+    border: '1px solid var(--hv-accent-success)',
   },
   pending: {
-    background: 'rgba(194,59,34,0.10)',
-    color: 'var(--vermillion-seal)',
-    border: '1px solid rgba(194,59,34,0.30)',
+    background: 'var(--hv-accent-danger-wash)',
+    color: 'var(--hv-accent-danger)',
+    border: '1px solid var(--hv-accent-danger)',
   },
 }
 

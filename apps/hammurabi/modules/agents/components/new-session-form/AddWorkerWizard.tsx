@@ -16,7 +16,7 @@ import type {
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
 
 const INPUT_CLASS =
-  'w-full rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-white focus:outline-none focus:ring-1 focus:ring-sumi-black/20 placeholder:text-sumi-mist'
+  'w-full rounded-lg border border-[color:var(--hv-border-hair)] px-3 py-2 text-[16px] md:text-sm bg-[var(--hv-surface-card)] focus:outline-none focus:ring-1 focus:ring-[color:var(--hv-field-focus-border)] placeholder:text-[color:var(--hv-fg-faint)]'
 const TEXTAREA_CLASS = `${INPUT_CLASS} min-h-[96px] resize-y`
 const GUIDE_URL = 'https://github.com/NickGuAI/Hervald/blob/main/apps/hammurabi/docs/provider-auth-setup.md'
 
@@ -48,6 +48,9 @@ function shellQuote(value: string): string {
 }
 
 function buildSshCommand(machine: Machine, innerCommand: string): string {
+  if (!machine.host) {
+    return innerCommand
+  }
   const destination = machine.user ? `${machine.user}@${machine.host}` : (machine.host ?? 'worker')
   const portPart = machine.port ? `-p ${machine.port} ` : ''
   return `ssh ${portPart}${destination} ${shellQuote(innerCommand)}`
@@ -165,7 +168,7 @@ export function AddWorkerWizard({
   const authStatusQuery = useMachineAuthStatus(machine?.id, open && machine !== null)
   const authStatus = authStatusQuery.data
   const machineLabel = (machine?.label ?? label.trim()) || 'Worker'
-  const machineHost = machine?.host ?? host.trim()
+  const machineHost = machine?.host ?? (host.trim() || 'local')
 
   const canFinish = machineProviders.every((provider) => {
     if (!selectedProviders[provider.id]) {
@@ -286,11 +289,11 @@ export function AddWorkerWizard({
       title={step === 1 ? 'Add Worker' : 'Worker Provider Auth'}
       contentClassName="space-y-4"
     >
-      <div className="rounded-lg border border-ink-border bg-washi-white px-4 py-3">
-        <div className="text-xs uppercase tracking-[0.18em] text-sumi-diluted">
+      <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
+        <div className="text-xs uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">
           {step === 1 ? 'Step 1 of 2' : 'Step 2 of 2'}
         </div>
-        <div className="mt-1 text-sm text-sumi-black">
+        <div className="mt-1 text-sm text-[color:var(--hv-fg)]">
           {step === 1
           ? 'Register the worker first, then configure provider auth on the same machine.'
             : `Configure provider auth on ${machineLabel}.`}
@@ -300,8 +303,8 @@ export function AddWorkerWizard({
       {step === 1 ? (
         <div className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2">
-            <label className="space-y-1 text-sm text-sumi-black">
-              <span className="text-whisper uppercase tracking-wide text-sumi-diluted">Worker label</span>
+            <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+              <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Worker label</span>
               <input
                 value={label}
                 onChange={(event) => setLabel(event.target.value)}
@@ -310,8 +313,8 @@ export function AddWorkerWizard({
               />
             </label>
 
-            <label className="space-y-1 text-sm text-sumi-black">
-              <span className="text-whisper uppercase tracking-wide text-sumi-diluted">Hostname or IP</span>
+            <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+              <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Hostname or IP</span>
               <input
                 value={host}
                 onChange={(event) => setHost(event.target.value)}
@@ -320,8 +323,8 @@ export function AddWorkerWizard({
               />
             </label>
 
-            <label className="space-y-1 text-sm text-sumi-black">
-              <span className="text-whisper uppercase tracking-wide text-sumi-diluted">SSH user</span>
+            <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+              <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">SSH user</span>
               <input
                 value={user}
                 onChange={(event) => setUser(event.target.value)}
@@ -330,8 +333,8 @@ export function AddWorkerWizard({
               />
             </label>
 
-            <label className="space-y-1 text-sm text-sumi-black">
-              <span className="text-whisper uppercase tracking-wide text-sumi-diluted">SSH port</span>
+            <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+              <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">SSH port</span>
               <input
                 value={port}
                 onChange={(event) => setPort(event.target.value)}
@@ -342,8 +345,8 @@ export function AddWorkerWizard({
             </label>
           </div>
 
-          <label className="space-y-1 text-sm text-sumi-black">
-            <span className="text-whisper uppercase tracking-wide text-sumi-diluted">Workspace directory</span>
+          <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+            <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Workspace directory</span>
             <input
               value={cwd}
               onChange={(event) => setCwd(event.target.value)}
@@ -352,8 +355,8 @@ export function AddWorkerWizard({
             />
           </label>
 
-          <div className="rounded-lg border border-dashed border-ink-border px-3 py-2 text-sm text-sumi-diluted">
-            Worker ID preview: <span className="font-mono text-sumi-black">{derivedMachineId}</span>
+          <div className="rounded-lg border border-dashed border-[color:var(--hv-border-hair)] px-3 py-2 text-sm text-[color:var(--hv-fg-subtle)]">
+            Worker ID preview: <span className="font-mono text-[color:var(--hv-fg)]">{derivedMachineId}</span>
           </div>
 
           {connectionError ? (
@@ -383,29 +386,29 @@ export function AddWorkerWizard({
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="rounded-lg border border-ink-border bg-washi-white px-4 py-3 text-sm text-sumi-black">
+          <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3 text-sm text-[color:var(--hv-fg)]">
             <div className="font-medium">{machineLabel}</div>
-            <div className="mt-1 text-sumi-diluted">
+            <div className="mt-1 text-[color:var(--hv-fg-subtle)]">
               {machineHost}
               {machine?.user ? ` as ${machine.user}` : ''}
               {machine?.port ? ` on port ${machine.port}` : ''}
             </div>
             {authStatus?.envFile ? (
-              <div className="mt-2 font-mono text-xs text-sumi-diluted">
+              <div className="mt-2 font-mono text-xs text-[color:var(--hv-fg-subtle)]">
                 env file: {authStatus.envFile}
               </div>
             ) : null}
           </div>
 
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-ink-border bg-washi-white px-4 py-3 text-sm">
-            <div className="text-sumi-diluted">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3 text-sm">
+            <div className="text-[color:var(--hv-fg-subtle)]">
               Need the manual commands? The full guide stays in the repo docs.
             </div>
             <a
               href={GUIDE_URL}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-sumi-black underline underline-offset-2"
+              className="inline-flex items-center gap-1 text-[color:var(--hv-fg)] underline underline-offset-2"
             >
               Provider auth guide
               <ExternalLink size={14} />
@@ -413,7 +416,7 @@ export function AddWorkerWizard({
           </div>
 
           {authStatusQuery.isLoading ? (
-            <div className="flex items-center gap-2 rounded-lg border border-ink-border bg-washi-white px-4 py-3 text-sm text-sumi-diluted">
+            <div className="flex items-center gap-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3 text-sm text-[color:var(--hv-fg-subtle)]">
               <Loader2 size={14} className="animate-spin" />
               Checking worker provider status…
             </div>
@@ -441,7 +444,7 @@ export function AddWorkerWizard({
             const requiresSecret = provider.machineAuth?.requiresSecretModes.includes(draft.mode) ?? true
 
             return (
-              <div key={provider.id} className="rounded-xl border border-ink-border bg-washi-white px-4 py-4">
+              <div key={provider.id} className="rounded-xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <label className="flex items-start gap-3">
                     <input
@@ -451,24 +454,24 @@ export function AddWorkerWizard({
                         ...current,
                         [provider.id]: event.target.checked,
                       }))}
-                      className="mt-1 h-4 w-4 rounded border-ink-border"
+                      className="mt-1 h-4 w-4 rounded border-[color:var(--hv-border-hair)]"
                     />
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="font-medium text-sumi-black">
+                        <div className="font-medium text-[color:var(--hv-fg)]">
                         {status?.label ?? provider.label}
                         </div>
                         <a
                           href={GUIDE_URL}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-sumi-diluted underline underline-offset-2"
+                          className="inline-flex items-center gap-1 text-xs text-[color:var(--hv-fg-subtle)] underline underline-offset-2"
                         >
                           Guide
                           <ExternalLink size={12} />
                         </a>
                       </div>
-                      <div className="mt-1 text-sm text-sumi-diluted">
+                      <div className="mt-1 text-sm text-[color:var(--hv-fg-subtle)]">
                         {supportedAuthModes.includes('setup-token')
                           ? 'Run setup-token on the worker, paste the resulting token here, then verify before dispatching sessions.'
                           : supportedAuthModes.includes('device-auth')
@@ -478,7 +481,7 @@ export function AddWorkerWizard({
                     </div>
                   </label>
 
-                  <div className="rounded-full border border-ink-border px-2.5 py-1 text-xs uppercase tracking-wide text-sumi-diluted">
+                  <div className="rounded-full border border-[color:var(--hv-border-hair)] px-2.5 py-1 text-xs uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">
                     {status?.configured
                       ? 'ready'
                       : selected
@@ -488,19 +491,19 @@ export function AddWorkerWizard({
                 </div>
 
                 {status ? (
-                  <div className="mt-3 grid gap-2 text-xs text-sumi-diluted md:grid-cols-2">
-                    <div>Version: <span className="font-mono text-sumi-black">{status.version ?? 'missing'}</span></div>
-                    <div>Detected auth: <span className="font-mono text-sumi-black">{status.currentMethod}</span></div>
-                    <div>Env source: <span className="font-mono text-sumi-black">{status.envSourceKey ?? 'missing'}</span></div>
-                    <div>Verification: <span className="font-mono text-sumi-black">{status.verificationCommand}</span></div>
+                  <div className="mt-3 grid gap-2 text-xs text-[color:var(--hv-fg-subtle)] md:grid-cols-2">
+                    <div>Version: <span className="font-mono text-[color:var(--hv-fg)]">{status.version ?? 'missing'}</span></div>
+                    <div>Detected auth: <span className="font-mono text-[color:var(--hv-fg)]">{status.currentMethod}</span></div>
+                    <div>Env source: <span className="font-mono text-[color:var(--hv-fg)]">{status.envSourceKey ?? 'missing'}</span></div>
+                    <div>Verification: <span className="font-mono text-[color:var(--hv-fg)]">{status.verificationCommand}</span></div>
                   </div>
                 ) : null}
 
                 {selected ? (
                   <div className="mt-4 space-y-3">
                     {supportedAuthModes.length > 1 ? (
-                      <label className="space-y-1 text-sm text-sumi-black">
-                        <span className="text-whisper uppercase tracking-wide text-sumi-diluted">Auth mode</span>
+                      <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+                        <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Auth mode</span>
                         <select
                           value={draft.mode}
                           onChange={(event) => updateProviderDraft(provider.id, {
@@ -519,25 +522,25 @@ export function AddWorkerWizard({
                     ) : null}
 
                     {draft.mode === 'setup-token' ? (
-                      <div className="rounded-lg border border-dashed border-ink-border px-3 py-2 text-sm text-sumi-diluted">
+                      <div className="rounded-lg border border-dashed border-[color:var(--hv-border-hair)] px-3 py-2 text-sm text-[color:var(--hv-fg-subtle)]">
                         1. Run on the worker:
-                        <div className="mt-2 font-mono text-xs text-sumi-black">{sshCommand}</div>
+                        <div className="mt-2 font-mono text-xs text-[color:var(--hv-fg)]">{sshCommand}</div>
                         <div className="mt-2">2. Paste the resulting token below and verify it.</div>
                       </div>
                     ) : null}
 
                     {draft.mode === 'device-auth' ? (
-                      <div className="rounded-lg border border-dashed border-ink-border px-3 py-2 text-sm text-sumi-diluted">
+                      <div className="rounded-lg border border-dashed border-[color:var(--hv-border-hair)] px-3 py-2 text-sm text-[color:var(--hv-fg-subtle)]">
                         1. Click <strong>Prepare device auth</strong> once so the worker can store credentials on disk.
                         <div className="mt-2">2. Run on the worker:</div>
-                        <div className="mt-2 font-mono text-xs text-sumi-black">{sshCommand}</div>
+                        <div className="mt-2 font-mono text-xs text-[color:var(--hv-fg)]">{sshCommand}</div>
                         <div className="mt-2">3. Complete the device-code prompt, then refresh status here.</div>
                       </div>
                     ) : null}
 
                     {requiresSecret ? (
-                      <label className="space-y-1 text-sm text-sumi-black">
-                        <span className="text-whisper uppercase tracking-wide text-sumi-diluted">
+                      <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+                        <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">
                           {modeLabel(draft.mode)}
                         </span>
                         <textarea
@@ -559,7 +562,7 @@ export function AddWorkerWizard({
                     ) : null}
 
                     {status?.configured ? (
-                      <div className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                      <div className="flex items-center gap-2 rounded-lg border border-[color:var(--hv-accent-success)] bg-[var(--hv-accent-success-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-success)]">
                         <CheckCircle2 size={16} />
                         {status.label} is ready on this worker.
                       </div>
@@ -567,7 +570,7 @@ export function AddWorkerWizard({
 
                     {status?.installed === false ? (
                       <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                        {status.label} CLI is missing on this worker. Run <span className="font-mono">hammurabi machine bootstrap {machine?.id}</span> first, then come back here to verify auth.
+                        {status.label} CLI is missing on this machine. Run <span className="font-mono">hammurabi machine bootstrap {machine?.id}</span> first, then come back here to verify auth.
                       </div>
                     ) : null}
 
@@ -607,7 +610,7 @@ export function AddWorkerWizard({
           })}
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm text-sumi-diluted">
+            <div className="text-sm text-[color:var(--hv-fg-subtle)]">
               Partial setup is OK. Unchecked providers stay unavailable until you return and verify them.
             </div>
             <div className="flex items-center gap-2">

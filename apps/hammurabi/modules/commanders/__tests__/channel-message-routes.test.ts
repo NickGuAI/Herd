@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
 import type { CommanderSessionsInterface } from '../../agents/routes'
-import type { AgentType } from '../../agents/types'
+import type { AgentType, StreamJsonEvent } from '../../agents/types'
 import {
   createCommandersRouter,
   type CommanderChannelReplyDispatchInput,
@@ -59,6 +59,7 @@ interface MockSessionsInterface {
   interface: CommanderSessionsInterface
   createCalls: Array<Parameters<CommanderSessionsInterface['createCommanderSession']>[0]>
   sendCalls: Array<{ name: string; text: string }>
+  emitEvent: (name: string, event: StreamJsonEvent) => void
 }
 
 interface MockChannelReplyDispatchers {
@@ -78,6 +79,44 @@ async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms)
   })
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now()
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error('Timed out waiting for condition')
+    }
+    await sleep(10)
+  }
+}
+
+function emitAssistantTextTurn(
+  mock: Pick<MockSessionsInterface, 'emitEvent'>,
+  sessionName: string,
+  text: string,
+): void {
+  mock.emitEvent(sessionName, { type: 'message_start' } as StreamJsonEvent)
+  mock.emitEvent(sessionName, {
+    type: 'content_block_start',
+    index: 0,
+    content_block: { type: 'text' },
+  } as StreamJsonEvent)
+  mock.emitEvent(sessionName, {
+    type: 'content_block_delta',
+    index: 0,
+    delta: { type: 'text_delta', text },
+  } as StreamJsonEvent)
+  mock.emitEvent(sessionName, { type: 'content_block_stop', index: 0 } as StreamJsonEvent)
+  mock.emitEvent(sessionName, {
+    type: 'message_delta',
+    delta: { stop_reason: 'end_turn' },
+  } as StreamJsonEvent)
+  mock.emitEvent(sessionName, {
+    type: 'result',
+    duration_ms: 1200,
+    is_error: false,
+  } as StreamJsonEvent)
 }
 
 afterEach(async () => {
@@ -143,6 +182,7 @@ function createMockSessionsInterface(): MockSessionsInterface {
   const createCalls: Array<Parameters<CommanderSessionsInterface['createCommanderSession']>[0]> = []
   const sendCalls: Array<{ name: string; text: string }> = []
   const activeSessions = new Map<string, ActiveSessionState>()
+  const eventHandlers = new Map<string, Set<(event: StreamJsonEvent) => void>>()
 
   const sessionsInterface: CommanderSessionsInterface = {
     async createCommanderSession(params) {
@@ -202,8 +242,23 @@ function createMockSessionsInterface(): MockSessionsInterface {
         usage: { ...active.usage },
       } as unknown as ReturnType<CommanderSessionsInterface['getSession']>
     },
-    subscribeToEvents() {
-      return () => {}
+    subscribeToEvents(name, handler) {
+      let handlers = eventHandlers.get(name)
+      if (!handlers) {
+        handlers = new Set()
+        eventHandlers.set(name, handlers)
+      }
+      handlers.add(handler)
+      return () => {
+        const current = eventHandlers.get(name)
+        if (!current) {
+          return
+        }
+        current.delete(handler)
+        if (current.size === 0) {
+          eventHandlers.delete(name)
+        }
+      }
     },
   }
 
@@ -211,6 +266,15 @@ function createMockSessionsInterface(): MockSessionsInterface {
     interface: sessionsInterface,
     createCalls,
     sendCalls,
+    emitEvent(name, event) {
+      const handlers = eventHandlers.get(name)
+      if (!handlers) {
+        return
+      }
+      for (const handler of handlers) {
+        handler(event)
+      }
+    },
   }
 }
 
@@ -309,6 +373,7 @@ async function startServer(options: {
   sessionStorePath: string
   sessionsInterface: CommanderSessionsInterface
   channelReplyDispatchers?: NonNullable<CommandersRouterOptions['channelReplyDispatchers']>
+  internalToken?: string
 }): Promise<RunningServer> {
   const app = express()
   app.use(express.json())
@@ -323,6 +388,7 @@ async function startServer(options: {
     sessionsInterface: options.sessionsInterface,
     channelReplyDispatchers: options.channelReplyDispatchers,
     channelBindingStore: await seedOpenChannelBindings(options.sessionStorePath),
+    internalToken: options.internalToken,
   })
   app.use('/api/commanders', commanders.router)
 
@@ -388,6 +454,104 @@ async function postChannelReply(
 }
 
 describe('POST /api/commanders/channel-message', () => {
+  it('accepts the runtime internal token used by channel adapters', async () => {
+    const dir = await createTempDir('hammurabi-channel-internal-auth-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const mock = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: mock.interface,
+      internalToken: 'runtime-internal-token',
+    })
+
+    try {
+      const response = await postChannelMessage(server.baseUrl, {
+        commanderId: COMMANDER_A,
+        provider: 'whatsapp',
+        accountId: 'default',
+        chatType: 'direct',
+        peerId: '15551234567',
+        displayName: '+1 555 123 4567',
+        message: 'hello from whatsapp',
+      }, { 'x-hammurabi-internal-token': 'runtime-internal-token' })
+
+      expect(response.status).toBe(201)
+      expect(await response.json()).toMatchObject({
+        accepted: true,
+        delivered: true,
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('forwards completed assistant turns back to the inbound WhatsApp route', async () => {
+    const dir = await createTempDir('hammurabi-channel-auto-reply-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const mock = createMockSessionsInterface()
+    const outbound = createMockChannelReplyDispatchers()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: mock.interface,
+      channelReplyDispatchers: outbound.dispatchers,
+    })
+
+    try {
+      const inbound = await postChannelMessage(server.baseUrl, {
+        commanderId: COMMANDER_A,
+        provider: 'whatsapp',
+        accountId: 'default',
+        chatType: 'direct',
+        peerId: '15551234567@s.whatsapp.net',
+        displayName: '+1 555 123 4567',
+        message: 'hello hera',
+      })
+      expect(inbound.status).toBe(201)
+      const sessionName = mock.createCalls[0]?.name
+      if (!sessionName) {
+        throw new Error('Expected channel message to create a conversation session')
+      }
+
+      emitAssistantTextTurn(mock, sessionName, 'Commander runtime is ready')
+      await sleep(25)
+      expect(outbound.calls).toHaveLength(0)
+
+      emitAssistantTextTurn(mock, sessionName, 'WhatsApp reply from Hera')
+
+      await waitFor(() => outbound.calls.length === 1)
+      expect(outbound.calls[0]).toMatchObject({
+        commanderId: COMMANDER_A,
+        message: 'WhatsApp reply from Hera',
+        channelMeta: {
+          provider: 'whatsapp',
+          chatType: 'direct',
+          accountId: 'default',
+          peerId: '15551234567@s.whatsapp.net',
+          sessionKey: 'whatsapp:default:direct:15551234567@s.whatsapp.net',
+        },
+        lastRoute: {
+          channel: 'whatsapp',
+          to: '15551234567@s.whatsapp.net',
+          accountId: 'default',
+        },
+      })
+
+      mock.emitEvent(sessionName, {
+        type: 'result',
+        duration_ms: 1300,
+        is_error: false,
+      } as StreamJsonEvent)
+      await sleep(25)
+      expect(outbound.calls).toHaveLength(1)
+    } finally {
+      await server.close()
+    }
+  })
+
   it('rejects agent-runtime API keys without the channel ingest scope', async () => {
     const dir = await createTempDir('hammurabi-channel-auth-')
     const storePath = join(dir, 'sessions.json')

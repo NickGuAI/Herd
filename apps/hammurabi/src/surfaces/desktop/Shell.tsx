@@ -13,20 +13,12 @@ import {
   MobileShellChrome,
   useMobileShellChromeState,
 } from '@/surfaces/mobile/MobileShell'
+import type { FrontendNavItem } from '@/types'
 import { TopBar } from './TopBar'
 import type { TopBarCounts } from './TopBar'
 
-interface NavItem {
-  name: string
-  label: string
-  icon: string
-  path: string
-  hideFromNav?: boolean
-  navGroup?: 'primary' | 'secondary'
-}
-
 interface ShellProps {
-  modules: NavItem[]
+  modules: FrontendNavItem[]
   children: React.ReactNode
 }
 
@@ -113,7 +105,7 @@ export function Shell({ modules, children }: ShellProps) {
         including non-Command-Room pages — gets the same canonical IA.
       */}
       {mobileChrome.shouldRenderMobileChrome ? (
-        <MobileShellChrome pendingCount={counts.pending} />
+        <MobileShellChrome modules={modules} pendingCount={counts.pending} />
       ) : null}
     </div>
   )

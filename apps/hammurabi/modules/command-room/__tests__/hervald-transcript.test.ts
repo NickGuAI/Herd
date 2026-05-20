@@ -1,6 +1,8 @@
+import type { SessionQueueSnapshot } from '@/types'
 import { describe, expect, it } from 'vitest'
 import type { MsgItem } from '@modules/agents/messages/model'
 import {
+  appendQueuedMessagesToTranscript,
   mapSessionMessagesToTranscript,
   mergeHistoricalAndLiveTranscript,
 } from '../components/transcript'
@@ -52,6 +54,51 @@ describe('mergeHistoricalAndLiveTranscript', () => {
       { id: 'history-2', kind: 'agent', text: 'older' },
       { id: 'live-1', kind: 'agent', text: 'same' },
       { id: 'live-2', kind: 'agent', text: 'newer' },
+    ])
+  })
+})
+
+describe('appendQueuedMessagesToTranscript', () => {
+  it('keeps queued backlog items out of the chat transcript', () => {
+    const messages: MsgItem[] = [
+      { id: 'agent-1', kind: 'agent', text: 'Working.' },
+    ]
+    const queueSnapshot: SessionQueueSnapshot = {
+      currentMessage: null,
+      totalCount: 1,
+      items: [
+        {
+          id: 'queue-1',
+          text: 'Do this next.',
+          priority: 'normal',
+          queuedAt: '2026-05-17T14:00:00.000Z',
+        },
+      ],
+    }
+
+    expect(appendQueuedMessagesToTranscript(messages, queueSnapshot)).toEqual([
+      { id: 'agent-1', kind: 'agent', text: 'Working.' },
+    ])
+  })
+
+  it('keeps the current queued message out of the chat transcript', () => {
+    const queueSnapshot: SessionQueueSnapshot = {
+      currentMessage: {
+        id: 'queue-current',
+        text: 'Current queued turn.',
+        priority: 'normal',
+        queuedAt: '2026-05-17T14:01:00.000Z',
+      },
+      totalCount: 1,
+      items: [],
+    }
+
+    expect(appendQueuedMessagesToTranscript([], queueSnapshot)).toEqual([])
+
+    expect(appendQueuedMessagesToTranscript([
+      { id: 'live-user', kind: 'user', text: 'Current queued turn.' },
+    ], queueSnapshot)).toEqual([
+      { id: 'live-user', kind: 'user', text: 'Current queued turn.' },
     ])
   })
 })

@@ -10,27 +10,24 @@ import {
 } from 'lucide-react'
 
 type ToolColorClass =
-  | 'text-sky-400'
-  | 'text-violet-400'
-  | 'text-amber-400'
-  | 'text-emerald-400'
-  | 'text-orange-400'
-  | 'text-cyan-400'
+  | 'text-[color:var(--hv-accent-info)]'
+  | 'text-[color:var(--hv-accent-warning)]'
+  | 'text-[color:var(--hv-accent-success)]'
 
 const TOOL_META: Record<string, { icon: LucideIcon; colorClass: ToolColorClass }> = {
-  Read: { icon: FileText, colorClass: 'text-sky-400' },
-  Glob: { icon: Search, colorClass: 'text-sky-400' },
-  Grep: { icon: Search, colorClass: 'text-sky-400' },
-  Edit: { icon: Pencil, colorClass: 'text-amber-400' },
-  MultiEdit: { icon: Pencil, colorClass: 'text-amber-400' },
-  Write: { icon: FilePlus, colorClass: 'text-emerald-400' },
-  NotebookEdit: { icon: Pencil, colorClass: 'text-amber-400' },
-  Bash: { icon: TerminalSquare, colorClass: 'text-orange-400' },
-  WebFetch: { icon: Search, colorClass: 'text-sky-400' },
-  WebSearch: { icon: Search, colorClass: 'text-sky-400' },
-  LSP: { icon: FileText, colorClass: 'text-sky-400' },
-  TodoWrite: { icon: FilePlus, colorClass: 'text-emerald-400' },
-  Agent: { icon: Bot, colorClass: 'text-violet-400' },
+  Read: { icon: FileText, colorClass: 'text-[color:var(--hv-accent-info)]' },
+  Glob: { icon: Search, colorClass: 'text-[color:var(--hv-accent-info)]' },
+  Grep: { icon: Search, colorClass: 'text-[color:var(--hv-accent-info)]' },
+  Edit: { icon: Pencil, colorClass: 'text-[color:var(--hv-accent-warning)]' },
+  MultiEdit: { icon: Pencil, colorClass: 'text-[color:var(--hv-accent-warning)]' },
+  Write: { icon: FilePlus, colorClass: 'text-[color:var(--hv-accent-success)]' },
+  NotebookEdit: { icon: Pencil, colorClass: 'text-[color:var(--hv-accent-warning)]' },
+  Bash: { icon: TerminalSquare, colorClass: 'text-[color:var(--hv-accent-warning)]' },
+  WebFetch: { icon: Search, colorClass: 'text-[color:var(--hv-accent-info)]' },
+  WebSearch: { icon: Search, colorClass: 'text-[color:var(--hv-accent-info)]' },
+  LSP: { icon: FileText, colorClass: 'text-[color:var(--hv-accent-info)]' },
+  TodoWrite: { icon: FilePlus, colorClass: 'text-[color:var(--hv-accent-success)]' },
+  Agent: { icon: Bot, colorClass: 'text-[color:var(--hv-accent-info)]' },
 }
 
 export function getToolMeta(name: string) {
@@ -38,9 +35,9 @@ export function getToolMeta(name: string) {
     return TOOL_META[name]
   }
   if (name.startsWith('mcp__')) {
-    return { icon: Plug, colorClass: 'text-violet-400' as ToolColorClass }
+    return { icon: Plug, colorClass: 'text-[color:var(--hv-accent-info)]' as ToolColorClass }
   }
-  return { icon: TerminalSquare, colorClass: 'text-orange-400' as ToolColorClass }
+  return { icon: TerminalSquare, colorClass: 'text-[color:var(--hv-accent-warning)]' as ToolColorClass }
 }
 
 export function formatToolDisplayName(name: string): { displayName: string; service?: string } {

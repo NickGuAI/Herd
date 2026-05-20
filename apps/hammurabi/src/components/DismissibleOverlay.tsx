@@ -176,7 +176,7 @@ export function DismissibleOverlay({
       onMouseDown={handleOuterMouseDown}
     >
       <div
-        className={cn('pointer-events-none absolute inset-0 -z-10 bg-sumi-black/50', backdropClassName)}
+        className={cn('pointer-events-none absolute inset-0 -z-10 bg-[var(--hv-button-primary-bg)]', backdropClassName)}
         aria-hidden="true"
       />
 

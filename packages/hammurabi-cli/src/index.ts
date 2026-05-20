@@ -10,6 +10,7 @@ import { runMemoryCli } from './memory.js'
 import { runSessionCli } from './session.js'
 import { runConversationsCli } from './conversations.js'
 import { listWorkerDispatchProviderIds, loadProviderRegistry } from './providers.js'
+import { runDaemonCli } from './daemon.js'
 import {
   buildCommanderSessionName,
   isOwnedByCommander,
@@ -87,6 +88,7 @@ function printRootUsage(stdout: Writable): void {
   stdout.write('  hammurabi quests <command>\n')
   stdout.write('  hammurabi workers <command>\n')
   stdout.write('  hammurabi conversations <command>\n')
+  stdout.write('  hammurabi daemon run --machine <id> --pairing-token <token> --endpoint <url>\n')
   stdout.write('  hammurabi automation <command>\n')
   stdout.write('  hammurabi commander <command>\n')
   stdout.write('  hammurabi commander transcripts <command>\n')
@@ -299,6 +301,9 @@ export async function runCli(args: readonly string[]): Promise<number> {
   if (command === 'conversations') {
     return runConversationsCli(args.slice(1))
   }
+  if (command === 'daemon') {
+    return runDaemonCli(args.slice(1))
+  }
   if (command === 'automation') {
     return runAutomationCli(args.slice(1))
   }
@@ -327,6 +332,7 @@ export { runMachinesCli } from './machines.js'
 export { runQuestsCli } from './quests.js'
 export { runWorkersCli } from './workers.js'
 export { runConversationsCli } from './conversations.js'
+export { runDaemonCli } from './daemon.js'
 export { runCommanderCli } from './commander.js'
 export { runAutomationCli } from './automation.js'
 export { runMemoryCli } from './memory.js'

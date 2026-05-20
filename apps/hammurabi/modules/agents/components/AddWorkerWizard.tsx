@@ -11,8 +11,8 @@ type WorkerConnectionMode = 'same-machine' | 'direct-ssh' | 'tailscale'
 type TailscalePlatformOption = 'macos' | 'linux' | 'already-installed'
 
 const INPUT_CLASS =
-  'w-full rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-white focus:outline-none focus:ring-1 focus:ring-sumi-black/20 placeholder:text-sumi-mist'
-const LABEL_CLASS = 'text-whisper uppercase tracking-wide text-sumi-diluted'
+  'w-full rounded-lg border border-[color:var(--hv-border-hair)] px-3 py-2 text-[16px] md:text-sm bg-[var(--hv-surface-card)] focus:outline-none focus:ring-1 focus:ring-[color:var(--hv-field-focus-border)] placeholder:text-[color:var(--hv-fg-faint)]'
+const LABEL_CLASS = 'text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]'
 
 const MODE_OPTIONS: Array<{ value: WorkerConnectionMode; label: string }> = [
   { value: 'same-machine', label: 'Same machine' },
@@ -71,23 +71,23 @@ function parsePort(value: string): number | undefined {
 
 function renderCommandList(platform: TailscalePlatformOption) {
   return (
-    <div className="space-y-2 rounded-lg border border-ink-border bg-washi-aged/60 p-3">
-      <p className="text-sm text-sumi-black">
+    <div className="space-y-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-3">
+      <p className="text-sm text-[color:var(--hv-fg)]">
         Run these commands on the worker you want to pair:
       </p>
       {TAILSCALE_COMMANDS[platform].map((command) => (
         <pre
           key={command}
-          className="overflow-x-auto rounded-md bg-sumi-black px-3 py-2 font-mono text-xs text-washi-white"
+          className="overflow-x-auto rounded-md bg-[var(--hv-button-primary-bg)] px-3 py-2 font-mono text-xs text-[color:var(--hv-fg-inverse)]"
         >
           {command}
         </pre>
       ))}
-      <p className="text-xs text-sumi-diluted">
+      <p className="text-xs text-[color:var(--hv-fg-subtle)]">
         `tailscale up` opens the Tailscale auth flow the first time it runs.
       </p>
-      <div className="rounded-md border border-dashed border-ink-border/70 bg-washi-white/80 p-3">
-        <p className="text-sm text-sumi-black">
+      <div className="rounded-md border border-dashed border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] p-3">
+        <p className="text-sm text-[color:var(--hv-fg)]">
           Then run <span className="font-mono">tailscale status --json</span>, copy
           {' '}<span className="font-mono">Self.DNSName</span>, and paste it below.
         </p>
@@ -227,7 +227,7 @@ export function AddWorkerWizard({
       </div>
 
       {mode === 'same-machine' && (
-        <div className="rounded-lg border border-ink-border bg-washi-aged/60 p-4 text-sm text-sumi-black">
+        <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-4 text-sm text-[color:var(--hv-fg)]">
           The Hammurabi host already exposes the local machine as <span className="font-mono">local</span>.
           Use that machine entry when you want to run workers on this server.
         </div>
@@ -318,7 +318,7 @@ export function AddWorkerWizard({
                 </button>
               </div>
               {verification && (
-                <p className="text-sm text-sumi-black">
+                <p className="text-sm text-[color:var(--hv-fg)]">
                   Verified. Server can reach <span className="font-mono">{verification.tailscaleHostname}</span>
                   {' '}({verification.resolvedHost}).
                 </p>
@@ -363,7 +363,7 @@ export function AddWorkerWizard({
       )}
 
       {actionError && (
-        <div className="rounded-lg border border-accent-vermillion/30 bg-accent-vermillion/8 px-3 py-2 text-sm text-accent-vermillion">
+        <div className="rounded-lg border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-danger)]">
           {actionError}
         </div>
       )}

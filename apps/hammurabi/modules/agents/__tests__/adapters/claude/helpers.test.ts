@@ -65,20 +65,23 @@ function runHookThroughShell(command: string, env: NodeJS.ProcessEnv, stdin: str
 describe('agents/adapters/claude/helpers', () => {
   it('builds Claude environment and PTY commands', () => {
     expect(buildClaudeEnvironmentPrefix()).toBe(
-      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 && ${UNSET_CLAUDE_CHILD_ENV}`,
+      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV}`,
     )
     expect(buildClaudeEnvironmentPrefix('disabled')).toBe(
-      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 && ${UNSET_CLAUDE_CHILD_ENV}`,
+      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV}`,
+    )
+    expect(buildClaudeEnvironmentPrefix('enabled', 64000)).toBe(
+      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 MAX_THINKING_TOKENS=64000 && ${UNSET_CLAUDE_CHILD_ENV}`,
     )
 
     expect(buildClaudePtyCommand('default', 'medium')).toBe(
-      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort medium`,
+      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort medium`,
     )
     expect(buildClaudePtyCommand('default', 'low', 'disabled')).toBe(
-      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort low`,
+      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort low`,
     )
     expect(buildClaudePtyCommand('default', 'high')).toBe(
-      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort high`,
+      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort high`,
     )
   })
 
@@ -177,6 +180,7 @@ describe('agents/adapters/claude/helpers', () => {
     const spawnConfig = buildClaudeLocalLoginShellSpawn(
       ['-p', '--output-format', 'stream-json'],
       'enabled',
+      128000,
       '/tmp/project alpha',
       '/tmp/hammurabi.env',
       '/bin/zsh',
@@ -188,7 +192,7 @@ describe('agents/adapters/claude/helpers', () => {
     expect(spawnConfig.args[1]).toContain('. "$HOME/.bashrc" >/dev/null 2>&1 || true')
     expect(spawnConfig.args[1]).toContain('. "$HOME/.zshrc" >/dev/null 2>&1 || true')
     expect(spawnConfig.args[1]).toContain('. \'/tmp/hammurabi.env\' >/dev/null 2>&1 || true')
-    expect(spawnConfig.args[1]).toContain(`cd '/tmp/project alpha' && export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0; ${UNSET_CLAUDE_CHILD_ENV}; claude '-p' '--output-format' 'stream-json'`)
+    expect(spawnConfig.args[1]).toContain(`cd '/tmp/project alpha' && export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 MAX_THINKING_TOKENS=128000; ${UNSET_CLAUDE_CHILD_ENV}; claude '-p' '--output-format' 'stream-json'`)
   })
 })
 
@@ -229,6 +233,30 @@ describe('agents/adapters/claude/helpers: mergeClaudeExtraBody', () => {
 })
 
 describe('agents/adapters/claude/helpers: buildClaudeSpawnEnv', () => {
+  it('sets the default adaptive-thinking and max-thinking-token env', () => {
+    const spawnEnv = buildClaudeSpawnEnv({})
+    expect(spawnEnv.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe('1')
+    expect(spawnEnv.MAX_THINKING_TOKENS).toBe('128000')
+  })
+
+  it('honors adaptive-thinking overrides', () => {
+    const spawnEnv = buildClaudeSpawnEnv({}, 'enabled')
+    expect(spawnEnv.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe('0')
+    expect(spawnEnv.MAX_THINKING_TOKENS).toBe('128000')
+  })
+
+  it('honors max-thinking-token overrides', () => {
+    const spawnEnv = buildClaudeSpawnEnv({}, 'disabled', 64000)
+    expect(spawnEnv.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe('1')
+    expect(spawnEnv.MAX_THINKING_TOKENS).toBe('64000')
+  })
+
+  it('honors adaptive-thinking and max-thinking-token overrides together', () => {
+    const spawnEnv = buildClaudeSpawnEnv({}, 'enabled', 64000)
+    expect(spawnEnv.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING).toBe('0')
+    expect(spawnEnv.MAX_THINKING_TOKENS).toBe('64000')
+  })
+
   it('injects CLAUDE_CODE_EXTRA_BODY with summarized thinking on every spawn', () => {
     const spawnEnv = buildClaudeSpawnEnv({})
     expect(spawnEnv.CLAUDE_CODE_EXTRA_BODY).toBeDefined()

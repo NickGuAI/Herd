@@ -3,11 +3,11 @@ import { runOrgCommanderNow } from '@modules/org/hooks/useOrgActions'
 import { Field, FormModal } from '../components'
 
 const TEXTAREA_CLASS =
-  'min-h-28 w-full rounded-2xl border border-ink-border bg-washi-white px-4 py-2 text-sm text-sumi-black outline-none transition-colors focus:border-sumi-black resize-y'
+  'min-h-28 w-full rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-2 text-sm text-[color:var(--hv-fg)] outline-none transition-colors focus:border-[color:var(--hv-field-focus-border)] resize-y'
 const PRIMARY_BUTTON_CLASS =
-  'rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90 disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)] disabled:cursor-not-allowed disabled:opacity-60'
 const SECONDARY_BUTTON_CLASS =
-  'rounded-full border border-ink-border px-4 py-2 text-sm text-sumi-black transition-colors hover:bg-ink-wash disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60'
 
 interface RunNowProps {
   open: boolean
@@ -100,13 +100,13 @@ export function RunNow({
       {globalError ? (
         <div
           data-testid="run-now-error"
-          className="rounded-2xl border border-accent-vermillion/30 bg-accent-vermillion/10 px-4 py-3 text-sm text-accent-vermillion"
+          className="rounded-2xl border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-4 py-3 text-sm text-[color:var(--hv-accent-danger)]"
         >
           {globalError}
         </div>
       ) : null}
 
-      <p className="text-sm text-sumi-diluted">
+      <p className="text-sm text-[color:var(--hv-fg-subtle)]">
         Send a task message to {commanderDisplayName}. The backend will start the commander if it is idle or deliver a follow-up if it is already running.
       </p>
 

@@ -34,7 +34,7 @@ export function ConfirmModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-ink-border px-4 py-2 text-sm text-sumi-black transition-colors hover:bg-ink-wash"
+            className="rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
           >
             {cancelLabel}
           </button>
@@ -44,8 +44,8 @@ export function ConfirmModal({
             className={[
               'rounded-full px-4 py-2 text-sm transition-colors',
               confirmTone === 'danger'
-                ? 'bg-accent-vermillion text-washi-white hover:bg-accent-vermillion/90'
-                : 'bg-sumi-black text-washi-white hover:bg-sumi-black/90',
+                ? 'bg-[var(--hv-accent-danger-wash)] text-[color:var(--hv-fg-inverse)] hover:bg-[var(--hv-accent-danger-wash)]'
+                : 'bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)] hover:bg-[var(--hv-button-primary-bg)]',
             ].join(' ')}
           >
             {confirmLabel}
@@ -53,7 +53,7 @@ export function ConfirmModal({
         </>
       )}
     >
-      <p className="text-sm text-sumi-diluted">{message}</p>
+      <p className="text-sm text-[color:var(--hv-fg-subtle)]">{message}</p>
     </FormModal>
   )
 }

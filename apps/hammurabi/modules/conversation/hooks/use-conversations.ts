@@ -6,11 +6,13 @@ import type { MsgItem } from '@modules/agents/messages/model'
 import type { CommanderCurrentTask } from '@modules/commanders/hooks/useCommander'
 import type { ClaudeAdaptiveThinkingMode } from '@modules/claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '@modules/claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '@modules/claude-max-thinking-tokens.js'
 import type {
   Conversation as ConversationContract,
   ConversationStatus,
   ConversationSurface,
 } from '@gehirn/hammurabi-cli/session-contract'
+import type { WorkspaceContextPayload } from '@modules/workspace/types'
 
 const CONVERSATIONS_POLL_INTERVAL_MS = 5000
 const CONVERSATION_DETAIL_STALE_MS = 30_000
@@ -27,12 +29,64 @@ export interface ConversationRecord extends Omit<ConversationContract, 'currentT
   agentType?: AgentType | null
   model?: string | null
   liveSession: AgentSession | null
+  canonicalOrder?: number
+  displayState?: ConversationDisplayState
+  sendTarget?: ConversationSendTarget | null
+  allowedActions?: ConversationAllowedActions
+}
+
+export type ConversationAction =
+  | 'send'
+  | 'queue'
+  | 'media'
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'archive'
+  | 'delete'
+  | 'updateProvider'
+
+export type ConversationDisabledReasons = Record<ConversationAction, string | null>
+
+export type ConversationAllowedActions = Record<ConversationAction, boolean>
+
+export interface ConversationCapabilityState {
+  supported: boolean
+  reason: string | null
+}
+
+export interface ConversationSendTarget {
+  kind: 'conversation'
+  conversationId: string
+  commanderId: string
+  sessionName: string
+  transportType: AgentSession['transportType'] | null
+  agentType: AgentType | null
+  queue: ConversationCapabilityState
+  media: ConversationCapabilityState
+}
+
+export interface ConversationDisplayState {
+  status: ConversationStatus
+  isVisible: boolean
+  isDefaultConversation: boolean
+  hasLiveSession: boolean
+  isSendable: boolean
+  isQueueable: boolean
+  isMediaSendable: boolean
+  label: string
+  disabledReasons: ConversationDisabledReasons
 }
 
 export interface ConversationMessageInput {
   conversationId: string
   message: string
+  images?: Array<{
+    mediaType: string
+    data: string
+  }>
   queue?: boolean
+  workspaceContext?: WorkspaceContextPayload
 }
 
 export interface CreateConversationInput {
@@ -47,10 +101,11 @@ export interface CreateConversationInput {
 
 export interface StartConversationInput {
   conversationId: string
-  agentType: AgentType
+  agentType?: AgentType
   model?: string | null
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   cwd?: string
   host?: string
 }
@@ -118,6 +173,18 @@ function conversationStatusPriority(status: ConversationStatus): number {
 
 export function sortConversations(conversations: readonly ConversationRecord[]): ConversationRecord[] {
   return [...conversations].sort((left, right) => {
+    if (
+      typeof left.canonicalOrder === 'number'
+      && typeof right.canonicalOrder === 'number'
+      && Number.isFinite(left.canonicalOrder)
+      && Number.isFinite(right.canonicalOrder)
+    ) {
+      const canonicalDelta = left.canonicalOrder - right.canonicalOrder
+      if (canonicalDelta !== 0) {
+        return canonicalDelta
+      }
+    }
+
     const statusDelta = conversationStatusPriority(left.status) - conversationStatusPriority(right.status)
     if (statusDelta !== 0) {
       return statusDelta
@@ -206,7 +273,9 @@ async function postConversationMessage(
       },
       body: JSON.stringify({
         message: input.message,
+        ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
         ...(input.queue ? { queue: true } : {}),
+        ...(input.workspaceContext ? { workspaceContext: input.workspaceContext } : {}),
       }),
     },
   )
@@ -245,11 +314,14 @@ async function postStartConversation(
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        agentType: input.agentType,
+        ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.effort !== undefined ? { effort: input.effort } : {}),
         ...(input.adaptiveThinking !== undefined
           ? { adaptiveThinking: input.adaptiveThinking }
+          : {}),
+        ...(input.maxThinkingTokens !== undefined
+          ? { maxThinkingTokens: input.maxThinkingTokens }
           : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.host !== undefined ? { host: input.host } : {}),

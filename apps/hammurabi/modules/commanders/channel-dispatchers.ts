@@ -6,6 +6,7 @@ import type {
   ChannelOutboundPayload,
   ChannelSurfaceBinding,
 } from '../channels/types.js'
+import type { ActionPolicyGate } from '../policies/action-policy-gate.js'
 import { synthesizeOutboundAudio } from '../../server/voice/tts.js'
 import { resolveConversationVoiceConfig } from './voice-config.js'
 import type { Conversation } from './conversation-store.js'
@@ -14,6 +15,7 @@ export interface DispatchChannelReplyInput {
   conversation: Conversation
   message: string
   surfaceBindingStore?: ChannelSurfaceBindingStore
+  actionPolicyGate?: ActionPolicyGate
   env?: NodeJS.ProcessEnv
   logger?: Pick<Console, 'warn'>
 }
@@ -51,6 +53,22 @@ export async function dispatchChannelReply(
         `[channels] TTS synthesis failed for conversation "${input.conversation.id}"; falling back to text-only payload:`,
         error,
       )
+    }
+  }
+
+  if (binding.provider === 'email' && input.actionPolicyGate) {
+    const result = await input.actionPolicyGate.enforceAndWait({
+      source: 'channel-reply',
+      toolName: 'mcp__gmail__send',
+      toolInput: {
+        to: input.conversation.lastRoute?.to ?? binding.peerId,
+        subject: input.conversation.channelMeta?.subject,
+        body: input.message,
+      },
+      fallbackSessionName: input.conversation.id,
+    })
+    if (result.decision !== 'allow') {
+      throw new Error(result.reason ?? 'Email reply denied by action policy')
     }
   }
 

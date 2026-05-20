@@ -3,7 +3,7 @@ import { Building2 } from 'lucide-react'
 import { useOrgIdentity, useUpdateOrgIdentity } from '../hooks/useOrgIdentity'
 
 const INPUT_CLASS =
-  'mt-1 w-full rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-aged focus:outline-none focus:border-ink-border-hover'
+  'mt-1 w-full rounded-lg border border-[var(--hv-field-border)] bg-[var(--hv-field-bg)] px-3 py-2 text-[16px] text-[color:var(--hv-fg)] placeholder:text-[color:var(--hv-field-placeholder)] focus:outline-none focus:border-[var(--hv-field-focus-border)] md:text-sm'
 
 function validateOrgName(value: string): string | null {
   const normalized = value.trim()
@@ -52,16 +52,16 @@ export function OrgIdentityCard() {
     <form
       onSubmit={(event) => void handleSubmit(event)}
       data-testid="org-identity-card"
-      className="card-sumi p-5 space-y-5"
+      className="space-y-5"
     >
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="section-title">Org Identity</p>
-          <p className="mt-2 text-sm leading-relaxed text-sumi-diluted">
+          <p className="mt-2 text-sm leading-relaxed text-[color:var(--hv-fg-subtle)]">
             Set the organization name shown at the top of Org.
           </p>
         </div>
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-wash text-sumi-black">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--hv-surface-hover)] text-[color:var(--hv-fg)]">
           <Building2 size={16} aria-hidden="true" />
         </span>
       </div>
@@ -80,11 +80,11 @@ export function OrgIdentityCard() {
         />
       </label>
 
-      {loadError ? <p className="text-sm text-accent-vermillion">{loadError}</p> : null}
-      {formError ? <p className="text-sm text-accent-vermillion">{formError}</p> : null}
+      {loadError ? <p className="text-sm text-[color:var(--hv-accent-danger)]">{loadError}</p> : null}
+      {formError ? <p className="text-sm text-[color:var(--hv-accent-danger)]">{formError}</p> : null}
 
       <div className="flex items-center justify-between gap-3 pt-1">
-        <p className="text-xs text-sumi-diluted">
+        <p className="text-xs text-[color:var(--hv-fg-subtle)]">
           Stored locally in Hammurabi org identity.
         </p>
         <button

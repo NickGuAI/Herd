@@ -166,6 +166,7 @@
      ------------------------------------------------------------ */
   --hv-radius-sharp:     2px;
   --hv-radius-soft:      4px;
+  --hv-radius-md:        10px;
   --hv-radius-carved-sm: 2px 8px 2px 8px;
   --hv-radius-carved:    2px 12px 2px 12px;
   --hv-radius-carved-md: 4px 16px 4px 16px;
@@ -182,6 +183,7 @@
   --hv-shadow-lift:      0 4px 20px rgba(28, 28, 28, 0.08);
   --hv-shadow-float:     0 8px 32px rgba(28, 28, 28, 0.06);
   --hv-shadow-modal:     0 12px 48px rgba(28, 28, 28, 0.08);
+  --hv-shadow-block:     4px 4px 0 rgba(28, 28, 28, 0.92);
   --hv-shadow-carved:    inset 0 2px 8px rgba(28, 28, 28, 0.03);
   --hv-shadow-inner-hi:  inset 0 1px 0 rgba(255, 255, 255, 0.5);
 
@@ -371,6 +373,7 @@
   --hv-shadow-lift:      0 4px 20px rgba(0, 0, 0, 0.28);
   --hv-shadow-float:     0 8px 32px rgba(0, 0, 0, 0.32);
   --hv-shadow-modal:     0 12px 48px rgba(0, 0, 0, 0.36);
+  --hv-shadow-block:     4px 4px 0 rgba(0, 0, 0, 0.72);
   --hv-shadow-carved:    inset 0 2px 8px rgba(0, 0, 0, 0.24);
   --hv-shadow-inner-hi:  inset 0 1px 0 rgba(250, 248, 245, 0.08);
 }

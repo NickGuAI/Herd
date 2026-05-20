@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from 'react-dom/test-utils'
+import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceSource } from '../../use-workspace'
@@ -8,26 +8,47 @@ import type { WorkspaceSource } from '../../use-workspace'
 const mocks = vi.hoisted(() => ({
   fetchWorkspaceTree: vi.fn(),
   fetchWorkspaceExpandedTree: vi.fn(),
+  fetchWorkspacePathResolution: vi.fn(),
+  saveFile: vi.fn(),
+  previewData: null as null | {
+    kind: 'text'
+    path: string
+    name: string
+    content: string
+    size: number
+    truncated: boolean
+    workspace: {
+      source: {
+        kind: 'target'
+        id: string
+        label: string
+      }
+      rootPath: string
+      rootName: string
+      gitRoot: string | null
+      readOnly: boolean
+      isRemote: boolean
+    }
+  },
 }))
 
 vi.mock('../../use-workspace', () => ({
   fetchWorkspaceTree: mocks.fetchWorkspaceTree,
   fetchWorkspaceExpandedTree: mocks.fetchWorkspaceExpandedTree,
+  fetchWorkspacePathResolution: mocks.fetchWorkspacePathResolution,
   getWorkspaceSourceKey: (source: WorkspaceSource) =>
-    source.kind === 'commander'
-      ? `commander:${source.commanderId}`
-      : `agent:${source.sessionName}`,
+    `target:${source.targetId}`,
   useWorkspaceActions: () => ({
     createFile: vi.fn(async () => undefined),
     createFolder: vi.fn(async () => undefined),
-    saveFile: vi.fn(async () => undefined),
+    saveFile: mocks.saveFile,
     renamePath: vi.fn(async () => undefined),
     deletePath: vi.fn(async () => undefined),
     uploadFiles: vi.fn(async () => undefined),
     initGit: vi.fn(async () => undefined),
   }),
   useWorkspaceFilePreview: () => ({
-    data: null,
+    data: mocks.previewData,
     isLoading: false,
     isFetching: false,
     error: null,
@@ -54,7 +75,28 @@ vi.mock('../WorkspaceToolbar', () => ({
 }))
 
 vi.mock('../WorkspaceFilePreview', () => ({
-  WorkspaceFilePreview: () => null,
+  WorkspaceFilePreview: ({
+    selectedPath,
+    draftContent,
+    readOnly,
+    onDraftChange,
+  }: {
+    selectedPath: string | null
+    draftContent?: string
+    readOnly?: boolean
+    onDraftChange?: (value: string) => void
+  }) => (
+    <div data-testid="workspace-preview-path">
+      {selectedPath ?? 'none'}
+      {!readOnly && (
+        <textarea
+          data-testid="workspace-preview-editor"
+          value={draftContent ?? ''}
+          onChange={(event) => onDraftChange?.(event.target.value)}
+        />
+      )}
+    </div>
+  ),
 }))
 
 vi.mock('../WorkspaceGitPanel', () => ({
@@ -64,8 +106,8 @@ vi.mock('../WorkspaceGitPanel', () => ({
 import { WorkspacePanel } from '../WorkspacePanel'
 
 const SOURCE: WorkspaceSource = {
-  kind: 'commander',
-  commanderId: 'cmd-1',
+  kind: 'target',
+  targetId: 'wt-cmd-1',
   readOnly: false,
 }
 
@@ -76,8 +118,8 @@ function createWorkspaceTreeResponse(
   return {
     workspace: {
       source: {
-        kind: 'commander' as const,
-        id: 'cmd-1',
+        kind: 'target' as const,
+        id: 'wt-cmd-1',
         label: 'Test Commander',
       },
       rootPath: '/tmp/cmd-1',
@@ -87,7 +129,7 @@ function createWorkspaceTreeResponse(
       isRemote: false,
     },
     parentPath,
-    nodes,
+    nodes: nodes.map((node) => ({ ...node, parentPath })),
   }
 }
 
@@ -119,14 +161,46 @@ describe('WorkspacePanel add-to-context actions', () => {
     mocks.fetchWorkspaceTree.mockResolvedValue(
       createWorkspaceTreeResponse('', [
         { name: 'src', path: 'src', type: 'directory' },
+        { name: '.config', path: '.config', type: 'directory' },
         { name: 'README.md', path: 'README.md', type: 'file' },
+        { name: '.env', path: '.env', type: 'file' },
       ]),
     )
-    mocks.fetchWorkspaceExpandedTree.mockResolvedValue(
-      createWorkspaceTreeResponse('src', [
+    mocks.fetchWorkspaceExpandedTree.mockImplementation(async (_source: WorkspaceSource, parentPath: string) => {
+      if (parentPath === 'docs') {
+        return createWorkspaceTreeResponse('docs', [
+          { name: 'spec.md', path: 'docs/spec.md', type: 'file' },
+        ])
+      }
+      if (parentPath === 'apps/hammurabi/docs/diagrams') {
+        return createWorkspaceTreeResponse('apps/hammurabi/docs/diagrams', [
+          { name: 'ui-to-backend-logic-flow.dot', path: 'apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.dot', type: 'file' },
+          { name: 'ui-to-backend-logic-flow.svg', path: 'apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg', type: 'file' },
+        ])
+      }
+
+      return createWorkspaceTreeResponse('src', [
         { name: 'app.ts', path: 'src/app.ts', type: 'file' },
-      ]),
-    )
+      ])
+    })
+    mocks.fetchWorkspacePathResolution.mockImplementation(async (_source: WorkspaceSource, requestedPath: string) => {
+      let relativePath = requestedPath
+      if (relativePath.startsWith('/home/builder/App/')) {
+        relativePath = relativePath.slice('/home/builder/App/'.length)
+      }
+      if (relativePath === '/home/builder/App') {
+        relativePath = ''
+      }
+      return {
+        workspace: createWorkspaceTreeResponse('', []).workspace,
+        requestedPath,
+        path: relativePath,
+        type: relativePath === 'src' ? 'directory' : 'file',
+        treePath: relativePath === 'src' ? 'src' : relativePath.split('/').slice(0, -1).join('/'),
+      }
+    })
+    mocks.saveFile.mockResolvedValue(undefined)
+    mocks.previewData = null
   })
 
   afterEach(async () => {
@@ -142,10 +216,13 @@ describe('WorkspacePanel add-to-context actions', () => {
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
     mocks.fetchWorkspaceTree.mockReset()
     mocks.fetchWorkspaceExpandedTree.mockReset()
+    mocks.fetchWorkspacePathResolution.mockReset()
+    mocks.saveFile.mockReset()
+    mocks.previewData = null
     vi.clearAllMocks()
   })
 
-  it('adds file and directory tree nodes using the same path semantics as mobile', async () => {
+  it('adds file and directory tree nodes with explicit backend context types', async () => {
     const onInsertPath = vi.fn()
 
     await renderPanel(onInsertPath)
@@ -158,11 +235,239 @@ describe('WorkspacePanel add-to-context actions', () => {
     await act(async () => {
       ;(document.body.querySelector('[aria-label="Add src to context"]') as HTMLButtonElement).click()
     })
-    expect(onInsertPath).toHaveBeenCalledWith('src/')
+    expect(onInsertPath).toHaveBeenCalledWith('src', 'directory')
 
     await act(async () => {
       ;(document.body.querySelector('[aria-label="Add README.md to context"]') as HTMLButtonElement).click()
     })
-    expect(onInsertPath).toHaveBeenCalledWith('README.md')
+    expect(onInsertPath).toHaveBeenCalledWith('README.md', 'file')
+  })
+
+  it('hides hidden workspace entries by default until toggled on', async () => {
+    const onInsertPath = vi.fn()
+
+    await renderPanel(onInsertPath)
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[aria-label="Add README.md to context"]')).not.toBeNull()
+    })
+
+    expect(document.body.querySelector('[aria-label="Add .config to context"]')).toBeNull()
+    expect(document.body.querySelector('[aria-label="Add .env to context"]')).toBeNull()
+
+    await act(async () => {
+      ;(document.body.querySelector('[data-testid="workspace-hidden-toggle"]') as HTMLButtonElement).click()
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[aria-label="Add .config to context"]')).not.toBeNull()
+      expect(document.body.querySelector('[aria-label="Add .env to context"]')).not.toBeNull()
+    })
+  })
+
+  it('opens a requested file path in the large side-preview modal', async () => {
+    const onInsertPath = vi.fn()
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <WorkspacePanel
+          source={SOURCE}
+          position="side"
+          variant="dark"
+          requestedPath="docs/spec.md"
+          requestedPathToken={1}
+          onInsertPath={onInsertPath}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="workspace-preview-path"]')?.textContent).toBe('docs/spec.md')
+    })
+  })
+
+  it('resolves absolute SVG chat file links to the rendered SVG before expanding the parent directory', async () => {
+    const onInsertPath = vi.fn()
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <WorkspacePanel
+          source={SOURCE}
+          position="side"
+          variant="dark"
+          requestedPath="/home/builder/App/apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg"
+          requestedPathToken={1}
+          onInsertPath={onInsertPath}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.fetchWorkspacePathResolution).toHaveBeenCalledWith(
+        SOURCE,
+        '/home/builder/App/apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg',
+      )
+      expect(mocks.fetchWorkspaceExpandedTree).toHaveBeenCalledWith(
+        SOURCE,
+        'apps/hammurabi/docs/diagrams',
+      )
+      expect(document.body.querySelector('[data-testid="workspace-preview-path"]')?.textContent).toBe(
+        'apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg',
+      )
+    })
+    expect(mocks.fetchWorkspaceExpandedTree).not.toHaveBeenCalledWith(
+      SOURCE,
+      'home/builder/App/apps/hammurabi/docs/diagrams',
+    )
+  })
+
+  it('selects requested directory paths without opening a file preview modal', async () => {
+    const onInsertPath = vi.fn()
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <WorkspacePanel
+          source={SOURCE}
+          position="side"
+          variant="dark"
+          requestedPath="src"
+          requestedPathToken={1}
+          onInsertPath={onInsertPath}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.fetchWorkspaceExpandedTree).toHaveBeenCalledWith(SOURCE, 'src')
+    })
+    expect(document.body.querySelector('[data-testid="workspace-preview-path"]')).toBeNull()
+  })
+
+  it('keeps the side directory tree scrollable while opening clicked files in a modal', async () => {
+    const onInsertPath = vi.fn()
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <WorkspacePanel
+          source={SOURCE}
+          position="side"
+          variant="dark"
+          onInsertPath={onInsertPath}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[aria-label="Add README.md to context"]')).not.toBeNull()
+    })
+
+    await act(async () => {
+      const readmeButton = Array.from(document.body.querySelectorAll('button'))
+        .find((button) => button.textContent?.includes('README.md')) as HTMLButtonElement | undefined
+      readmeButton?.click()
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="workspace-preview-path"]')?.textContent).toBe('README.md')
+    })
+    expect(document.body.querySelector('[aria-label="Add README.md to context"]')).not.toBeNull()
+  })
+
+  it('keeps modal edits in draft state instead of resetting to preview content', async () => {
+    const onInsertPath = vi.fn()
+    mocks.previewData = {
+      kind: 'text',
+      path: 'README.md',
+      name: 'README.md',
+      content: 'Original',
+      size: 8,
+      truncated: false,
+      workspace: {
+        source: {
+          kind: 'target',
+          id: 'wt-cmd-1',
+          label: 'Test Commander',
+        },
+        rootPath: '/tmp/cmd-1',
+        rootName: 'cmd-1',
+        gitRoot: '/tmp/cmd-1',
+        readOnly: false,
+        isRemote: false,
+      },
+    }
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <WorkspacePanel
+          source={SOURCE}
+          position="side"
+          variant="dark"
+          requestedPath="README.md"
+          requestedPathToken={1}
+          onInsertPath={onInsertPath}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('button')?.textContent).toBeDefined()
+      expect(Array.from(document.body.querySelectorAll('button')).some((button) => button.textContent === 'Edit')).toBe(true)
+    })
+
+    await act(async () => {
+      const editButton = Array.from(document.body.querySelectorAll('button'))
+        .find((button) => button.textContent === 'Edit') as HTMLButtonElement | undefined
+      editButton?.click()
+    })
+
+    await vi.waitFor(() => {
+      const editorCandidate = Array.from(document.body.querySelectorAll<HTMLTextAreaElement>('div[role="dialog"] textarea'))
+        .find((textarea) => textarea.value === 'Original')
+      expect(editorCandidate).toBeDefined()
+    })
+    const editor = Array.from(document.body.querySelectorAll<HTMLTextAreaElement>('div[role="dialog"] textarea'))
+      .find((textarea) => textarea.value === 'Original')
+    if (!editor) {
+      throw new Error('expected workspace preview editor')
+    }
+
+    await act(async () => {
+      editor.value = 'Changed'
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const changedEditor = Array.from(document.body.querySelectorAll<HTMLTextAreaElement>('div[role="dialog"] textarea'))
+      .find((textarea) => textarea.value === 'Changed')
+    expect(changedEditor?.value).toBe('Changed')
   })
 })

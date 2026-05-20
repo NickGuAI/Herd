@@ -91,14 +91,6 @@ vi.mock('@modules/command-room/components/desktop/SessionsColumn', () => ({
   SessionsColumn: () => null,
 }))
 
-vi.mock('@modules/command-room/components/desktop/TeamColumn', () => ({
-  TeamColumn: () => null,
-}))
-
-vi.mock('@modules/command-room/components/desktop/WorkspaceModal', () => ({
-  WorkspaceModal: () => null,
-}))
-
 vi.mock('@modules/command-room/components/mobile/MobileCommandRoom', () => ({
   MobileCommandRoom: ({
     transcript,
@@ -150,6 +142,7 @@ function buildProvider(id: string, label: string) {
     uiCapabilities: {
       supportsEffort: id === 'claude',
       supportsAdaptiveThinking: id === 'claude',
+      supportsMaxThinkingTokens: id === 'claude',
       supportsSkills: id === 'claude',
       supportsLoginMode: id !== 'gemini',
       forcedTransport: id === 'gemini' ? 'stream' : undefined,
@@ -169,7 +162,6 @@ function buildCommander(overrides: Partial<Record<string, unknown>> = {}) {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp/atlas',
-    persona: 'Primary commander',
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '',
@@ -208,6 +200,48 @@ function buildConversation(overrides: Partial<ConversationRecord> = {}): Convers
       transportType: 'stream',
       processAlive: true,
     } as ConversationRecord['liveSession'],
+    sendTarget: {
+      kind: 'conversation',
+      conversationId: 'conv-1',
+      commanderId: 'cmd-1',
+      sessionName: 'conversation-conv-1',
+      transportType: 'stream',
+      agentType: 'claude',
+      queue: { supported: true, reason: null },
+      media: { supported: true, reason: null },
+    },
+    allowedActions: {
+      send: true,
+      queue: true,
+      media: true,
+      start: false,
+      pause: true,
+      resume: false,
+      archive: true,
+      delete: true,
+      updateProvider: false,
+    },
+    displayState: {
+      status: 'active',
+      isVisible: true,
+      isDefaultConversation: false,
+      hasLiveSession: true,
+      isSendable: true,
+      isQueueable: true,
+      isMediaSendable: true,
+      label: 'Chat 1',
+      disabledReasons: {
+        send: null,
+        queue: null,
+        media: null,
+        start: 'Conversation is already active.',
+        pause: null,
+        resume: 'Conversation is already active.',
+        archive: null,
+        delete: null,
+        updateProvider: 'Provider can only be changed before starting.',
+      },
+    },
     createdAt: '2026-05-01T08:00:00.000Z',
     updatedAt: '2026-05-01T08:05:00.000Z',
     lastMessageAt: '2026-05-01T08:05:00.000Z',

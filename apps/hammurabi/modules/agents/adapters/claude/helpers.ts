@@ -4,7 +4,14 @@ import {
   type ClaudeAdaptiveThinkingMode,
 } from '../../../claude-adaptive-thinking.js'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL, type ClaudeEffortLevel } from '../../../claude-effort.js'
-import { CLAUDE_DISABLE_ADAPTIVE_THINKING_ENV } from '../../constants.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '../../../claude-max-thinking-tokens.js'
+import {
+  CLAUDE_DISABLE_ADAPTIVE_THINKING_ENV,
+  CLAUDE_MAX_THINKING_TOKENS_ENV,
+} from '../../constants.js'
 import {
   ANTHROPIC_MODEL_ENV_KEYS,
   buildLoginShellBootstrap,
@@ -120,6 +127,7 @@ export function mergeClaudeExtraBody(existing: string | undefined): string {
 export function buildClaudeSpawnEnv(
   env: NodeJS.ProcessEnv,
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   approval: ClaudeApprovalEnvOptions = {},
 ): NodeJS.ProcessEnv {
   const port = resolveClaudeApprovalPort(env, approval.port)
@@ -130,6 +138,7 @@ export function buildClaudeSpawnEnv(
     ...scrubEnvironmentVariables(env, ['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS]),
     CLAUDECODE: undefined,
     CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking),
+    MAX_THINKING_TOKENS: String(maxThinkingTokens),
     CLAUDE_CODE_EXTRA_BODY: mergeClaudeExtraBody(env.CLAUDE_CODE_EXTRA_BODY),
     HAMMURABI_PORT: port,
     HAMMURABI_APPROVAL_BASE_URL: baseUrl,
@@ -142,24 +151,27 @@ export function buildClaudeSpawnEnv(
 
 export function buildClaudeEnvironmentPrefix(
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
 ): string {
-  return `export ${CLAUDE_DISABLE_ADAPTIVE_THINKING_ENV}=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} && ${buildUnsetEnvironmentCommand(['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS])}`
+  return `export ${CLAUDE_DISABLE_ADAPTIVE_THINKING_ENV}=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} ${CLAUDE_MAX_THINKING_TOKENS_ENV}=${maxThinkingTokens} && ${buildUnsetEnvironmentCommand(['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS])}`
 }
 
 export function buildClaudePtyCommand(
   mode: ClaudePermissionMode,
   effort: ClaudeEffortLevel = DEFAULT_CLAUDE_EFFORT_LEVEL,
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
 ): string {
-  const base = `${buildClaudeEnvironmentPrefix(adaptiveThinking)} && claude --effort ${effort}`
+  const base = `${buildClaudeEnvironmentPrefix(adaptiveThinking, maxThinkingTokens)} && claude --effort ${effort}`
   return base
 }
 
 export function buildClaudeShellInvocation(
   args: string[],
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
 ): string {
-  const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)}; ${buildUnsetEnvironmentCommand(['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS])};`
+  const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} MAX_THINKING_TOKENS=${maxThinkingTokens}; ${buildUnsetEnvironmentCommand(['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS])};`
   return `${envPrefix} claude ${args.map((arg) => shellEscape(arg)).join(' ')}`
 }
 
@@ -187,13 +199,14 @@ export function buildClaudeApprovalHookCommand(): string {
 export function buildClaudeLocalLoginShellSpawn(
   args: string[],
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   cwd?: string,
   envFile?: string,
   shellPath?: string,
 ): { command: string; args: string[] } {
   const normalizedScript = cwd
-    ? `cd ${shellEscape(cwd)} && ${buildClaudeShellInvocation(args, adaptiveThinking)}`
-    : buildClaudeShellInvocation(args, adaptiveThinking)
+    ? `cd ${shellEscape(cwd)} && ${buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens)}`
+    : buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens)
   const script = `${buildLoginShellBootstrap(envFile)}; ${normalizedScript}`
   return {
     command: shellPath?.trim() || '/bin/bash',

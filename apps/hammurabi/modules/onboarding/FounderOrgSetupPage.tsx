@@ -1,54 +1,15 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useCreateFounderOrgSetup } from '@modules/onboarding/hooks/useFounderOnboarding'
-import { FOUNDER_SETUP_EMAIL_PATTERN } from '@modules/onboarding/contracts'
-import { useAuth } from '@/contexts/AuthContext'
-
-interface FounderOrgSetupFormState {
-  orgDisplayName: string
-  founderDisplayName: string
-  founderEmail: string
-}
-
-interface ValidationErrors {
-  orgDisplayName?: string
-  founderDisplayName?: string
-  founderEmail?: string
-}
-
-function toInitialFormState(user: {
-  name?: string | null
-  email?: string | null
-} | undefined): FounderOrgSetupFormState {
-  return {
-    orgDisplayName: '',
-    founderDisplayName: user?.name?.trim() ?? '',
-    founderEmail: user?.email?.trim() ?? '',
-  }
-}
-
-function validateFormState(state: FounderOrgSetupFormState): ValidationErrors {
-  const orgDisplayName = state.orgDisplayName.trim()
-  const founderDisplayName = state.founderDisplayName.trim()
-  const founderEmail = state.founderEmail.trim()
-  const errors: ValidationErrors = {}
-
-  if (!orgDisplayName) {
-    errors.orgDisplayName = 'Org display name is required.'
-  }
-
-  if (!founderDisplayName) {
-    errors.founderDisplayName = 'Founder display name is required.'
-  }
-
-  if (!founderEmail) {
-    errors.founderEmail = 'Founder email is required.'
-  } else if (!FOUNDER_SETUP_EMAIL_PATTERN.test(founderEmail)) {
-    errors.founderEmail = 'Founder email must be a valid email address.'
-  }
-
-  return errors
-}
+import {
+  useCreateFounderOrgSetup,
+  useFounderSetupStatus,
+} from '@modules/onboarding/hooks/useFounderOnboarding'
+import {
+  DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
+  validateFounderOrgSetupFormValues,
+  type FounderOrgSetupFormValues,
+  type FounderOrgSetupValidationErrors,
+} from '@modules/onboarding/contracts'
 
 function formatSetupError(error: unknown): string {
   if (!(error instanceof Error)) {
@@ -69,15 +30,29 @@ function formatSetupError(error: unknown): string {
 }
 
 export function FounderOrgSetupPage() {
-  const auth = useAuth()
   const navigate = useNavigate()
+  const setupStatus = useFounderSetupStatus()
   const mutation = useCreateFounderOrgSetup()
   const submissionLockRef = useRef(false)
-  const [formState, setFormState] = useState<FounderOrgSetupFormState>(() => toInitialFormState(auth?.user))
-  const [errors, setErrors] = useState<ValidationErrors>({})
+  const defaultsAppliedRef = useRef(false)
+  const hasEditedRef = useRef(false)
+  const [formState, setFormState] = useState<FounderOrgSetupFormValues>(
+    () => setupStatus.data?.defaultValues ?? DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
+  )
+  const [errors, setErrors] = useState<FounderOrgSetupValidationErrors>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
 
-  function updateField<K extends keyof FounderOrgSetupFormState>(key: K, value: FounderOrgSetupFormState[K]) {
+  useEffect(() => {
+    if (!setupStatus.data || defaultsAppliedRef.current || hasEditedRef.current) {
+      return
+    }
+
+    defaultsAppliedRef.current = true
+    setFormState(setupStatus.data.defaultValues)
+  }, [setupStatus.data])
+
+  function updateField<K extends keyof FounderOrgSetupFormValues>(key: K, value: FounderOrgSetupFormValues[K]) {
+    hasEditedRef.current = true
     setFormState((current) => ({
       ...current,
       [key]: value,
@@ -96,7 +71,7 @@ export function FounderOrgSetupPage() {
       return
     }
 
-    const nextErrors = validateFormState(formState)
+    const nextErrors = validateFounderOrgSetupFormValues(formState)
     setErrors(nextErrors)
     if (Object.values(nextErrors).some(Boolean)) {
       return
@@ -105,14 +80,14 @@ export function FounderOrgSetupPage() {
     submissionLockRef.current = true
     setSubmitError(null)
     try {
-      await mutation.mutateAsync({
+      const result = await mutation.mutateAsync({
         displayName: formState.orgDisplayName.trim(),
         founder: {
           displayName: formState.founderDisplayName.trim(),
           email: formState.founderEmail.trim(),
         },
       })
-      navigate('/org', { replace: true })
+      navigate(result.nextRoute, { replace: true })
     } catch (error) {
       setSubmitError(formatSetupError(error))
     } finally {

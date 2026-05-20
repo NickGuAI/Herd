@@ -2,7 +2,9 @@ import { Router } from 'express'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
-import { AppSettingsStore, normalizeAppTheme } from './store.js'
+import { AppSettingsStore, normalizeAppFontScale, normalizeAppTheme } from './store.js'
+import type { AppSettings } from './types.js'
+import { buildMobileSettingsDto } from './mobile-settings-dtos.js'
 
 export interface SettingsRouterOptions {
   store?: AppSettingsStore
@@ -40,14 +42,42 @@ export function createSettingsRouter(options: SettingsRouterOptions = {}): Route
     res.json({ settings: await store.get() })
   })
 
+  router.get('/mobile', requireReadAccess, (_req, res) => {
+    res.json(buildMobileSettingsDto())
+  })
+
   router.patch('/', requireWriteAccess, async (req, res) => {
-    const theme = normalizeAppTheme(req.body?.theme)
-    if (!theme) {
-      res.status(400).json({ error: 'theme must be "light" or "dark"' })
+    const body = typeof req.body === 'object' && req.body !== null
+      ? req.body as Record<string, unknown>
+      : {}
+    const patch: Partial<Pick<AppSettings, 'theme' | 'fontScale'>> = {}
+    const hasTheme = Object.prototype.hasOwnProperty.call(body, 'theme')
+    const hasFontScale = Object.prototype.hasOwnProperty.call(body, 'fontScale')
+
+    if (hasTheme) {
+      const theme = normalizeAppTheme(body.theme)
+      if (!theme) {
+        res.status(400).json({ error: 'theme must be "light" or "dark"' })
+        return
+      }
+      patch.theme = theme
+    }
+
+    if (hasFontScale) {
+      const fontScale = normalizeAppFontScale(body.fontScale)
+      if (fontScale === null) {
+        res.status(400).json({ error: 'fontScale must be a number between 0.8 and 1.6' })
+        return
+      }
+      patch.fontScale = fontScale
+    }
+
+    if (!hasTheme && !hasFontScale) {
+      res.status(400).json({ error: 'settings patch must include theme or fontScale' })
       return
     }
 
-    res.json({ settings: await store.update({ theme }) })
+    res.json({ settings: await store.update(patch) })
   })
 
   return router

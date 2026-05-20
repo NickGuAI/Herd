@@ -5,15 +5,10 @@ import { CheckOnHero } from './CheckOnHero'
 import { MoreCard } from './MoreCard'
 import { StatusCard } from './StatusCard'
 
-function initials(name: string): string {
-  const [first = 'C', second = 'M'] = name.trim().split(/\s+/)
-  return `${first.charAt(0)}${second.charAt(0)}`.toUpperCase()
-}
-
 function statusDotClass(status: string) {
   return status === 'running' || status === 'active'
-    ? 'bg-sumi-black'
-    : 'bg-sumi-diluted'
+    ? 'bg-[var(--hv-button-primary-bg)]'
+    : 'bg-[var(--hv-fg-subtle)]'
 }
 
 export function CommanderRow({
@@ -51,19 +46,20 @@ export function CommanderRow({
             <img
               src={commander.avatarUrl}
               alt={commander.displayName}
-              className="h-11 w-11 rounded-full border border-ink-border object-cover"
+              className="h-11 w-11 rounded-full border border-[color:var(--hv-border-hair)] object-cover"
             />
           ) : (
-            <div className="flex h-11 w-11 items-center justify-center rounded-full border border-ink-border bg-washi-aged text-sm font-medium text-sumi-black">
-              {initials(commander.displayName)}
-            </div>
+            <div
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-sm font-medium text-[color:var(--hv-fg)]"
+              aria-hidden="true"
+            />
           )}
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-sumi-diluted">Commander</p>
-            <h2 className="truncate text-lg font-medium text-sumi-black">{commander.displayName}</h2>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-[color:var(--hv-fg-subtle)]">Commander</p>
+            <h2 className="truncate text-lg font-medium text-[color:var(--hv-fg)]">{commander.displayName}</h2>
           </div>
         </div>
-        <div className="flex items-center gap-3 text-sm text-sumi-diluted">
+        <div className="flex items-center gap-3 text-sm text-[color:var(--hv-fg-subtle)]">
           <span className={`h-2.5 w-2.5 rounded-full ${statusDotClass(commander.status)}`} />
           <span>{commander.status}</span>
           <button
@@ -71,7 +67,7 @@ export function CommanderRow({
             data-testid="commander-edit-button"
             data-commander-id={commander.id}
             onClick={() => onEdit(commander)}
-            className="rounded-full border border-ink-border px-3 py-1.5 text-sm text-sumi-black transition-colors hover:bg-ink-wash"
+            className="rounded-full border border-[color:var(--hv-border-hair)] px-3 py-1.5 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
           >
             Edit
           </button>
@@ -83,7 +79,7 @@ export function CommanderRow({
                 data-testid="commander-restore-button"
                 data-commander-id={commander.id}
                 onClick={() => onRestore(commander)}
-                className="rounded-full bg-sumi-black px-3 py-1.5 text-sm text-washi-white transition-colors hover:bg-sumi-black/90"
+                className="rounded-full bg-[var(--hv-button-primary-bg)] px-3 py-1.5 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)]"
               >
                 Restore
               </button>

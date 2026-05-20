@@ -3,8 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJson, fetchVoid } from '../../../src/lib/api'
 import type { AgentType } from '@/types'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { CommanderPortraitStyleId } from '../portrait-styles'
 
-const COMMANDERS_QUERY_KEY = ['commanders', 'sessions'] as const
+export const COMMANDERS_QUERY_KEY = ['commanders', 'sessions'] as const
 export const GLOBAL_COMMANDER_ID = '__global__'
 
 export type CommanderState = 'idle' | 'running' | 'paused' | 'stopped'
@@ -31,9 +32,8 @@ export interface CommanderCurrentTask {
 }
 
 export interface CommanderUiFields {
-  borderColor?: string
-  accentColor?: string
   speakingTone?: string
+  portraitStyleId?: CommanderPortraitStyleId
 }
 
 export interface CommanderSession {
@@ -48,7 +48,6 @@ export interface CommanderSession {
   model?: string | null
   effort?: ClaudeEffortLevel
   cwd?: string
-  persona?: string
   maxTurns?: number
   contextMode?: CommanderContextMode
   heartbeat: CommanderHeartbeatConfig
@@ -103,7 +102,7 @@ export interface CommanderCreateInput {
   model?: string | null
   effort?: ClaudeEffortLevel
   cwd?: string
-  persona?: string
+  identityOperatingStyle?: string
   avatarSeed?: string
   maxTurns?: number
   contextMode?: CommanderContextMode
@@ -119,11 +118,9 @@ export interface CommanderCreateInput {
 
 export interface CommanderProfileUpdateInput {
   commanderId: string
-  persona?: string
-  borderColor?: string
-  accentColor?: string
   speakingTone?: string
   effort?: ClaudeEffortLevel
+  portraitStyleId?: CommanderPortraitStyleId
 }
 
 export interface CommanderAvatarUploadInput {
@@ -133,6 +130,7 @@ export interface CommanderAvatarUploadInput {
 
 export interface CommanderAvatarGenerateInput {
   commanderId: string
+  styleId?: CommanderPortraitStyleId
 }
 
 interface CommanderMessageInput {
@@ -402,11 +400,9 @@ async function updateCommanderProfile(input: CommanderProfileUpdateInput): Promi
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      persona: input.persona,
-      borderColor: input.borderColor,
-      accentColor: input.accentColor,
       speakingTone: input.speakingTone,
       effort: input.effort,
+      portraitStyleId: input.portraitStyleId,
     }),
   })
 }
@@ -425,7 +421,11 @@ export async function generateCommanderAvatar(
 ): Promise<{ avatarUrl: string }> {
   return fetchJson<{ avatarUrl: string }>(
     `/api/commanders/${encodeURIComponent(input.commanderId)}/avatar/generate`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ styleId: input.styleId }),
+    },
   )
 }
 

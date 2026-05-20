@@ -136,6 +136,72 @@ describe('combinedAuth', () => {
     await server.close()
   })
 
+  it('can use broader Auth0 permissions without broadening API-key scopes', async () => {
+    const apiKeyStore: ApiKeyStoreLike = {
+      hasAnyKeys: async () => true,
+      verifyKey: async (_rawKey, options) => {
+        const record = {
+          id: 'key-1',
+          name: 'Commander Read Key',
+          keyHash: 'hash',
+          prefix: 'hmrb_cmdr',
+          createdBy: 'ops@gehirn.ai',
+          createdAt: '2026-05-18T00:00:00.000Z',
+          lastUsedAt: null,
+          scopes: ['commanders:read'],
+        }
+        const requiredScopes = options?.requiredScopes ?? []
+        if (!requiredScopes.every((scope) => record.scopes.includes(scope))) {
+          return { ok: false, reason: 'insufficient_scope' as const }
+        }
+        return { ok: true, record }
+      },
+    }
+    const middleware = combinedAuth({
+      apiKeyStore,
+      requiredApiKeyScopes: ['skills:read'],
+      requiredAuth0Permissions: ['skills:read', 'commanders:read'],
+      auth0PermissionMode: 'any',
+      verifyToken: async (token) => {
+        if (token !== 'auth0-token') {
+          throw new Error('invalid')
+        }
+
+        return {
+          id: 'auth0|commander-user',
+          email: 'user@example.com',
+          metadata: {
+            permissions: ['commanders:read'],
+          },
+        }
+      },
+    })
+    const server = await startServer(middleware)
+
+    const auth0Response = await fetch(`${server.baseUrl}/protected`, {
+      headers: {
+        authorization: 'Bearer auth0-token',
+      },
+    })
+    expect(auth0Response.status).toBe(200)
+    expect(await auth0Response.json()).toEqual({
+      authMode: 'auth0',
+      userId: 'auth0|commander-user',
+    })
+
+    const apiKeyResponse = await fetch(`${server.baseUrl}/protected`, {
+      headers: {
+        'x-hammurabi-api-key': 'managed-key',
+      },
+    })
+    expect(apiKeyResponse.status).toBe(403)
+    expect(await apiKeyResponse.json()).toEqual({
+      error: 'Insufficient API key scope',
+    })
+
+    await server.close()
+  })
+
   it('returns 403 when a valid Auth0 user lacks the required permissions', async () => {
     const middleware = combinedAuth({
       apiKeyStore: createManagedKeyStore(),

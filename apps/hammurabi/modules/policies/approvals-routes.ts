@@ -12,7 +12,9 @@ import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import { createAuth0Verifier } from '../../server/middleware/auth0.js'
 import { ApprovalCoordinator } from './pending-store.js'
-import type { ApprovalHistoryEntry, PendingApproval } from './types.js'
+import type { ApprovalCoordinatorEvent, ApprovalHistoryEntry, PendingApproval } from './types.js'
+
+type CommanderNameLookup = (commanderId: string | null | undefined) => string | null
 
 export interface ApprovalsRouterOptions {
   apiKeyStore?: ApiKeyStoreLike
@@ -23,13 +25,36 @@ export interface ApprovalsRouterOptions {
   internalToken?: string
   approvalCoordinator: ApprovalCoordinator
   approvalSessionsInterface: ApprovalSessionsInterface
+  buildCommanderNameLookup?: () => Promise<CommanderNameLookup>
 }
 
-function toQueuedApprovalResponse(approval: PendingApproval) {
+function normalizeCommanderName(resolved: string | null | undefined): string | null {
+  const name = typeof resolved === 'string' ? resolved.trim() : ''
+  return name || null
+}
+
+async function buildCommanderNameLookup(options: ApprovalsRouterOptions): Promise<CommanderNameLookup> {
+  if (!options.buildCommanderNameLookup) {
+    return () => null
+  }
+
+  try {
+    return await options.buildCommanderNameLookup()
+  } catch (err) {
+    console.error('[approvals] commander name lookup failed', err)
+    return () => null
+  }
+}
+
+function toQueuedApprovalResponse(
+  getCommanderName: CommanderNameLookup,
+  approval: PendingApproval,
+) {
   const details = Object.entries(approval.context.details ?? {}).map(([label, value]) => ({
     label,
     value,
   }))
+  const commanderName = normalizeCommanderName(getCommanderName(approval.commanderId))
 
   return {
     id: approval.id,
@@ -39,7 +64,7 @@ function toQueuedApprovalResponse(approval: PendingApproval) {
     actionId: approval.actionId,
     actionLabel: approval.actionLabel,
     commanderId: approval.commanderId ?? null,
-    commanderName: approval.commanderId ?? null,
+    commanderName,
     sessionName: approval.sessionId ?? null,
     source: approval.source,
     requestedAt: approval.requestedAt,
@@ -51,7 +76,7 @@ function toQueuedApprovalResponse(approval: PendingApproval) {
     details,
     context: {
       ...approval.context,
-      commanderName: approval.commanderId ?? undefined,
+      ...(commanderName ? { commanderName } : {}),
       sessionName: approval.sessionId ?? undefined,
     },
     raw: {
@@ -61,13 +86,17 @@ function toQueuedApprovalResponse(approval: PendingApproval) {
   }
 }
 
-function toCodexApprovalResponse(approval: PendingCodexApprovalView) {
+function toCodexApprovalResponse(
+  getCommanderName: CommanderNameLookup,
+  approval: PendingCodexApprovalView,
+) {
   const details = [
     approval.reason ? { label: 'Reason', value: approval.reason } : null,
     approval.risk ? { label: 'Risk', value: approval.risk } : null,
     approval.threadId ? { label: 'Thread', value: approval.threadId } : null,
     approval.turnId ? { label: 'Turn', value: approval.turnId } : null,
   ].filter((detail): detail is { label: string; value: string } => detail !== null)
+  const commanderName = normalizeCommanderName(getCommanderName(approval.commanderScopeId))
 
   return {
     id: approval.id,
@@ -77,7 +106,7 @@ function toCodexApprovalResponse(approval: PendingCodexApprovalView) {
     actionId: approval.actionId,
     actionLabel: approval.actionLabel,
     commanderId: approval.commanderScopeId ?? null,
-    commanderName: approval.commanderScopeId ?? null,
+    commanderName,
     sessionName: approval.sessionName,
     source: 'codex',
     requestedAt: approval.requestedAt,
@@ -91,17 +120,21 @@ function toCodexApprovalResponse(approval: PendingCodexApprovalView) {
       summary: approval.reason ?? `${approval.actionLabel} requires approval.`,
       details: Object.fromEntries(details.map((detail) => [detail.label, detail.value])),
       sessionName: approval.sessionName,
+      ...(commanderName ? { commanderName } : {}),
     },
     raw: approval,
   }
 }
 
 async function listApprovalResponses(options: ApprovalsRouterOptions) {
+  const getCommanderName = await buildCommanderNameLookup(options)
   const queuedApprovals = await options.approvalCoordinator.listPending()
   const codexApprovals = options.approvalSessionsInterface.listPendingCodexApprovals()
+  const queuedResponses = queuedApprovals.map((approval) => toQueuedApprovalResponse(getCommanderName, approval))
+  const codexResponses = codexApprovals.map((approval) => toCodexApprovalResponse(getCommanderName, approval))
   return [
-    ...queuedApprovals.map((approval) => toQueuedApprovalResponse(approval)),
-    ...codexApprovals.map((approval) => toCodexApprovalResponse(approval)),
+    ...queuedResponses,
+    ...codexResponses,
   ].sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
 }
 
@@ -146,6 +179,88 @@ function buildCodexHistoryEntry(event: CodexApprovalQueueEvent): ApprovalHistory
     sessionId: event.approval.sessionName,
     source: 'codex',
     summary,
+  }
+}
+
+function sendQueuedApprovalEvent(
+  ws: WebSocket,
+  event: ApprovalCoordinatorEvent,
+  approval: ReturnType<typeof toQueuedApprovalResponse>,
+): void {
+  if (event.type === 'resolved') {
+    sendJson(ws, {
+      type: 'approval.resolved',
+      approvalId: event.approval.id,
+      approval,
+      decision: event.decision,
+      delivered: event.delivered,
+    })
+    return
+  }
+
+  sendJson(ws, {
+    type: 'approval.enqueued',
+    approvalId: event.approval.id,
+    approval,
+  })
+}
+
+function sendCodexApprovalEvent(
+  ws: WebSocket,
+  event: CodexApprovalQueueEvent,
+  approval: ReturnType<typeof toCodexApprovalResponse>,
+): void {
+  if (event.type === 'resolved') {
+    sendJson(ws, {
+      type: 'approval.resolved',
+      approvalId: event.approval.id,
+      approval,
+      decision: event.decision,
+      delivered: event.delivered,
+    })
+    return
+  }
+
+  sendJson(ws, {
+    type: 'approval.enqueued',
+    approvalId: event.approval.id,
+    approval,
+  })
+}
+
+async function sendQueuedApprovalStreamEvent(
+  ws: WebSocket,
+  options: ApprovalsRouterOptions,
+  event: ApprovalCoordinatorEvent,
+): Promise<void> {
+  try {
+    const getCommanderName = await buildCommanderNameLookup(options)
+    sendQueuedApprovalEvent(ws, event, toQueuedApprovalResponse(getCommanderName, event.approval))
+  } catch (err) {
+    console.error('[approvals] stream conversion failed', err)
+    try {
+      sendQueuedApprovalEvent(ws, event, toQueuedApprovalResponse(() => null, event.approval))
+    } catch (fallbackErr) {
+      console.error('[approvals] stream fallback conversion failed', fallbackErr)
+    }
+  }
+}
+
+async function sendCodexApprovalStreamEvent(
+  ws: WebSocket,
+  options: ApprovalsRouterOptions,
+  event: CodexApprovalQueueEvent,
+): Promise<void> {
+  try {
+    const getCommanderName = await buildCommanderNameLookup(options)
+    sendCodexApprovalEvent(ws, event, toCodexApprovalResponse(getCommanderName, event.approval))
+  } catch (err) {
+    console.error('[approvals] stream conversion failed', err)
+    try {
+      sendCodexApprovalEvent(ws, event, toCodexApprovalResponse(() => null, event.approval))
+    } catch (fallbackErr) {
+      console.error('[approvals] stream fallback conversion failed', fallbackErr)
+    }
   }
 }
 
@@ -258,41 +373,11 @@ export function createApprovalsRouter(options: ApprovalsRouterOptions): {
 
       wss.handleUpgrade(req, socket, head, (ws) => {
         const unsubscribeQueuedApprovals = options.approvalCoordinator.subscribe((event) => {
-          if (event.type === 'resolved') {
-            sendJson(ws, {
-              type: 'approval.resolved',
-              approvalId: event.approval.id,
-              approval: toQueuedApprovalResponse(event.approval),
-              decision: event.decision,
-              delivered: event.delivered,
-            })
-            return
-          }
-
-          sendJson(ws, {
-            type: 'approval.enqueued',
-            approvalId: event.approval.id,
-            approval: toQueuedApprovalResponse(event.approval),
-          })
+          void sendQueuedApprovalStreamEvent(ws, options, event)
         })
         const unsubscribeCodexApprovals = options.approvalSessionsInterface.subscribeToCodexApprovalQueue(
           (event: CodexApprovalQueueEvent) => {
-            if (event.type === 'resolved') {
-              sendJson(ws, {
-                type: 'approval.resolved',
-                approvalId: event.approval.id,
-                approval: toCodexApprovalResponse(event.approval),
-                decision: event.decision,
-                delivered: event.delivered,
-              })
-              return
-            }
-
-            sendJson(ws, {
-              type: 'approval.enqueued',
-              approvalId: event.approval.id,
-              approval: toCodexApprovalResponse(event.approval),
-            })
+            void sendCodexApprovalStreamEvent(ws, options, event)
           },
         )
 
@@ -306,6 +391,8 @@ export function createApprovalsRouter(options: ApprovalsRouterOptions): {
             type: 'approval.snapshot',
             approvals,
           })
+        }).catch((err) => {
+          console.error('[approvals] stream snapshot failed', err)
         })
       })
     })

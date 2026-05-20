@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { GEMINI_IMAGE_GENERATION_PROVIDER_ID } from '../../../server/api-keys/provider-secrets-store.js'
 import {
-  buildSumiPortraitPrompt,
+  buildCommanderPortraitPrompt,
   extractCommanderMdExcerpt,
 } from '../../../server/image-generation/sumi-portrait-prompt.js'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
@@ -27,7 +27,6 @@ import {
   withNamesLock,
 } from '../names-lock.js'
 import { resolveCommanderNamesPath, resolveCommanderPaths } from '../paths.js'
-import { MAX_PERSONA_LENGTH } from '../persona.js'
 import {
   parseHost,
   parseMessage,
@@ -38,10 +37,14 @@ import {
   parseOptionalCommanderMaxTurns,
   parseOptionalCurrentTask,
   parseOptionalHeartbeatContextConfig,
-  parseOptionalPersona,
   parseSessionId,
   parseTaskSource,
 } from '../route-parsers.js'
+import {
+  DEFAULT_COMMANDER_PORTRAIT_STYLE_ID,
+  listCommanderPortraitStyleIds,
+  parseCommanderPortraitStyleId,
+} from '../portrait-styles.js'
 import {
   DEFAULT_COMMANDER_CONTEXT_MODE,
   type CommanderContextMode,
@@ -54,6 +57,7 @@ import {
   buildCommanderWizardSystemPrompt,
 } from '../templates/wizard-prompt.js'
 import {
+  mergeIdentityOperatingStyleIntoCommanderWorkflow,
   readCommanderWorkflowMarkdown,
   scaffoldCommanderWorkflow,
 } from '../templates/workflow.js'
@@ -89,12 +93,26 @@ const WIZARD_SESSION_PREFIX = 'commander-wizard-'
 const WIZARD_SESSION_NAME_PATTERN = /^commander-wizard-[a-zA-Z0-9_-]+$/
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ARCHIVED_COMMANDER_RUNTIME_ERROR = 'Commander is archived. Restore it first via POST /:id/restore.'
+const COMMANDER_MD_IDENTITY_MESSAGE = 'Commander identity lives in COMMANDER.md; edit COMMANDER.md directly.'
 
 class DuplicateCommanderDisplayNameError extends Error {
   constructor(displayName: string) {
     super(`Commander displayName "${displayName}" already exists`)
     this.name = 'DuplicateCommanderDisplayNameError'
   }
+}
+
+function parseIdentityOperatingStyleInput(
+  raw: unknown,
+): { valid: true; value: string | undefined } | { valid: false } {
+  if (raw === undefined || raw === null) {
+    return { valid: true, value: undefined }
+  }
+  if (typeof raw !== 'string') {
+    return { valid: false }
+  }
+  const trimmed = raw.trim()
+  return { valid: true, value: trimmed.length > 0 ? trimmed : undefined }
 }
 
 interface CommanderTemplatePackage {
@@ -105,7 +123,6 @@ interface CommanderTemplatePackage {
     id?: string
     host?: string
     displayName: string
-    persona?: string
     agentType?: AgentType
     model?: string | null
     effort?: ClaudeEffortLevel
@@ -345,6 +362,7 @@ async function writeCommanderAvatarBytes(
   basePath: string,
   bytes: Uint8Array,
   mimeType: string,
+  profilePatch: Partial<CommanderUiProfile> = {},
 ): Promise<void> {
   const avatarFileName = `avatar${avatarExtensionForMimeType(mimeType)}`
   const { commanderRoot } = resolveCommanderPaths(commanderId, basePath)
@@ -354,6 +372,7 @@ async function writeCommanderAvatarBytes(
   const existing = await readCommanderUiProfile(commanderId, basePath)
   await writeCommanderUiProfile(commanderId, basePath, {
     ...ensureCommanderVisualProfile(commanderId, existing),
+    ...profilePatch,
     avatar: avatarFileName,
   } satisfies CommanderUiProfile)
 }
@@ -527,6 +546,7 @@ export function registerCoreRoutes(
     options: {
       heartbeat?: CommanderSession['heartbeat']
       uiProfile?: CommanderUiProfile | null
+      identityOperatingStyle?: string
     } = {},
   ) => {
     const heartbeat = options.heartbeat ?? session.heartbeat
@@ -559,6 +579,16 @@ export function registerCoreRoutes(
         },
         context.commanderBasePath,
       )
+      if (options.identityOperatingStyle) {
+        await mergeIdentityOperatingStyleIntoCommanderWorkflow(
+          created.id,
+          options.identityOperatingStyle,
+          {
+            cwd: created.cwd,
+            basePath: context.commanderBasePath,
+          },
+        )
+      }
 
       await upsertCommanderDisplayName(context.commanderDataDir, created.id, displayName)
       await writeCommanderUiProfile(
@@ -673,6 +703,16 @@ export function registerCoreRoutes(
       return
     }
 
+    const portraitStyleId = req.body?.styleId === undefined
+      ? DEFAULT_COMMANDER_PORTRAIT_STYLE_ID
+      : parseCommanderPortraitStyleId(req.body?.styleId)
+    if (!portraitStyleId) {
+      res.status(400).json({
+        error: `styleId must be one of: ${listCommanderPortraitStyleIds()}`,
+      })
+      return
+    }
+
     const session = await context.sessionStore.get(commanderId)
     if (!session) {
       res.status(404).json({ error: `Commander "${commanderId}" not found` })
@@ -703,9 +743,10 @@ export function registerCoreRoutes(
     const displayNames = await readCommanderDisplayNames(context.commanderDataDir)
     const displayName = displayNames[commanderId]?.trim() || session.host
     const commanderMdExcerpt = extractCommanderMdExcerpt(commanderMd)
-    const prompt = buildSumiPortraitPrompt({
+    const prompt = buildCommanderPortraitPrompt({
       displayName,
       commanderMdExcerpt,
+      styleId: portraitStyleId,
     })
 
     let avatarBytes: Buffer
@@ -728,6 +769,7 @@ export function registerCoreRoutes(
         context.commanderBasePath,
         avatarBytes,
         'image/png',
+        { portraitStyleId },
       )
     } catch {
       res.status(500).json({ error: 'Failed to write generated avatar' })
@@ -753,34 +795,38 @@ export function registerCoreRoutes(
     const parseField = (value: unknown): string | undefined =>
       typeof value === 'string' ? value.trim() || undefined : undefined
 
-    const persona = parseField(req.body?.persona)
-    const borderColor = parseField(req.body?.borderColor)
-    const accentColor = parseField(req.body?.accentColor)
-    const speakingTone = parseField(req.body?.speakingTone)
-    const parsedEffort = parseOptionalCommanderEffort(req.body?.effort)
-
-    if (persona !== undefined && persona.length > MAX_PERSONA_LENGTH) {
-      res.status(400).json({ error: `persona must be a string up to ${MAX_PERSONA_LENGTH} characters` })
+    if (req.body?.persona !== undefined || req.body?.identityOperatingStyle !== undefined) {
+      res.status(400).json({ error: COMMANDER_MD_IDENTITY_MESSAGE })
       return
     }
+
+    const speakingTone = parseField(req.body?.speakingTone)
+    const parsedEffort = parseOptionalCommanderEffort(req.body?.effort)
+    const portraitStyleProvided = req.body?.portraitStyleId !== undefined
+    const portraitStyleId = portraitStyleProvided
+      ? parseCommanderPortraitStyleId(req.body?.portraitStyleId)
+      : undefined
+
     if (parsedEffort === null) {
       res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
+      return
+    }
+    if (portraitStyleProvided && !portraitStyleId) {
+      res.status(400).json({ error: `portraitStyleId must be one of: ${listCommanderPortraitStyleIds()}` })
       return
     }
 
     const existing = await readCommanderUiProfile(commanderId, context.commanderBasePath)
     const merged: CommanderUiProfile = ensureCommanderVisualProfile(commanderId, {
       ...(existing ?? {}),
-      ...(req.body?.borderColor !== undefined ? { borderColor } : {}),
-      ...(req.body?.accentColor !== undefined ? { accentColor } : {}),
       ...(req.body?.speakingTone !== undefined ? { speakingTone } : {}),
+      ...(portraitStyleProvided && portraitStyleId ? { portraitStyleId } : {}),
     })
     await writeCommanderUiProfile(commanderId, context.commanderBasePath, merged)
 
-    if (req.body?.persona !== undefined || req.body?.effort !== undefined) {
+    if (req.body?.effort !== undefined) {
       await context.sessionStore.update(commanderId, (current) => ({
         ...current,
-        ...(req.body?.persona !== undefined ? { persona } : {}),
         ...(req.body?.effort !== undefined ? { effort: parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL } : {}),
       }))
     }
@@ -972,12 +1018,17 @@ export function registerCoreRoutes(
       res.status(400).json({ error: 'replicatedFromCommanderId must be a valid commander id when provided' })
       return
     }
-    const parsedPersona = parseOptionalPersona(req.body?.persona)
-    if (!parsedPersona.valid) {
-      res.status(400).json({ error: `persona must be a string up to ${MAX_PERSONA_LENGTH} characters` })
+    const parsedIdentityOperatingStyle = parseIdentityOperatingStyleInput(req.body?.identityOperatingStyle)
+    if (!parsedIdentityOperatingStyle.valid) {
+      res.status(400).json({ error: 'identityOperatingStyle must be a string when provided' })
       return
     }
-    const persona = parsedPersona.value
+    const parsedLegacyIdentity = parseIdentityOperatingStyleInput(req.body?.persona)
+    if (!parsedLegacyIdentity.valid) {
+      res.status(400).json({ error: 'persona must be a string when provided' })
+      return
+    }
+    const identityOperatingStyle = parsedIdentityOperatingStyle.value ?? parsedLegacyIdentity.value
     const defaultHeartbeat = createDefaultHeartbeatConfig()
     let heartbeat = defaultHeartbeat
 
@@ -1016,7 +1067,6 @@ export function registerCoreRoutes(
       id: randomUUID(),
       host,
       avatarSeed,
-      persona,
       state: 'idle',
       created: context.now().toISOString(),
       agentType: selectedAgentType,
@@ -1033,7 +1083,10 @@ export function registerCoreRoutes(
     }
 
     try {
-      const created = await persistCreatedCommander(session, displayName, { heartbeat })
+      const created = await persistCreatedCommander(session, displayName, {
+        heartbeat,
+        identityOperatingStyle,
+      })
       res.status(201).json(
         displayName !== created.host
           ? { ...created, displayName }
@@ -1080,7 +1133,6 @@ export function registerCoreRoutes(
           id: session.id,
           host: session.host,
           displayName,
-          ...(session.persona ? { persona: session.persona } : {}),
           ...(session.agentType ? { agentType: session.agentType } : {}),
           ...(session.model !== undefined ? { model: session.model } : {}),
           ...(session.effort ? { effort: session.effort } : {}),
@@ -1123,11 +1175,17 @@ export function registerCoreRoutes(
       return
     }
 
-    const parsedPersona = parseOptionalPersona(commander.persona)
-    if (!parsedPersona.valid) {
-      res.status(400).json({ error: `persona must be a string up to ${MAX_PERSONA_LENGTH} characters` })
+    const parsedIdentityOperatingStyle = parseIdentityOperatingStyleInput(commander.identityOperatingStyle)
+    if (!parsedIdentityOperatingStyle.valid) {
+      res.status(400).json({ error: 'commander.identityOperatingStyle must be a string when provided' })
       return
     }
+    const parsedLegacyIdentity = parseIdentityOperatingStyleInput(commander.persona)
+    if (!parsedLegacyIdentity.valid) {
+      res.status(400).json({ error: 'persona must be a string when provided' })
+      return
+    }
+    const identityOperatingStyle = parsedIdentityOperatingStyle.value ?? parsedLegacyIdentity.value
 
     const parsedAgentType = parseOptionalCommanderAgentType(commander.agentType)
     if (parsedAgentType === null) {
@@ -1219,7 +1277,6 @@ export function registerCoreRoutes(
     const session: CommanderSession = {
       id: randomUUID(),
       host,
-      persona: parsedPersona.value,
       state: 'idle',
       created: context.now().toISOString(),
       agentType: importedAgentType,
@@ -1244,6 +1301,16 @@ export function registerCoreRoutes(
           path.join(commanderRoot, COMMANDER_WORKFLOW_FILE),
           `${commanderMd.trimEnd()}\n`,
           'utf8',
+        )
+      }
+      if (identityOperatingStyle) {
+        await mergeIdentityOperatingStyleIntoCommanderWorkflow(
+          session.id,
+          identityOperatingStyle,
+          {
+            cwd: session.cwd,
+            basePath: context.commanderBasePath,
+          },
         )
       }
 
@@ -1317,7 +1384,6 @@ export function registerCoreRoutes(
       id: randomUUID(),
       host,
       avatarSeed: source.avatarSeed,
-      persona: source.persona,
       state: 'idle',
       created: context.now().toISOString(),
       agentType: source.agentType ?? 'claude',
@@ -1335,9 +1401,30 @@ export function registerCoreRoutes(
 
     try {
       const sourceProfile = await readCommanderUiProfile(sourceCommanderId, context.commanderBasePath)
+      const sourceCommanderMd = await readCommanderWorkflowMarkdown(sourceCommanderId, context.commanderBasePath)
       const created = await persistCreatedCommander(session, displayName, {
         uiProfile: sourceProfile,
       })
+      if (sourceCommanderMd !== null) {
+        const { commanderRoot } = resolveCommanderPaths(session.id, context.commanderBasePath)
+        await mkdir(commanderRoot, { recursive: true })
+        await writeFile(
+          path.join(commanderRoot, COMMANDER_WORKFLOW_FILE),
+          `${sourceCommanderMd.trimEnd()}\n`,
+          'utf8',
+        )
+      }
+      const sourceIdentityOperatingStyle = parseIdentityOperatingStyleInput(source.persona)
+      if (sourceIdentityOperatingStyle.valid && sourceIdentityOperatingStyle.value) {
+        await mergeIdentityOperatingStyleIntoCommanderWorkflow(
+          session.id,
+          sourceIdentityOperatingStyle.value,
+          {
+            cwd: session.cwd,
+            basePath: context.commanderBasePath,
+          },
+        )
+      }
       res.status(201).json(
         displayName !== created.host
           ? { ...created, displayName }
@@ -1362,23 +1449,27 @@ export function registerCoreRoutes(
     }
 
     const displayNameProvided = req.body?.displayName !== undefined
-    const personaProvided = req.body?.persona !== undefined
+    if (req.body?.persona !== undefined || req.body?.identityOperatingStyle !== undefined) {
+      res.status(400).json({ error: COMMANDER_MD_IDENTITY_MESSAGE })
+      return
+    }
     const agentTypeProvided = req.body?.agentType !== undefined
     const modelProvided = req.body?.model !== undefined
     const effortProvided = req.body?.effort !== undefined
     const cwdProvided = req.body?.cwd !== undefined
     const maxTurnsProvided = req.body?.maxTurns !== undefined
     const contextModeProvided = req.body?.contextMode !== undefined
+    const portraitStyleProvided = req.body?.portraitStyleId !== undefined
 
     if (
       !displayNameProvided
-      && !personaProvided
       && !agentTypeProvided
       && !modelProvided
       && !effortProvided
       && !cwdProvided
       && !maxTurnsProvided
       && !contextModeProvided
+      && !portraitStyleProvided
     ) {
       res.status(400).json({ error: 'At least one editable field must be provided' })
       return
@@ -1389,12 +1480,6 @@ export function registerCoreRoutes(
       : undefined
     if (displayNameProvided && !displayName) {
       res.status(400).json({ error: 'displayName must be a non-empty string' })
-      return
-    }
-
-    const parsedPersona = parseOptionalPersona(req.body?.persona)
-    if (!parsedPersona.valid) {
-      res.status(400).json({ error: `persona must be a string up to ${MAX_PERSONA_LENGTH} characters` })
       return
     }
 
@@ -1440,6 +1525,13 @@ export function registerCoreRoutes(
     const parsedContextMode = parseOptionalCommanderContextMode(req.body?.contextMode)
     if (!parsedContextMode.valid) {
       res.status(400).json({ error: 'contextMode must be either "thin" or "fat"' })
+      return
+    }
+    const portraitStyleId = portraitStyleProvided
+      ? parseCommanderPortraitStyleId(req.body?.portraitStyleId)
+      : undefined
+    if (portraitStyleProvided && !portraitStyleId) {
+      res.status(400).json({ error: `portraitStyleId must be one of: ${listCommanderPortraitStyleIds()}` })
       return
     }
 
@@ -1490,7 +1582,6 @@ export function registerCoreRoutes(
       const nextEffort = parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
       return {
         ...current,
-        ...(personaProvided ? { persona: parsedPersona.value } : {}),
         ...(agentTypeProvided
           ? (nextAgentType ? { agentType: nextAgentType } : { agentType: undefined })
           : {}),
@@ -1524,6 +1615,18 @@ export function registerCoreRoutes(
       }
     }
 
+    if (portraitStyleProvided && portraitStyleId) {
+      const existingProfile = await readCommanderUiProfile(commanderId, context.commanderBasePath)
+      await writeCommanderUiProfile(
+        commanderId,
+        context.commanderBasePath,
+        ensureCommanderVisualProfile(commanderId, {
+          ...(existingProfile ?? {}),
+          portraitStyleId,
+        }),
+      )
+    }
+
     const liveSessionName = context.activeCommanderSessions.get(commanderId)?.sessionName
       ?? toCommanderSessionName(commanderId)
     const liveSession = context.sessionsInterface?.getSession(liveSessionName)
@@ -1531,8 +1634,9 @@ export function registerCoreRoutes(
       liveSession.maxTurns = updated.maxTurns
     }
 
+    const { persona: _legacyIdentity, ...publicUpdated } = updated
     res.json({
-      ...updated,
+      ...publicUpdated,
       displayName: nextDisplayName,
     })
   })
@@ -1655,7 +1759,6 @@ export function registerCoreRoutes(
         {
           commanderId,
           cwd: started.cwd ?? undefined,
-          persona: started.persona,
           currentTask: activeConversation?.currentTask ?? defaultConversation.currentTask,
           taskSource: started.taskSource,
           maxTurns: started.maxTurns,

@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import { createServer, type Server } from 'node:http'
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { WebSocket } from 'ws'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
 import {
   appendTranscriptEvent,
@@ -12,7 +13,9 @@ import {
 } from '../../agents/transcript-store'
 import { createCommandersRouter, type CommandersRouterOptions } from '../routes'
 import type { CommanderSessionsInterface } from '../../agents/routes'
-import type { AgentType } from '../../agents/types'
+import type { AgentType, SessionSendPayload } from '../../agents/types'
+import type { QueuedMessageImage } from '../../agents/message-queue'
+import { MAX_MESSAGE_IMAGE_COUNT } from '../../agents/message-images'
 import { buildConversationSessionName } from '../routes/conversation-runtime'
 import { CommanderChannelBindingStore, CommanderChannelBindingConflictError } from '../../channels/store'
 import {
@@ -22,6 +25,9 @@ import {
   DEFAULT_COMMANDER_MAX_TURNS,
 } from '../store'
 import { createDefaultHeartbeatConfig } from '../heartbeat'
+import { STARTUP_PROMPT } from '../routes/context'
+import type { WorkspaceResolverCapability } from '../../workspace/capability'
+import { resolveWorkspaceRoot } from '../../workspace/resolver'
 
 const COMMANDER_A = '00000000-0000-4000-a000-0000000000aa'
 const COMMANDER_B = '00000000-0000-4000-a000-0000000000bb'
@@ -63,6 +69,7 @@ interface RunningServer {
 }
 
 interface ActiveSessionState {
+  kind?: 'stream' | 'pty'
   agentType: AgentType
   model?: string
   conversationId?: string
@@ -70,6 +77,7 @@ interface ActiveSessionState {
     providerId: AgentType
     sessionId?: string
     threadId?: string
+    maxThinkingTokens?: number
   }
   events: Array<Record<string, unknown>>
   conversationEntryCount: number
@@ -90,6 +98,7 @@ interface MockSessionsFixture {
   sendCalls: Array<{
     name: string
     text: string
+    images?: QueuedMessageImage[]
     options?: {
       queue?: boolean
       priority?: 'high' | 'normal' | 'low'
@@ -190,6 +199,7 @@ function createMockSessionsInterface(
   const sendCalls: Array<{
     name: string
     text: string
+    images?: QueuedMessageImage[]
     options?: {
       queue?: boolean
       priority?: 'high' | 'normal' | 'low'
@@ -211,6 +221,7 @@ function createMockSessionsInterface(
     }
 
     return {
+      kind: 'stream',
       agentType: params.agentType,
       model: params.model,
       conversationId: params.conversationId,
@@ -218,6 +229,7 @@ function createMockSessionsInterface(
         ? {
           providerId: 'claude',
           sessionId: `claude-${params.conversationId ?? params.name}`,
+          ...(params.maxThinkingTokens ? { maxThinkingTokens: params.maxThinkingTokens } : {}),
         }
         : params.agentType === 'codex'
           ? {
@@ -289,13 +301,34 @@ function createMockSessionsInterface(
         body: { error: 'dispatchWorkerForCommander is not stubbed for this fixture' },
       }
     },
-    async sendToSession(name, text, options) {
-      sendCalls.push(options ? { name, text, options } : { name, text })
+    async sendToSession(name, payload, options) {
+      const normalized: SessionSendPayload = typeof payload === 'string'
+        ? { text: payload }
+        : payload
+      const images = normalized.images && normalized.images.length > 0 ? [...normalized.images] : undefined
+      sendCalls.push(options
+        ? { name, text: normalized.text, images, options }
+        : { name, text: normalized.text, images })
       const active = activeSessions.get(name)
       if (active) {
         active.events.push({
           type: 'user',
-          text,
+          message: {
+            role: 'user',
+            content: images
+              ? [
+                  ...(normalized.text ? [{ type: 'text', text: normalized.text }] : []),
+                  ...images.map((image) => ({
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: image.mediaType,
+                      data: image.data,
+                    },
+                  })),
+                ]
+              : normalized.text,
+          },
         })
         active.conversationEntryCount += 1
       }
@@ -308,6 +341,17 @@ function createMockSessionsInterface(
       const active = activeSessions.get(name)
       if (!active) {
         return undefined
+      }
+      if (active.kind === 'pty') {
+        return {
+          kind: 'pty',
+          name,
+          agentType: active.agentType,
+          model: active.model,
+          conversationId: active.conversationId,
+          createdAt: '2026-05-01T00:00:00.000Z',
+          lastEventAt: '2026-05-01T00:00:00.000Z',
+        } as unknown as ReturnType<CommanderSessionsInterface['getSession']>
       }
       return {
         kind: 'stream',
@@ -424,6 +468,9 @@ async function startServer(
   app.use('/api/conversations', commanders.conversationRouter)
 
   const httpServer = createServer(app)
+  if (commanders.handleConversationUpgrade) {
+    httpServer.on('upgrade', commanders.handleConversationUpgrade)
+  }
   await new Promise<void>((resolve) => {
     httpServer.listen(0, () => resolve())
   })
@@ -478,10 +525,11 @@ async function startConversation(
   baseUrl: string,
   conversationId: string,
   input: {
-    agentType: AgentType
+    agentType?: AgentType
     model?: string | null
     effort?: 'low' | 'medium' | 'high' | 'max'
     adaptiveThinking?: 'enabled' | 'disabled'
+    maxThinkingTokens?: number
     cwd?: string
     host?: string
   },
@@ -823,9 +871,44 @@ describe('conversation routes', () => {
     await seedCommander(storePath, COMMANDER_A)
 
     const sessions = createMockSessionsInterface()
+    const workspaceDir = await createTempDir('hammurabi-commanders-conversation-workspace-')
+    await writeFile(join(workspaceDir, 'README.md'), '# Workspace context\n', 'utf8')
+    const workspace = await resolveWorkspaceRoot({
+      rootPath: workspaceDir,
+      source: {
+        kind: 'target',
+        id: 'wt-conversation',
+        label: 'local',
+      },
+    })
+    const workspaceResolver: WorkspaceResolverCapability = {
+      open: async () => ({
+        targetId: 'wt-conversation',
+        conversationId: CONVERSATION_A,
+        label: 'local',
+        host: 'local',
+        rootPath: workspaceDir,
+        readOnly: false,
+      }),
+      resolveTarget: async (targetId) => ({
+        target: {
+          targetId,
+          conversationId: CONVERSATION_A,
+          label: 'local',
+          host: 'local',
+          rootPath: workspaceDir,
+          readOnly: false,
+        },
+        workspace,
+        host: 'local',
+        rootPath: workspace.rootPath,
+        readOnly: false,
+      }),
+    }
     const server = await startServer({
       sessionStorePath: storePath,
       sessionsInterface: sessions.iface,
+      getWorkspaceResolver: () => workspaceResolver,
     })
 
     try {
@@ -927,6 +1010,53 @@ describe('conversation routes', () => {
       expect(sessions.createCalls).toHaveLength(1)
       expect(sessions.sendCalls.at(-1)?.text).toBe('Reuse the active session.')
 
+      const workspaceContextResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: 'Use this context.',
+          workspaceContext: {
+            targetId: 'wt-conversation',
+            conversationId: CONVERSATION_A,
+            filePaths: ['README.md'],
+            fileAnnotations: [{
+              path: 'README.md',
+              body: 'Explain the workspace heading.',
+            }],
+          },
+        }),
+      })
+      expect(workspaceContextResponse.status).toBe(200)
+      expect(sessions.sendCalls.at(-1)?.text).toContain('<workspace-files>')
+      expect(sessions.sendCalls.at(-1)?.text).toContain('@README.md')
+      expect(sessions.sendCalls.at(-1)?.text).toContain('Explain the workspace heading.')
+      expect(sessions.sendCalls.at(-1)?.text).toContain('Use this context.')
+
+      const missingTargetContextResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: 'Use fallback context.',
+          workspaceContext: {
+            filePaths: ['docs/no-target.md'],
+            fileAnnotations: [{
+              path: 'docs/note.md',
+              body: 'Fallback annotation body.',
+            }],
+          },
+        }),
+      })
+      expect(missingTargetContextResponse.status).toBe(200)
+      expect(sessions.sendCalls.at(-1)?.text).toContain('@docs/no-target.md')
+      expect(sessions.sendCalls.at(-1)?.text).toContain('Fallback annotation body.')
+      expect(sessions.sendCalls.at(-1)?.text).toContain('Use fallback context.')
+
       const queuedMessageResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
         method: 'POST',
         headers: {
@@ -946,6 +1076,98 @@ describe('conversation routes', () => {
           priority: 'normal',
         },
       }))
+
+      const image = { mediaType: 'image/png', data: Buffer.from('image-bytes').toString('base64') }
+      const imageMessageResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: 'Inspect this screenshot.',
+          images: [image],
+        }),
+      })
+      expect(imageMessageResponse.status).toBe(200)
+      expect(sessions.sendCalls.at(-1)).toEqual(expect.objectContaining({
+        text: 'Inspect this screenshot.',
+        images: [image],
+      }))
+
+      const imageOnlyMessageResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: '',
+          images: [image],
+        }),
+      })
+      expect(imageOnlyMessageResponse.status).toBe(200)
+      expect(sessions.sendCalls.at(-1)).toEqual(expect.objectContaining({
+        text: '',
+        images: [image],
+      }))
+
+      const imageOnlyQueueResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: '',
+          images: [image],
+          queue: true,
+        }),
+      })
+      expect(imageOnlyQueueResponse.status).toBe(200)
+      expect(sessions.sendCalls.at(-1)).toEqual(expect.objectContaining({
+        text: '',
+        images: [image],
+        options: {
+          queue: true,
+          priority: 'normal',
+        },
+      }))
+
+      const sendCallCountBeforeInvalidImage = sessions.sendCalls.length
+      const unsupportedImageResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: '',
+          images: [{ mediaType: 'image/svg+xml', data: 'abc' }],
+        }),
+      })
+      expect(unsupportedImageResponse.status).toBe(400)
+      expect(await unsupportedImageResponse.json()).toEqual({
+        error: 'Unsupported image type. Use PNG, JPEG, GIF, or WebP.',
+      })
+      expect(sessions.sendCalls).toHaveLength(sendCallCountBeforeInvalidImage)
+
+      const tooManyImagesResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: '',
+          images: Array.from({ length: MAX_MESSAGE_IMAGE_COUNT + 1 }, () => image),
+        }),
+      })
+      expect(tooManyImagesResponse.status).toBe(413)
+      expect(await tooManyImagesResponse.json()).toEqual({
+        error: `At most ${MAX_MESSAGE_IMAGE_COUNT} images can be sent at once`,
+      })
+      expect(sessions.sendCalls).toHaveLength(sendCallCountBeforeInvalidImage)
 
       const pauseResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/pause`, {
         method: 'POST',
@@ -1450,6 +1672,36 @@ describe('conversation routes', () => {
     }
   })
 
+  it('starts an idle conversation using the backend provider fallback when agentType is omitted', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-start-default-provider-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A, { agentType: 'codex', model: 'gpt-5.4' })
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      const createResponse = await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })
+      expect(createResponse.status).toBe(201)
+
+      const startResponse = await startConversation(server.baseUrl, CONVERSATION_A, {})
+      expect(startResponse.status).toBe(200)
+      expect(sessions.createCalls[0]).toEqual(expect.objectContaining({
+        agentType: 'codex',
+        model: 'gpt-5.4',
+        conversationId: CONVERSATION_A,
+      }))
+    } finally {
+      await server.close()
+    }
+  })
+
   it('uses the commander default model when starting a conversation on the same provider', async () => {
     const dir = await createTempDir('hammurabi-commanders-conversation-start-model-')
     const storePath = join(dir, 'sessions.json')
@@ -1570,6 +1822,49 @@ describe('conversation routes', () => {
     }
   })
 
+  it('validates and propagates maxThinkingTokens at conversation start', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-start-max-thinking-tokens-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'ui',
+      })).status).toBe(201)
+
+      for (const invalid of [-1, 500, 999999, 1.5]) {
+        const response = await startConversation(server.baseUrl, CONVERSATION_A, {
+          agentType: 'claude',
+          maxThinkingTokens: invalid,
+        })
+        expect(response.status).toBe(400)
+        expect(await response.json()).toEqual({
+          error: 'Invalid maxThinkingTokens. Expected integer 1024..256000',
+        })
+      }
+
+      const validResponse = await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+        maxThinkingTokens: 64000,
+      })
+      expect(validResponse.status).toBe(200)
+      expect(sessions.createCalls).toHaveLength(1)
+      expect(sessions.createCalls[0]).toEqual(expect.objectContaining({
+        maxThinkingTokens: 64000,
+      }))
+    } finally {
+      sessions.dispose()
+      await server.close()
+    }
+  })
+
   it('starts and lists Codex conversations when the live session has a watchdog timer', async () => {
     const dir = await createTempDir('hammurabi-commanders-conversation-codex-timer-')
     const storePath = join(dir, 'sessions.json')
@@ -1645,6 +1940,327 @@ describe('conversation routes', () => {
       expect(listPayload[0]?.liveSession).not.toHaveProperty('codexTurnWatchdogTimer')
     } finally {
       sessions.dispose()
+      await server.close()
+    }
+  })
+
+  it('returns conversation read-model actions for active stream, idle, archived, and pty live sessions', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-read-model-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'ui',
+      })).status).toBe(201)
+      expect((await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })).status).toBe(200)
+
+      const activeResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(activeResponse.status).toBe(200)
+      const active = await activeResponse.json() as {
+        canonicalOrder: number
+        displayState: {
+          hasLiveSession: boolean
+          isSendable: boolean
+          isQueueable: boolean
+          isMediaSendable: boolean
+          disabledReasons: Record<string, string | null>
+        }
+        sendTarget: {
+          sessionName: string
+          transportType: string | null
+          queue: { supported: boolean; reason: string | null }
+          media: { supported: boolean; reason: string | null }
+        } | null
+        allowedActions: Record<string, boolean>
+      }
+      expect(active).toEqual(expect.objectContaining({
+        canonicalOrder: 0,
+        allowedActions: expect.objectContaining({
+          send: true,
+          queue: true,
+          media: true,
+          pause: true,
+          updateProvider: false,
+        }),
+      }))
+      expect(active.displayState).toEqual(expect.objectContaining({
+        hasLiveSession: true,
+        isSendable: true,
+        isQueueable: true,
+        isMediaSendable: true,
+      }))
+      expect(active.displayState.disabledReasons.send).toBeNull()
+      expect(active.displayState.disabledReasons.queue).toBeNull()
+      expect(active.displayState.disabledReasons.media).toBeNull()
+      expect(active.sendTarget).toEqual(expect.objectContaining({
+        sessionName: buildConversationSessionName({
+          id: CONVERSATION_A,
+          commanderId: COMMANDER_A,
+        } as Parameters<typeof buildConversationSessionName>[0]),
+        transportType: 'stream',
+        queue: { supported: true, reason: null },
+        media: { supported: true, reason: null },
+      }))
+
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_B,
+        surface: 'api',
+      })).status).toBe(201)
+      const idleResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_B}`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(idleResponse.status).toBe(200)
+      const idle = await idleResponse.json() as {
+        sendTarget: {
+          sessionName: string
+          transportType: string | null
+        } | null
+        displayState: {
+          hasLiveSession: boolean
+          disabledReasons: Record<string, string | null>
+        }
+        allowedActions: Record<string, boolean>
+      }
+      expect(idle.sendTarget).toEqual(expect.objectContaining({
+        sessionName: buildConversationSessionName({
+          id: CONVERSATION_B,
+          commanderId: COMMANDER_A,
+        } as Parameters<typeof buildConversationSessionName>[0]),
+        transportType: null,
+      }))
+      expect(idle.displayState.hasLiveSession).toBe(false)
+      expect(idle.allowedActions).toEqual(expect.objectContaining({
+        send: false,
+        queue: false,
+        media: false,
+        start: true,
+        resume: true,
+        updateProvider: true,
+        archive: true,
+        delete: true,
+      }))
+      expect(idle.displayState.disabledReasons.send).toContain('active')
+      expect(idle.displayState.disabledReasons.media).toContain('active stream session')
+
+      const archiveResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_B}/archive`, {
+        method: 'POST',
+        headers: FULL_AUTH_HEADERS,
+      })
+      expect(archiveResponse.status).toBe(200)
+      const archived = await archiveResponse.json() as {
+        displayState: {
+          isVisible: boolean
+          disabledReasons: Record<string, string | null>
+        }
+        allowedActions: Record<string, boolean>
+      }
+      expect(archived.displayState.isVisible).toBe(false)
+      expect(archived.allowedActions).toEqual(expect.objectContaining({
+        send: false,
+        queue: false,
+        media: false,
+        start: false,
+        pause: false,
+        resume: false,
+        archive: true,
+        delete: true,
+        updateProvider: false,
+      }))
+      expect(archived.displayState.disabledReasons.send).toContain('archived')
+
+      const liveSessionName = buildConversationSessionName({
+        id: CONVERSATION_A,
+        commanderId: COMMANDER_A,
+      } as Parameters<typeof buildConversationSessionName>[0])
+      const liveSession = sessions.activeSessions.get(liveSessionName)
+      if (!liveSession) {
+        throw new Error('Expected active live session for pty read-model case')
+      }
+      liveSession.kind = 'pty'
+
+      const ptyResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(ptyResponse.status).toBe(200)
+      const pty = await ptyResponse.json() as {
+        sendTarget: {
+          transportType: string | null
+          queue: { supported: boolean; reason: string | null }
+          media: { supported: boolean; reason: string | null }
+        } | null
+        displayState: {
+          isSendable: boolean
+          isQueueable: boolean
+          isMediaSendable: boolean
+          disabledReasons: Record<string, string | null>
+        }
+        allowedActions: Record<string, boolean>
+      }
+      expect(pty.sendTarget).toEqual(expect.objectContaining({
+        transportType: 'pty',
+        queue: {
+          supported: false,
+          reason: expect.stringContaining('not stream-sendable'),
+        },
+        media: {
+          supported: false,
+          reason: expect.stringContaining('active stream session'),
+        },
+      }))
+      expect(pty.displayState).toEqual(expect.objectContaining({
+        isSendable: false,
+        isQueueable: false,
+        isMediaSendable: false,
+      }))
+      expect(pty.allowedActions).toEqual(expect.objectContaining({
+        send: false,
+        queue: false,
+        media: false,
+        pause: true,
+      }))
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('projects media sendability from provider capabilities', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-read-model-provider-media-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    const cases: Array<{ id: string; agentType: AgentType; supportsMedia: boolean }> = [
+      { id: '33333333-3333-4333-8333-333333333331', agentType: 'codex', supportsMedia: true },
+      { id: '33333333-3333-4333-8333-333333333332', agentType: 'gemini', supportsMedia: false },
+      { id: '33333333-3333-4333-8333-333333333333', agentType: 'opencode', supportsMedia: false },
+    ]
+
+    try {
+      for (const entry of cases) {
+        expect((await createConversation(server.baseUrl, COMMANDER_A, {
+          id: entry.id,
+          surface: 'ui',
+        })).status).toBe(201)
+        expect((await startConversation(server.baseUrl, entry.id, {
+          agentType: entry.agentType,
+        })).status).toBe(200)
+
+        const response = await fetch(`${server.baseUrl}/api/conversations/${entry.id}`, {
+          headers: READ_ONLY_AUTH_HEADERS,
+        })
+        expect(response.status).toBe(200)
+        const payload = await response.json() as {
+          displayState: {
+            isSendable: boolean
+            isQueueable: boolean
+            isMediaSendable: boolean
+            disabledReasons: Record<string, string | null>
+          }
+          sendTarget: {
+            agentType: AgentType | null
+            media: { supported: boolean; reason: string | null }
+          } | null
+          allowedActions: Record<string, boolean>
+        }
+
+        expect(payload.displayState).toEqual(expect.objectContaining({
+          isSendable: true,
+          isQueueable: true,
+          isMediaSendable: entry.supportsMedia,
+        }))
+        expect(payload.allowedActions).toEqual(expect.objectContaining({
+          send: true,
+          queue: true,
+          media: entry.supportsMedia,
+        }))
+        expect(payload.sendTarget).toEqual(expect.objectContaining({
+          agentType: entry.agentType,
+          media: {
+            supported: entry.supportsMedia,
+            reason: entry.supportsMedia ? null : 'Conversation provider does not support image attachments',
+          },
+        }))
+        expect(payload.displayState.disabledReasons.media).toBe(
+          entry.supportsMedia ? null : 'Conversation provider does not support image attachments',
+        )
+      }
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('marks active conversations without a live session as non-sendable', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-read-model-no-live-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'ui',
+      })).status).toBe(201)
+      expect((await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })).status).toBe(200)
+
+      const liveSessionName = buildConversationSessionName({
+        id: CONVERSATION_A,
+        commanderId: COMMANDER_A,
+      } as Parameters<typeof buildConversationSessionName>[0])
+      sessions.activeSessions.delete(liveSessionName)
+
+      const response = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(response.status).toBe(200)
+      const payload = await response.json() as {
+        sendTarget: {
+          sessionName: string
+          transportType: string | null
+        } | null
+        displayState: {
+          hasLiveSession: boolean
+          disabledReasons: Record<string, string | null>
+        }
+        allowedActions: Record<string, boolean>
+      }
+      expect(payload.sendTarget).toEqual(expect.objectContaining({
+        sessionName: liveSessionName,
+        transportType: null,
+      }))
+      expect(payload.displayState.hasLiveSession).toBe(false)
+      expect(payload.allowedActions).toEqual(expect.objectContaining({
+        send: false,
+        queue: false,
+        media: false,
+        pause: true,
+      }))
+      expect(payload.displayState.disabledReasons.send).toContain('no live session')
+      expect(payload.displayState.disabledReasons.media).toContain('active stream session')
+    } finally {
       await server.close()
     }
   })
@@ -1741,6 +2357,104 @@ describe('conversation routes', () => {
         error: `Conversation is idle. Call POST /api/conversations/${CONVERSATION_A}/start first.`,
       })
       expect(sessions.createCalls).toHaveLength(0)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('maps a selected-conversation image send to one canonical historical user message', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-image-history-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      const createResponse = await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })
+      expect(createResponse.status).toBe(201)
+
+      const startResponse = await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })
+      expect(startResponse.status).toBe(200)
+
+      const image = { mediaType: 'image/png', data: Buffer.from('image-bytes').toString('base64') }
+      const messageResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: 'Review this image.',
+          images: [image],
+        }),
+      })
+      expect(messageResponse.status).toBe(200)
+
+      const historyResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(historyResponse.status).toBe(200)
+      const history = await historyResponse.json() as {
+        messages: Array<{ kind: string; text: string; images?: QueuedMessageImage[] }>
+      }
+      const imageMessages = history.messages.filter((message) => (
+        message.kind === 'user'
+        && message.text === 'Review this image.'
+        && message.images?.[0]?.data === image.data
+      ))
+      expect(imageMessages).toHaveLength(1)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('rejects conversation websocket upgrades for stale conversation live-session state without delegating raw session names', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-ws-stale-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const rawSessionUpgrade = vi.fn()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+      conversationSessionWebSocket: rawSessionUpgrade,
+    })
+
+    try {
+      const createResponse = await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })
+      expect(createResponse.status).toBe(201)
+
+      const ws = new WebSocket(
+        `${server.baseUrl.replace('http://', 'ws://')}/api/conversations/${CONVERSATION_A}/ws?api_key=full-scope-key`,
+      )
+      const status = await new Promise<number>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Timed out')), 3_000)
+        ws.on('open', () => {
+          clearTimeout(timeout)
+          reject(new Error('WebSocket unexpectedly opened'))
+        })
+        ws.on('error', reject)
+        ws.on('unexpected-response', (_req, res) => {
+          clearTimeout(timeout)
+          resolve(res.statusCode ?? 0)
+        })
+      })
+
+      expect(status).toBe(404)
+      expect(rawSessionUpgrade).not.toHaveBeenCalled()
     } finally {
       await server.close()
     }
@@ -1953,10 +2667,17 @@ describe('conversation routes', () => {
         createdSession: true,
         commanderId: COMMANDER_A,
       }))
-      // Auto-start must spawn a session (createCommanderSession was called)
-      // and the inbound message must reach sendToSession.
+      // Auto-start must create the same commander-seeded runtime as a normal
+      // Start click, then queue the inbound channel text behind that seed turn.
       expect(sessions.createCalls.length).toBe(1)
-      expect(sessions.sendCalls.some((call) => call.text === 'Hello, atlas.')).toBe(true)
+      expect(sessions.sendCalls[0]).toEqual(expect.objectContaining({
+        text: STARTUP_PROMPT,
+      }))
+      expect(sessions.sendCalls[1]).toEqual(expect.objectContaining({
+        text: 'Hello, atlas.',
+        options: { queue: true, priority: 'normal' },
+      }))
+      expect(sessions.createCalls[0]?.systemPrompt).toContain('## Commander Memory')
     } finally {
       await server.close()
     }
@@ -1978,7 +2699,8 @@ describe('conversation routes', () => {
     })
 
     try {
-      // First inbound prime: starts the conversation in followup mode (live send).
+      // First inbound prime: starts the conversation and queues the channel
+      // message behind the commander startup seed.
       expect((await fetch(`${server.baseUrl}/api/commanders/channel-message`, {
         method: 'POST',
         headers: { ...FULL_AUTH_HEADERS, 'content-type': 'application/json' },

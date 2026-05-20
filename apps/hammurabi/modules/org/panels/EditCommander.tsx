@@ -2,7 +2,14 @@ import { useContext, useEffect, useState } from 'react'
 import { QueryClientContext, type QueryClient } from '@tanstack/react-query'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL, type ClaudeEffortLevel } from '@modules/claude-effort.js'
-import { generateCommanderAvatar } from '@modules/commanders/hooks/useCommander'
+import { COMMANDERS_QUERY_KEY, generateCommanderAvatar } from '@modules/commanders/hooks/useCommander'
+import {
+  COMMANDER_PORTRAIT_STYLE_OPTIONS,
+  DEFAULT_COMMANDER_PORTRAIT_STYLE_ID,
+  getCommanderPortraitStyle,
+  parseCommanderPortraitStyleId,
+  type CommanderPortraitStyleId,
+} from '@modules/commanders/portrait-styles'
 import {
   HIRE_COMMANDER_EFFORT_OPTIONS,
   listSupportedCommanderConversationProviders,
@@ -18,14 +25,13 @@ import type { OrgNode, OrgTree } from '@modules/org/types'
 import { ConfirmModal, EnumSelect, Field, FormModal } from '../components'
 
 const INPUT_CLASS =
-  'min-h-11 w-full rounded-2xl border border-ink-border bg-washi-white px-4 py-2 text-sm text-sumi-black outline-none transition-colors focus:border-sumi-black'
-const TEXTAREA_CLASS = `${INPUT_CLASS} min-h-28 resize-y`
+  'min-h-11 w-full rounded-2xl border border-[color:var(--hv-field-border)] bg-[var(--hv-field-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg)] outline-none transition-colors placeholder:text-[color:var(--hv-field-placeholder)] focus:border-[color:var(--hv-field-focus-border)]'
 const PRIMARY_BUTTON_CLASS =
-  'rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90 disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-button-primary-fg)] transition-colors hover:bg-[var(--hv-button-primary-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60'
 const SECONDARY_BUTTON_CLASS =
-  'rounded-full border border-ink-border px-4 py-2 text-sm text-sumi-black transition-colors hover:bg-ink-wash disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full border border-[color:var(--hv-button-ghost-border)] px-4 py-2 text-sm text-[color:var(--hv-button-ghost-fg)] transition-colors hover:bg-[var(--hv-button-ghost-hover-bg)] disabled:cursor-not-allowed disabled:opacity-60'
 const METADATA_CARD_CLASS =
-  'rounded-2xl border border-ink-border bg-washi-white px-4 py-3'
+  'rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3'
 
 type CommanderContextMode = 'thin' | 'fat'
 
@@ -41,12 +47,12 @@ interface EditCommanderProps {
 
 interface EditCommanderValues {
   displayName: string
-  persona: string
   agentType: OrgAgentType
   effort: ClaudeEffortLevel
   cwd: string
   maxTurns: string
   contextMode: CommanderContextMode
+  portraitStyleId: CommanderPortraitStyleId
 }
 
 interface EditCommanderMetadata {
@@ -72,7 +78,6 @@ function buildFormValues(
 ): EditCommanderValues {
   return {
     displayName: detail.displayName?.trim() || commanderDisplayName,
-    persona: detail.persona ?? '',
     agentType: detail.agentType ?? 'claude',
     effort: detail.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
     cwd: detail.cwd ?? '',
@@ -80,6 +85,7 @@ function buildFormValues(
       ? String(detail.maxTurns)
       : '1',
     contextMode: detail.contextMode === 'thin' ? 'thin' : 'fat',
+    portraitStyleId: detail.ui?.portraitStyleId ?? DEFAULT_COMMANDER_PORTRAIT_STYLE_ID,
   }
 }
 
@@ -105,6 +111,10 @@ function isValidAgentType(
 
 function isValidEffort(value: string): value is ClaudeEffortLevel {
   return HIRE_COMMANDER_EFFORT_OPTIONS.some((option) => option.value === value)
+}
+
+function isValidPortraitStyleId(value: string): value is CommanderPortraitStyleId {
+  return parseCommanderPortraitStyleId(value) !== null
 }
 
 function toUserFacingError(error: unknown, fallback: string): string {
@@ -279,16 +289,19 @@ export function EditCommander({
     && values
     && (
       normalizeName(values.displayName) !== normalizeName(initialValues.displayName)
-      || values.persona.trim() !== initialValues.persona.trim()
       || values.agentType !== initialValues.agentType
       || values.effort !== initialValues.effort
       || values.cwd.trim() !== initialValues.cwd.trim()
       || parsedMaxTurns !== Number.parseInt(initialValues.maxTurns, 10)
       || values.contextMode !== initialValues.contextMode
+      || values.portraitStyleId !== initialValues.portraitStyleId
     ),
   )
 
   const avatarFallback = commanderAvatarFallback(trimmedDisplayName || commanderDisplayName)
+  const selectedPortraitStyle = getCommanderPortraitStyle(
+    values?.portraitStyleId ?? DEFAULT_COMMANDER_PORTRAIT_STYLE_ID,
+  )
 
   async function handleGenerateAvatar(): Promise<void> {
     setIsGenerateAvatarConfirmOpen(false)
@@ -296,7 +309,10 @@ export function EditCommander({
     setIsGeneratingAvatar(true)
 
     try {
-      const { avatarUrl } = await generateCommanderAvatar({ commanderId })
+      const { avatarUrl } = await generateCommanderAvatar({
+        commanderId,
+        styleId: values?.portraitStyleId ?? DEFAULT_COMMANDER_PORTRAIT_STYLE_ID,
+      })
       const refreshedDetail = await fetchOrgCommanderDetail(commanderId).catch(() => null)
       const timestamp = Date.now()
       const resolvedAvatarUrl = refreshedDetail?.avatarUrl ?? avatarUrl
@@ -304,6 +320,7 @@ export function EditCommander({
 
       setAvatarPreviewUrl(cacheBustedAvatarUrl)
       await queryClient?.invalidateQueries({ queryKey: ORG_QUERY_KEY })
+      await queryClient?.invalidateQueries({ queryKey: COMMANDERS_QUERY_KEY })
       queryClient?.setQueriesData<OrgTree>(
         { queryKey: ORG_QUERY_KEY },
         (current) => updateOrgTreeAvatarUrl(current, commanderId, cacheBustedAvatarUrl),
@@ -321,14 +338,10 @@ export function EditCommander({
     }
 
     const payload: Record<string, string | number> = {}
-    const trimmedPersona = values.persona.trim()
     const trimmedCwd = values.cwd.trim()
 
     if (normalizeName(values.displayName) !== normalizeName(initialValues.displayName)) {
       payload.displayName = trimmedDisplayName
-    }
-    if (trimmedPersona !== initialValues.persona.trim()) {
-      payload.persona = trimmedPersona
     }
     if (values.agentType !== initialValues.agentType) {
       payload.agentType = values.agentType
@@ -345,12 +358,16 @@ export function EditCommander({
     if (values.contextMode !== initialValues.contextMode) {
       payload.contextMode = values.contextMode
     }
+    if (values.portraitStyleId !== initialValues.portraitStyleId) {
+      payload.portraitStyleId = values.portraitStyleId
+    }
 
     setIsPending(true)
     setGlobalError(null)
     try {
       await updateOrgCommander(commanderId, payload)
       await queryClient?.invalidateQueries({ queryKey: ORG_QUERY_KEY })
+      await queryClient?.invalidateQueries({ queryKey: COMMANDERS_QUERY_KEY })
       onUpdated?.(trimmedDisplayName)
       requestClose()
     } catch (error) {
@@ -393,69 +410,89 @@ export function EditCommander({
         {globalError ? (
           <div
             data-testid="edit-commander-error"
-            className="rounded-2xl border border-accent-vermillion/30 bg-accent-vermillion/10 px-4 py-3 text-sm text-accent-vermillion"
+            className="rounded-2xl border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-4 py-3 text-sm text-[color:var(--hv-accent-danger)]"
           >
             {globalError}
           </div>
         ) : null}
 
         {isLoading ? (
-          <p data-testid="edit-commander-loading" className="text-sm text-sumi-diluted">
+          <p data-testid="edit-commander-loading" className="text-sm text-[color:var(--hv-fg-muted)]">
             Loading commander details...
           </p>
         ) : !values || !metadata ? (
-          <p data-testid="edit-commander-load-failed" className="text-sm text-sumi-diluted">
+          <p data-testid="edit-commander-load-failed" className="text-sm text-[color:var(--hv-fg-muted)]">
             Commander details are unavailable right now.
           </p>
         ) : (
           <div className="space-y-6">
             <div className="space-y-4">
-              <p className="text-sm text-sumi-diluted">
+              <p className="text-sm text-[color:var(--hv-fg-muted)]">
                 Update commander identity and runtime defaults without leaving the org page.
               </p>
 
-              <div className="flex flex-col gap-4 rounded-2xl border border-ink-border bg-washi-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div
+                data-testid="edit-commander-portrait-panel"
+                className="flex flex-col gap-4 rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-4 text-[color:var(--hv-fg)] shadow-[var(--hv-shadow-whisper)] sm:flex-row sm:items-center sm:justify-between"
+              >
                 <div className="flex min-w-0 items-center gap-4">
                   {avatarPreviewUrl ? (
                     <img
                       data-testid="edit-commander-avatar-preview"
                       src={avatarPreviewUrl}
                       alt={`${trimmedDisplayName || commanderDisplayName} avatar`}
-                      className="h-16 w-16 rounded-full border border-ink-border object-cover"
+                      className="h-20 w-20 rounded-full border border-[color:var(--hv-border-soft)] object-cover"
                     />
                   ) : (
                     <div
                       data-testid="edit-commander-avatar-fallback"
-                      className="flex h-16 w-16 items-center justify-center rounded-full border border-ink-border bg-washi-aged text-base font-medium text-sumi-black"
+                      className="flex h-20 w-20 items-center justify-center rounded-full border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-raised)] text-base font-medium text-[color:var(--hv-fg)]"
                     >
                       {avatarFallback}
                     </div>
                   )}
                   <div className="min-w-0">
-                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-sumi-diluted">
-                      Avatar
+                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">
+                      Portrait
                     </p>
-                    <p className="mt-1 text-sm text-sumi-black">
-                      Generate a fresh sumi portrait from this commander&apos;s `COMMANDER.md`.
+                    <p className="mt-1 text-sm text-[color:var(--hv-fg)]">
+                      Generate a fresh {selectedPortraitStyle.label} portrait from this commander&apos;s `COMMANDER.md`.
                     </p>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  data-testid="edit-commander-generate-avatar-button"
-                  onClick={() => setIsGenerateAvatarConfirmOpen(true)}
-                  disabled={isLoading || isPending || isGeneratingAvatar}
-                  className={SECONDARY_BUTTON_CLASS}
-                >
-                  {isGeneratingAvatar ? 'Generating...' : 'Generate avatar'}
-                </button>
+                <div className="grid w-full gap-3 sm:w-64">
+                  <Field label="Portrait Style" htmlFor="edit-commander-portrait-style-select">
+                    <EnumSelect
+                      id="edit-commander-portrait-style-select"
+                      data-testid="edit-commander-portrait-style-select"
+                      value={values.portraitStyleId}
+                      onChange={(event) => {
+                        const nextValue = event.target.value
+                        if (isValidPortraitStyleId(nextValue)) {
+                          updateField('portraitStyleId', nextValue)
+                        }
+                      }}
+                      options={COMMANDER_PORTRAIT_STYLE_OPTIONS}
+                    />
+                  </Field>
+
+                  <button
+                    type="button"
+                    data-testid="edit-commander-generate-avatar-button"
+                    onClick={() => setIsGenerateAvatarConfirmOpen(true)}
+                    disabled={isLoading || isPending || isGeneratingAvatar}
+                    className={SECONDARY_BUTTON_CLASS}
+                  >
+                    {isGeneratingAvatar ? 'Generating...' : 'Generate avatar'}
+                  </button>
+                </div>
               </div>
 
               {avatarError ? (
                 <div
                   data-testid="edit-commander-avatar-error"
-                  className="rounded-2xl border border-accent-vermillion/30 bg-accent-vermillion/10 px-4 py-3 text-sm text-accent-vermillion"
+                  className="rounded-2xl border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-4 py-3 text-sm text-[color:var(--hv-accent-danger)]"
                 >
                   {avatarError}
                 </div>
@@ -473,16 +510,6 @@ export function EditCommander({
                   value={values.displayName}
                   onChange={(event) => updateField('displayName', event.target.value)}
                   className={INPUT_CLASS}
-                />
-              </Field>
-
-              <Field label="Persona" htmlFor="edit-commander-persona-input">
-                <textarea
-                  id="edit-commander-persona-input"
-                  data-testid="edit-commander-persona-textarea"
-                  value={values.persona}
-                  onChange={(event) => updateField('persona', event.target.value)}
-                  className={TEXTAREA_CLASS}
                 />
               </Field>
 
@@ -566,32 +593,32 @@ export function EditCommander({
             </div>
 
             <div className="space-y-3">
-              <h2 className="text-sm font-medium text-sumi-black">Metadata</h2>
+              <h2 className="text-sm font-medium text-[color:var(--hv-fg)]">Metadata</h2>
               <dl
                 data-testid="edit-commander-metadata"
                 className="grid gap-3 sm:grid-cols-2"
               >
                 <div className={METADATA_CARD_CLASS}>
-                  <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">ID</dt>
-                  <dd className="mt-1 break-all font-mono text-sm text-sumi-black">{metadata.id}</dd>
+                  <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">ID</dt>
+                  <dd className="mt-1 break-all font-mono text-sm text-[color:var(--hv-fg)]">{metadata.id}</dd>
                 </div>
                 <div className={METADATA_CARD_CLASS}>
-                  <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Operator ID</dt>
-                  <dd className="mt-1 break-all font-mono text-sm text-sumi-black">{metadata.operatorId ?? '—'}</dd>
+                  <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Operator ID</dt>
+                  <dd className="mt-1 break-all font-mono text-sm text-[color:var(--hv-fg)]">{metadata.operatorId ?? '—'}</dd>
                 </div>
                 <div className={METADATA_CARD_CLASS}>
-                  <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Created At</dt>
-                  <dd className="mt-1 break-all font-mono text-sm text-sumi-black">{metadata.createdAt ?? '—'}</dd>
+                  <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Created At</dt>
+                  <dd className="mt-1 break-all font-mono text-sm text-[color:var(--hv-fg)]">{metadata.createdAt ?? '—'}</dd>
                 </div>
                 <div className={METADATA_CARD_CLASS}>
-                  <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Template ID</dt>
-                  <dd className="mt-1 break-all font-mono text-sm text-sumi-black">{metadata.templateId ?? '—'}</dd>
+                  <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Template ID</dt>
+                  <dd className="mt-1 break-all font-mono text-sm text-[color:var(--hv-fg)]">{metadata.templateId ?? '—'}</dd>
                 </div>
                 <div className={`${METADATA_CARD_CLASS} sm:col-span-2`}>
-                  <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">
+                  <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">
                     Replicated From Commander ID
                   </dt>
-                  <dd className="mt-1 break-all font-mono text-sm text-sumi-black">
+                  <dd className="mt-1 break-all font-mono text-sm text-[color:var(--hv-fg)]">
                     {metadata.replicatedFromCommanderId ?? '—'}
                   </dd>
                 </div>
@@ -604,7 +631,7 @@ export function EditCommander({
       <ConfirmModal
         open={isGenerateAvatarConfirmOpen}
         title="Generate avatar"
-        message="Generate avatar from this commander's COMMANDER.md? This will overwrite the current avatar."
+        message={`Generate a ${selectedPortraitStyle.label} avatar from this commander's COMMANDER.md? This will overwrite the current avatar.`}
         confirmLabel="Generate now"
         bodyTestId="edit-commander-generate-avatar-confirm-modal"
         onClose={() => setIsGenerateAvatarConfirmOpen(false)}

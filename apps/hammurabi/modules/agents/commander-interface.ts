@@ -15,7 +15,7 @@
  * Non-closure dependencies stay imported directly so the context interface
  * stays focused on what's actually router-local.
  */
-import type { QueuedMessage, QueuedMessagePriority } from './message-queue.js'
+import type { QueuedMessage, QueuedMessageImage, QueuedMessagePriority } from './message-queue.js'
 import type { ProviderCreateOptions } from './providers/provider-adapter.js'
 import { getProvider } from './providers/registry.js'
 import type {
@@ -24,6 +24,7 @@ import type {
   ClaudePermissionMode,
   CommanderSessionsInterface,
   MachineConfig,
+  SessionSendPayload,
   StreamJsonEvent,
   StreamSession,
 } from './types.js'
@@ -49,6 +50,7 @@ export type RuntimeShutdown = (reason?: string) => Promise<void>
 export type CreateQueuedMessage = (
   text: string,
   priority: QueuedMessagePriority,
+  images?: QueuedMessageImage[],
 ) => QueuedMessage
 
 export type EnqueueQueuedMessage = (
@@ -70,6 +72,7 @@ export type ScheduleQueueDrain = (
 export type SendImmediateText = (
   session: StreamSession,
   text: string,
+  images?: QueuedMessageImage[],
 ) => Promise<
   | { ok: true; queued: boolean; message: QueuedMessage }
   | { ok: false; error: string }
@@ -113,6 +116,17 @@ export type BaseCommanderSessionsInterface = Omit<
 
 type CreateCommanderSessionInput = Parameters<BaseCommanderSessionsInterface['createCommanderSession']>[0]
 
+function normalizeSendPayload(payload: string | SessionSendPayload): SessionSendPayload {
+  if (typeof payload === 'string') {
+    return { text: payload }
+  }
+  const images = payload.images && payload.images.length > 0 ? [...payload.images] : undefined
+  return {
+    text: payload.text,
+    images,
+  }
+}
+
 /**
  * Construct the commander-session interface backed by the given router
  * context. Behavior is identical to the pre-#921-P5 inline object literal
@@ -142,6 +156,8 @@ export function createCommanderSessionsInterface(
     agentType,
     model,
     effort,
+    adaptiveThinking,
+    maxThinkingTokens,
     cwd,
     resumeProviderContext,
     maxTurns,
@@ -165,6 +181,8 @@ export function createCommanderSessionsInterface(
       systemPrompt,
       model,
       effort,
+      adaptiveThinking,
+      maxThinkingTokens,
       maxTurns,
       sessionType: 'commander',
       creator,
@@ -241,13 +259,14 @@ export function createCommanderSessionsInterface(
       return replacement
     },
 
-    async sendToSession(name, text, options) {
+    async sendToSession(name, payload, options) {
       const session = sessions.get(name)
       if (!session || session.kind !== 'stream') {
         return false
       }
+      const { text, images } = normalizeSendPayload(payload)
       if (options?.queue) {
-        const message = createQueuedMessage(text, options.priority ?? 'normal')
+        const message = createQueuedMessage(text, options.priority ?? 'normal', images)
         const queued = enqueueQueuedMessage(session, message)
         if (!queued.ok) {
           return false
@@ -256,7 +275,7 @@ export function createCommanderSessionsInterface(
         return true
       }
 
-      const result = await sendImmediateTextToStreamSession(session, text)
+      const result = await sendImmediateTextToStreamSession(session, text, images)
       return result.ok
     },
 

@@ -5,8 +5,10 @@ import { cn } from '@/lib/utils'
 import type { AgentType, SessionQueueSnapshot } from '@/types'
 import {
   getWorkspaceSourceKey,
+  type WorkspacePendingFileAnnotation,
   type WorkspaceSource,
 } from '@modules/workspace/use-workspace'
+import type { WorkspaceTreeNode } from '@modules/workspace/types'
 import type { SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
 import type { MsgItem } from '@modules/agents/messages/model'
 import {
@@ -15,6 +17,11 @@ import {
   type CommanderAgentType,
   type CommanderSession,
 } from '@modules/commanders/hooks/useCommander'
+import {
+  normalizeCommandRoomGlobalSearchParams,
+  normalizeCommandRoomRouteMetadata,
+  type CommandRoomRouteMetadata,
+} from '@modules/command-room/route-metadata'
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
 import type { Commander, Worker } from '@modules/command-room/components/desktop/SessionRow'
 import { MobileApprovalSheet } from '@modules/approvals/MobileApprovalSheet'
@@ -33,13 +40,17 @@ function approvalMatchesCommander(approval: PendingApproval, commander: Commande
   return approval.commanderId === commander.id || approval.commanderName === commander.name
 }
 
-function resolveMobileTab(pathname: string): MobileTab {
-  if (pathname.startsWith('/command-room/inbox')) {
-    return 'inbox'
+function resolveMobileTab(pathname: string, metadata: CommandRoomRouteMetadata): MobileTab {
+  const inboxMode = metadata.mobile.modes.find((mode) => mode.id === 'inbox')
+  if (inboxMode && pathname.startsWith(inboxMode.path)) {
+    return inboxMode.id
   }
-  if (pathname.startsWith('/command-room/settings')) {
-    return 'settings'
+
+  const settingsMode = metadata.mobile.modes.find((mode) => mode.id === 'settings')
+  if (settingsMode && pathname.startsWith(settingsMode.path)) {
+    return settingsMode.id
   }
+
   return 'sessions'
 }
 
@@ -78,7 +89,13 @@ export interface MobileCommandRoomProps {
   onQueue?: (
     payload: SessionComposerSubmitPayload,
   ) => boolean | void | Promise<boolean | void>
+  contextFileAnnotations?: WorkspacePendingFileAnnotation[]
+  onRemoveContextFileAnnotation?: (commentId: string) => void
+  onClearContextFileAnnotations?: () => void
   workspaceSource: WorkspaceSource | null
+  onOpenWorkspaceFile?: (path: string) => void
+  workspaceRequestedPath?: string | null
+  workspaceRequestedPathToken?: number
   onStopCommander?: () => void
   onCreateChatForCommander?: (commanderId: string) => void | Promise<void>
   onCreateConversation?: (
@@ -97,6 +114,7 @@ export interface MobileCommandRoomProps {
   ) => void | Promise<void>
   onArchiveConversation?: (conversationId: string) => void | Promise<void>
   onRemoveConversation?: (conversationId: string) => void | Promise<void>
+  commandRoomRouteMetadata?: CommandRoomRouteMetadata
 }
 
 export function MobileCommandRoom({
@@ -132,7 +150,13 @@ export function MobileCommandRoom({
   onRemoveQueuedMessage,
   onSend,
   onQueue,
+  contextFileAnnotations = [],
+  onRemoveContextFileAnnotation,
+  onClearContextFileAnnotations,
   workspaceSource,
+  onOpenWorkspaceFile,
+  workspaceRequestedPath,
+  workspaceRequestedPathToken = 0,
   onStopCommander,
   onCreateConversation,
   requestedNewChatCommanderId = null,
@@ -142,47 +166,63 @@ export function MobileCommandRoom({
   onSwapConversationProvider,
   onArchiveConversation,
   onRemoveConversation,
+  commandRoomRouteMetadata,
 }: MobileCommandRoomProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const commanderParam = searchParams.get('commander')?.trim() || null
-  const commanderId = commanderParam === 'global' ? GLOBAL_COMMANDER_ID : commanderParam
-  const tab = resolveMobileTab(location.pathname)
+  const routeMetadata = useMemo(
+    () => normalizeCommandRoomRouteMetadata(commandRoomRouteMetadata),
+    [commandRoomRouteMetadata],
+  )
+  const { launch: commandRoomLaunch, globalCommander: globalCommanderRoute, mobile: mobileRoute } = routeMetadata
+  const commanderParam = searchParams.get(commandRoomLaunch.commanderParam)?.trim() || null
+  const commanderId = commanderParam === globalCommanderRoute.commanderValue ? GLOBAL_COMMANDER_ID : commanderParam
+  const tab = resolveMobileTab(location.pathname, routeMetadata)
   const inChat = tab === 'sessions' && commanderId !== null && !isGlobalCommanderId(commanderId)
   const [sheet, setSheet] = useState<SheetKind>(null)
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null)
   const [contextFilePaths, setContextFilePaths] = useState<string[]>([])
+  const [contextDirectoryPaths, setContextDirectoryPaths] = useState<string[]>([])
   const approvalDecision = useApprovalDecision()
-  const surface = searchParams.get('surface')
-  const surfaceSearch = surface ? `surface=${encodeURIComponent(surface)}` : ''
+  const surface = searchParams.get(mobileRoute.surfaceParam)
+  const surfaceSearch = surface ? `${mobileRoute.surfaceParam}=${encodeURIComponent(surface)}` : ''
   const workspaceSelectionKey = useMemo(
     () => workspaceSource ? getWorkspaceSourceKey(workspaceSource) : `none:${composerSessionName}`,
     [composerSessionName, workspaceSource],
   )
 
   useEffect(() => {
-    if (location.pathname !== '/command-room' || commanderId !== GLOBAL_COMMANDER_ID) {
+    if (
+      !mobileRoute.normalizeGlobalRoute
+      || location.pathname !== commandRoomLaunch.path
+      || commanderId !== GLOBAL_COMMANDER_ID
+    ) {
       return
     }
 
-    const nextParams = new URLSearchParams()
-    const surface = searchParams.get('surface')
-    if (surface) {
-      nextParams.set('surface', surface)
-    }
-    nextParams.set('commander', 'global')
-    nextParams.set('panel', 'automation')
+    const nextParams = normalizeCommandRoomGlobalSearchParams(
+      new URLSearchParams(location.search),
+      routeMetadata,
+    )
     const nextSearch = nextParams.toString()
     const currentSearch = location.search.startsWith('?')
       ? location.search.slice(1)
       : location.search
-    if (location.pathname === '/command-room' && currentSearch === nextSearch) {
+    if (location.pathname === commandRoomLaunch.path && currentSearch === nextSearch) {
       return
     }
 
-    navigate(`/command-room?${nextSearch}`, { replace: true })
-  }, [commanderId, location.pathname, location.search, navigate, searchParams])
+    navigate(`${commandRoomLaunch.path}?${nextSearch}`, { replace: true })
+  }, [
+    commandRoomLaunch.path,
+    commanderId,
+    location.pathname,
+    location.search,
+    mobileRoute.normalizeGlobalRoute,
+    navigate,
+    routeMetadata,
+  ])
 
   useEffect(() => {
     if (!selectedApprovalId) {
@@ -197,6 +237,7 @@ export function MobileCommandRoom({
 
   useEffect(() => {
     setContextFilePaths([])
+    setContextDirectoryPaths([])
   }, [workspaceSelectionKey])
 
   const selectedCommander = commanders.find((commander) => commander.id === selectedCommanderId) ?? commanders[0] ?? null
@@ -225,6 +266,7 @@ export function MobileCommandRoom({
     () => orderMobileConversations(
       (conversations ?? []).filter((conversation) => (
         conversation.commanderId === activeCommander?.id
+        && conversation.displayState?.isVisible !== false
         && conversation.status !== 'archived'
       )),
     ),
@@ -260,10 +302,6 @@ export function MobileCommandRoom({
     setSelectedApprovalId(null)
   }
 
-  function navigateTo(pathname: string) {
-    navigate(`${pathname}${surfaceSearch ? `?${surfaceSearch}` : ''}`)
-  }
-
   const handleSelectConversationId = useCallback((conversationId: string | null) => {
     onSelectConversationId(conversationId)
   }, [onSelectConversationId])
@@ -273,10 +311,10 @@ export function MobileCommandRoom({
       return
     }
     navigate(
-      `/command-room${surfaceSearch ? `?${surfaceSearch}` : ''}`,
+      `${commandRoomLaunch.path}${surfaceSearch ? `?${surfaceSearch}` : ''}`,
       { replace: true },
     )
-  }, [activeCommander, commanders, inChat, navigate, surfaceSearch])
+  }, [activeCommander, commandRoomLaunch.path, commanders, inChat, navigate, surfaceSearch])
 
   function openApproval(approvalId: string | null) {
     setSelectedApprovalId(approvalId ?? null)
@@ -287,15 +325,34 @@ export function MobileCommandRoom({
     onSelectCommanderId(id)
   }
 
-  function handleAddContextFilePath(filePath: string) {
+  function handleAddWorkspaceContextPath(contextPath: string, type: WorkspaceTreeNode['type'] = 'file') {
+    const normalizedPath = contextPath.trim().replace(/\/+$/u, '')
+    if (!normalizedPath) {
+      return
+    }
+    if (type === 'directory') {
+      setContextDirectoryPaths((current) => (
+        current.includes(normalizedPath) ? current : [...current, normalizedPath]
+      ))
+      return
+    }
     setContextFilePaths((current) => (
-      current.includes(filePath) ? current : [...current, filePath]
+      current.includes(normalizedPath) ? current : [...current, normalizedPath]
     ))
   }
 
   function handleRemoveContextFilePath(filePath: string) {
     setContextFilePaths((current) => current.filter((entry) => entry !== filePath))
   }
+
+  function handleRemoveContextDirectoryPath(directoryPath: string) {
+    setContextDirectoryPaths((current) => current.filter((entry) => entry !== directoryPath))
+  }
+
+  const handleOpenWorkspaceFileFromChat = useCallback((filePath: string) => {
+    void onOpenWorkspaceFile?.(filePath)
+    setSheet('workspace')
+  }, [onOpenWorkspaceFile])
 
   return (
     <section
@@ -304,7 +361,7 @@ export function MobileCommandRoom({
         // component is a normal flex-fill route body, not a viewport overlay.
         // overflow-x-hidden kept here as defence-in-depth. See issue 1107.
         'flex min-h-0 flex-1 w-full flex-col overflow-x-hidden',
-        'bg-washi-aged/35',
+        'bg-[var(--hv-bg-raised)]',
       )}
       data-testid="mobile-command-room"
     >
@@ -337,6 +394,7 @@ export function MobileCommandRoom({
             onBack={() => navigate('/org')}
             onOpenTeam={() => setSheet('team')}
             onOpenWorkspace={() => setSheet('workspace')}
+            onOpenWorkspaceFile={handleOpenWorkspaceFileFromChat}
             onSelectConversationId={handleSelectConversationId}
             onCreateConversation={activeCommander
               ? (agentType, model) => onCreateConversation?.(activeCommander.id, agentType, model) ?? null
@@ -360,8 +418,16 @@ export function MobileCommandRoom({
             onMoveQueuedMessage={onMoveQueuedMessage}
             onRemoveQueuedMessage={onRemoveQueuedMessage}
             contextFilePaths={contextFilePaths}
+            contextDirectoryPaths={contextDirectoryPaths}
+            contextFileAnnotations={contextFileAnnotations}
             onRemoveContextFilePath={handleRemoveContextFilePath}
-            onClearContextFilePaths={() => setContextFilePaths([])}
+            onRemoveContextDirectoryPath={handleRemoveContextDirectoryPath}
+            onRemoveContextFileAnnotation={onRemoveContextFileAnnotation}
+            onClearContextFilePaths={() => {
+              setContextFilePaths([])
+              setContextDirectoryPaths([])
+              onClearContextFileAnnotations?.()
+            }}
             onSend={onSend}
             onQueue={onQueue}
           />
@@ -417,8 +483,10 @@ export function MobileCommandRoom({
       <MobileWorkspaceSheet
         open={sheet === 'workspace'}
         source={workspaceSource}
-        onSelectFile={handleAddContextFilePath}
+        onSelectFile={handleAddWorkspaceContextPath}
         onClose={closeSheets}
+        requestedPath={workspaceRequestedPath}
+        requestedPathToken={workspaceRequestedPathToken}
       />
     </section>
   )

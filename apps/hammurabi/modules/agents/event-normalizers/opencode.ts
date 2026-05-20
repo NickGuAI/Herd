@@ -14,6 +14,7 @@ export interface OpenCodeTurnState {
     type: OpenCodeBlockType
   }
   lastPlanText?: string
+  lastPlanApprovalToolId?: string
 }
 
 function withOpenCodeSource<T extends HammurabiEvent>(event: T): T {
@@ -36,6 +37,24 @@ function readTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : undefined
+}
+
+function readTrimmedId(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  return readTrimmedString(value)
+}
+
+function readProviderRequestId(value: unknown): string | number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  return readTrimmedString(value)
+}
+
+function readLowerString(value: unknown): string | undefined {
+  return readTrimmedString(value)?.toLowerCase()
 }
 
 function stringifyUnknown(value: unknown): string | undefined {
@@ -161,6 +180,14 @@ function extractPromptUsage(result: Record<string, unknown>): HammurabiUsage | u
 }
 
 function formatPlan(update: Record<string, unknown>): string | undefined {
+  const directPlan =
+    readTrimmedString(update.plan) ??
+    readTrimmedString(update.markdown) ??
+    readTrimmedString(update.text)
+  if (directPlan) {
+    return directPlan
+  }
+
   const entries = Array.isArray(update.entries) ? update.entries : []
   const lines = entries
     .map((entry) => {
@@ -181,6 +208,102 @@ function formatPlan(update: Record<string, unknown>): string | undefined {
     .filter((entry): entry is string => Boolean(entry))
 
   return lines.length > 0 ? lines.join('\n') : undefined
+}
+
+function readPlanDefaultDecision(update: Record<string, unknown>): 'approve' | 'reject' | undefined {
+  const value = readLowerString(update.defaultDecision)
+  if (!value) {
+    return undefined
+  }
+  if (['approve', 'approved', 'yes', 'true'].includes(value)) {
+    return 'approve'
+  }
+  if (['reject', 'rejected', 'no', 'false'].includes(value)) {
+    return 'reject'
+  }
+  return undefined
+}
+
+function readPlanAutoResolveAfterMs(update: Record<string, unknown>): number | undefined {
+  const value = update.autoResolveAfterMs
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined
+}
+
+function readPlanToolId(update: Record<string, unknown>): string | undefined {
+  return readTrimmedId(update.toolCallId) ??
+    readTrimmedId(update.toolUseId) ??
+    readTrimmedId(update.toolId) ??
+    readTrimmedId(update.requestId) ??
+    readTrimmedId(update.id)
+}
+
+function isWaitingPlanUpdate(update: Record<string, unknown>): boolean {
+  if (
+    update.awaitingApproval === true ||
+    update.requiresApproval === true ||
+    update.needsApproval === true ||
+    update.waitingForDecision === true ||
+    update.blocking === true
+  ) {
+    return true
+  }
+
+  const waitingValues = new Set([
+    'awaiting_approval',
+    'awaiting approval',
+    'blocked',
+    'pending_approval',
+    'requires_approval',
+    'requires approval',
+    'waiting',
+    'waiting_for_approval',
+    'waiting for approval',
+    'waiting_for_decision',
+    'waiting for decision',
+  ])
+  return [
+    readLowerString(update.status),
+    readLowerString(update.state),
+    readLowerString(update.phase),
+    readLowerString(update.decisionState),
+  ].some((value) => Boolean(value && waitingValues.has(value)))
+}
+
+function buildPlanApprovalEvent(update: Record<string, unknown>, plan: string): HammurabiEvent | null {
+  if (!isWaitingPlanUpdate(update)) {
+    return null
+  }
+  const toolId = readPlanToolId(update)
+  if (!toolId) {
+    return null
+  }
+  const toolName = readTrimmedString(update.toolName) ?? 'PlanApproval'
+  const expiresAt = readTrimmedString(update.expiresAt)
+  const autoResolveAfterMs = readPlanAutoResolveAfterMs(update)
+  const defaultDecision = readPlanDefaultDecision(update)
+  return withOpenCodeSource({
+    type: 'plan_approval',
+    interactionKind: 'plan_approval',
+    toolId,
+    toolName,
+    plan,
+    approveLabel: readTrimmedString(update.approveLabel) ?? 'Approve',
+    rejectLabel: readTrimmedString(update.rejectLabel) ?? 'Reject',
+    customResponseLabel: readTrimmedString(update.customResponseLabel) ?? 'Response',
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(autoResolveAfterMs !== undefined ? { autoResolveAfterMs } : {}),
+    ...(defaultDecision ? { defaultDecision } : {}),
+    providerContext: {
+      provider: 'opencode',
+      backend: 'acp',
+      toolUseId: toolId,
+      toolName,
+      ...(update.requestId !== undefined ? { requestId: readProviderRequestId(update.requestId) ?? String(update.requestId) } : {}),
+      answerFormat: 'opencode.plan_decision',
+    },
+  })
 }
 
 function describeStopReason(stopReason: string | undefined): { result: string; isError?: boolean; subtype?: string } {
@@ -214,7 +337,7 @@ export function normalizeOpenCodeSessionUpdate(
     return null
   }
 
-  const sessionUpdate = readTrimmedString(update.sessionUpdate)
+  const sessionUpdate = readTrimmedString(update.sessionUpdate) ?? readTrimmedString(update.type)
   if (!sessionUpdate) {
     return null
   }
@@ -292,10 +415,23 @@ export function normalizeOpenCodeSessionUpdate(
     }
     case 'plan': {
       const plan = formatPlan(update)
-      if (!plan || plan === state.lastPlanText) {
+      if (!plan) {
+        return null
+      }
+      const planApproval = buildPlanApprovalEvent(update, plan)
+      if (planApproval?.type === 'plan_approval') {
+        if (plan === state.lastPlanText && planApproval.toolId === state.lastPlanApprovalToolId) {
+          return null
+        }
+        state.lastPlanText = plan
+        state.lastPlanApprovalToolId = planApproval.toolId
+        return planApproval
+      }
+      if (plan === state.lastPlanText) {
         return null
       }
       state.lastPlanText = plan
+      state.lastPlanApprovalToolId = undefined
       return withOpenCodeSource({
         type: 'planning',
         action: 'proposed',

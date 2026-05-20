@@ -12,6 +12,7 @@ import {
   type CommanderSession,
   type CommanderSessionStore,
 } from './store.js'
+import { mergeIdentityOperatingStyleIntoCommanderWorkflow } from './templates/workflow.js'
 import { COMMANDER_WORKFLOW_FILE } from './workflow.js'
 
 export interface CommanderConfigMigrationResult {
@@ -243,13 +244,34 @@ export async function migrateLegacyCommanderConfigForSession(
   options: CommanderConfigMigrationOptions = {},
 ): Promise<CommanderConfigMigrationResult> {
   const logger = options.logger ?? console
+  const legacyIdentityText = typeof session.persona === 'string' && session.persona.trim().length > 0
+    ? session.persona.trim()
+    : undefined
+  let legacyIdentityWorkflowUpdated = false
+  if (legacyIdentityText && !options.dryRun) {
+    const merged = await mergeIdentityOperatingStyleIntoCommanderWorkflow(
+      session.id,
+      legacyIdentityText,
+      {
+        cwd: session.cwd,
+        basePath: options.commanderBasePath,
+      },
+    )
+    legacyIdentityWorkflowUpdated = merged.updated
+    if (merged.updated) {
+      logger.info(
+        `[commanders][migration] Commander "${session.id}" moved legacy identity text into COMMANDER.md.`,
+      )
+    }
+  }
+
   const workflowFile = await readWorkflowFile(session.id, options.commanderBasePath)
   if (!workflowFile) {
     return {
       commanderId: session.id,
-      migratedFields: [],
+      migratedFields: legacyIdentityText ? ['legacyIdentityText'] : [],
       removedFrontmatterKeys: [],
-      sessionUpdated: false,
+      sessionUpdated: Boolean(legacyIdentityText),
       workflowUpdated: false,
     }
   }
@@ -333,6 +355,16 @@ export async function migrateLegacyCommanderConfigForSession(
     }
   }
 
+  if (legacyIdentityText) {
+    migratedFields.push('legacyIdentityText')
+    if (!options.dryRun) {
+      await sessionStore.update(session.id, (current) => {
+        const { persona: _legacyPersona, ...next } = current
+        return next
+      })
+    }
+  }
+
   if (workflowUpdate.changed) {
     logger.info(
       `[commanders][migration] Commander "${session.id}" removed COMMANDER.md runtime frontmatter keys: ${formatFields(workflowUpdate.removedKeys)}`,
@@ -344,12 +376,12 @@ export async function migrateLegacyCommanderConfigForSession(
 
   return {
     commanderId: session.id,
-    migratedFields,
-    removedFrontmatterKeys: workflowUpdate.removedKeys,
-    sessionUpdated: migratedFields.length > 0,
-    workflowUpdated: workflowUpdate.changed,
+      migratedFields,
+      removedFrontmatterKeys: workflowUpdate.removedKeys,
+      sessionUpdated: migratedFields.length > 0,
+      workflowUpdated: workflowUpdate.changed || legacyIdentityWorkflowUpdated,
+    }
   }
-}
 
 export async function migrateLegacyCommanderConfig(
   sessionStore: CommanderSessionStore,

@@ -14,6 +14,7 @@ import {
 import { getBuiltInAction } from './registry.js'
 import { ApprovalCoordinator } from './pending-store.js'
 import { PolicyStore } from './store.js'
+import { getDefaultActionPolicySettings } from './settings-defaults.js'
 import {
   FALLBACK_ACTION_POLICY_ID,
   serializeActionPolicyScope,
@@ -277,6 +278,7 @@ export function createPoliciesRouter(options: PoliciesRouterOptions): { router: 
   router.get('/action-policies/settings', requireReadAccess, async (_req, res) => {
     res.json({
       settings: await options.policyStore.getSettings(),
+      defaults: getDefaultActionPolicySettings(),
     })
   })
 

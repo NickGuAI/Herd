@@ -1,4 +1,8 @@
 import { useLocation, useSearchParams } from 'react-router-dom'
+import type { FrontendNavItem } from '@/types'
+import { findModuleGraphUiRouteMetadata } from '@/module-graph-bindings'
+import { useModuleGraphContext } from '@/module-graph-context'
+import { normalizeCommandRoomRouteMetadata } from '@modules/command-room/route-metadata'
 import { MobileBottomTabs } from './MobileBottomTabs'
 import {
   MOBILE_SHELL_BOTTOM_PADDING_CLASS,
@@ -15,6 +19,7 @@ interface UseMobileShellChromeStateArgs {
 }
 
 interface MobileShellChromeProps {
+  modules: FrontendNavItem[]
   pendingCount: number
 }
 
@@ -23,9 +28,14 @@ export function useMobileShellChromeState({
 }: UseMobileShellChromeStateArgs): MobileShellChromeState {
   const location = useLocation()
   const [searchParams] = useSearchParams()
+  const moduleGraph = useModuleGraphContext()
+  const routeMetadata = normalizeCommandRoomRouteMetadata(
+    findModuleGraphUiRouteMetadata(moduleGraph, 'command-room.ui'),
+  )
   const inImmersiveChat = isImmersiveMobileChatRoute(
     location.pathname,
     searchParams,
+    routeMetadata,
   )
 
   return {
@@ -35,6 +45,6 @@ export function useMobileShellChromeState({
   }
 }
 
-export function MobileShellChrome({ pendingCount }: MobileShellChromeProps) {
-  return <MobileBottomTabs pendingCount={pendingCount} />
+export function MobileShellChrome({ modules, pendingCount }: MobileShellChromeProps) {
+  return <MobileBottomTabs modules={modules} pendingCount={pendingCount} />
 }

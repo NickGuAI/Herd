@@ -138,7 +138,8 @@ describe("stream sessions", () => {
   function expectLocalClaudeScript(
     script: string,
     effort: 'max' | 'medium' = 'max',
-    adaptiveThinking: '0' | '1' = '0',
+    adaptiveThinking: '0' | '1' = '1',
+    maxThinkingTokens = '128000',
     options: {
       cwd?: string
       includeSettings?: boolean
@@ -152,6 +153,7 @@ describe("stream sessions", () => {
         expect(script).toContain(`cd '${escapeSingleQuotes(options.cwd)}' &&`)
       }
       expect(script).toContain(`export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${adaptiveThinking}`)
+      expect(script).toContain(`MAX_THINKING_TOKENS=${maxThinkingTokens}`)
       expect(script).toContain(UNSET_CLAUDE_CHILD_ENV)
       expect(script).toContain('claude ')
       expect(normalizedScript).toContain(`--effort ${effort}`)
@@ -165,16 +167,21 @@ describe("stream sessions", () => {
       }
     }
 
-  function expectDefaultClaudeSpawn(effort: 'max' | 'medium' = 'max', adaptiveThinking: '0' | '1' = '0') {
+  function expectDefaultClaudeSpawn(
+    effort: 'max' | 'medium' = 'max',
+    adaptiveThinking: '0' | '1' = '1',
+    maxThinkingTokens = '128000',
+  ) {
       const [command, args, options] = mockedSpawn.mock.calls.at(-1) ?? []
       expect(isLocalClaudeLoginShellSpawn(command, args)).toBe(true)
-      expectLocalClaudeScript(String(args?.[1]), effort, adaptiveThinking, {
+      expectLocalClaudeScript(String(args?.[1]), effort, adaptiveThinking, maxThinkingTokens, {
         includeSettings: true,
       })
 
       expect(options).toEqual(expect.objectContaining({
         env: expect.objectContaining({
           CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: adaptiveThinking,
+          MAX_THINKING_TOKENS: maxThinkingTokens,
           CLAUDECODE: undefined,
           ANTHROPIC_MODEL: undefined,
           ANTHROPIC_DEFAULT_OPUS_MODEL: undefined,
@@ -1797,7 +1804,8 @@ describe("stream sessions", () => {
           expect.arrayContaining(['-p', '22', 'builder@10.0.1.50']),
           expect.objectContaining({
             env: expect.objectContaining({
-              CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '0',
+              CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1',
+              MAX_THINKING_TOKENS: '128000',
               CLAUDECODE: undefined,
               ANTHROPIC_MODEL: undefined,
               ANTHROPIC_DEFAULT_OPUS_MODEL: undefined,
@@ -1814,7 +1822,7 @@ describe("stream sessions", () => {
         expect(remoteCommand).toContain('. "$HOME/.bashrc" >/dev/null 2>&1 || true')
         expect(remoteCommand).toContain('. "$HOME/.zshrc" >/dev/null 2>&1 || true')
         expect(remoteCommand).toContain('/Users/builder/.hammurabi-env')
-        expect(remoteCommand).toContain('export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0')
+        expect(remoteCommand).toContain('export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000')
         expect(remoteCommand).toContain(UNSET_CLAUDE_CHILD_ENV)
         expect(remoteCommand).toContain('claude')
         expect(remoteCommand).toContain('--effort')
@@ -2197,9 +2205,21 @@ describe("stream sessions", () => {
           action: 'enter',
         }),
         withClaudeSource({
-          type: 'planning',
-          action: 'proposed',
+          type: 'plan_approval',
+          interactionKind: 'plan_approval',
+          toolId: 'plan-exit',
+          toolName: 'ExitPlanMode',
           plan: '1. Inspect stream handling\n2. Patch replay',
+          approveLabel: 'Approve',
+          rejectLabel: 'Reject',
+          customResponseLabel: 'Add response',
+          providerContext: {
+            provider: 'claude',
+            backend: 'cli',
+            toolUseId: 'plan-exit',
+            toolName: 'ExitPlanMode',
+            answerFormat: 'claude.exit_plan_mode',
+          },
         }),
         withClaudeSource({
           type: 'assistant',
@@ -2228,6 +2248,7 @@ describe("stream sessions", () => {
         withClaudeSource({
           type: 'planning',
           action: 'decision',
+          toolId: 'plan-exit',
           approved: true,
           message: 'Proceeding with the approved plan.',
         }),
@@ -2333,7 +2354,102 @@ describe("stream sessions", () => {
       const parsed = JSON.parse(userWrite.replace('\n', ''))
       expect(parsed).toEqual({
         type: 'user',
+        subtype: 'queued_message',
         message: { role: 'user', content: 'What files handle auth?' },
+      })
+
+      const queueResponse = await fetch(`${server.baseUrl}/api/agents/sessions/stream-input/queue`, {
+        headers: AUTH_HEADERS,
+      })
+      expect(queueResponse.status).toBe(200)
+      expect(await queueResponse.json()).toMatchObject({
+        items: [],
+        currentMessage: null,
+        totalCount: 0,
+      })
+
+      ws.close()
+      await server.close()
+    })
+
+  it('serializes plan approval answers as Claude ExitPlanMode tool results', async () => {
+      const mock = installMockProcess()
+      const server = await startServer()
+
+      await fetch(`${server.baseUrl}/api/agents/sessions`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'stream-plan-answer',
+          mode: 'default',
+          transportType: 'stream',
+        }),
+      })
+
+      mock.emitStdout('{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"plan-exit","name":"ExitPlanMode","input":{"plan":"1. Patch\\n2. Test"}}]}}\n')
+
+      const ws = await connectWs(server.baseUrl, 'stream-plan-answer')
+      ws.send(JSON.stringify({
+        type: 'tool_answer',
+        toolId: 'plan-exit',
+        answers: {
+          decision: ['reject'],
+          message: ['Need one more regression test.'],
+        },
+      }))
+
+      await vi.waitFor(() => {
+        const write = mock.getStdinWrites().find((entry) => {
+          try {
+            const parsed = JSON.parse(entry.trim()) as {
+              message?: { content?: Array<{ tool_use_id?: string; content?: string }> }
+            }
+            const result = parsed.message?.content?.[0]
+            if (result?.tool_use_id !== 'plan-exit' || typeof result.content !== 'string') {
+              return false
+            }
+            return (JSON.parse(result.content) as { approved?: boolean }).approved === false
+          } catch {
+            return false
+          }
+        })
+        expect(write).toBeTruthy()
+      })
+
+      const answerWrite = mock.getStdinWrites().find((entry) => {
+        try {
+          const parsed = JSON.parse(entry.trim()) as {
+            message?: { content?: Array<{ tool_use_id?: string; content?: string }> }
+          }
+          const result = parsed.message?.content?.[0]
+          if (result?.tool_use_id !== 'plan-exit' || typeof result.content !== 'string') {
+            return false
+          }
+          return (JSON.parse(result.content) as { approved?: boolean }).approved === false
+        } catch {
+          return false
+        }
+      })!
+      const parsed = JSON.parse(answerWrite.trim()) as {
+        type: string
+        message: { content: Array<{ tool_use_id: string; content: string }> }
+      }
+      expect(parsed).toEqual({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'plan-exit',
+            content: JSON.stringify({
+              approved: false,
+              message: 'Need one more regression test.',
+            }),
+          }],
+        },
       })
 
       ws.close()
@@ -3119,7 +3235,7 @@ describe("stream sessions", () => {
 
       const [command, args, options] = mockedSpawn.mock.calls.at(-1) ?? []
       expect(isLocalClaudeLoginShellSpawn(command, args)).toBe(true)
-      expectLocalClaudeScript(String(args?.[1]), 'max', '0', {
+      expectLocalClaudeScript(String(args?.[1]), 'max', '1', '128000', {
         cwd: '/home/builder/projects/my-repo',
         includeSettings: true,
       })
@@ -3166,6 +3282,15 @@ describe("stream sessions", () => {
 
         await vi.waitFor(() => {
           expect(mock.getStdinWrites().some((chunk) => chunk.includes('interrupt follow-up'))).toBe(true)
+        })
+        const directWrite = mock.getStdinWrites().find((chunk) => chunk.includes('interrupt follow-up'))
+        expect(JSON.parse(directWrite!.trim())).toMatchObject({
+          type: 'user',
+          subtype: 'queued_message',
+          message: {
+            role: 'user',
+            content: 'interrupt follow-up',
+          },
         })
 
         const queueResponse = await fetch(`${server.baseUrl}/api/agents/sessions/stream-active-send-direct/queue`, {

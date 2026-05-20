@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { FrontendNavItem } from '@/types'
 
 const mocks = vi.hoisted(() => ({
   useAgentSessions: vi.fn(),
@@ -24,6 +25,29 @@ import { Shell } from '@/surfaces/desktop/Shell'
 let root: Root | null = null
 let container: HTMLDivElement | null = null
 let originalMatchMedia: typeof window.matchMedia | undefined
+
+const mobileNavModules: FrontendNavItem[] = [
+  {
+    name: 'org',
+    routeId: 'org.ui',
+    label: 'Org',
+    icon: 'Users',
+    path: '/org',
+    navGroup: 'primary',
+    surfaces: ['desktop', 'mobile'],
+    order: 10,
+  },
+  {
+    name: 'automations',
+    routeId: 'automations.ui',
+    label: 'Automations',
+    icon: 'CalendarClock',
+    path: '/automations',
+    navGroup: 'primary',
+    surfaces: ['mobile'],
+    order: 20,
+  },
+]
 
 function buildMatchMedia(isMobile: boolean) {
   return vi.fn().mockImplementation((query: string) => ({
@@ -54,7 +78,7 @@ async function renderShell(pathname: string) {
     root?.render(
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[pathname]}>
-          <Shell modules={[]}>
+          <Shell modules={mobileNavModules}>
             <div data-testid="shell-child">child</div>
           </Shell>
         </MemoryRouter>

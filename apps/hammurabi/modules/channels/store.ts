@@ -150,6 +150,23 @@ export class CommanderChannelBindingStore {
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   }
 
+  async getByCommanderProviderAccount(input: {
+    commanderId: string
+    provider: unknown
+    accountId: unknown
+  }): Promise<CommanderChannelBinding | null> {
+    await this.ensureLoaded()
+    const commanderId = parseNonEmptyString(input.commanderId, 'commanderId')
+    const provider = parseProvider(input.provider)
+    const accountId = parseNonEmptyString(input.accountId, 'accountId')
+    const binding = [...this.bindings().values()].find((candidate) => (
+      candidate.commanderId === commanderId
+      && candidate.provider === provider
+      && candidate.accountId === accountId
+    ))
+    return binding ? cloneBinding(binding) : null
+  }
+
   async list(): Promise<CommanderChannelBinding[]> {
     await this.ensureLoaded()
     return [...this.bindings().values()]

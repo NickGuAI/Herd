@@ -188,6 +188,62 @@ describe('runOnboardCli', () => {
     })
   })
 
+  it('prints daemon pairing guidance when provider runtime metadata is available', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'hammurabi-onboard-home-'))
+    const dataDir = path.join(homeDir, '.hammurabi')
+    createdDirectories.push(homeDir)
+    previousHome = process.env.HOME
+    process.env.HOME = homeDir
+    previousHammurabiDataDir = process.env.HAMMURABI_DATA_DIR
+    process.env.HAMMURABI_DATA_DIR = dataDir
+    await seedOperatorFile(path.join(dataDir, 'operators.json'))
+
+    promptTextMock.mockResolvedValue('https://hervald.gehirn.ai')
+    promptSecretMock.mockResolvedValue('hmrb_test_key')
+    promptMultiSelectMock.mockResolvedValue(['claude-code'])
+    validateTelemetryWriteKeyMock.mockResolvedValue({
+      ok: true,
+      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+    })
+    applyManagedAgentTelemetryConfigMock.mockResolvedValue({
+      configured: [],
+      failed: [],
+    })
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([
+      {
+        id: 'claude',
+        label: 'Claude',
+        eventProvider: 'claude',
+        capabilities: {
+          supportsAutomation: true,
+          supportsCommanderConversation: true,
+          supportsWorkerDispatch: true,
+        },
+        machineAuth: {
+          cliBinaryName: 'claude',
+          installPackageName: '@anthropic-ai/claude-code',
+          authEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+          supportedAuthModes: ['setup-token', 'device-auth'],
+          requiresSecretModes: ['setup-token'],
+          loginStatusCommand: 'claude auth status',
+        },
+      },
+    ]), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const exitCode = await runOnboardCli(['onboard'], {
+      fetchImpl,
+    })
+
+    expect(exitCode).toBe(0)
+    const out = stdoutSpy?.mock.calls.map(([chunk]) => String(chunk)).join('') ?? ''
+    expect(out).toContain('Provider runtime setup:')
+    expect(out).toContain('hammurabi machine daemon-pair --machine <id>')
+    expect(out).toContain('hammurabi machine daemon-status --machine <id>')
+  })
+
   it('guides an already-installed tailscale worker and prints the next machine-add command', async () => {
     const homeDir = await mkdtemp(path.join(tmpdir(), 'hammurabi-onboard-home-'))
     const dataDir = path.join(homeDir, '.hammurabi')

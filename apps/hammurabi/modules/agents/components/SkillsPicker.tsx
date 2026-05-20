@@ -17,7 +17,7 @@ export function SkillsPicker({
   variant?: 'default' | 'hervald'
   theme?: 'light' | 'dark'
 }) {
-  const { data: skills, isLoading } = useSkills()
+  const { data: skills, isError, isLoading } = useSkills()
   const [query, setQuery] = useState('')
   const filteredSkills = useMemo(() => {
     if (!skills) return []
@@ -50,7 +50,7 @@ export function SkillsPicker({
           <div className="flex items-center justify-between mb-4">
             <h3
               className={cn(
-                'font-display text-heading text-sumi-black',
+                'font-display text-heading text-[color:var(--hv-fg)]',
                 variant === 'hervald' && 'sheet-title--hervald',
               )}
             >
@@ -59,7 +59,7 @@ export function SkillsPicker({
             <button
               onClick={onClose}
               className={cn(
-                'p-1.5 rounded-lg hover:bg-ink-wash transition-colors',
+                'p-1.5 rounded-lg hover:bg-[var(--hv-surface-hover)] transition-colors',
                 variant === 'hervald' && 'sheet-close--hervald',
               )}
               aria-label="Close"
@@ -67,7 +67,7 @@ export function SkillsPicker({
               <X
                 size={16}
                 className={cn(
-                  'text-sumi-diluted',
+                  'text-[color:var(--hv-fg-subtle)]',
                   variant === 'hervald' && 'sheet-close-icon--hervald',
                 )}
               />
@@ -77,7 +77,7 @@ export function SkillsPicker({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             className={cn(
-              'w-full px-3 py-2 mb-3 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover',
+              'w-full px-3 py-2 mb-3 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
               variant === 'hervald' && 'sheet-search--hervald',
             )}
             placeholder="Search skills..."
@@ -86,14 +86,18 @@ export function SkillsPicker({
           <div className="space-y-2 max-h-[60dvh] overflow-y-auto">
             {isLoading ? (
               <div className="flex justify-center py-8">
-                <div className="w-3 h-3 rounded-full bg-sumi-mist animate-breathe" />
+                <div className="w-3 h-3 rounded-full bg-[var(--hv-fg-faint)] animate-breathe" />
+              </div>
+            ) : isError ? (
+              <div className="text-center py-8 text-[color:var(--hv-accent-danger)] text-sm">
+                Unable to load skills
               </div>
             ) : skills?.length === 0 ? (
-              <div className="text-center py-8 text-sumi-diluted text-sm">
+              <div className="text-center py-8 text-[color:var(--hv-fg-subtle)] text-sm">
                 No user-invocable skills installed
               </div>
             ) : filteredSkills.length === 0 ? (
-              <div className="text-center py-8 text-sumi-diluted text-sm">
+              <div className="text-center py-8 text-[color:var(--hv-fg-subtle)] text-sm">
                 No skills match your search
               </div>
             ) : (
@@ -106,8 +110,8 @@ export function SkillsPicker({
                     onClose()
                   }}
                   className={cn(
-                    'w-full text-left p-3 rounded-lg border border-ink-border bg-washi-aged transition-colors',
-                    '[-webkit-tap-highlight-color:transparent] [@media(hover:hover)]:hover:bg-ink-wash',
+                    'w-full text-left p-3 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] transition-colors',
+                    '[-webkit-tap-highlight-color:transparent] [@media(hover:hover)]:hover:bg-[var(--hv-surface-hover)]',
                     variant === 'hervald' && 'sheet-skill--hervald',
                   )}
                 >
@@ -115,13 +119,13 @@ export function SkillsPicker({
                     <Zap
                       size={14}
                       className={cn(
-                        'text-accent-vermillion shrink-0',
+                        'text-[color:var(--hv-accent-danger)] shrink-0',
                         variant === 'hervald' && 'sheet-skill-icon--hervald',
                       )}
                     />
                     <span
                       className={cn(
-                        'font-mono text-sm text-sumi-black',
+                        'font-mono text-sm text-[color:var(--hv-fg)]',
                         variant === 'hervald' && 'sheet-skill-name--hervald',
                       )}
                     >
@@ -131,7 +135,7 @@ export function SkillsPicker({
                   {skill.description && (
                     <p
                       className={cn(
-                        'text-xs text-sumi-diluted mt-1.5 line-clamp-2',
+                        'text-xs text-[color:var(--hv-fg-subtle)] mt-1.5 line-clamp-2',
                         variant === 'hervald' && 'sheet-skill-description--hervald',
                       )}
                     >
@@ -141,7 +145,7 @@ export function SkillsPicker({
                   {skill.argumentHint && (
                     <p
                       className={cn(
-                        'text-xs text-sumi-mist mt-1 font-mono',
+                        'text-xs text-[color:var(--hv-fg-faint)] mt-1 font-mono',
                         variant === 'hervald' && 'sheet-skill-args--hervald',
                       )}
                     >

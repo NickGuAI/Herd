@@ -1,4 +1,4 @@
-import type { RequestHandler, Router } from 'express'
+import type { Request, RequestHandler, Router } from 'express'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { CommanderSessionStore } from '../../commanders/store.js'
@@ -19,6 +19,16 @@ import {
   type MachineAuthProvider,
 } from '../machine-auth.js'
 import { updateMachineEnvEntries } from '../machine-credentials.js'
+import {
+  buildDaemonMachineHealthReport,
+  buildMachineDaemonStatus,
+} from '../daemon/status.js'
+import { buildMachineDaemonPairCommand } from '../daemon/pairing-command.js'
+import {
+  createDaemonPairingToken,
+  hashDaemonPairingToken,
+  type MachineDaemonRegistry,
+} from '../daemon/registry.js'
 import {
   getMachineProvider,
   type MachineAuthMode,
@@ -59,6 +69,7 @@ interface MachineWorldRouteDeps {
   validateMachineConfig(value: unknown, options?: { requireHost?: boolean }): MachineConfig
   withMachineRegistryWriteLock<T>(operation: () => Promise<T>): Promise<T>
   writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]>
+  daemonRegistry: MachineDaemonRegistry
 }
 
 export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
@@ -72,7 +83,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
   router.get('/machines', requireReadAccess, async (_req, res) => {
     try {
       const machines = await deps.readMachineRegistry()
-      res.json(machines)
+      res.json(machines.map(serializeMachineForResponse))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to read machines registry'
       res.status(500).json({ error: message })
@@ -114,7 +125,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
         const next = await deps.writeMachineRegistry([...current, machine])
         return next.find((entry) => entry.id === machine.id) ?? machine
       })
-      res.status(201).json(created)
+      res.status(201).json(serializeMachineForResponse(created))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update machines registry'
       if (message.includes('already exists')) {
@@ -161,7 +172,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
         if (!target) {
           throw new Error(`Machine "${machineId}" not found`)
         }
-        if (target.host === null) {
+        if (target.id === 'local') {
           throw new Error(`Machine "${machineId}" is the local machine and cannot be removed`)
         }
 
@@ -201,6 +212,14 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
 
     if (!machine) {
       res.status(404).json({ error: `Machine "${machineId}" not found` })
+      return
+    }
+
+    if (machine.transport === 'daemon') {
+      res.json(buildDaemonMachineHealthReport(
+        machine,
+        deps.daemonRegistry.getConnection(machine.id),
+      ))
       return
     }
 
@@ -255,6 +274,152 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
         detail: message,
       })
     }
+  })
+
+  router.post('/machines/:id/daemon/pair', requireWriteAccess, async (req, res) => {
+    const machineId = deps.parseSessionName(req.params.id)
+    if (!machineId) {
+      res.status(400).json({ error: 'Invalid machine ID' })
+      return
+    }
+    if (machineId === 'local') {
+      res.status(400).json({ error: 'The local machine cannot be paired as a daemon machine' })
+      return
+    }
+
+    const request = parseDaemonPairRequest(req.body)
+    if (!request.ok) {
+      res.status(400).json({ error: request.error })
+      return
+    }
+
+    const token = createDaemonPairingToken()
+    const pairedAt = new Date().toISOString()
+
+    try {
+      const pairedMachine = await deps.withMachineRegistryWriteLock(async () => {
+        const current = await deps.readMachineRegistry()
+        const existing = current.find((entry) => entry.id === machineId)
+        const nextMachine: MachineConfig = {
+          id: machineId,
+          label: request.value.label ?? existing?.label ?? machineId,
+          host: existing?.host ?? null,
+          transport: 'daemon',
+          tailscaleHostname: existing?.tailscaleHostname,
+          user: existing?.user,
+          port: existing?.port,
+          cwd: request.value.cwd ?? existing?.cwd,
+          envFile: existing?.envFile,
+          daemon: {
+            pairingTokenHash: hashDaemonPairingToken(token),
+            pairedAt,
+          },
+        }
+        const next = existing
+          ? current.map((entry) => (entry.id === machineId ? nextMachine : entry))
+          : [...current, nextMachine]
+        const persisted = await deps.writeMachineRegistry(next)
+        return persisted.find((entry) => entry.id === machineId) ?? nextMachine
+      })
+
+      res.status(201).json({
+        machine: serializeMachineForResponse(pairedMachine),
+        pairing: {
+          machineId,
+          token,
+          websocketPath: `/api/agents/daemons/ws?machine_id=${encodeURIComponent(machineId)}`,
+          pairedAt,
+          command: buildMachineDaemonPairCommand({
+            machineId,
+            token,
+            endpoint: resolveRequestEndpoint(req),
+          }),
+        },
+        status: buildMachineDaemonStatus(
+          pairedMachine,
+          deps.daemonRegistry.getConnection(machineId),
+        ),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to pair daemon machine'
+      res.status(500).json({ error: message })
+    }
+  })
+
+  router.post('/machines/:id/daemon/revoke', requireWriteAccess, async (req, res) => {
+    const machineId = deps.parseSessionName(req.params.id)
+    if (!machineId) {
+      res.status(400).json({ error: 'Invalid machine ID' })
+      return
+    }
+    if (machineId === 'local') {
+      res.status(400).json({ error: 'The local machine cannot be revoked as a daemon machine' })
+      return
+    }
+
+    const revokedAt = new Date().toISOString()
+    try {
+      const revokedMachine = await deps.withMachineRegistryWriteLock(async () => {
+        const current = await deps.readMachineRegistry()
+        const existing = current.find((entry) => entry.id === machineId)
+        if (!existing) {
+          throw new Error(`Machine "${machineId}" not found`)
+        }
+        const nextMachine: MachineConfig = {
+          ...existing,
+          daemon: {
+            pairedAt: existing.daemon?.pairedAt,
+            revokedAt,
+            lastSeenAt: existing.daemon?.lastSeenAt,
+            daemonVersion: existing.daemon?.daemonVersion,
+          },
+        }
+        const persisted = await deps.writeMachineRegistry(
+          current.map((entry) => (entry.id === machineId ? nextMachine : entry)),
+        )
+        return persisted.find((entry) => entry.id === machineId) ?? nextMachine
+      })
+      deps.daemonRegistry.disconnect(machineId, 'Daemon pairing revoked')
+      res.json({
+        machine: serializeMachineForResponse(revokedMachine),
+        status: buildMachineDaemonStatus(revokedMachine, null),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to revoke daemon pairing'
+      if (message.includes('not found')) {
+        res.status(404).json({ error: message })
+        return
+      }
+      res.status(500).json({ error: message })
+    }
+  })
+
+  router.get('/machines/:id/daemon/status', requireReadAccess, async (req, res) => {
+    const machineId = deps.parseSessionName(req.params.id)
+    if (!machineId) {
+      res.status(400).json({ error: 'Invalid machine ID' })
+      return
+    }
+
+    let machine: MachineConfig | undefined
+    try {
+      const machines = await deps.readMachineRegistry()
+      machine = machines.find((entry) => entry.id === machineId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to read machines registry'
+      res.status(500).json({ error: message })
+      return
+    }
+
+    if (!machine) {
+      res.status(404).json({ error: `Machine "${machineId}" not found` })
+      return
+    }
+
+    res.json(buildMachineDaemonStatus(
+      machine,
+      deps.daemonRegistry.getConnection(machineId),
+    ))
   })
 
   router.get('/machines/:id/auth-status', requireReadAccess, async (req, res) => {
@@ -399,6 +564,78 @@ interface ParsedMachineAuthSetup {
   provider: MachineAuthProvider
   mode: MachineAuthMode
   secret?: string
+}
+
+interface ParsedDaemonPairRequest {
+  label?: string
+  cwd?: string
+}
+
+function serializeMachineForResponse(machine: MachineConfig): Record<string, unknown> {
+  return {
+    id: machine.id,
+    label: machine.label,
+    host: machine.host,
+    ...(machine.transport ? { transport: machine.transport } : {}),
+    ...(machine.tailscaleHostname ? { tailscaleHostname: machine.tailscaleHostname } : {}),
+    ...(machine.user ? { user: machine.user } : {}),
+    ...(machine.port ? { port: machine.port } : {}),
+    ...(machine.cwd ? { cwd: machine.cwd } : {}),
+    ...(machine.envFile ? { envFile: machine.envFile } : {}),
+    ...(machine.daemon
+      ? {
+          daemon: {
+            pairedAt: machine.daemon.pairedAt ?? null,
+            revokedAt: machine.daemon.revokedAt ?? null,
+            lastSeenAt: machine.daemon.lastSeenAt ?? null,
+            daemonVersion: machine.daemon.daemonVersion ?? null,
+          },
+        }
+      : {}),
+  }
+}
+
+function resolveRequestEndpoint(req: Request): string {
+  const configuredEndpoint = process.env.HAMMURABI_API_BASE_URL?.trim()
+  if (configuredEndpoint) {
+    return configuredEndpoint.replace(/\/+$/u, '')
+  }
+
+  const forwardedProto = req.header('x-forwarded-proto')?.split(',')[0]?.trim()
+  const forwardedHost = req.header('x-forwarded-host')?.split(',')[0]?.trim()
+  const protocol = forwardedProto || req.protocol || 'http'
+  const host = forwardedHost || req.header('host')?.trim()
+  return host ? `${protocol}://${host}` : '<hammurabi-endpoint>'
+}
+
+function parseDaemonPairRequest(
+  value: unknown,
+): { ok: true; value: ParsedDaemonPairRequest } | { ok: false; error: string } {
+  const record = typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : {}
+
+  const label = typeof record.label === 'string' && record.label.trim().length > 0
+    ? record.label.trim()
+    : undefined
+  const cwd = typeof record.cwd === 'string' && record.cwd.trim().length > 0
+    ? record.cwd.trim()
+    : undefined
+  if (cwd && !cwd.startsWith('/')) {
+    return { ok: false, error: 'cwd must be an absolute path when provided' }
+  }
+
+  if (record.transport !== undefined && record.transport !== 'daemon') {
+    return { ok: false, error: 'daemon pairing only supports daemon transport' }
+  }
+
+  return {
+    ok: true,
+    value: {
+      label,
+      cwd,
+    },
+  }
 }
 
 function parseMachineAuthSetupRequest(

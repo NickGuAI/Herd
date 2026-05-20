@@ -21,6 +21,7 @@ export interface TranscriptProps {
   agentAvatarUrl?: string
   agentAccentColor?: string
   onAnswer?: (toolId: string, answers: Record<string, string[]>) => void
+  onOpenWorkspaceFile?: (path: string) => void
   dark?: boolean
   className?: string
 }
@@ -33,6 +34,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
     agentAvatarUrl,
     agentAccentColor,
     onAnswer,
+    onOpenWorkspaceFile,
     dark = false,
     className,
   },
@@ -148,6 +150,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
         emptyLabel="Session started"
         agentAvatarUrl={agentAvatarUrl}
         agentAccentColor={agentAccentColor}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
       />
       <div ref={messagesEndRef} />
     </div>

@@ -1,11 +1,14 @@
 import { WorkspaceOverlay } from '@modules/agents/components/WorkspaceOverlay'
 import type { WorkspaceSource } from '@modules/workspace/use-workspace'
+import type { WorkspaceTreeNode } from '@modules/workspace/types'
 
 interface MobileWorkspaceSheetProps {
   open: boolean
   source: WorkspaceSource | null
   onClose: () => void
-  onSelectFile: (filePath: string) => void
+  onSelectFile: (filePath: string, type: WorkspaceTreeNode['type']) => void
+  requestedPath?: string | null
+  requestedPathToken?: number
 }
 
 export function MobileWorkspaceSheet({
@@ -13,6 +16,8 @@ export function MobileWorkspaceSheet({
   source,
   onClose,
   onSelectFile,
+  requestedPath,
+  requestedPathToken = 0,
 }: MobileWorkspaceSheetProps) {
   if (!open || !source) {
     return null
@@ -22,11 +27,13 @@ export function MobileWorkspaceSheet({
     <WorkspaceOverlay
       open={open}
       onClose={onClose}
-      onSelectFile={(filePath) => {
-        onSelectFile(filePath)
+      onSelectFile={(filePath, type) => {
+        onSelectFile(filePath, type)
         onClose()
       }}
       source={source}
+      requestedPath={requestedPath}
+      requestedPathToken={requestedPathToken}
     />
   )
 }

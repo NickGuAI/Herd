@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -11,6 +11,7 @@ import type { LocalScannerLike } from '../local-scanner'
 interface RunningServer {
   baseUrl: string
   hub: TelemetryHub
+  shutdown: () => void
   close: () => Promise<void>
 }
 
@@ -77,7 +78,9 @@ async function startServer(options: {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     hub: telemetry.hub,
+    shutdown: telemetry.shutdown,
     close: async () => {
+      telemetry.shutdown()
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
@@ -93,6 +96,7 @@ async function startServer(options: {
 }
 
 afterEach(async () => {
+  vi.useRealTimers()
   await Promise.all(
     testDirectories.splice(0).map((directory) =>
       rm(directory, {
@@ -446,6 +450,31 @@ describe('telemetry routes', () => {
     })
 
     await server.close()
+  })
+
+  it('clears the recurring local scan interval on shutdown', async () => {
+    vi.useFakeTimers()
+    const scan = vi.fn(async () => ({
+      scanned: 1,
+      ingested: 1,
+      skipped: 0,
+      durationMs: 5,
+    }))
+
+    const telemetry = createTelemetryRouterWithHub({
+      localScanner: { scan },
+      localScan: { intervalMs: 1_000 },
+      now: () => new Date('2026-02-20T10:00:00.000Z'),
+    })
+
+    expect(scan).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(scan).toHaveBeenCalledTimes(2)
+
+    telemetry.shutdown()
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(scan).toHaveBeenCalledTimes(2)
   })
 
   it('summary includes dailyCosts sorted ascending by date', async () => {

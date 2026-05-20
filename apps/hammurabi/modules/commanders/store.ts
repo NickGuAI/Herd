@@ -21,12 +21,12 @@ import {
   DEFAULT_COMMANDER_RUNTIME_LIMIT_MAX_TURNS,
   type CommanderRuntimeConfig,
 } from './runtime-config.shared.js'
-import { writeJsonFileAtomically } from '../../migrations/write-json-file-atomically.js'
+import { writeJsonFileAtomically } from '../json-file.js'
 import {
   migrateProviderContext,
   migratedProviderContextChanged,
   parseCanonicalProviderContext,
-} from '../../migrations/provider-context.js'
+} from '../agents/providers/provider-context-migration.js'
 import type { ChannelChatType, ChannelProvider } from '../channels/types.js'
 
 const COMMANDER_STATES = new Set<CommanderSession['state']>([
@@ -72,6 +72,7 @@ export interface CommanderChannelMeta {
   parentPeerId?: string
   groupId?: string
   threadId?: string
+  references?: string[]
   sessionKey: string
   displayName: string
   subject?: string
@@ -89,6 +90,7 @@ export interface CommanderSession {
   id: string
   host: string
   avatarSeed?: string
+  /** @deprecated Legacy field migrated into COMMANDER.md; do not read for runtime or UI behavior. */
   persona?: string
   state: 'idle' | 'running' | 'paused' | 'stopped'
   created: string
@@ -250,6 +252,17 @@ function parseChannelChatType(raw: unknown): CommanderChannelMeta['chatType'] | 
     : null
 }
 
+function parseOptionalStringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined
+  }
+  const values = raw
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+  return values.length > 0 ? values : undefined
+}
+
 export function parseCommanderChannelMeta(raw: unknown): CommanderChannelMeta | undefined {
   if (!isObject(raw)) {
     return undefined
@@ -273,6 +286,7 @@ export function parseCommanderChannelMeta(raw: unknown): CommanderChannelMeta | 
     parentPeerId: parseOptionalNonEmptyString(raw.parentPeerId),
     groupId: parseOptionalNonEmptyString(raw.groupId),
     threadId: parseOptionalNonEmptyString(raw.threadId),
+    references: parseOptionalStringList(raw.references),
     sessionKey,
     displayName,
     subject: parseOptionalNonEmptyString(raw.subject),

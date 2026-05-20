@@ -8,7 +8,7 @@ import {
 } from '@modules/operators/hooks/useFounderProfile'
 
 const INPUT_CLASS =
-  'mt-1 w-full rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-aged focus:outline-none focus:border-ink-border-hover'
+  'mt-1 w-full rounded-lg border border-[var(--hv-field-border)] bg-[var(--hv-field-bg)] px-3 py-2 text-[16px] text-[color:var(--hv-fg)] placeholder:text-[color:var(--hv-field-placeholder)] focus:outline-none focus:border-[var(--hv-field-focus-border)] md:text-sm'
 
 function initials(name?: string | null, email?: string | null): string {
   const source = name?.trim() || email?.trim() || 'Operator'
@@ -96,11 +96,11 @@ export function AccountProfileCard() {
   const loadError = isFounderMissingError(error) ? null : error instanceof Error ? error.message : null
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)} className="card-sumi p-5 space-y-5">
+    <form onSubmit={(event) => void handleSubmit(event)} className="space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="section-title">Account Profile</p>
-          <p className="mt-2 text-sm text-sumi-diluted leading-relaxed">
+          <p className="mt-2 text-sm text-[color:var(--hv-fg-subtle)] leading-relaxed">
             Set the founder name and image shown in Org and mobile settings.
           </p>
         </div>
@@ -114,17 +114,17 @@ export function AccountProfileCard() {
           <img
             src={avatarSrc}
             alt={liveDisplayName}
-            className="h-16 w-16 rounded-full border border-ink-border object-cover"
+            className="h-16 w-16 rounded-full border border-[var(--hv-border-soft)] object-cover"
           />
         ) : (
-          <div className="flex h-16 w-16 items-center justify-center rounded-full border border-ink-border bg-washi-aged font-display text-xl italic text-sumi-black">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full border border-[var(--hv-border-soft)] bg-[var(--hv-bg-raised)] font-display text-xl italic text-[color:var(--hv-fg)]">
             {initials(liveDisplayName, liveEmail)}
           </div>
         )}
 
         <div className="min-w-0 flex-1 space-y-1.5">
-          <p className="truncate text-sm font-medium text-sumi-black">{liveDisplayName}</p>
-          <p className="truncate font-mono text-[11px] text-sumi-diluted">{liveEmail}</p>
+          <p className="truncate text-sm font-medium text-[color:var(--hv-fg)]">{liveDisplayName}</p>
+          <p className="truncate font-mono text-[11px] text-[color:var(--hv-fg-subtle)]">{liveEmail}</p>
 
           <input
             ref={fileInputRef}
@@ -144,7 +144,7 @@ export function AccountProfileCard() {
             {avatarSrc ? 'Change Image' : 'Choose Image'}
           </button>
           {avatarFile ? (
-            <p className="text-whisper text-sumi-diluted truncate max-w-[220px]">
+            <p className="text-whisper text-[color:var(--hv-fg-subtle)] truncate max-w-[220px]">
               {avatarFile.name}
             </p>
           ) : null}
@@ -164,11 +164,11 @@ export function AccountProfileCard() {
         />
       </label>
 
-      {loadError ? <p className="text-sm text-accent-vermillion">{loadError}</p> : null}
-      {formError ? <p className="text-sm text-accent-vermillion">{formError}</p> : null}
+      {loadError ? <p className="text-sm text-[color:var(--hv-accent-danger)]">{loadError}</p> : null}
+      {formError ? <p className="text-sm text-[color:var(--hv-accent-danger)]">{formError}</p> : null}
 
       <div className="flex items-center justify-between gap-3 pt-1">
-        <p className="text-xs text-sumi-diluted">
+        <p className="text-xs text-[color:var(--hv-fg-subtle)]">
           Founder identity persists even when Auth0 returns a synthetic subject.
         </p>
         <button

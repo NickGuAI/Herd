@@ -1,12 +1,12 @@
 import path from 'node:path'
 import { resolveModuleDataDir } from '../data-dir.js'
 import {
-  DEFAULT_STANDING_APPROVAL_EXPIRY_DAYS,
   getActiveStandingApprovalEmails,
   normalizeStandingApprovalEntries,
   reconcileStandingApprovalEntries,
   SEND_EMAIL_ACTION_ID,
 } from './email-standing-approval.js'
+import { getDefaultActionPolicySettings } from './settings-defaults.js'
 import {
   BUILT_IN_ACTIONS,
   INTERNAL_EDIT_IN_CWD_ACTION,
@@ -66,11 +66,7 @@ function defaultPersistedStore(now: () => Date): PersistedPolicyStore {
     updatedAt: now().toISOString(),
     global: emptyStoredScope(),
     commanders: {},
-    settings: {
-      timeoutMinutes: 15,
-      timeoutAction: 'block',
-      standingApprovalExpiryDays: DEFAULT_STANDING_APPROVAL_EXPIRY_DAYS,
-    },
+    settings: getDefaultActionPolicySettings(),
   }
 }
 

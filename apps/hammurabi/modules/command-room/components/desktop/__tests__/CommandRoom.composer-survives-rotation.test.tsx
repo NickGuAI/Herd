@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
+import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import { act } from 'react-dom/test-utils'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -78,14 +78,6 @@ vi.mock('@modules/conversation/hooks/use-conversations', () => ({
 
 vi.mock('../SessionsColumn', () => ({
   SessionsColumn: () => null,
-}))
-
-vi.mock('../TeamColumn', () => ({
-  TeamColumn: () => null,
-}))
-
-vi.mock('../WorkspaceModal', () => ({
-  WorkspaceModal: () => null,
 }))
 
 vi.mock('@modules/components/ModalFormContainer', () => ({
@@ -185,6 +177,7 @@ let root: Root | null = null
 let container: HTMLDivElement | null = null
 let originalMatchMedia: typeof window.matchMedia | undefined
 let originalActEnvironment: boolean | undefined
+const CONVERSATION_SESSION_NAME = 'conversation-conv-1'
 
 const reactActEnvironment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
@@ -257,7 +250,6 @@ function buildCommander() {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp/atlas',
-    persona: 'Primary commander',
     heartbeat: {
       intervalMs: 900000,
       messageTemplate: '',
@@ -299,6 +291,48 @@ function buildConversation(): ConversationRecord {
       agentType: 'claude',
       transportType: 'stream',
       processAlive: true,
+    },
+    sendTarget: {
+      kind: 'conversation',
+      conversationId: 'conv-1',
+      commanderId: 'cmd-1',
+      sessionName: CONVERSATION_SESSION_NAME,
+      transportType: 'stream',
+      agentType: 'claude',
+      queue: { supported: true, reason: null },
+      media: { supported: true, reason: null },
+    },
+    allowedActions: {
+      send: true,
+      queue: true,
+      media: true,
+      start: false,
+      pause: true,
+      resume: false,
+      archive: true,
+      delete: true,
+      updateProvider: false,
+    },
+    displayState: {
+      status: 'active',
+      isVisible: true,
+      isDefaultConversation: false,
+      hasLiveSession: true,
+      isSendable: true,
+      isQueueable: true,
+      isMediaSendable: true,
+      label: 'Chat 1',
+      disabledReasons: {
+        send: null,
+        queue: null,
+        media: null,
+        start: 'Conversation is already active.',
+        pause: null,
+        resume: 'Conversation is already active.',
+        archive: null,
+        delete: null,
+        updateProvider: 'Provider can only be changed before starting.',
+      },
     },
     createdAt: '2026-05-01T08:00:00.000Z',
     updatedAt: '2026-05-01T08:05:00.000Z',
@@ -478,12 +512,12 @@ describe('CommandRoom composer draft survives surface flips', () => {
     await settle()
 
     const mobileComposer = expectComposer('mobile-composer')
-    expect(mobileComposer.dataset.sessionName).toBe('conversation-conv-1')
+    expect(mobileComposer.dataset.sessionName).toBe(CONVERSATION_SESSION_NAME)
 
     await setComposerText(mobileComposer, 'draft survives rotation')
     expect(mobileComposer.value).toBe('draft survives rotation')
     await advanceTime(500)
-    expect(window.localStorage.getItem('hammurabi:draft:conversation-conv-1')).toBe('draft survives rotation')
+    expect(window.localStorage.getItem(`hammurabi:draft:${CONVERSATION_SESSION_NAME}`)).toBe('draft survives rotation')
 
     act(() => {
       matchMediaController.setMatches({
@@ -508,7 +542,7 @@ describe('CommandRoom composer draft survives surface flips', () => {
 
     await renderAt('/command-room')
     await settle()
-    expect(mocks.lastMobileComposerSessionName).toBe('conversation-conv-1')
+    expect(mocks.lastMobileComposerSessionName).toBe(CONVERSATION_SESSION_NAME)
 
     act(() => {
       matchMediaController.setMatches({
@@ -518,7 +552,7 @@ describe('CommandRoom composer draft survives surface flips', () => {
     })
     await settle()
 
-    expect(mocks.lastDesktopComposerSessionName).toBe('conversation-conv-1')
+    expect(mocks.lastDesktopComposerSessionName).toBe(CONVERSATION_SESSION_NAME)
     expect(mocks.lastDesktopComposerSessionName).toBe(mocks.lastMobileComposerSessionName)
   })
 })

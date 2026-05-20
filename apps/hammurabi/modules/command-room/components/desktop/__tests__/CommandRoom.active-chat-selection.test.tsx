@@ -119,10 +119,6 @@ vi.mock('@modules/agents/page-shell/session-helpers', () => ({
   shouldAttemptDebriefOnKill: () => false,
 }), { virtual: true })
 
-vi.mock('@modules/agents/queue-capability', () => ({
-  supportsQueuedDrafts: () => false,
-}), { virtual: true })
-
 vi.mock('@modules/agents/queue-mutation', () => ({
   runQueueMutationRequest: vi.fn(async (request: () => Promise<unknown>) => {
     await request()
@@ -145,6 +141,29 @@ vi.mock('@modules/agents/queue-state', () => ({
 
 vi.mock('@modules/workspace/use-workspace', () => ({
   getWorkspaceSourceKey: () => 'workspace:none',
+  materializeWorkspaceContext: vi.fn(async () => ({ text: '', filePaths: [], directoryPaths: [], fileAnnotations: [] })),
+  fetchWorkspaceTree: vi.fn(async () => ({ nodes: [], parentPath: '' })),
+  fetchWorkspaceExpandedTree: vi.fn(async () => ({ nodes: [], parentPath: '' })),
+  openWorkspaceTarget: vi.fn(async () => ({
+    targetId: 'wt-test',
+    label: 'local:/tmp/workspace',
+    host: 'local',
+    rootPath: '/tmp/workspace',
+    isReadOnly: false,
+  })),
+  useWorkspaceActions: () => ({
+    invalidateAll: vi.fn(),
+    saveFile: vi.fn(),
+    createFile: vi.fn(),
+    createFolder: vi.fn(),
+    renamePath: vi.fn(),
+    deletePath: vi.fn(),
+    initGit: vi.fn(),
+    uploadFiles: vi.fn(),
+  }),
+  useWorkspaceFilePreview: () => ({ data: null, isLoading: false, error: null }),
+  useWorkspaceGitStatus: () => ({ data: null, isLoading: false, error: null }),
+  useWorkspaceGitLog: () => ({ data: null, isLoading: false, error: null }),
 }), { virtual: true })
 
 vi.mock('../SessionsColumn', () => ({
@@ -217,14 +236,6 @@ vi.mock('../CenterColumn', () => ({
   ),
 }), { virtual: true })
 
-vi.mock('../TeamColumn', () => ({
-  TeamColumn: () => null,
-}))
-
-vi.mock('../WorkspaceModal', () => ({
-  WorkspaceModal: () => null,
-}))
-
 vi.mock('@modules/components/ModalFormContainer', () => ({
   ModalFormContainer: ({
     open,
@@ -271,7 +282,6 @@ function buildCommander(id: string, displayName: string) {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp',
-    persona: null,
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '[HB {{timestamp}}]',

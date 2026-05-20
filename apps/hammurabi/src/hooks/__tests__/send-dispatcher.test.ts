@@ -69,6 +69,61 @@ describe('SendDispatcher', () => {
     expect(fallbackHttp).toHaveBeenCalledWith({ text: '', images: [image] })
   })
 
+  it('uses HTTP fallback for image sends even when the WebSocket is open', async () => {
+    const socket = {
+      readyState: 1,
+      send: vi.fn(),
+    }
+    const image = { mediaType: 'image/png', data: 'base64-data' }
+    const fallbackHttp = vi.fn(async () => true)
+    const dispatcher = createWsDirectDispatcher({
+      wsRef: { current: socket },
+      sessionName: 'commander-test',
+      fallbackHttp,
+    })
+
+    const ok = await dispatcher.send(
+      { text: 'see attached', images: [image] },
+      vi.fn(),
+    )
+
+    expect(ok).toBe(true)
+    expect(socket.send).not.toHaveBeenCalled()
+    expect(fallbackHttp).toHaveBeenCalledWith({
+      text: 'see attached',
+      images: [image],
+    })
+  })
+
+  it('forwards structured workspace context over direct stream transports', async () => {
+    const workspaceContext = {
+      targetId: 'wt-test',
+      filePaths: ['README.md'],
+    }
+    const socket = {
+      readyState: 1,
+      send: vi.fn(),
+    }
+    const dispatcher = createWsDirectDispatcher({
+      wsRef: { current: socket },
+      sessionName: 'commander-test',
+      fallbackHttp: vi.fn(async () => true),
+    })
+
+    const ok = await dispatcher.send(
+      { text: 'review', workspaceContext },
+      vi.fn(),
+    )
+
+    expect(ok).toBe(true)
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'input',
+      text: 'review',
+      images: undefined,
+      workspaceContext,
+    }))
+  })
+
   it('paints before conversation HTTP transport dispatch', async () => {
     const calls: string[] = []
     const submitConversationMessage = vi.fn(async () => {
@@ -88,7 +143,41 @@ describe('SendDispatcher', () => {
 
     expect(ok).toBe(true)
     expect(calls).toEqual(['paint', 'transport'])
-    expect(submitConversationMessage).toHaveBeenCalledWith({ message: 'Ship the bubble' })
+    expect(submitConversationMessage).toHaveBeenCalledWith({ message: 'Ship the bubble', images: undefined })
+  })
+
+  it('allows conversation HTTP transport to carry image-only content', async () => {
+    const image = { mediaType: 'image/png', data: 'base64-data' }
+    const submitConversationMessage = vi.fn(async () => true)
+    const paintOptimistic = vi.fn()
+    const dispatcher = createHttpConversationDispatcher({ submitConversationMessage })
+
+    const ok = await dispatcher.send({ text: '   ', images: [image] }, paintOptimistic)
+
+    expect(ok).toBe(true)
+    expect(paintOptimistic).toHaveBeenCalledWith('', [image])
+    expect(submitConversationMessage).toHaveBeenCalledWith({ message: '', images: [image] })
+  })
+
+  it('forwards structured workspace context over conversation HTTP transport', async () => {
+    const workspaceContext = {
+      targetId: 'wt-test',
+      fileAnnotations: [{
+        path: 'README.md',
+        body: 'Review this section.',
+      }],
+    }
+    const submitConversationMessage = vi.fn(async () => true)
+    const dispatcher = createHttpConversationDispatcher({ submitConversationMessage })
+
+    const ok = await dispatcher.send({ text: 'ship', workspaceContext }, vi.fn())
+
+    expect(ok).toBe(true)
+    expect(submitConversationMessage).toHaveBeenCalledWith({
+      message: 'ship',
+      images: undefined,
+      workspaceContext,
+    })
   })
 
   it('skips paint and transport when there is no sendable content', async () => {

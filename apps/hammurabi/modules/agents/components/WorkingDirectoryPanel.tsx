@@ -117,7 +117,7 @@ export function WorkingDirectoryPanel({
       <div
         className={cn(
           'border-b',
-          'border-ink-border bg-washi-aged',
+          'border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)]',
           isDragOver && 'ring-2 ring-inset ring-accent-indigo/30',
         )}
         onDragOver={handleDragOver}
@@ -128,13 +128,13 @@ export function WorkingDirectoryPanel({
           onClick={() => setIsOpen(!isOpen)}
           className="w-full flex items-center gap-2 px-4 py-2.5 text-left"
         >
-          <FolderOpen size={14} className="shrink-0 text-sumi-diluted" />
-          <span className="flex-1 truncate font-mono text-xs text-sumi-gray">{browsePath}</span>
+          <FolderOpen size={14} className="shrink-0 text-[color:var(--hv-fg-subtle)]" />
+          <span className="flex-1 truncate font-mono text-xs text-[color:var(--hv-fg-muted)]">{browsePath}</span>
           <ChevronRight
             size={12}
             className={cn(
               'transition-transform duration-200',
-              'text-sumi-mist',
+              'text-[color:var(--hv-fg-faint)]',
               isOpen && 'rotate-90',
             )}
           />
@@ -143,7 +143,7 @@ export function WorkingDirectoryPanel({
           <div className="px-4 pb-3">
             <div className={cn(
               'rounded-lg border max-h-40 overflow-y-auto',
-              'border-ink-border bg-washi-white',
+              'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]',
             )}>
               {data?.files.map((f) => (
                 <div
@@ -153,18 +153,18 @@ export function WorkingDirectoryPanel({
                   {f.isDirectory ? (
                     <button
                       onClick={() => handleItemClick(f.name, true)}
-                      className="flex flex-1 items-center gap-2 text-left transition-colors hover:text-sumi-black"
+                      className="flex flex-1 items-center gap-2 text-left transition-colors hover:text-[color:var(--hv-fg)]"
                     >
-                      <Folder size={12} className="shrink-0 text-sumi-mist" />
-                      <span className="font-mono text-sumi-gray">{f.name}/</span>
+                      <Folder size={12} className="shrink-0 text-[color:var(--hv-fg-faint)]" />
+                      <span className="font-mono text-[color:var(--hv-fg-muted)]">{f.name}/</span>
                     </button>
                   ) : (
                     <button
                       onClick={() => handleItemClick(f.name, false)}
-                      className="flex flex-1 items-center gap-2 text-left hover:text-sumi-black"
+                      className="flex flex-1 items-center gap-2 text-left hover:text-[color:var(--hv-fg)]"
                     >
-                      <FileText size={12} className="shrink-0 text-sumi-mist" />
-                      <span className="font-mono text-sumi-gray">{f.name}</span>
+                      <FileText size={12} className="shrink-0 text-[color:var(--hv-fg-faint)]" />
+                      <span className="font-mono text-[color:var(--hv-fg-muted)]">{f.name}</span>
                     </button>
                   )}
                 </div>
@@ -176,7 +176,7 @@ export function WorkingDirectoryPanel({
                 disabled={browsePath === cwd}
                 className={cn(
                   'p-1.5 rounded border transition-colors disabled:opacity-30',
-                  'border-ink-border bg-washi-white hover:bg-ink-wash',
+                  'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] hover:bg-[var(--hv-surface-hover)]',
                 )}
                 aria-label="Parent directory"
               >
@@ -194,7 +194,7 @@ export function WorkingDirectoryPanel({
                 disabled={uploading}
                 className={cn(
                   'flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded border text-xs disabled:opacity-60 transition-colors',
-                  'border-ink-border bg-washi-white hover:bg-ink-wash text-sumi-diluted',
+                  'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] hover:bg-[var(--hv-surface-hover)] text-[color:var(--hv-fg-subtle)]',
                 )}
               >
                 {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
@@ -202,7 +202,7 @@ export function WorkingDirectoryPanel({
               </button>
             </div>
             {uploadError && (
-              <p className="mt-1 text-xs text-accent-vermillion">{uploadError}</p>
+              <p className="mt-1 text-xs text-[color:var(--hv-accent-danger)]">{uploadError}</p>
             )}
           </div>
         )}
@@ -214,7 +214,7 @@ export function WorkingDirectoryPanel({
   return (
     <div
       className={cn(
-        'w-64 border-l border-ink-border bg-washi-aged flex flex-col overflow-hidden transition-all duration-300',
+        'w-64 border-l border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] flex flex-col overflow-hidden transition-all duration-300',
         isDragOver && 'ring-2 ring-inset ring-accent-indigo/30 bg-accent-indigo/5',
       )}
       onDragOver={handleDragOver}
@@ -222,10 +222,10 @@ export function WorkingDirectoryPanel({
       onDrop={handleDrop}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-ink-border">
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-[color:var(--hv-border-hair)]">
         <div className="flex items-center gap-2 min-w-0">
-          <FolderOpen size={14} className="text-sumi-diluted shrink-0" />
-          <span className="font-mono text-xs text-sumi-gray truncate">
+          <FolderOpen size={14} className="text-[color:var(--hv-fg-subtle)] shrink-0" />
+          <span className="font-mono text-xs text-[color:var(--hv-fg-muted)] truncate">
             {browsePath.split('/').pop() || '/'}
           </span>
         </div>
@@ -233,7 +233,7 @@ export function WorkingDirectoryPanel({
           <button
             onClick={navigateUp}
             disabled={browsePath === cwd}
-            className="p-1 rounded hover:bg-ink-wash transition-colors disabled:opacity-30"
+            className="p-1 rounded hover:bg-[var(--hv-surface-hover)] transition-colors disabled:opacity-30"
             aria-label="Parent directory"
           >
             <ChevronUp size={12} />
@@ -241,7 +241,7 @@ export function WorkingDirectoryPanel({
           {onClose && (
             <button
               onClick={onClose}
-              className="p-1 rounded hover:bg-ink-wash transition-colors"
+              className="p-1 rounded hover:bg-[var(--hv-surface-hover)] transition-colors"
               aria-label="Close panel"
             >
               <X size={12} />
@@ -257,23 +257,23 @@ export function WorkingDirectoryPanel({
             key={f.name}
             draggable
             onDragStart={(e) => handleItemDragStart(e, f.name)}
-            className="flex items-center gap-2 px-3 py-1.5 hover:bg-ink-wash transition-colors cursor-grab active:cursor-grabbing"
+            className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--hv-surface-hover)] transition-colors cursor-grab active:cursor-grabbing"
           >
             {f.isDirectory ? (
               <button
                 onClick={() => handleItemClick(f.name, true)}
                 className="flex items-center gap-2 flex-1 text-left"
               >
-                <Folder size={13} className="text-sumi-mist shrink-0" />
-                <span className="font-mono text-xs text-sumi-black truncate">{f.name}</span>
+                <Folder size={13} className="text-[color:var(--hv-fg-faint)] shrink-0" />
+                <span className="font-mono text-xs text-[color:var(--hv-fg)] truncate">{f.name}</span>
               </button>
             ) : (
               <button
                 onClick={() => handleItemClick(f.name, false)}
                 className="flex items-center gap-2 flex-1 text-left min-w-0"
               >
-                <FileText size={13} className="text-sumi-mist shrink-0" />
-                <span className="font-mono text-xs text-sumi-gray truncate">{f.name}</span>
+                <FileText size={13} className="text-[color:var(--hv-fg-faint)] shrink-0" />
+                <span className="font-mono text-xs text-[color:var(--hv-fg-muted)] truncate">{f.name}</span>
               </button>
             )}
           </div>
@@ -281,7 +281,7 @@ export function WorkingDirectoryPanel({
       </div>
 
       {/* Upload area */}
-      <div className="border-t border-ink-border p-3">
+      <div className="border-t border-[color:var(--hv-border-hair)] p-3">
         <input
           ref={fileInputRef}
           type="file"
@@ -292,13 +292,13 @@ export function WorkingDirectoryPanel({
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-dashed border-ink-border bg-washi-white hover:bg-ink-wash transition-colors text-xs text-sumi-diluted disabled:opacity-60"
+          className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-dashed border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] hover:bg-[var(--hv-surface-hover)] transition-colors text-xs text-[color:var(--hv-fg-subtle)] disabled:opacity-60"
         >
           {uploading ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
           {uploading ? 'Uploading...' : 'Upload or Drop Files'}
         </button>
         {uploadError && (
-          <p className="mt-1 text-xs text-accent-vermillion">{uploadError}</p>
+          <p className="mt-1 text-xs text-[color:var(--hv-accent-danger)]">{uploadError}</p>
         )}
         {isDragOver && (
           <div className="mt-2 text-center text-xs text-accent-indigo font-medium">

@@ -1,9 +1,11 @@
 import { fetchJson } from '@/lib/api'
 import type { SessionQueueSnapshot } from '@/types'
+import type { WorkspaceContextPayload } from '@modules/workspace/types'
 
 interface QueueMessagePayload {
   text: string
   images?: { mediaType: string; data: string }[]
+  workspaceContext?: WorkspaceContextPayload
 }
 
 function sessionQueueBasePath(sessionName: string): string {

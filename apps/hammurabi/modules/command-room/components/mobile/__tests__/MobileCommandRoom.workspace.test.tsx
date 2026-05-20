@@ -12,10 +12,14 @@ vi.mock('@/hooks/use-approvals', () => ({
 vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
   MobileSessionShell: ({
     onOpenWorkspace,
+    onOpenWorkspaceFile,
     contextFilePaths = [],
+    contextDirectoryPaths = [],
   }: {
     onOpenWorkspace?: () => void
+    onOpenWorkspaceFile?: (filePath: string) => void
     contextFilePaths?: string[]
+    contextDirectoryPaths?: string[]
   }) => createElement(
     'div',
     { 'data-testid': 'mobile-session-shell' },
@@ -29,12 +33,21 @@ vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
       'Open workspace',
     ),
     createElement(
+      'button',
+      {
+        type: 'button',
+        'data-testid': 'open-workspace-file',
+        onClick: () => onOpenWorkspaceFile?.('docs/from-chat.md'),
+      },
+      'Open docs/from-chat.md',
+    ),
+    createElement(
       'div',
       {
         'data-testid': 'context-paths',
-        'data-context-paths': contextFilePaths.join('|'),
+        'data-context-paths': [...contextFilePaths, ...contextDirectoryPaths.map((path) => `${path}/`)].join('|'),
       },
-      contextFilePaths.join('|'),
+      [...contextFilePaths, ...contextDirectoryPaths.map((path) => `${path}/`)].join('|'),
     ),
   ),
 }))
@@ -47,16 +60,19 @@ vi.mock('@modules/agents/components/WorkspaceOverlay', () => ({
   WorkspaceOverlay: ({
     open,
     onSelectFile,
+    requestedPath,
   }: {
     open: boolean
-    onSelectFile: (filePath: string) => void
+    onSelectFile: (filePath: string, type: 'file' | 'directory') => void
+    requestedPath?: string | null
   }) => open
     ? createElement(
       'button',
       {
         type: 'button',
         'data-testid': 'workspace-select-file',
-        onClick: () => onSelectFile('docs/spec.md'),
+        'data-requested-path': requestedPath ?? '',
+        onClick: () => onSelectFile('docs/spec.md', 'file'),
       },
       'Select docs/spec.md',
     )
@@ -92,7 +108,15 @@ import { MobileCommandRoom } from '../MobileCommandRoom'
 let root: Root | null = null
 let container: HTMLDivElement | null = null
 
-async function renderRoom() {
+async function renderRoom({
+  onOpenWorkspaceFile = vi.fn(),
+  workspaceRequestedPath,
+  workspaceRequestedPathToken,
+}: {
+  onOpenWorkspaceFile?: (filePath: string) => void
+  workspaceRequestedPath?: string | null
+  workspaceRequestedPathToken?: number
+} = {}) {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -123,7 +147,6 @@ async function renderRoom() {
                   agentType: 'claude',
                   effort: 'medium',
                   cwd: '/tmp/atlas',
-                  persona: 'Primary commander',
                   heartbeat: {
                     intervalMs: 900_000,
                     messageTemplate: '',
@@ -164,7 +187,10 @@ async function renderRoom() {
               onRemoveQueuedMessage={vi.fn()}
               onSend={vi.fn(async () => true)}
               onQueue={vi.fn(async () => true)}
-              workspaceSource={{ kind: 'commander', commanderId: 'cmd-1', readOnly: true }}
+              workspaceSource={{ kind: 'target', targetId: 'wt-cmd-1', readOnly: true }}
+              onOpenWorkspaceFile={onOpenWorkspaceFile}
+              workspaceRequestedPath={workspaceRequestedPath}
+              workspaceRequestedPathToken={workspaceRequestedPathToken}
               crons={[]}
               cronsLoading={false}
               cronsError={null}
@@ -239,5 +265,29 @@ describe('MobileCommandRoom workspace selection', () => {
     await vi.waitFor(() => {
       expect(contextPaths()).toBe('docs/spec.md')
     })
+  })
+
+  it('opens the mobile workspace sheet when a chat workspace file link is tapped', async () => {
+    const onOpenWorkspaceFile = vi.fn()
+    await renderRoom({
+      onOpenWorkspaceFile,
+      workspaceRequestedPath: 'docs/from-chat.md',
+      workspaceRequestedPathToken: 1,
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="open-workspace-file"]')).not.toBeNull()
+    })
+    expect(document.body.querySelector('[data-testid="workspace-select-file"]')).toBeNull()
+
+    ;(document.body.querySelector('[data-testid="open-workspace-file"]') as HTMLButtonElement).click()
+
+    await vi.waitFor(() => {
+      expect(onOpenWorkspaceFile).toHaveBeenCalledWith('docs/from-chat.md')
+      expect(document.body.querySelector('[data-testid="workspace-select-file"]')).not.toBeNull()
+    })
+    expect(
+      document.body.querySelector('[data-testid="workspace-select-file"]')?.getAttribute('data-requested-path'),
+    ).toBe('docs/from-chat.md')
   })
 })

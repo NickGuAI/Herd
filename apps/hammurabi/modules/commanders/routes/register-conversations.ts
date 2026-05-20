@@ -1,14 +1,21 @@
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { Response } from 'express'
+import { parseMessageImagesForRequest } from '../../agents/message-images.js'
 import { sanitizeTranscriptFileKey } from '../../agents/session/persistence.js'
-import { liveSessionToApiPayload } from '../../agents/session/state.js'
 import {
   parseClaudeAdaptiveThinking,
+  parseClaudeMaxThinkingTokens,
 } from '../../agents/session/input.js'
 import { deleteSessionTranscript } from '../../agents/transcript-store.js'
 import { parseProviderId } from '../../agents/providers/registry.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
+import {
+  applyWorkspaceContextToText,
+  hasWorkspaceContextPayload,
+  readWorkspaceContextPayload,
+} from '../../workspace/context.js'
+import { toWorkspaceError } from '../../workspace/resolver.js'
 import type { AgentType } from '../../agents/types.js'
 import {
   conversationNamesEqual,
@@ -17,12 +24,10 @@ import {
 import { resolveCommanderPaths } from '../paths.js'
 import {
   isObject,
-  parseMessage,
   parseSessionId,
   parseTrimmedString,
 } from '../route-parsers.js'
 import type { CommanderChannelMeta } from '../store.js'
-import { buildDefaultCommanderConversationId } from '../store.js'
 import type { Conversation } from '../conversation-store.js'
 import {
   ConversationProviderSwapConflictError,
@@ -37,6 +42,7 @@ import {
   updateCommanderDerivedState,
   buildConversationSessionName,
 } from './conversation-runtime.js'
+import { buildConversationSummaryDTO } from './conversation-read-model.js'
 import type { CommanderRoutesContext } from './types.js'
 
 type ConversationStatusAction = 'pause' | 'resume' | 'archive'
@@ -185,14 +191,48 @@ function requestId(req: import('express').Request): string | undefined {
   return value && value.trim().length > 0 ? value.trim() : undefined
 }
 
-function withLiveSession(context: CommanderRoutesContext, conversation: Conversation) {
-  const liveSession = getLiveConversationSession(context, conversation)
-  const defaultConversationId = buildDefaultCommanderConversationId(conversation.commanderId)
-  return {
-    ...conversation,
-    isDefaultConversation: conversation.id === defaultConversationId,
-    liveSession: liveSession ? liveSessionToApiPayload(liveSession) : null,
+function withLiveSession(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  canonicalOrder = 0,
+) {
+  return buildConversationSummaryDTO(context, conversation, canonicalOrder)
+}
+
+function conversationStatusPriority(status: Conversation['status']): number {
+  switch (status) {
+    case 'active':
+      return 0
+    case 'idle':
+      return 1
+    case 'archived':
+      return 3
+    default:
+      return 4
   }
+}
+
+function buildConversationCanonicalOrder(conversations: readonly Conversation[]): Map<string, number> {
+  const ordered = [...conversations].sort((left, right) => {
+    const statusDelta = conversationStatusPriority(left.status) - conversationStatusPriority(right.status)
+    if (statusDelta !== 0) {
+      return statusDelta
+    }
+
+    const lastMessageDelta = Date.parse(right.lastMessageAt) - Date.parse(left.lastMessageAt)
+    if (Number.isFinite(lastMessageDelta) && lastMessageDelta !== 0) {
+      return lastMessageDelta
+    }
+
+    const createdDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt)
+    if (Number.isFinite(createdDelta) && createdDelta !== 0) {
+      return createdDelta
+    }
+
+    return left.id.localeCompare(right.id)
+  })
+
+  return new Map(ordered.map((conversation, index) => [conversation.id, index]))
 }
 
 function sendConversationListSerializationFailure(res: Response, error: unknown): void {
@@ -311,7 +351,10 @@ export function registerConversationRoutes(
 
     const conversations = await context.conversationStore.listByCommander(commanderId)
     try {
-      res.json(conversations.map((conversation) => withLiveSession(context, conversation)))
+      const canonicalOrder = buildConversationCanonicalOrder(conversations)
+      res.json(conversations.map((conversation) => (
+        withLiveSession(context, conversation, canonicalOrder.get(conversation.id) ?? 0)
+      )))
     } catch (error) {
       sendConversationListSerializationFailure(res, error)
     }
@@ -602,8 +645,10 @@ export function registerConversationRoutes(
       return
     }
 
-    const agentType = parseConversationAgentType(body.agentType)
-    if (!agentType) {
+    const requestedAgentType = body.agentType === undefined
+      ? undefined
+      : parseConversationAgentType(body.agentType)
+    if (body.agentType !== undefined && !requestedAgentType) {
       res.status(400).json({ error: 'Invalid agentType. Expected a registered provider id.' })
       return
     }
@@ -613,10 +658,12 @@ export function registerConversationRoutes(
       res.status(400).json({ error: 'model must be a string or null when provided' })
       return
     }
-    const modelValidation = validateModelForAgentType(agentType, requestedModel.value ?? null)
-    if (!modelValidation.ok) {
-      res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
-      return
+    if (requestedAgentType) {
+      const modelValidation = validateModelForAgentType(requestedAgentType, requestedModel.value ?? null)
+      if (!modelValidation.ok) {
+        res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
+        return
+      }
     }
 
     const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(body.adaptiveThinking)
@@ -625,6 +672,13 @@ export function registerConversationRoutes(
       return
     }
     const adaptiveThinking = parsedAdaptiveThinking ?? undefined
+
+    const parsedMaxThinkingTokens = parseClaudeMaxThinkingTokens(body.maxThinkingTokens)
+    if (body.maxThinkingTokens !== undefined && parsedMaxThinkingTokens === null) {
+      res.status(400).json({ error: 'Invalid maxThinkingTokens. Expected integer 1024..256000' })
+      return
+    }
+    const maxThinkingTokens = parsedMaxThinkingTokens ?? undefined
 
     try {
       const conversation = await context.conversationStore.get(conversationId)
@@ -637,10 +691,21 @@ export function registerConversationRoutes(
         return
       }
 
+      const commander = await context.sessionStore.get(conversation.commanderId)
+      const agentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? 'claude'
+      if (!requestedAgentType) {
+        const modelValidation = validateModelForAgentType(agentType, requestedModel.value ?? null)
+        if (!modelValidation.ok) {
+          res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
+          return
+        }
+      }
+
       const spawnOptions: ConversationSpawnOptions = {
-        agentType,
+        ...(requestedAgentType ? { agentType: requestedAgentType } : {}),
         ...(requestedModel.value !== undefined ? { model: requestedModel.value } : {}),
         ...(adaptiveThinking !== undefined ? { adaptiveThinking } : {}),
+        ...(maxThinkingTokens !== undefined ? { maxThinkingTokens } : {}),
       }
       const started = await startConversationSession(
         context,
@@ -674,9 +739,16 @@ export function registerConversationRoutes(
       return
     }
 
-    const message = parseMessage(req.body?.message)
-    if (!message) {
-      res.status(400).json({ error: 'message must be a non-empty string' })
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
+    const parsedImages = parseMessageImagesForRequest(req.body?.images)
+    if (!parsedImages.ok) {
+      res.status(parsedImages.status).json({ error: parsedImages.error })
+      return
+    }
+    const images = parsedImages.images
+    const workspaceContext = readWorkspaceContextPayload(req.body?.workspaceContext)
+    if (!message && images.length === 0 && !hasWorkspaceContextPayload(workspaceContext)) {
+      res.status(400).json({ error: 'message must be a non-empty string or images must be provided' })
       return
     }
     const queue = req.body?.queue === true
@@ -691,10 +763,27 @@ export function registerConversationRoutes(
       return
     }
 
+    let messageWithContext: string
+    try {
+      messageWithContext = await applyWorkspaceContextToText({
+        text: message,
+        resolver: workspaceContext?.targetId ? context.getWorkspaceResolver?.() : undefined,
+        context: workspaceContext,
+      })
+    } catch (error) {
+      const workspaceError = toWorkspaceError(error)
+      res.status(workspaceError.statusCode).json({ error: workspaceError.message })
+      return
+    }
+    if (!messageWithContext && images.length === 0) {
+      res.status(400).json({ error: 'message must be a non-empty string or images must be provided' })
+      return
+    }
+
     const delivered = await deliverConversationMessage(
       context,
       conversation,
-      message,
+      { message: messageWithContext, images },
       queue ? { queue: true, priority: 'normal' } : undefined,
     )
     if (!delivered.ok) {

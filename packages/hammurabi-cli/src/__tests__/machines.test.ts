@@ -607,6 +607,153 @@ describe('runMachinesCli', () => {
     )
   })
 
+  it('pairs a daemon machine and prints the local daemon command', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      pairing: {
+        machineId: 'macbook',
+        token: 'hmrd_secret',
+        websocketPath: '/api/agents/daemons/ws?machine_id=macbook',
+        pairedAt: '2026-05-19T00:00:00.000Z',
+      },
+      status: {
+        machineId: 'macbook',
+        paired: true,
+        connected: false,
+        selectedTransport: 'daemon',
+        providerAuthReady: false,
+        launchable: false,
+        launchUnsupportedReason: 'daemon is not connected',
+        pairedAt: '2026-05-19T00:00:00.000Z',
+        revokedAt: null,
+        connectedAt: null,
+        lastSeenAt: null,
+        daemonVersion: null,
+        providerHealth: {},
+      },
+    }, 201))
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    const exitCode = await runMachinesCli(
+      ['daemon-pair', '--machine', 'macbook', '--label', 'MacBook Pro', '--cwd', '/Users/yugu'],
+      {
+        fetchImpl,
+        readConfig: async () => config,
+        stdout: stdout.writer,
+        stderr: stderr.writer,
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(stdout.read()).toContain('Paired daemon machine: macbook')
+    expect(stdout.read()).toContain('hammurabi daemon run --machine macbook --pairing-token hmrd_secret --endpoint https://hervald.gehirn.ai')
+    expect(stdout.read()).not.toContain('pairing_token')
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://hervald.gehirn.ai/api/agents/machines/macbook/daemon/pair',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          authorization: 'Bearer hmrb_test_key',
+          'content-type': 'application/json',
+        }),
+        body: JSON.stringify({
+          label: 'MacBook Pro',
+          cwd: '/Users/yugu',
+        }),
+      }),
+    )
+  })
+
+  it('prints daemon status with provider readiness', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      machineId: 'macbook',
+      paired: true,
+      connected: true,
+      selectedTransport: 'daemon',
+      providerAuthReady: true,
+      launchable: true,
+      launchUnsupportedReason: null,
+      pairedAt: '2026-05-19T00:00:00.000Z',
+      revokedAt: null,
+      connectedAt: '2026-05-19T00:01:00.000Z',
+      lastSeenAt: '2026-05-19T00:02:00.000Z',
+      daemonVersion: '0.1.0',
+      providerHealth: {
+        claude: {
+          provider: 'claude',
+          installed: true,
+          authenticated: true,
+          version: '2.1.142',
+          authMethod: 'login',
+          detail: 'claude auth status ok',
+          checkedAt: '2026-05-19T00:02:00.000Z',
+        },
+      },
+    }))
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    const exitCode = await runMachinesCli(['daemon-status', '--machine', 'macbook'], {
+      fetchImpl,
+      readConfig: async () => config,
+      stdout: stdout.writer,
+      stderr: stderr.writer,
+    })
+
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(stdout.read()).toContain('Connected: yes (0.1.0)')
+    expect(stdout.read()).toContain('Provider auth: ready')
+    expect(stdout.read()).toContain('- claude: installed, authenticated')
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://hervald.gehirn.ai/api/agents/machines/macbook/daemon/status',
+      expect.objectContaining({
+        method: 'GET',
+      }),
+    )
+  })
+
+  it('revokes a daemon pairing through the API', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      status: {
+        machineId: 'macbook',
+        paired: false,
+        connected: false,
+        selectedTransport: 'daemon',
+        providerAuthReady: false,
+        launchable: false,
+        launchUnsupportedReason: 'daemon is not connected',
+        pairedAt: '2026-05-19T00:00:00.000Z',
+        revokedAt: '2026-05-19T00:03:00.000Z',
+        connectedAt: null,
+        lastSeenAt: '2026-05-19T00:02:00.000Z',
+        daemonVersion: null,
+        providerHealth: {},
+      },
+    }))
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    const exitCode = await runMachinesCli(['daemon-revoke', '--machine', 'macbook'], {
+      fetchImpl,
+      readConfig: async () => config,
+      stdout: stdout.writer,
+      stderr: stderr.writer,
+    })
+
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(stdout.read()).toContain('Revoked daemon pairing: macbook')
+    expect(stdout.read()).toContain('Paired: no')
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://hervald.gehirn.ai/api/agents/machines/macbook/daemon/revoke',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    )
+  })
+
   it('posts provider auth setup and prints the updated status', async () => {
     const fetchImpl = createProviderAwareFetch({
       'https://hervald.gehirn.ai/api/agents/machines/gpu-1/auth-setup': jsonResponse({

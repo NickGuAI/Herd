@@ -466,6 +466,8 @@ function printProviderRuntimeInstructions(providers: readonly ProviderRegistryEn
     const modes = machineAuth.supportedAuthModes.join(', ')
     process.stdout.write(`- ${provider.label}: install ${installTarget}, verify \`${machineAuth.cliBinaryName} --version\`, then authenticate with ${modes}.\n`)
   }
+  process.stdout.write('- For subscription/OAuth CLI auth on a personal machine, pair the machine from Hervald Machines or run `hammurabi machine daemon-pair --machine <id>`, then run the printed `hammurabi daemon run ...` command on that machine.\n')
+  process.stdout.write('- Check daemon readiness with `hammurabi machine daemon-status --machine <id>`.\n')
   process.stdout.write('- Detailed auth recipes live in the Hervald provider docs.\n')
 }
 

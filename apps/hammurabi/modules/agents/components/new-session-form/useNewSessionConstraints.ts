@@ -12,6 +12,10 @@ import {
   DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '../../../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '../../../claude-max-thinking-tokens.js'
 
 interface UseNewSessionConstraintsOptions {
   providers: readonly ProviderRegistryEntry[]
@@ -23,6 +27,8 @@ interface UseNewSessionConstraintsOptions {
   setEffort: (value: ClaudeEffortLevel) => void
   adaptiveThinking: ClaudeAdaptiveThinkingMode
   setAdaptiveThinking: (value: ClaudeAdaptiveThinkingMode) => void
+  maxThinkingTokens: ClaudeMaxThinkingTokens
+  setMaxThinkingTokens: (value: ClaudeMaxThinkingTokens) => void
 }
 
 function findProvider(
@@ -74,6 +80,17 @@ export function getNormalizedAdaptiveThinking(
     : null
 }
 
+export function getNormalizedMaxThinkingTokens(
+  providers: readonly ProviderRegistryEntry[],
+  agentType: AgentType,
+  maxThinkingTokens: ClaudeMaxThinkingTokens,
+): ClaudeMaxThinkingTokens | null {
+  return !findProvider(providers, agentType)?.uiCapabilities.supportsMaxThinkingTokens
+    && maxThinkingTokens !== DEFAULT_CLAUDE_MAX_THINKING_TOKENS
+    ? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
+    : null
+}
+
 export function useNewSessionConstraints({
   providers,
   agentType,
@@ -84,6 +101,8 @@ export function useNewSessionConstraints({
   setEffort,
   adaptiveThinking,
   setAdaptiveThinking,
+  maxThinkingTokens,
+  setMaxThinkingTokens,
 }: UseNewSessionConstraintsOptions) {
   useEffect(() => {
     const fallbackAgent = getFallbackAgent(providers, agentType)
@@ -112,4 +131,11 @@ export function useNewSessionConstraints({
       setAdaptiveThinking(nextAdaptiveThinking)
     }
   }, [providers, adaptiveThinking, agentType, setAdaptiveThinking])
+
+  useEffect(() => {
+    const nextMaxThinkingTokens = getNormalizedMaxThinkingTokens(providers, agentType, maxThinkingTokens)
+    if (nextMaxThinkingTokens) {
+      setMaxThinkingTokens(nextMaxThinkingTokens)
+    }
+  }, [providers, maxThinkingTokens, agentType, setMaxThinkingTokens])
 }

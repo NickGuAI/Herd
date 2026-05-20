@@ -1,4 +1,4 @@
-export type WorkspaceSourceKind = 'agent-session' | 'commander'
+export type WorkspaceSourceKind = 'target'
 
 export interface WorkspaceSourceDescriptor {
   kind: WorkspaceSourceKind
@@ -34,9 +34,36 @@ export interface ResolvedWorkspace extends WorkspaceSummary {
   machine?: WorkspaceMachineDescriptor
 }
 
+export interface WorkspaceTargetDescriptor {
+  targetId: string
+  conversationId?: string
+  label: string
+  host: string
+  rootPath: string
+  readOnly: boolean
+  machine?: WorkspaceMachineDescriptor
+}
+
+export interface ResolvedWorkspaceTarget {
+  target: WorkspaceTargetDescriptor
+  workspace: ResolvedWorkspace
+  commandRunner?: import('./git.js').WorkspaceCommandRunner
+  host: string
+  rootPath: string
+  machine?: WorkspaceMachineDescriptor
+  readOnly: boolean
+}
+
+export type WorkspacePanelDefault = 'open' | 'closed' | 'last-used'
+
+export interface WorkspacePreferences {
+  panelDefault: WorkspacePanelDefault
+}
+
 export interface WorkspaceTreeNode {
   name: string
   path: string
+  parentPath: string
   type: 'file' | 'directory'
   extension?: string
   size?: number
@@ -46,6 +73,16 @@ export interface WorkspaceTreeResponse {
   workspace: WorkspaceSummary
   parentPath: string
   nodes: WorkspaceTreeNode[]
+}
+
+export interface WorkspacePathResolution {
+  workspace: WorkspaceSummary
+  requestedPath: string
+  path: string
+  type: WorkspaceTreeNode['type']
+  treePath: string
+  preferredFrom?: string
+  preferredReason?: 'graphviz-source'
 }
 
 export type WorkspaceFilePreviewKind = 'text' | 'image' | 'binary' | 'pdf'
@@ -65,6 +102,47 @@ export interface WorkspaceFilePreview {
 export interface WorkspaceMutationResult {
   workspace: WorkspaceSummary
   path: string
+}
+
+export interface WorkspaceFileAnnotation {
+  path: string
+  body: string
+  quote?: string | null
+  range?: {
+    startLine?: number | null
+    endLine?: number | null
+  } | null
+}
+
+export interface WorkspacePendingFileAnnotation extends WorkspaceFileAnnotation {
+  id: string
+}
+
+export interface WorkspaceContextPayload {
+  targetId?: string | null
+  conversationId?: string | null
+  filePaths?: string[]
+  directoryPaths?: string[]
+  fileAnnotations?: WorkspaceFileAnnotation[]
+}
+
+export interface WorkspaceContextRequest extends WorkspaceContextPayload {
+  targetId: string
+}
+
+export interface WorkspaceContextSkippedFile {
+  path: string
+  reason: 'not_found'
+  error: string
+}
+
+export interface WorkspaceContextMaterialization {
+  text: string
+  filePaths: string[]
+  directoryPaths: string[]
+  fileAnnotations: WorkspaceFileAnnotation[]
+  skippedFilePaths?: WorkspaceContextSkippedFile[]
+  skippedDirectoryPaths?: WorkspaceContextSkippedFile[]
 }
 
 export interface WorkspaceGitStatusEntry {

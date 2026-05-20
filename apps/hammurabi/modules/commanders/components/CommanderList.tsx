@@ -4,7 +4,6 @@ import { Clock3, ExternalLink, MessageSquare, Plus, Square, Trash2, Triangle } f
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { cn, formatCost, timeAgo } from '@/lib/utils'
 import { fetchJson } from '../../../src/lib/api'
-import { ensureCommanderVisualProfile } from '../commander-visual-profile'
 import type {
   CommanderAgentType,
   CommanderCreateInput,
@@ -15,7 +14,6 @@ import { CreateCommanderWizard } from './CreateCommanderWizard'
 
 declare module '../hooks/useCommander' {
   interface CommanderSession {
-    persona?: string
     channelMeta?: {
       provider: 'whatsapp' | 'telegram' | 'discord'
       displayName: string
@@ -224,7 +222,6 @@ export function CommanderList({
             manualHeartbeatMutation.variables === session.id
           const manualHeartbeatRunId = manualHeartbeatRunIdByCommander[session.id]
           const manualHeartbeatError = manualHeartbeatErrorByCommander[session.id]
-          const visualProfile = ensureCommanderVisualProfile(session.id, session.ui ?? null)
 
           return (
             <div
@@ -240,18 +237,15 @@ export function CommanderList({
               }}
               className={cn(
                 'cursor-pointer rounded-lg border p-3 transition-all duration-300',
+                'border-[color:var(--hv-border-soft)]',
                 selected ? 'bg-washi-aged/70 shadow-ink-sm ring-1 ring-sumi-black/10' : 'bg-washi-white hover:bg-washi-aged/40',
               )}
-              style={{ borderColor: visualProfile.borderColor }}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="font-mono text-sm text-sumi-black truncate">{commanderDisplayName}</p>
                   {session.channelMeta?.subject && (
                     <p className="mt-1 text-sumi-diluted text-xs truncate">{session.channelMeta.subject}</p>
-                  )}
-                  {session.persona && (
-                    <p className="mt-1 text-sumi-diluted text-xs truncate">{session.persona}</p>
                   )}
                   <p className="mt-1 text-whisper text-sumi-mist truncate">{session.id}</p>
                   {session.remoteOrigin?.label && (

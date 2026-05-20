@@ -27,7 +27,7 @@ import {
 } from '../commander-interface'
 import { createCodexProviderContext } from '../providers/provider-session-context'
 import type { AgentType, AnySession, StreamJsonEvent, StreamSession } from '../types'
-import type { QueuedMessage } from '../message-queue'
+import type { QueuedMessage, QueuedMessageImage } from '../message-queue'
 
 type SessionClient = StreamSession['clients'] extends Set<infer T> ? T : never
 
@@ -99,9 +99,10 @@ function makeBaseContext(
       }
       return createClaudeSessionMock(name)
     }),
-    createQueuedMessage: vi.fn((text, priority) => ({
+    createQueuedMessage: vi.fn((text, priority, images?: QueuedMessageImage[]) => ({
       id: 'queued-1',
       text,
+      images,
       priority,
       queuedAt: new Date().toISOString(),
     }) as unknown as QueuedMessage),
@@ -130,11 +131,25 @@ describe('createCommanderSessionsInterface — createCommanderSession', () => {
       commanderId: 'claude',
       systemPrompt: 'hello',
       agentType: 'claude',
+      adaptiveThinking: 'enabled',
+      maxThinkingTokens: 64000,
     })
 
     expect(ctx.createClaudeSessionMock).toHaveBeenCalledTimes(1)
     expect(ctx.createCodexSessionMock).not.toHaveBeenCalled()
     expect(ctx.createGeminiSessionMock).not.toHaveBeenCalled()
+    expect(ctx.createProviderStreamSession).toHaveBeenCalledWith(
+      'commander-claude',
+      'default',
+      '',
+      expect.any(String),
+      undefined,
+      'claude',
+      expect.objectContaining({
+        adaptiveThinking: 'enabled',
+        maxThinkingTokens: 64000,
+      }),
+    )
     expect(ctx.sessions.get('commander-claude')).toBe(session)
     expect(ctx.schedulePersistedSessionsWrite).toHaveBeenCalledTimes(1)
   })
@@ -315,7 +330,21 @@ describe('createCommanderSessionsInterface — sendToSession', () => {
 
     expect(ok).toBe(true)
     expect(ctx.sendImmediateTextToStreamSession).toHaveBeenCalledTimes(1)
+    expect(ctx.sendImmediateTextToStreamSession).toHaveBeenCalledWith(session, 'hello', undefined)
     expect(ctx.enqueueQueuedMessage).not.toHaveBeenCalled()
+  })
+
+  it('immediate send forwards image payloads through sendImmediateTextToStreamSession', async () => {
+    const session = makeClaudeStreamSession('target')
+    const sessions = new Map<string, AnySession>([['target', session]])
+    const ctx = makeBaseContext({ sessions })
+    const iface = createCommanderSessionsInterface(ctx)
+    const image = { mediaType: 'image/png', data: 'base64-data' }
+
+    const ok = await iface.sendToSession('target', { text: 'hello', images: [image] })
+
+    expect(ok).toBe(true)
+    expect(ctx.sendImmediateTextToStreamSession).toHaveBeenCalledWith(session, 'hello', [image])
   })
 
   it('queued send routes through createQueuedMessage + enqueue + drain', async () => {
@@ -327,10 +356,25 @@ describe('createCommanderSessionsInterface — sendToSession', () => {
     const ok = await iface.sendToSession('target', 'deferred', { queue: true, priority: 'high' })
 
     expect(ok).toBe(true)
-    expect(ctx.createQueuedMessage).toHaveBeenCalledWith('deferred', 'high')
+    expect(ctx.createQueuedMessage).toHaveBeenCalledWith('deferred', 'high', undefined)
     expect(ctx.enqueueQueuedMessage).toHaveBeenCalledTimes(1)
     expect(ctx.scheduleQueuedMessageDrain).toHaveBeenCalledTimes(1)
     expect(ctx.sendImmediateTextToStreamSession).not.toHaveBeenCalled()
+  })
+
+  it('queued send forwards image payloads through createQueuedMessage', async () => {
+    const session = makeClaudeStreamSession('target')
+    const sessions = new Map<string, AnySession>([['target', session]])
+    const ctx = makeBaseContext({ sessions })
+    const iface = createCommanderSessionsInterface(ctx)
+    const image = { mediaType: 'image/png', data: 'base64-data' }
+
+    const ok = await iface.sendToSession('target', { text: '', images: [image] }, { queue: true })
+
+    expect(ok).toBe(true)
+    expect(ctx.createQueuedMessage).toHaveBeenCalledWith('', 'normal', [image])
+    expect(ctx.enqueueQueuedMessage).toHaveBeenCalledTimes(1)
+    expect(ctx.scheduleQueuedMessageDrain).toHaveBeenCalledTimes(1)
   })
 
   it('returns false when the session does not exist', async () => {

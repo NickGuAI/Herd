@@ -7,13 +7,20 @@ import {
   DEFAULT_CLAUDE_EFFORT_LEVEL,
   normalizeClaudeEffortLevel,
 } from '../../../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  normalizeClaudeMaxThinkingTokens,
+} from '../../../claude-max-thinking-tokens.js'
 import { normalizeClaudeEvent } from '../../event-normalizers/claude.js'
 import {
   buildLoginShellCommand,
+  prepareDaemonMachineLaunchEnvironment,
   prepareMachineLaunchEnvironment,
   buildSshArgs,
+  isDaemonMachine,
   isRemoteMachine,
 } from '../../machines.js'
+import type { MachineDaemonRegistry } from '../../daemon/registry.js'
 import {
   cloneActiveSkillInvocation,
   snapshotExitedStreamSession,
@@ -60,6 +67,7 @@ export interface ClaudeStreamSessionDeps {
   setCompletedSession(sessionName: string, session: CompletedSession): void
   setExitedSession(sessionName: string, session: ExitedStreamSessionState): void
   spawnImpl?: typeof spawn
+  daemonRegistry?: Pick<MachineDaemonRegistry, 'attachProcess' | 'spawnProcess'>
   internalToken?: string
   writeToStdin(session: StreamSession, data: string): boolean
   writeTranscriptMeta(session: StreamSession): void
@@ -158,7 +166,12 @@ export function createClaudeStreamSession(
     options.adaptiveThinking,
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   )
+  const maxThinkingTokens = normalizeClaudeMaxThinkingTokens(
+    options.maxThinkingTokens,
+    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  )
   const remote = isRemoteMachine(machine)
+  const daemon = isDaemonMachine(machine)
   const settingsJson = buildClaudeApprovalSettingsJson()
   const args = buildClaudeStreamArgs(
     mode,
@@ -173,16 +186,19 @@ export function createClaudeStreamSession(
   const localSpawnCwd = process.env.HOME || '/tmp'
   const requestedCwd = cwd ?? machine?.cwd
   const sessionCwd = requestedCwd ?? localSpawnCwd
-  const preparedLaunch = prepareMachineLaunchEnvironment(machine, process.env)
-  const remoteClaude = buildClaudeShellInvocation(args, adaptiveThinking)
+  const preparedLaunch = daemon
+    ? prepareDaemonMachineLaunchEnvironment(machine)
+    : prepareMachineLaunchEnvironment(machine, process.env)
+  const remoteClaude = buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens)
   const remoteStreamCmd = buildLoginShellCommand(
     remoteClaude,
     requestedCwd,
-    remote ? preparedLaunch.sourcedEnvFile : undefined,
+    remote || daemon ? preparedLaunch.sourcedEnvFile : undefined,
   )
   const localShellSpawn = buildClaudeLocalLoginShellSpawn(
     args,
     adaptiveThinking,
+    maxThinkingTokens,
     requestedCwd,
     preparedLaunch.sourcedEnvFile,
     process.env.SHELL,
@@ -200,7 +216,7 @@ export function createClaudeStreamSession(
         internalToken: deps.internalToken,
       }
     : undefined
-  const spawnCommand = remote ? 'ssh' : localShellSpawn.command
+  const spawnCommand = remote ? 'ssh' : (daemon ? 'sh' : localShellSpawn.command)
   const spawnArgs = remote
     ? buildSshArgs(
       machine,
@@ -209,19 +225,34 @@ export function createClaudeStreamSession(
       remoteApprovalBridge,
       preparedLaunch.sshSendEnvKeys,
     )
+    : daemon
+      ? ['-lc', remoteStreamCmd]
     : localShellSpawn.args
-  const spawnCwd = remote ? localSpawnCwd : sessionCwd
+  const spawnCwd = remote ? localSpawnCwd : (daemon ? requestedCwd : sessionCwd)
   const spawnImpl = deps.spawnImpl ?? spawn
-  const spawnEnv = buildClaudeSpawnEnv(preparedLaunch.env, adaptiveThinking, {
+  const spawnEnv = buildClaudeSpawnEnv(preparedLaunch.env, adaptiveThinking, maxThinkingTokens, {
     internalToken: deps.internalToken,
   })
   spawnEnv.HAMMURABI_SESSION_NAME = sessionName
 
-  const childProcess: ChildProcess = spawnImpl(spawnCommand, spawnArgs, {
-    cwd: spawnCwd,
-    env: spawnEnv,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+  const childProcess: ChildProcess = daemon
+    ? (
+        options.daemonProcess
+          ? deps.daemonRegistry?.attachProcess(machine.id, options.daemonProcess)
+          : deps.daemonRegistry?.spawnProcess(machine.id, {
+              command: spawnCommand,
+              args: spawnArgs,
+              cwd: spawnCwd,
+              env: spawnEnv,
+            })
+      ) ?? (() => {
+        throw new Error(`Daemon machine "${machine.id}" is not connected`)
+      })()
+    : spawnImpl(spawnCommand, spawnArgs, {
+        cwd: spawnCwd,
+        env: spawnEnv,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
 
   const session: StreamSession = {
     kind: 'stream',
@@ -232,9 +263,10 @@ export function createClaudeStreamSession(
     agentType: 'claude',
     effort,
     adaptiveThinking,
+    maxThinkingTokens,
     mode,
     cwd: sessionCwd,
-    host: remote ? machine.id : undefined,
+    host: remote || daemon ? machine.id : undefined,
     currentSkillInvocation: cloneActiveSkillInvocation(options.currentSkillInvocation),
     spawnedBy: options.spawnedBy,
     spawnedWorkers: options.spawnedWorkers ? [...options.spawnedWorkers] : [],
@@ -265,6 +297,7 @@ export function createClaudeStreamSession(
       sessionId: options.resumeSessionId,
       effort,
       adaptiveThinking,
+      maxThinkingTokens,
     }),
     activeTurnId: undefined,
     adapter: createClaudeSessionAdapter(deps),

@@ -7,8 +7,9 @@ import { resolveCommanderPaths } from './paths.js'
 
 const TRANSCRIPT_INDEX_SCRIPT_PATH = path.resolve(
   process.cwd(),
-  'scripts',
-  'commander-transcript-index.py',
+  'modules',
+  'commanders',
+  'transcript-indexer.py',
 )
 export const DEFAULT_TRANSCRIPT_RETENTION_DAYS = 30
 const DEFAULT_TRANSCRIPT_INDEX_ROOT = path.join(homedir(), '.ginsights', 'transcript-index')
@@ -146,12 +147,12 @@ function parseTranscriptSearchResults(stdout: string): TranscriptSearchHit[] {
     parsed = JSON.parse(stdout) as unknown
   } catch (error) {
     throw new Error(
-      `commander-transcript-index.py returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      `transcript-indexer.py returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
 
   if (!Array.isArray(parsed)) {
-    throw new Error('commander-transcript-index.py returned an unexpected payload')
+    throw new Error('transcript-indexer.py returned an unexpected payload')
   }
 
   return parsed.flatMap((entry) => {
@@ -198,12 +199,12 @@ function parseTranscriptSyncResult(stdout: string): TranscriptIndexSyncResult {
     parsed = JSON.parse(stdout) as unknown
   } catch (error) {
     throw new Error(
-      `commander-transcript-index.py returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      `transcript-indexer.py returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
 
   if (!isObject(parsed)) {
-    throw new Error('commander-transcript-index.py returned an unexpected payload')
+    throw new Error('transcript-indexer.py returned an unexpected payload')
   }
 
   return {

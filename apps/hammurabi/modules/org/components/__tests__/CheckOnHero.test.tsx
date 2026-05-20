@@ -8,13 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrgNode } from '../../types'
 
 const mocks = vi.hoisted(() => ({
-  fetchCommanderActiveConversation: vi.fn(async () => null),
+  fetchJson: vi.fn(),
 }))
 
-vi.mock('@modules/conversation/hooks/use-conversations', () => ({
-  ACTIVE_CONVERSATION_FETCH_STALE_MS: 30_000,
-  commanderActiveConversationQueryKey: (commanderId: string) => ['commanders', 'conversations', 'active', commanderId],
-  fetchCommanderActiveConversation: mocks.fetchCommanderActiveConversation,
+vi.mock('@/lib/api', () => ({
+  fetchJson: mocks.fetchJson,
 }))
 
 import { CheckOnHero } from '../CheckOnHero'
@@ -98,8 +96,15 @@ describe('CheckOnHero', () => {
   beforeEach(() => {
     previousActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true
-    mocks.fetchCommanderActiveConversation.mockReset()
-    mocks.fetchCommanderActiveConversation.mockResolvedValue(null)
+    mocks.fetchJson.mockReset()
+    mocks.fetchJson.mockResolvedValue({
+      target: {
+        routeId: 'command-room.ui',
+        path: '/command-room?commander=cmd-1',
+        commanderId: 'cmd-1',
+        conversationId: null,
+      },
+    })
   })
 
   afterEach(async () => {
@@ -116,8 +121,13 @@ describe('CheckOnHero', () => {
   })
 
   it('navigates with the active conversation in the search params when one exists', async () => {
-    mocks.fetchCommanderActiveConversation.mockResolvedValue({
-      id: 'conv-9',
+    mocks.fetchJson.mockResolvedValue({
+      target: {
+        routeId: 'command-room.ui',
+        path: '/command-room?commander=cmd-1&conversation=conv-9',
+        commanderId: 'cmd-1',
+        conversationId: 'conv-9',
+      },
     })
 
     await renderHero()
@@ -133,7 +143,7 @@ describe('CheckOnHero', () => {
       expect(document.body.querySelector('[data-testid="location"]')?.textContent)
         .toBe('/command-room?commander=cmd-1&conversation=conv-9')
     })
-    expect(mocks.fetchCommanderActiveConversation).toHaveBeenCalledWith('cmd-1')
+    expect(mocks.fetchJson).toHaveBeenCalledWith('/api/org/commanders/cmd-1/check-on-target')
   })
 
   it('falls back to a commander-only navigation when no active conversation exists', async () => {

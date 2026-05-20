@@ -2,9 +2,11 @@ import { Router, type Request } from 'express'
 import { WebSocket } from 'ws'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { createReadStream } from 'node:fs'
+import type { IncomingMessage } from 'node:http'
 import * as path from 'node:path'
 import { appendFile, mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import type { Duplex } from 'node:stream'
 import { promisify } from 'node:util'
 import multer from 'multer'
 import { buildCommanderSessionSeed } from '../commanders/memory/module.js'
@@ -27,17 +29,8 @@ import {
   type ClaudeEffortLevel,
 } from '../claude-effort.js'
 import {
-  getMimeType,
-  listWorkspaceTree,
-  readWorkspaceFilePreview,
-  readWorkspaceGitLog,
-  readWorkspaceGitStatus,
-  resolveWorkspacePath,
-  resolveWorkspaceRoot,
-  toWorkspaceError,
-  WorkspaceError,
-  type WorkspaceCommandRunner,
-} from '../workspace/index.js'
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+} from '../claude-max-thinking-tokens.js'
 import { createAgentsAuthContext } from './router-context.js'
 import { validateModelForAgentType } from './providers/validate-model.js'
 import { registerDiscoveryRoutes } from './routes/discovery-routes.js'
@@ -46,7 +39,6 @@ import { registerMachineWorldRoutes } from './routes/machine-world-routes.js'
 import { registerSessionControlRoutes } from './routes/session-control-routes.js'
 import { registerSessionQueryRoutes } from './routes/session-query-routes.js'
 import { registerWorkerDispatchRoutes } from './routes/worker-dispatch-routes.js'
-import { registerWorkspaceRoutes } from './routes/workspace-routes.js'
 import {
   CODEX_MODE_COMMANDS,
   CODEX_RUNTIME_TEARDOWN_TIMEOUT_MS,
@@ -68,6 +60,8 @@ import {
 import { buildClaudePtyCommand, resolveClaudeApprovalPort } from './adapters/claude/helpers.js'
 import { createClaudeStreamSession } from './adapters/claude/index.js'
 import { createAgentsWebSocket } from './websocket.js'
+import { createDaemonWebSocket } from './daemon/websocket.js'
+import { MachineDaemonRegistry } from './daemon/registry.js'
 import {
   buildCodexApprovalDecisionEvent,
   buildCodexApprovalMissingIdSystemEvent,
@@ -103,6 +97,7 @@ import {
   parseAutoRotateEntryThreshold,
   parseClaudeAdaptiveThinking,
   parseClaudeEffort,
+  parseClaudeMaxThinkingTokens,
   parseCodexApprovalDecision,
   parseCwd,
   parseMaxSessions,
@@ -118,6 +113,9 @@ import {
   parseWsKeepAliveIntervalMs,
   parseCodexTurnWatchdogTimeoutMs,
 } from './session/input.js'
+import type {
+  PlanApprovalDecision,
+} from '../../src/types/hammurabi-events.js'
 import type {
   ProviderAdapterDeps,
   ProviderCreateOptions,
@@ -149,8 +147,9 @@ import {
   buildSshDestination,
   createMachineRegistryStore,
   createMissingToolStatus,
-  createWorkspaceSshCommandRunner,
+  LOCAL_MACHINE_ID,
   ensureSshControlDir,
+  isDaemonMachine,
   isRemoteMachine,
   parseMachineHealthOutput,
   parseMachineRegistry,
@@ -201,14 +200,11 @@ import {
   getWorldAgentStatus,
   getWorldAgentTask,
   getWorldAgentUsage,
-  hasPendingAskUserQuestion,
   hasResumeIdentifier,
   mergePersistedSessionWithTranscriptMeta,
   parseFrontmatter,
   parsePersistedSessionsState,
   resolveLastUpdatedAt,
-  sendWorkspaceError,
-  sendWorkspaceRawFile,
   snapshotDeletedResumableStreamSession,
   snapshotExitedStreamSession,
   summarizeWorkerStates,
@@ -217,7 +213,7 @@ import {
   toExitBasedCompletedSession,
   toWorldAgent,
 } from './session/state.js'
-import { CodexSessionRuntime } from './launchers/runtimes.js'
+import { CodexSessionRuntime, GeminiAcpRuntime, OpenCodeAcpRuntime } from './launchers/runtimes.js'
 import type {
   ActiveSkillInvocation,
   AgentSession,
@@ -323,6 +319,11 @@ import {
   serializeCodexApprovalId,
 } from './codex-approval.js'
 export { parseCodexApprovalId }
+import {
+  buildPlanApprovalAutoResolvedSystemEvent,
+  deliverPlanApprovalDecision,
+  findPlanApprovalEvent,
+} from './plan-approval.js'
 import { createCommanderSessionsInterface } from './commander-interface.js'
 import { createApprovalSessionsInterface } from './approval-interface.js'
 import { createPersistenceHelpers } from './persistence-helpers.js'
@@ -368,6 +369,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     ? path.resolve(options.machinesFilePath)
     : path.join(resolveHammurabiDataDir(), 'machines.json')
   const machineRegistry = createMachineRegistryStore(machinesFilePath)
+  const daemonRegistry = new MachineDaemonRegistry()
   void ensureSshControlDir().catch((error) => {
     console.warn(
       `[agents] Failed to initialize SSH control directory: ${
@@ -498,53 +500,60 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     return machineRegistry.readMachineRegistry()
   }
 
-  async function resolveAgentSessionWorkspace(rawSessionName: unknown) {
-    const sessionName = parseSessionName(rawSessionName)
-    if (!sessionName) {
-      throw new WorkspaceError(400, 'Invalid session name')
+  async function resolveLaunchMachine(
+    requestedHost: string | undefined,
+  ): Promise<
+    | { ok: true; machine: MachineConfig | undefined }
+    | { ok: false; status: number; error: string }
+  > {
+    const machineId = requestedHost ?? LOCAL_MACHINE_ID
+    let machines: MachineConfig[]
+    try {
+      machines = await readMachineRegistry()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to read machines registry'
+      return { ok: false, status: 500, error: message }
     }
 
-    const session = sessions.get(sessionName)
-    if (!session) {
-      throw new WorkspaceError(404, `Session "${sessionName}" not found`)
+    const machine = machines.find((entry) => entry.id === machineId)
+    if (!machine && requestedHost !== undefined) {
+      return { ok: false, status: 400, error: `Unknown host machine "${requestedHost}"` }
     }
+    return { ok: true, machine }
+  }
 
-    const sourceHostRaw = session.host ?? (session.kind === 'external' ? session.machine : undefined)
-    const sourceHost = typeof sourceHostRaw === 'string' ? sourceHostRaw.trim() : ''
-    const machines = sourceHost.length > 0
-      ? await readMachineRegistry()
-      : []
-    const machine = sourceHost.length > 0
-      ? machines.find((entry) => entry.id === sourceHost || entry.host === sourceHost)
-      : undefined
-    if (sourceHost.length > 0 && !machine) {
-      throw new WorkspaceError(400, `Unknown host machine "${sourceHost}"`)
+  function resolveDaemonLaunchReadiness(
+    machine: MachineConfig | undefined,
+    agentType: AgentType,
+  ): { ok: true } | { ok: false; status: number; error: string } {
+    if (!isDaemonMachine(machine)) {
+      return { ok: true }
     }
-    const remoteMachine = isRemoteMachine(machine)
-      ? {
-        id: machine.id,
-        label: machine.label,
-        host: machine.host,
-        user: machine.user,
-        port: machine.port,
+    const connection = daemonRegistry.getConnection(machine.id)
+    if (!connection) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Daemon machine "${machine.id}" is not connected`,
       }
-      : undefined
-    const runner = remoteMachine ? createWorkspaceSshCommandRunner(remoteMachine) : undefined
-    const workspace = await resolveWorkspaceRoot({
-      rootPath: session.cwd,
-      source: {
-        kind: 'agent-session',
-        id: sessionName,
-        label: sessionName,
-        host: remoteMachine ? sourceHost : undefined,
-      },
-      machine: remoteMachine,
-    }, runner)
-
-    return {
-      workspace,
-      runner,
     }
+    const provider = getProvider(agentType)
+    const providerKeys = [
+      agentType,
+      provider?.machineAuth?.cliBinaryName,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    const ready = providerKeys.some((key) => {
+      const status = connection.providerHealth[key]
+      return status?.installed === true && status.authenticated === true
+    })
+    if (!ready) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Daemon machine "${machine.id}" is not ready for ${agentType}: provider auth is missing`,
+      }
+    }
+    return { ok: true }
   }
 
   async function writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]> {
@@ -652,6 +661,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     validateMachineConfig,
     withMachineRegistryWriteLock,
     writeMachineRegistry,
+    daemonRegistry,
   })
 
   registerWorkerDispatchRoutes({
@@ -700,16 +710,6 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     getWorkerStates,
   })
 
-  registerWorkspaceRoutes({
-    router,
-    requireReadAccess,
-    resolveAgentSessionWorkspace,
-    listWorkspaceTree,
-    readWorkspaceFilePreview,
-    readWorkspaceGitStatus,
-    readWorkspaceGitLog,
-  })
-
   registerExternalSessionRoutes({
     router,
     requireWriteAccess,
@@ -736,6 +736,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     retireLiveSessionForResume,
     schedulePersistedSessionsWrite,
     sendImmediateTextToStreamSession,
+    getWorkspaceResolver: options.getWorkspaceResolver,
     queueTextToStreamSession,
     createQueuedMessage,
     enqueueQueuedMessage,
@@ -1023,6 +1024,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
       {
         effort: session.effort,
         adaptiveThinking: session.adaptiveThinking,
+        maxThinkingTokens: session.maxThinkingTokens,
         model: session.model,
         createdAt: session.createdAt,
         spawnedBy: session.spawnedBy,
@@ -1188,6 +1190,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
           exitedStreamSessions.set(name, session)
         },
         spawnImpl: spawn,
+        daemonRegistry,
         internalToken,
         writeToStdin,
         writeTranscriptMeta,
@@ -1227,6 +1230,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
       exitedStreamSessions.set(name, session)
     },
     spawnImpl: spawn,
+    daemonRegistry,
     internalToken,
     writeToStdin,
     writeTranscriptMeta,
@@ -1234,7 +1238,8 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
   }
 
   function getProviderSessionDeps(agentType: AgentType): ProviderAdapterDeps {
-    if (getProvider(agentType)?.id === 'codex') {
+    const providerId = getProvider(agentType)?.id
+    if (providerId === 'codex') {
       return {
         ...providerSessionBaseDeps,
         clearTurnWatchdog: clearCodexTurnWatchdog,
@@ -1272,8 +1277,25 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
           wsKeepAliveIntervalMs,
           handleOwningSessionFailure,
           spawn,
+          daemonRegistry,
         ),
         scheduleTurnWatchdog: scheduleCodexTurnWatchdog,
+      } as unknown as ProviderAdapterDeps
+    }
+
+    if (providerId === 'gemini') {
+      return {
+        ...providerSessionBaseDeps,
+        runtimeFactory: (sessionName: string, machine?: MachineConfig, model?: string) =>
+          new GeminiAcpRuntime(sessionName, machine, model, daemonRegistry),
+      } as unknown as ProviderAdapterDeps
+    }
+
+    if (providerId === 'opencode') {
+      return {
+        ...providerSessionBaseDeps,
+        runtimeFactory: (sessionName: string, machine?: MachineConfig, model?: string) =>
+          new OpenCodeAcpRuntime(sessionName, machine, model, daemonRegistry),
       } as unknown as ProviderAdapterDeps
     }
 
@@ -1898,7 +1920,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     schedulePersistedSessionsWrite()
 
     const result = await attemptSendPromptToStreamSession(session, nextMessage, {
-      userEventSubtype: nextMessage.priority === 'normal' ? 'queued_message' : undefined,
+      userEventSubtype: 'queued_message',
     })
     if (!result.ok) {
       if (session.currentQueuedMessage?.id === nextMessage.id) {
@@ -1937,13 +1959,14 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
   async function sendImmediateTextToStreamSession(
     session: StreamSession,
     text: string,
+    images?: QueuedMessageImage[],
   ): Promise<{ ok: true; queued: boolean; message: QueuedMessage } | { ok: false; error: string }> {
     const liveSession = await awaitAutoRotationIfNeeded(session.name)
     if (!liveSession || liveSession.kind !== 'stream') {
       return { ok: false, error: 'Stream session unavailable' }
     }
 
-    const message = createQueuedMessage(text, 'high')
+    const message = createQueuedMessage(text, 'high', images)
 
     if (
       liveSession.lastTurnCompleted &&
@@ -1953,10 +1976,17 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
       liveSession.currentQueuedMessage = message
       broadcastQueueUpdate(liveSession)
       schedulePersistedSessionsWrite()
-      const result = await attemptSendPromptToStreamSession(liveSession, message)
+      const result = await attemptSendPromptToStreamSession(liveSession, message, {
+        userEventSubtype: 'queued_message',
+      })
       if (result.ok) {
         clearQueuedMessageRetry(liveSession)
         resetQueuedMessageRetryDelay(liveSession)
+        if (liveSession.currentQueuedMessage?.id === message.id) {
+          liveSession.currentQueuedMessage = undefined
+        }
+        broadcastQueueUpdate(liveSession)
+        schedulePersistedSessionsWrite()
         return { ok: true, queued: false, message }
       }
       liveSession.currentQueuedMessage = undefined
@@ -1974,7 +2004,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
         || Boolean(getProvider(liveSession.agentType)?.runtimeWatchdog)
       )
     ) {
-      const result = await attemptSendPromptToStreamSession(liveSession, message)
+      const result = await attemptSendPromptToStreamSession(liveSession, message, {
+        userEventSubtype: 'queued_message',
+      })
       if (result.ok) {
         clearQueuedMessageRetry(liveSession)
         resetQueuedMessageRetryDelay(liveSession)
@@ -2017,6 +2049,12 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(req.body?.adaptiveThinking)
     if (parsedAdaptiveThinking === null) {
       res.status(400).json({ error: 'Invalid adaptiveThinking. Expected one of: enabled, disabled' })
+      return
+    }
+
+    const parsedMaxThinkingTokens = parseClaudeMaxThinkingTokens(req.body?.maxThinkingTokens)
+    if (parsedMaxThinkingTokens === null) {
+      res.status(400).json({ error: 'Invalid maxThinkingTokens. Expected integer 1024..256000' })
       return
     }
 
@@ -2145,6 +2183,13 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
         ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE
       )
       : undefined
+    const maxThinkingTokens = provider.uiCapabilities.supportsMaxThinkingTokens
+      ? (
+        resumeSource?.source.maxThinkingTokens
+        ?? parsedMaxThinkingTokens
+        ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
+      )
+      : undefined
     const transportType: Exclude<SessionTransportType, 'external'> = resumeSource || provider.uiCapabilities.forcedTransport === 'stream'
       ? 'stream'
       : parseSessionTransportType(req.body?.transportType)
@@ -2154,25 +2199,21 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
       return
     }
 
-    let machine: MachineConfig | undefined
-    if (requestedHost !== undefined) {
-      try {
-        const machines = await readMachineRegistry()
-        machine = machines.find((entry) => entry.id === requestedHost)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to read machines registry'
-        res.status(500).json({ error: message })
-        return
-      }
-
-      if (!machine) {
-        res.status(400).json({ error: `Unknown host machine "${requestedHost}"` })
-        return
-      }
+    const resolvedMachine = await resolveLaunchMachine(requestedHost)
+    if (!resolvedMachine.ok) {
+      res.status(resolvedMachine.status).json({ error: resolvedMachine.error })
+      return
+    }
+    const machine = resolvedMachine.machine
+    const daemonReadiness = resolveDaemonLaunchReadiness(machine, agentType)
+    if (!daemonReadiness.ok) {
+      res.status(daemonReadiness.status).json({ error: daemonReadiness.error })
+      return
     }
 
     const requestedMachineCwd = cwd ?? machine?.cwd
     const sessionCwd = requestedMachineCwd ?? process.env.HOME ?? '/tmp'
+    const daemonMachine = isDaemonMachine(machine) ? machine : undefined
     const remoteMachine = isRemoteMachine(machine) ? machine : undefined
 
     const resumeProvider = resumeSource ? getProvider(resumeSource.source.agentType) : undefined
@@ -2206,6 +2247,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
           {
             effort,
             adaptiveThinking,
+            maxThinkingTokens,
             model: resumeSource ? undefined : model,
             resumeSessionId: resumeSource ? provider.getResumeId(resumeSource.source) : undefined,
             resumedFrom: resumeFromSession,
@@ -2251,7 +2293,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     // PTY session (default)
     try {
       const claudeEffort = effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
-      const ptySpawner = await getSpawner()
+      const ptySpawner = daemonMachine ? null : await getSpawner()
       const localSpawnCwd = process.env.HOME || '/tmp'
       const preparedLaunch = prepareMachineLaunchEnvironment(machine, process.env)
       const providerPtyEnv = provider.preparePtyEnv?.({ mode, effort: claudeEffort }) ?? {}
@@ -2290,13 +2332,22 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
             ...preparedLaunch.env,
             ...providerPtyEnv,
           }
-      const pty = ptySpawner.spawn(ptyCommand, ptyArgs, {
-        name: 'xterm-256color',
-        cols: DEFAULT_COLS,
-        rows: DEFAULT_ROWS,
-        cwd: remoteMachine ? localSpawnCwd : sessionCwd,
-        env: ptyEnv,
-      })
+      const pty = daemonMachine
+        ? daemonRegistry.spawnPty(daemonMachine.id, {
+            command: ptyCommand,
+            args: ptyArgs,
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+            cwd: sessionCwd,
+            env: ptyEnv,
+          })
+        : ptySpawner!.spawn(ptyCommand, ptyArgs, {
+            name: 'xterm-256color',
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+            cwd: remoteMachine ? localSpawnCwd : sessionCwd,
+            env: ptyEnv,
+          })
       const createdAt = new Date().toISOString()
 
       const session: PtySession = {
@@ -2307,8 +2358,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
         agentType,
         effort: provider.uiCapabilities.supportsEffort ? claudeEffort : undefined,
         adaptiveThinking: provider.uiCapabilities.supportsAdaptiveThinking ? adaptiveThinking : undefined,
+        maxThinkingTokens: provider.uiCapabilities.supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
         cwd: sessionCwd,
-        host: remoteMachine?.id,
+        host: daemonMachine?.id ?? remoteMachine?.id,
         task: task && task.length > 0 ? task : undefined,
         pty,
         buffer: '',
@@ -2341,6 +2393,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
           mode,
           claudeEffort,
           adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+          maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
         )
         : CODEX_MODE_COMMANDS[mode]
       pty.write(command + '\r')
@@ -2451,6 +2504,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
       'cwd',
       'effort',
       'host',
+      'maxThinkingTokens',
       'model',
       'name',
       'sessionType',
@@ -2488,6 +2542,14 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
       return {
         status: 400,
         body: { error: 'Invalid adaptiveThinking. Expected one of: enabled, disabled' },
+      }
+    }
+
+    const parsedMaxThinkingTokens = parseClaudeMaxThinkingTokens(body.maxThinkingTokens)
+    if (parsedMaxThinkingTokens === null) {
+      return {
+        status: 400,
+        body: { error: 'Invalid maxThinkingTokens. Expected integer 1024..256000' },
       }
     }
 
@@ -2545,29 +2607,22 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     const adaptiveThinking = provider.uiCapabilities.supportsAdaptiveThinking
       ? (parsedAdaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
       : undefined
+    const maxThinkingTokens = provider.uiCapabilities.supportsMaxThinkingTokens
+      ? (parsedMaxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
+      : undefined
 
     const requestedHost = parseOptionalHost(body.host)
     if (requestedHost === null) {
       return { status: 400, body: { error: 'Invalid host: expected machine ID string' } }
     }
-    const resolvedHost = requestedHost
-
-    let machine: MachineConfig | undefined
-    if (resolvedHost !== undefined) {
-      let machines: MachineConfig[]
-      try {
-        machines = await readMachineRegistry()
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to read machines registry'
-        return { status: 500, body: { error: message } }
-      }
-      machine = machines.find((entry) => entry.id === resolvedHost)
-      if (!machine) {
-        return {
-          status: 400,
-          body: { error: `Unknown host machine "${resolvedHost}"` },
-        }
-      }
+    const resolvedMachine = await resolveLaunchMachine(requestedHost)
+    if (!resolvedMachine.ok) {
+      return { status: resolvedMachine.status, body: { error: resolvedMachine.error } }
+    }
+    const machine = resolvedMachine.machine
+    const daemonReadiness = resolveDaemonLaunchReadiness(machine, agentType)
+    if (!daemonReadiness.ok) {
+      return { status: daemonReadiness.status, body: { error: daemonReadiness.error } }
     }
 
     const requestedMachineCwd = cwdParsed ?? machine?.cwd
@@ -2586,6 +2641,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
         {
           effort,
           adaptiveThinking,
+          maxThinkingTokens,
           model,
           sessionType,
           creator,
@@ -2725,19 +2781,34 @@ async function isLiveSessionResumeAvailable(session: StreamSession): Promise<boo
     return { source: { source } }
   }
 
-  const { handleUpgrade } = createAgentsWebSocket({
+  const { handleUpgrade: handleSessionUpgrade } = createAgentsWebSocket({
     sessions,
     verifyWsAuth,
     wsKeepAliveIntervalMs,
     getQueueUpdatePayload,
     broadcastStreamEvent,
     sendImmediateTextToStreamSession,
+    getWorkspaceResolver: options.getWorkspaceResolver,
     writeToStdin,
     appendStreamEvent,
-    readMachineRegistry,
-    createStreamSession,
     schedulePersistedSessionsWrite,
   })
+  const {
+    isDaemonUpgrade,
+    handleUpgrade: handleDaemonUpgrade,
+  } = createDaemonWebSocket({
+    machineRegistry,
+    daemonRegistry,
+    ready: restorePersistedSessionsReady,
+  })
+
+  function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (isDaemonUpgrade(req)) {
+      handleDaemonUpgrade(req, socket, head)
+      return
+    }
+    handleSessionUpgrade(req, socket, head)
+  }
 
   const baseSessionsInterface = createCommanderSessionsInterface({
     sessions,
@@ -2758,6 +2829,34 @@ async function isLiveSessionResumeAvailable(session: StreamSession): Promise<boo
   const sessionsInterface = {
     ...baseSessionsInterface,
     dispatchWorkerForCommander,
+    autoResolvePlanApproval(
+      name: string,
+      toolId: string,
+      decision: PlanApprovalDecision,
+      message: string,
+    ) {
+      const session = sessions.get(name)
+      if (!session || session.kind !== 'stream') {
+        return false
+      }
+      const planApproval = findPlanApprovalEvent(session, toolId)
+      if (!planApproval) {
+        return false
+      }
+      const result = deliverPlanApprovalDecision(session, planApproval, decision, message, writeToStdin)
+      if (!result.ok) {
+        return false
+      }
+
+      appendStreamEvent(session, result.payload)
+      broadcastStreamEvent(session, result.payload)
+
+      const systemEvent = buildPlanApprovalAutoResolvedSystemEvent(planApproval, decision)
+      appendStreamEvent(session, systemEvent)
+      broadcastStreamEvent(session, systemEvent)
+      schedulePersistedSessionsWrite()
+      return true
+    },
   }
 
   const approvalSessionsInterface = createApprovalSessionsInterface({
@@ -2775,6 +2874,7 @@ async function isLiveSessionResumeAvailable(session: StreamSession): Promise<boo
       if (sessionPrunerTimer) {
         process.off('SIGTERM', handleSessionPrunerSigterm)
       }
+      daemonRegistry.shutdown()
       await flushPersistedSessionsWrite()
       await sessionsInterface.shutdown?.()
     },

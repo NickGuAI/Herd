@@ -88,6 +88,42 @@ function clearActiveAgentMessageIds(state: MutableStreamProcessorState) {
   state.activeAgentMessageIds = []
 }
 
+function sameImages(
+  left: MsgItem['images'] | undefined,
+  right: MsgItem['images'] | undefined,
+): boolean {
+  const leftImages = left ?? []
+  const rightImages = right ?? []
+  if (leftImages.length !== rightImages.length) {
+    return false
+  }
+  return leftImages.every((image, index) => {
+    const candidate = rightImages[index]
+    return image.mediaType === candidate?.mediaType && image.data === candidate?.data
+  })
+}
+
+function appendUserMessageIfDistinct(
+  context: StreamEventProcessorContext,
+  text: string,
+  images?: MsgItem['images'],
+) {
+  context.setMessages((prev) => {
+    const lastMessage = prev[prev.length - 1]
+    if (
+      lastMessage?.kind === 'user'
+      && lastMessage.text === text
+      && sameImages(lastMessage.images, images)
+    ) {
+      return prev
+    }
+    return (context.capMessages ?? capMessages)([
+      ...prev,
+      createUserMessage(context.nextId(), text, images),
+    ])
+  })
+}
+
 function appendPlanningMessage(
   context: StreamEventProcessorContext,
   event: Extract<StreamEvent, { type: 'planning' }>,
@@ -98,6 +134,46 @@ function appendPlanningMessage(
       toPlanningMessage(context.nextId(), event),
     ]),
   )
+}
+
+function appendPlanApprovalAsk(
+  context: StreamEventProcessorContext,
+  event: Extract<StreamEvent, { type: 'plan_approval' }>,
+) {
+  context.setMessages((prev) => {
+    const existingIdx = prev.findIndex(
+      (message) => message.kind === 'ask' && message.toolId === event.toolId,
+    )
+    if (existingIdx !== -1) {
+      const updated = [...prev]
+      updated[existingIdx] = {
+        ...updated[existingIdx],
+        askInteractionKind: 'plan_approval',
+        toolName: event.toolName,
+        planApprovalPlan: event.plan,
+        planApprovalApproveLabel: event.approveLabel,
+        planApprovalRejectLabel: event.rejectLabel,
+        planApprovalCustomResponseLabel: event.customResponseLabel,
+      }
+      return updated
+    }
+    return (context.capMessages ?? capMessages)([
+      ...prev,
+      {
+        id: context.nextId(),
+        kind: 'ask',
+        text: '',
+        toolId: event.toolId,
+        toolName: event.toolName,
+        askInteractionKind: 'plan_approval',
+        askAnswered: false,
+        planApprovalPlan: event.plan,
+        planApprovalApproveLabel: event.approveLabel,
+        planApprovalRejectLabel: event.rejectLabel,
+        planApprovalCustomResponseLabel: event.customResponseLabel,
+      },
+    ])
+  })
 }
 
 function appendPlanningToolUse(
@@ -268,6 +344,11 @@ export function processStreamEvent(
     return
   }
 
+  if (event.type === 'plan_approval') {
+    appendPlanApprovalAsk(context, event)
+    return
+  }
+
   switch (event.type) {
     case 'assistant': {
       const blocks = event.message?.content
@@ -292,8 +373,7 @@ export function processStreamEvent(
           const text =
             (typeof block.thinking === 'string' ? block.thinking : undefined)
             ?? (typeof block.text === 'string' ? block.text : '')
-          const provider = event.source?.provider
-          if (provider === 'codex') {
+          if (block.presentation?.mergeWithActiveThinking) {
             const activeThinkingMessageId =
               context.state.currentBlock?.type === 'thinking'
                 ? context.state.currentBlock.msgId
@@ -352,38 +432,8 @@ export function processStreamEvent(
               context.state.currentBlock = null
             }
             continue
-          } else if (provider === 'claude') {
-            // Claude assistant envelope. Always emit a Thinking row when the
-            // upstream block has type 'thinking', regardless of body content —
-            // Anthropic flips Opus 4-7 to encrypted-thinking by default
-            // (text='' + signed signature blob), so dropping silently here used
-            // to kill every commander's Thinking pill. When body is empty but
-            // we have a signature, render a deterministic redaction stub so the
-            // pill still renders and signals upstream re-encryption.
-            const trimmed = text.trim()
-            const signature = typeof block.signature === 'string'
-              ? block.signature
-              : ''
-            let body: string | null = null
-            if (trimmed.length > 0) {
-              body = trimmed
-            } else if (signature.length > 0) {
-              body = `(reasoning content redacted by Claude · ${signature.length} bytes signed)`
-            }
-            if (body === null) {
-              continue
-            }
-            const id = context.nextId()
-            context.setMessages((prev) =>
-              (context.capMessages ?? capMessages)([
-                ...prev,
-                { id, kind: 'thinking', text: body! },
-              ]),
-            )
-            continue
           }
 
-          // Unknown-provider fallback (preserves pre-3-way behavior).
           if (!text) {
             continue
           }
@@ -491,12 +541,7 @@ export function processStreamEvent(
         if (hasActiveAgentTool) {
           break
         }
-        context.setMessages((prev) =>
-          (context.capMessages ?? capMessages)([
-            ...prev,
-            createUserMessage(context.nextId(), content.trim()),
-          ]),
-        )
+        appendUserMessageIfDistinct(context, content.trim())
         break
       }
       if (!Array.isArray(content)) {
@@ -522,12 +567,7 @@ export function processStreamEvent(
               images.push({ mediaType: source?.media_type ?? '', data: source?.data ?? '' })
             }
           }
-          context.setMessages((prev) =>
-            (context.capMessages ?? capMessages)([
-              ...prev,
-              createUserMessage(context.nextId(), text, images),
-            ]),
-          )
+          appendUserMessageIfDistinct(context, text, images)
           break
         }
       }
@@ -555,6 +595,25 @@ export function processStreamEvent(
             }
             delete context.state.planningToolNames[result.tool_use_id!]
             continue
+          }
+          if (result.tool_use_id) {
+            for (let i = updated.length - 1; i >= 0; i -= 1) {
+              const message = updated[i]
+              if (message.kind === 'ask' && message.toolId === result.tool_use_id) {
+                const nextMessage = { ...message, askAnswered: true, askSubmitting: false }
+                updated[i] = nextMessage
+                if (message.askInteractionKind === 'plan_approval') {
+                  const planningEvent = parsePlanningToolResult(
+                    result.content ?? event.tool_use_result,
+                    result.is_error,
+                  )
+                  if (planningEvent) {
+                    updated.push(toPlanningMessage(context.nextId(), planningEvent))
+                  }
+                }
+                break
+              }
+            }
           }
           const status = result.is_error ? ('error' as const) : ('success' as const)
           const toolOutput = extractToolResultOutput(result.content)

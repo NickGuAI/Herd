@@ -98,6 +98,97 @@ afterEach(async () => {
 })
 
 describe('commander channels route', () => {
+  it('returns backend provider descriptors with explicit commander binding state', async () => {
+    const listByCommander = vi.fn().mockResolvedValue([
+      {
+        id: 'binding-1',
+        commanderId: 'cmd-1',
+        provider: 'email',
+        accountId: 'assistant@example.com',
+        displayName: 'Assistant Email',
+        enabled: true,
+        config: {
+          provider: 'email',
+          defaultCommanderId: 'cmd-1',
+        },
+        createdAt: '2026-05-19T00:00:00.000Z',
+        updatedAt: '2026-05-19T00:00:00.000Z',
+      },
+    ])
+    const server = await startServer({
+      store: { listByCommander } as unknown as CommanderChannelBindingStore,
+      sessionStore: { get: vi.fn() },
+    })
+
+    const response = await fetch(`${server.baseUrl}/api/commanders/cmd-1/channels/providers`, {
+      headers: API_KEY_HEADERS,
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { providers: Array<Record<string, unknown>> }
+    const email = body.providers.find((provider) => provider.provider === 'email')
+    const whatsapp = body.providers.find((provider) => provider.provider === 'whatsapp')
+    expect(email).toMatchObject({
+      provider: 'email',
+      label: 'Email',
+      credentialFields: ['appPassword'],
+      commanderBinding: {
+        mode: 'account-commander',
+        source: 'bindingState.defaultCommanderId',
+        label: 'Default Commander',
+      },
+      bindingState: {
+        defaultCommanderId: 'cmd-1',
+        effectiveCommanderId: 'cmd-1',
+        source: 'legacy-provider-config',
+      },
+    })
+    expect(email?.formDefaults).toMatchObject({
+      imapHost: 'imap.gmail.com',
+      imapPort: '993',
+      smtpHost: 'smtp.gmail.com',
+      smtpPort: '465',
+      pollIntervalSeconds: '15',
+    })
+    expect(whatsapp).toMatchObject({
+      provider: 'whatsapp',
+      label: 'WhatsApp',
+      pairing: {
+        mode: 'qr',
+        transport: 'baileys',
+        statusPollIntervalMs: 2_000,
+      },
+      formDefaults: {
+        transport: 'baileys',
+        browserName: 'Hervald',
+        connectTimeoutSeconds: '30',
+        dmPolicy: 'allowlist',
+        groupPolicy: 'disabled',
+      },
+    })
+    expect(listByCommander).toHaveBeenCalledWith('cmd-1')
+  })
+
+  it('returns global provider descriptors without requiring a commander selection', async () => {
+    const server = await startServer({
+      store: {} as unknown as CommanderChannelBindingStore,
+      sessionStore: { get: vi.fn() },
+    })
+
+    const response = await fetch(`${server.baseUrl}/api/commanders/channels/providers`, {
+      headers: API_KEY_HEADERS,
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json() as { providers: Array<{ provider: string; label: string }> }
+    expect(body.providers.map((provider) => [provider.provider, provider.label])).toEqual([
+      ['email', 'Email'],
+      ['whatsapp', 'WhatsApp'],
+      ['telegram', 'Telegram'],
+      ['discord', 'Discord'],
+    ])
+  })
+
   it('rejects channel binding creation for unknown commander', async () => {
     const create = vi.fn()
     const sessionGet = vi.fn().mockResolvedValue(null)

@@ -102,6 +102,41 @@ describe('createSession', () => {
       }),
     })
   })
+
+  it('posts maxThinkingTokens when explicitly provided', async () => {
+    vi.mocked(fetchJson).mockResolvedValue({
+      sessionName: 'claude-max-thinking-tokens',
+      mode: 'default',
+      sessionType: 'stream',
+      created: true,
+    })
+
+    await expect(createSession({
+      name: 'claude-max-thinking-tokens',
+      mode: 'default',
+      sessionType: 'stream',
+      maxThinkingTokens: 64000,
+    })).resolves.toEqual({
+      sessionName: 'claude-max-thinking-tokens',
+      mode: 'default',
+      sessionType: 'stream',
+      created: true,
+    })
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/agents/sessions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: 'claude-max-thinking-tokens',
+        mode: 'default',
+        sessionType: 'stream',
+        maxThinkingTokens: 64000,
+        transportType: 'stream',
+      }),
+    })
+  })
 })
 
 describe('triggerPreKillDebrief', () => {

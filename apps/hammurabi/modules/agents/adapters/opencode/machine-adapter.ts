@@ -7,6 +7,7 @@ export const opencodeMachineProvider: MachineProviderAdapter = registerMachinePr
   id: 'opencode',
   label: 'OpenCode',
   cliBinaryName: 'opencode',
+  installPackageName: 'opencode-ai',
   authEnvKeys: ['OPENCODE_API_KEY'],
   loginStatusCommand: null,
   supportedAuthModes: ['api-key'],

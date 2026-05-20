@@ -381,6 +381,8 @@ async function connectWsWithReplay(
   replay: {
     type: 'replay'
     events: Array<Record<string, unknown>>
+    messages?: Array<Record<string, unknown>>
+    projection?: Record<string, unknown>
     more?: boolean
     usage?: { inputTokens: number; outputTokens: number; costUsd: number }
   }
@@ -392,6 +394,8 @@ async function connectWsWithReplay(
   const replayPromise = new Promise<{
     type: 'replay'
     events: Array<Record<string, unknown>>
+    messages?: Array<Record<string, unknown>>
+    projection?: Record<string, unknown>
     more?: boolean
     usage?: { inputTokens: number; outputTokens: number; costUsd: number }
   }>((resolve, reject) => {
@@ -399,6 +403,8 @@ async function connectWsWithReplay(
       const parsed = JSON.parse(data.toString()) as {
         type: string
         events?: Array<Record<string, unknown>>
+        messages?: Array<Record<string, unknown>>
+        projection?: Record<string, unknown>
         more?: boolean
         usage?: { inputTokens: number; outputTokens: number; costUsd: number }
       }
@@ -406,6 +412,8 @@ async function connectWsWithReplay(
         resolve({
           type: 'replay',
           events: parsed.events,
+          messages: parsed.messages,
+          projection: parsed.projection,
           more: parsed.more,
           usage: parsed.usage,
         })

@@ -32,8 +32,8 @@ import {
   migrateProviderContext,
   migratedProviderContextChanged,
   parseCanonicalProviderContext,
-} from '../../migrations/provider-context.js'
-import { writeJsonFileAtomically } from '../../migrations/write-json-file-atomically.js'
+} from '../agents/providers/provider-context-migration.js'
+import { writeJsonFileAtomically } from '../json-file.js'
 
 const CONVERSATION_STATUSES = new Set<Conversation['status']>([
   'active',

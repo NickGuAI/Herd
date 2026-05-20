@@ -25,7 +25,7 @@ declare module '../hooks/useCommander' {
     displayName?: string
     agentType?: AgentType
     effort?: ClaudeEffortLevel
-    persona?: string
+    identityOperatingStyle?: string
     avatarSeed?: string
     heartbeat?: {
       intervalMs: number
@@ -75,8 +75,8 @@ export function CreateCommanderForm({
   // Working directory
   const [cwd, setCwd] = useState('')
 
-  // Persona
-  const [persona, setPersona] = useState('')
+  // Commander instructions
+  const [identityOperatingStyle, setIdentityOperatingStyle] = useState('')
 
   // Avatar
   const [avatarSeed, setAvatarSeed] = useState('')
@@ -155,7 +155,7 @@ export function CreateCommanderForm({
     }
 
     const trimmedCwd = cwd.trim() || undefined
-    const trimmedPersona = persona.trim() || undefined
+    const trimmedIdentityOperatingStyle = identityOperatingStyle.trim() || undefined
 
     setActionError(null)
     try {
@@ -166,7 +166,7 @@ export function CreateCommanderForm({
         model,
         effort,
         cwd: trimmedCwd,
-        persona: trimmedPersona,
+        identityOperatingStyle: trimmedIdentityOperatingStyle,
         avatarSeed: avatarSeed.trim() || undefined,
         maxTurns: parsedMaxTurns,
         contextMode: parsedFatPinInterval > 0 ? 'fat' : 'thin',
@@ -196,7 +196,7 @@ export function CreateCommanderForm({
       setModel(null)
       setEffort(DEFAULT_CLAUDE_EFFORT_LEVEL)
       setCwd('')
-      setPersona('')
+      setIdentityOperatingStyle('')
       setAvatarSeed('')
       setHeartbeatMinutes(String(DEFAULT_HEARTBEAT_MINUTES))
       setMessageTemplate('')
@@ -311,13 +311,13 @@ export function CreateCommanderForm({
         />
       </div>
 
-      {/* Persona */}
+      {/* COMMANDER.md identity */}
       <label className="block">
-        <span className={`${LABEL_CLASS} mb-1 block`}>Persona</span>
+        <span className={`${LABEL_CLASS} mb-1 block`}>Identity and operating style</span>
         <textarea
           rows={4}
-          value={persona}
-          onChange={(event) => setPersona(event.target.value)}
+          value={identityOperatingStyle}
+          onChange={(event) => setIdentityOperatingStyle(event.target.value)}
           placeholder="Senior engineer who owns infra"
           style={{ resize: 'vertical' }}
           className={INPUT_CLASS}
@@ -437,7 +437,7 @@ export function CreateCommanderForm({
             host={host}
             displayName={displayName || undefined}
             cwd={cwd || undefined}
-            persona={persona || undefined}
+            identityOperatingStyle={identityOperatingStyle || undefined}
             agentType={agentType}
             effort={effort}
             heartbeatIntervalMs={Number.isFinite(parsedHeartbeatMs) ? parsedHeartbeatMs : undefined}

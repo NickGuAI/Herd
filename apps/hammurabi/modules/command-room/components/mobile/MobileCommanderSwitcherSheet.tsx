@@ -38,8 +38,8 @@ export function MobileCommanderSwitcherSheet({
       dark={dark}
     >
       <div className={dark ? 'hv-dark' : 'hv-light'}>
-        <div className="border-b border-ink-border/70 px-4 pb-3 pt-1">
-          <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-sumi-diluted">
+        <div className="border-b border-[color:var(--hv-border-hair)] px-4 pb-3 pt-1">
+          <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">
             switch commander · {commanders.length}
           </p>
         </div>
@@ -57,7 +57,7 @@ export function MobileCommanderSwitcherSheet({
                     onSelect(commander.id)
                     onClose()
                   }}
-                  className="flex w-full items-center gap-3 rounded-[2px_10px_2px_10px] border border-ink-border/70 px-3 py-3 text-left transition-colors hover:bg-ink-wash/50"
+                  className="flex w-full items-center gap-3 rounded-[2px_10px_2px_10px] border border-[color:var(--hv-border-hair)] px-3 py-3 text-left transition-colors hover:bg-[var(--hv-surface-hover)]"
                   style={{
                     background: isCurrent ? 'var(--hv-ink-wash-02)' : 'transparent',
                     borderColor: isCurrent ? 'var(--hv-border-firm)' : undefined,
@@ -73,24 +73,23 @@ export function MobileCommanderSwitcherSheet({
                       <StatusDot
                         state={commander.status}
                         size={8}
-                        pulse={commander.status === 'running'}
                         style={{ border: '2px solid var(--hv-bg)', borderRadius: '50%' }}
                       />
                     </span>
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate font-mono text-sm text-sumi-black">{commander.name}</span>
+                      <span className="truncate font-mono text-sm text-[color:var(--hv-fg)]">{commander.name}</span>
                       {isCurrent ? (
-                        <span className="text-[9px] uppercase tracking-[0.14em] text-sumi-mist">current</span>
+                        <span className="text-[9px] uppercase tracking-[0.14em] text-[color:var(--hv-fg-faint)]">current</span>
                       ) : null}
                     </div>
-                    <p className="mt-1 truncate text-xs italic text-sumi-diluted">
+                    <p className="mt-1 truncate text-xs italic text-[color:var(--hv-fg-subtle)]">
                       {(commander.description || 'commander').toLowerCase()}
                     </p>
                   </div>
                   {pendingCount > 0 ? (
-                    <span className="rounded-[2px_6px_2px_6px] bg-accent-vermillion/10 px-2 py-1 text-[10px] uppercase tracking-[0.1em] text-accent-vermillion">
+                    <span className="rounded-[2px_6px_2px_6px] bg-[var(--hv-accent-danger-wash)] px-2 py-1 text-[10px] uppercase tracking-[0.1em] text-[color:var(--hv-accent-danger)]">
                       {pendingCount}
                     </span>
                   ) : null}

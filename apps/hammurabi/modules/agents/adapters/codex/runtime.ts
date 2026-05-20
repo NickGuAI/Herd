@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket, type RawData } from 'ws'
 import { CODEX_RUNTIME_FORCE_KILL_WAIT_MS, CODEX_RUNTIME_TEARDOWN_TIMEOUT_MS } from '../../constants.js'
-import { isRemoteMachine } from '../../machines.js'
+import { isDaemonMachine, isRemoteMachine } from '../../machines.js'
+import type { MachineDaemonRegistry } from '../../daemon/registry.js'
 import {
   appendCodexSidecarTail,
   attachWebSocketKeepAlive,
@@ -21,6 +22,7 @@ import {
   toCodexProtocolMessage,
 } from './protocol.js'
 import {
+  spawnDaemonCodexRuntime,
   spawnLocalCodexRuntime,
   spawnRemoteCodexRuntime,
 } from './process.js'
@@ -34,6 +36,7 @@ const CODEX_INITIALIZE_CAPABILITIES = {
 export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
   readonly sessionName: string
   readonly machine: (MachineConfig & { host: string }) | null
+  readonly daemonMachine: (MachineConfig & { transport: 'daemon' }) | null
   readonly transportMode: 'ws' | 'stdio'
   readonly listActiveSessionNames: () => string[]
   readonly handleOwningSessionFailure: (failure: CodexRuntimeFailure) => void
@@ -62,10 +65,12 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
     wsKeepAliveIntervalMs: number,
     handleOwningSessionFailure: (failure: CodexRuntimeFailure) => void,
     spawnImpl: typeof spawn = spawn,
+    private readonly daemonRegistry?: Pick<MachineDaemonRegistry, 'spawnProcess'>,
   ) {
     this.sessionName = sessionName
     this.machine = isRemoteMachine(machine) ? machine : null
-    this.transportMode = this.machine ? 'stdio' : 'ws'
+    this.daemonMachine = isDaemonMachine(machine) ? machine : null
+    this.transportMode = this.machine || this.daemonMachine ? 'stdio' : 'ws'
     this.listActiveSessionNames = listActiveSessionNames
     this.wsKeepAliveIntervalMs = wsKeepAliveIntervalMs
     this.handleOwningSessionFailure = handleOwningSessionFailure
@@ -79,6 +84,7 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
       port: this.port || null,
       transportMode: this.transportMode,
       machineId: this.machine?.id ?? null,
+      daemonMachineId: this.daemonMachine?.id ?? null,
       activeSessions: this.listActiveSessionNames(),
       pendingRequests: this.pendingRequests.size,
       listenerThreads: this.notificationListeners.size,
@@ -409,6 +415,13 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
         const process = spawnRemoteCodexRuntime(this.machine, this.spawnImpl)
         this.attachProcess(process)
         this.log('info', 'Spawned remote Codex runtime process')
+      } else if (this.daemonMachine) {
+        if (!this.daemonRegistry) {
+          throw new Error(`Daemon machine "${this.daemonMachine.id}" is not connected`)
+        }
+        const process = spawnDaemonCodexRuntime(this.daemonMachine, this.daemonRegistry)
+        this.attachProcess(process)
+        this.log('info', 'Spawned daemon Codex runtime process')
       } else {
         const { port, process } = await spawnLocalCodexRuntime(this.spawnImpl)
         this.port = port

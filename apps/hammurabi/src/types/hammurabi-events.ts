@@ -40,6 +40,9 @@ export interface HammurabiThinkingBlock {
   thinking?: string
   text?: string
   signature?: string
+  presentation?: {
+    mergeWithActiveThinking?: boolean
+  }
 }
 
 export interface HammurabiImageBlock {
@@ -69,9 +72,36 @@ interface HammurabiEventBase {
 export interface PlanningStreamEvent extends HammurabiEventBase {
   type: 'planning'
   action: 'enter' | 'proposed' | 'decision'
+  toolId?: string
   plan?: string
   approved?: boolean | null
   message?: string
+}
+
+export type PlanApprovalDecision = 'approve' | 'reject'
+
+export interface PlanApprovalProviderContext {
+  provider: HammurabiEventProvider
+  backend: HammurabiEventBackend
+  toolUseId: string
+  toolName: string
+  requestId?: string | number
+  answerFormat: 'claude.exit_plan_mode' | 'opencode.plan_decision'
+}
+
+export interface PlanApprovalStreamEvent extends HammurabiEventBase {
+  type: 'plan_approval'
+  interactionKind: 'plan_approval'
+  toolId: string
+  toolName: string
+  plan: string
+  approveLabel?: string
+  rejectLabel?: string
+  customResponseLabel?: string
+  expiresAt?: string
+  autoResolveAfterMs?: number
+  defaultDecision?: PlanApprovalDecision
+  providerContext: PlanApprovalProviderContext
 }
 
 export interface QueueEventMessage {
@@ -83,6 +113,7 @@ export interface QueueEventMessage {
 
 export type HammurabiEvent =
   | (PlanningStreamEvent & HammurabiEventBase)
+  | (PlanApprovalStreamEvent & HammurabiEventBase)
   | ({
       type: 'queue_update'
       queue: {

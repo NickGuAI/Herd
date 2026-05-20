@@ -2,7 +2,7 @@ export const CLAUDE_ADAPTIVE_THINKING_MODES = ['enabled', 'disabled'] as const
 
 export type ClaudeAdaptiveThinkingMode = (typeof CLAUDE_ADAPTIVE_THINKING_MODES)[number]
 
-export const DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE: ClaudeAdaptiveThinkingMode = 'enabled'
+export const DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE: ClaudeAdaptiveThinkingMode = 'disabled'
 
 export function isClaudeAdaptiveThinkingMode(value: unknown): value is ClaudeAdaptiveThinkingMode {
   return CLAUDE_ADAPTIVE_THINKING_MODES.includes(value as ClaudeAdaptiveThinkingMode)

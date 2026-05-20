@@ -5,24 +5,22 @@ import { describe, expect, it } from 'vitest'
 import { resolveWorkspaceSource } from '../../CommandRoom'
 
 describe('resolveWorkspaceSource', () => {
-  it('returns a writable commander workspace source', () => {
+  it('returns a target workspace source', () => {
     expect(resolveWorkspaceSource({
-      selectedCommanderId: 'cmd-1',
+      targetId: 'wt-1',
+      label: 'local:/tmp/project',
+      readOnly: false,
     })).toEqual({
-      kind: 'commander',
-      commanderId: 'cmd-1',
+      kind: 'target',
+      targetId: 'wt-1',
+      label: 'local:/tmp/project',
       readOnly: false,
     })
   })
 
-  it('keeps agent-session workspace sources read-only', () => {
+  it('returns null before a target is opened', () => {
     expect(resolveWorkspaceSource({
-      activeSessionName: 'worker-1',
-      selectedCommanderId: 'cmd-1',
-    })).toEqual({
-      kind: 'agent-session',
-      sessionName: 'worker-1',
-      readOnly: true,
-    })
+      targetId: null,
+    })).toBeNull()
   })
 })

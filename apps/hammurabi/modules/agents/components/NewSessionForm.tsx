@@ -8,6 +8,7 @@ import type {
 import { useProviderRegistry } from '@/hooks/use-providers'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import { AgentControlsSection } from './new-session-form/AgentControlsSection'
 import { MachineSection } from './new-session-form/MachineSection'
 import { ResumeSourceSection } from './new-session-form/ResumeSourceSection'
@@ -27,6 +28,8 @@ export interface NewSessionFormProps {
   setEffort: (value: ClaudeEffortLevel) => void
   adaptiveThinking: ClaudeAdaptiveThinkingMode
   setAdaptiveThinking: (value: ClaudeAdaptiveThinkingMode) => void
+  maxThinkingTokens: ClaudeMaxThinkingTokens
+  setMaxThinkingTokens: (value: ClaudeMaxThinkingTokens) => void
   agentType: AgentType
   setAgentType: (value: AgentType) => void
   transportType: Exclude<SessionTransportType, 'external'>
@@ -67,6 +70,8 @@ function NewSessionFormComponent({
   setEffort,
   adaptiveThinking,
   setAdaptiveThinking,
+  maxThinkingTokens,
+  setMaxThinkingTokens,
   agentType,
   setAgentType,
   transportType,
@@ -96,8 +101,7 @@ function NewSessionFormComponent({
   agentOptions,
 }: NewSessionFormProps) {
   const { data: registeredProviders = [] } = useProviderRegistry()
-  const remoteMachines = machines.filter((machine) => machine.host)
-  const showMachineSelector = remoteMachines.length > 0
+  const showMachineSelector = machines.length > 0
   const resumeSelectionEnabled = Array.isArray(resumeOptions) && typeof setResumeSourceName === 'function'
   const resumeLocked = resumeSource !== null
   const providers = registeredProviders.filter((provider) =>
@@ -114,6 +118,8 @@ function NewSessionFormComponent({
     setEffort,
     adaptiveThinking,
     setAdaptiveThinking,
+    maxThinkingTokens,
+    setMaxThinkingTokens,
   })
 
   return (
@@ -129,6 +135,8 @@ function NewSessionFormComponent({
         setEffort={setEffort}
         adaptiveThinking={adaptiveThinking}
         setAdaptiveThinking={setAdaptiveThinking}
+        maxThinkingTokens={maxThinkingTokens}
+        setMaxThinkingTokens={setMaxThinkingTokens}
       />
 
       {resumeSelectionEnabled ? (

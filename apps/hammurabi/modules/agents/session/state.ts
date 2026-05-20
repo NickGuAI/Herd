@@ -8,7 +8,7 @@ import { resolveCommanderNamesPath } from '../../commanders/paths.js'
 import {
   parseCanonicalProviderContext,
   sanitizeProviderContextForPersistence,
-} from '../../../migrations/provider-context.js'
+} from '../providers/provider-context-migration.js'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   normalizeClaudeAdaptiveThinkingMode,
@@ -19,6 +19,11 @@ import {
   normalizeClaudeEffortLevel,
   type ClaudeEffortLevel,
 } from '../../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  normalizeClaudeMaxThinkingTokens,
+  type ClaudeMaxThinkingTokens,
+} from '../../claude-max-thinking-tokens.js'
 import {
   getMimeType,
   resolveWorkspacePath,
@@ -45,6 +50,7 @@ import type {
   CompletedSessionMetadata,
   ExitedStreamSessionState,
   PersistedSessionsState,
+  PersistedDaemonProcess,
   PersistedStreamSession,
   SessionCreator,
   SessionTransportType,
@@ -180,10 +186,12 @@ function parsePersistedProviderContext(
   entry: Record<string, unknown>,
   effort?: ClaudeEffortLevel,
   adaptiveThinking?: ClaudeAdaptiveThinkingMode,
+  maxThinkingTokens?: ClaudeMaxThinkingTokens,
 ) {
   const canonicalContext = parseCanonicalProviderContext(entry.providerContext, {
     effort,
     adaptiveThinking,
+    maxThinkingTokens,
   })
   if (canonicalContext) {
     return canonicalContext
@@ -194,6 +202,7 @@ function parsePersistedProviderContext(
     return sanitizeProviderContextForPersistence(migratedContext, {
       effort,
       adaptiveThinking,
+      maxThinkingTokens,
     }) ?? migratedContext
   }
 
@@ -207,6 +216,9 @@ function parsePersistedProviderContext(
   if ((provider?.uiCapabilities.supportsAdaptiveThinking ?? true) && adaptiveThinking) {
     fallback.adaptiveThinking = adaptiveThinking
   }
+  if ((provider?.uiCapabilities.supportsMaxThinkingTokens ?? true) && maxThinkingTokens) {
+    fallback.maxThinkingTokens = maxThinkingTokens
+  }
   return fallback
 }
 
@@ -216,6 +228,24 @@ function providerSupportsEffort(agentType: string): boolean {
 
 function providerSupportsAdaptiveThinking(agentType: string): boolean {
   return getProvider(agentType)?.uiCapabilities.supportsAdaptiveThinking ?? false
+}
+
+function providerSupportsMaxThinkingTokens(agentType: string): boolean {
+  return getProvider(agentType)?.uiCapabilities.supportsMaxThinkingTokens ?? false
+}
+
+function parsePersistedDaemonProcess(value: unknown): PersistedDaemonProcess | undefined {
+  const record = asObject(value)
+  if (!record) {
+    return undefined
+  }
+  const processId = typeof record.processId === 'string' && record.processId.trim().length > 0
+    ? record.processId.trim()
+    : undefined
+  const mode = record.mode === 'pipe' || record.mode === 'pty'
+    ? record.mode
+    : undefined
+  return processId && mode ? { processId, mode } : undefined
 }
 
 export function parsePersistedStreamSessionEntry(value: unknown): PersistedStreamSession | null {
@@ -252,6 +282,10 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
   const adaptiveThinking = normalizeClaudeAdaptiveThinkingMode(
     entry.adaptiveThinking,
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  )
+  const maxThinkingTokens = normalizeClaudeMaxThinkingTokens(
+    entry.maxThinkingTokens,
+    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   )
   const host = parseOptionalHost(entry.host)
   if (host === null) {
@@ -293,13 +327,16 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
   const activeTurnId = typeof entry.activeTurnId === 'string' && entry.activeTurnId.trim().length > 0
     ? entry.activeTurnId.trim()
     : undefined
+  const daemonProcess = parsePersistedDaemonProcess(entry.daemonProcess)
   const supportsEffort = providerSupportsEffort(agentType)
   const supportsAdaptiveThinking = providerSupportsAdaptiveThinking(agentType)
+  const supportsMaxThinkingTokens = providerSupportsMaxThinkingTokens(agentType)
   const providerContext = parsePersistedProviderContext(
     agentType,
     entry,
     supportsEffort ? effort : undefined,
     supportsAdaptiveThinking ? adaptiveThinking : undefined,
+    supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
   )
 
   return {
@@ -311,6 +348,7 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     model,
     effort: supportsEffort ? effort : undefined,
     adaptiveThinking: supportsAdaptiveThinking ? adaptiveThinking : undefined,
+    maxThinkingTokens: supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
     mode,
     cwd,
     host: host ?? undefined,
@@ -325,6 +363,7 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     resumedFrom,
     sessionState,
     hadResult,
+    daemonProcess,
     queuedMessages,
     currentQueuedMessage: currentQueuedMessage ?? undefined,
     pendingDirectSendMessages,
@@ -576,6 +615,10 @@ export function mergePersistedSessionWithTranscriptMeta(
     meta.adaptiveThinking,
     entry.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   )
+  const maxThinkingTokens = normalizeClaudeMaxThinkingTokens(
+    meta.maxThinkingTokens,
+    entry.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  )
 
   const metaCwd = typeof meta.cwd === 'string' ? meta.cwd.trim() : ''
   const cwd = metaCwd.startsWith('/') ? path.resolve(metaCwd) : entry.cwd
@@ -589,6 +632,7 @@ export function mergePersistedSessionWithTranscriptMeta(
     : entry.spawnedBy
   const supportsEffort = providerSupportsEffort(agentType)
   const supportsAdaptiveThinking = providerSupportsAdaptiveThinking(agentType)
+  const supportsMaxThinkingTokens = providerSupportsMaxThinkingTokens(agentType)
   const providerContext = parsePersistedProviderContext(
     agentType,
     {
@@ -597,6 +641,7 @@ export function mergePersistedSessionWithTranscriptMeta(
     },
     supportsEffort ? effort : undefined,
     supportsAdaptiveThinking ? adaptiveThinking : undefined,
+    supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
   )
 
   return {
@@ -607,6 +652,7 @@ export function mergePersistedSessionWithTranscriptMeta(
       : entry.model,
     effort: supportsEffort ? effort : undefined,
     adaptiveThinking: supportsAdaptiveThinking ? adaptiveThinking : undefined,
+    maxThinkingTokens: supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
     cwd,
     host: host ?? undefined,
     createdAt: metaCreatedAt,
@@ -725,6 +771,13 @@ export function getToolUses(event: StreamJsonEvent): Array<{ id: string | null; 
     }
   }
 
+  if (event.type === 'plan_approval') {
+    uses.push({
+      id: event.toolId.trim().length > 0 ? event.toolId.trim() : null,
+      name: event.toolName.trim().length > 0 ? event.toolName.trim() : 'PlanApproval',
+    })
+  }
+
   addToolUse(event.content_block)
 
   const message = asObject(event.message)
@@ -752,6 +805,10 @@ export function getToolResultIds(event: StreamJsonEvent): string[] {
 
   if (event.type === 'tool_result' && typeof event.tool_use_id === 'string' && event.tool_use_id.trim().length > 0) {
     ids.push(event.tool_use_id.trim())
+  }
+
+  if (event.type === 'planning' && event.action === 'decision' && typeof event.toolId === 'string' && event.toolId.trim().length > 0) {
+    ids.push(event.toolId.trim())
   }
 
   addToolResult(event.content_block)
@@ -788,6 +845,41 @@ export function hasPendingAskUserQuestion(session: StreamSession | AnySession): 
     const event = session.events[i]
     for (const toolResultId of getToolResultIds(event)) {
       answeredToolIds.add(toolResultId)
+    }
+
+    const toolUses = getToolUses(event)
+    for (let j = toolUses.length - 1; j >= 0; j -= 1) {
+      const toolUse = toolUses[j]
+      if (toolUse.name !== 'AskUserQuestion') {
+        continue
+      }
+      if (!toolUse.id) {
+        return true
+      }
+      if (!answeredToolIds.has(toolUse.id)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+export function hasPendingUserInteraction(session: StreamSession | AnySession): boolean {
+  if (session.kind === 'pty') {
+    return false
+  }
+  const answeredToolIds = new Set<string>()
+  for (let i = session.events.length - 1; i >= 0; i -= 1) {
+    const event = session.events[i]
+    for (const toolResultId of getToolResultIds(event)) {
+      answeredToolIds.add(toolResultId)
+    }
+
+    if (event.type === 'plan_approval') {
+      if (!event.toolId || !answeredToolIds.has(event.toolId)) {
+        return true
+      }
+      continue
     }
 
     const toolUses = getToolUses(event)
@@ -870,6 +962,7 @@ export function liveSessionToApiPayload(session: StreamSession): AgentSession {
   if (session.agentType) payload.agentType = session.agentType
   if (session.effort) payload.effort = session.effort
   if (session.adaptiveThinking) payload.adaptiveThinking = session.adaptiveThinking
+  if (session.maxThinkingTokens) payload.maxThinkingTokens = session.maxThinkingTokens
   if (session.model) payload.model = session.model
   if (session.cwd) payload.cwd = session.cwd
   if (session.host) payload.host = session.host
@@ -888,7 +981,7 @@ export function getWorldAgentPhase(session: AnySession, nowMs: number): WorldAge
   if (session.kind === 'stream' && getWorldAgentStatus(session, nowMs) === 'stale') {
     return 'stale'
   }
-  if (hasPendingAskUserQuestion(session)) {
+  if (hasPendingUserInteraction(session)) {
     return 'blocked'
   }
 
@@ -997,6 +1090,7 @@ export function snapshotExitedStreamSession(session: StreamSession): ExitedStrea
     model: session.model,
     effort: session.effort,
     adaptiveThinking: session.adaptiveThinking,
+    maxThinkingTokens: session.maxThinkingTokens,
     mode: session.mode,
     cwd: session.cwd,
     host: session.host,
@@ -1008,6 +1102,7 @@ export function snapshotExitedStreamSession(session: StreamSession): ExitedStrea
     providerContext: sanitizeProviderContextForPersistence(session.providerContext, {
       effort: session.effort,
       adaptiveThinking: session.adaptiveThinking,
+      maxThinkingTokens: session.maxThinkingTokens,
     }) ?? session.providerContext,
     activeTurnId: session.activeTurnId,
     resumedFrom: session.resumedFrom,
@@ -1035,6 +1130,7 @@ export function snapshotDeletedResumableStreamSession(session: StreamSession): E
     model: persisted.model,
     effort: persisted.effort,
     adaptiveThinking: persisted.adaptiveThinking,
+    maxThinkingTokens: persisted.maxThinkingTokens,
     mode: persisted.mode,
     cwd: persisted.cwd,
     host: persisted.host,
@@ -1067,6 +1163,7 @@ export function buildPersistedEntryFromExitedSession(
     model: exited.model,
     effort: exited.effort,
     adaptiveThinking: exited.adaptiveThinking,
+    maxThinkingTokens: exited.maxThinkingTokens,
     mode: exited.mode,
     cwd: exited.cwd,
     host: exited.host,
@@ -1075,6 +1172,7 @@ export function buildPersistedEntryFromExitedSession(
     providerContext: sanitizeProviderContextForPersistence(exited.providerContext, {
       effort: exited.effort,
       adaptiveThinking: exited.adaptiveThinking,
+      maxThinkingTokens: exited.maxThinkingTokens,
     }) ?? exited.providerContext,
     activeTurnId: exited.activeTurnId,
     spawnedBy: exited.spawnedBy,
@@ -1111,6 +1209,7 @@ export function buildPersistedEntryFromLiveStreamSession(
     model: session.model,
     effort: session.effort,
     adaptiveThinking: session.adaptiveThinking,
+    maxThinkingTokens: session.maxThinkingTokens,
     mode: session.mode,
     cwd: session.cwd,
     host: session.host,
@@ -1119,6 +1218,7 @@ export function buildPersistedEntryFromLiveStreamSession(
     providerContext: sanitizeProviderContextForPersistence(session.providerContext, {
       effort: session.effort,
       adaptiveThinking: session.adaptiveThinking,
+      maxThinkingTokens: session.maxThinkingTokens,
     }) ?? session.providerContext,
     activeTurnId: session.activeTurnId,
     spawnedBy: session.spawnedBy,

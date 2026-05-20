@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceTreeNode } from '../../../workspace/types'
 import {
   fetchWorkspaceExpandedTree,
+  fetchWorkspacePathResolution,
   fetchWorkspaceTree,
   getWorkspaceSourceKey,
   useWorkspaceFilePreview,
@@ -31,7 +32,9 @@ interface UseWorkspaceOverlayTreeOptions {
   source: WorkspaceSource
   query: string
   filesTabActive: boolean
-  onSelectFile: (filePath: string) => void
+  onSelectFile: (filePath: string, type: WorkspaceTreeNode['type']) => void
+  requestedPath?: string | null
+  requestedPathToken?: number
 }
 
 export function useWorkspaceOverlayTree({
@@ -40,6 +43,8 @@ export function useWorkspaceOverlayTree({
   query,
   filesTabActive,
   onSelectFile,
+  requestedPath,
+  requestedPathToken = 0,
 }: UseWorkspaceOverlayTreeOptions) {
   const sourceKey = getWorkspaceSourceKey(source)
   const [nodesByParent, setNodesByParent] = useState<Record<string, WorkspaceTreeNode[]>>({})
@@ -115,6 +120,33 @@ export function useWorkspaceOverlayTree({
     void loadDirectory('')
   }, [loadDirectory, nodesByParent, open, sourceKey])
 
+  useEffect(() => {
+    const rawRequestedPath = requestedPath?.trim()
+    if (!open || !rawRequestedPath) {
+      return
+    }
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const resolvedPath = await fetchWorkspacePathResolution(source, rawRequestedPath)
+        if (cancelled) {
+          return
+        }
+        setSelectedPath(resolvedPath.path)
+        if (resolvedPath.treePath && !nodesByParent[resolvedPath.treePath]) {
+          void loadDirectory(resolvedPath.treePath, true)
+        }
+      } catch {
+        // Silently fail — user can open the workspace tree manually.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [loadDirectory, nodesByParent, open, requestedPath, requestedPathToken, source])
+
   const handleToggleDirectory = useCallback(async (relativePath: string): Promise<void> => {
     const isExpanded = expandedPaths.has(relativePath)
     if (isExpanded) {
@@ -137,9 +169,8 @@ export function useWorkspaceOverlayTree({
   }, [])
 
   const handleAddPath = useCallback((path: string, knownType?: WorkspaceTreeNode['type']) => {
-    const nodeType = knownType ?? findNodeByPath(nodesByParent, path)?.type
-    const isDirectory = nodeType === 'directory'
-    onSelectFile(isDirectory ? `${path}/` : path)
+    const nodeType = knownType ?? findNodeByPath(nodesByParent, path)?.type ?? 'file'
+    onSelectFile(path, nodeType)
     setAddedPaths((prev) => new Set(prev).add(path))
 
     const timerId = window.setTimeout(() => {

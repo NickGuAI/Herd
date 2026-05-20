@@ -180,8 +180,8 @@ describe('buildOrgTree', () => {
       },
       profilesByCommander: {
         [commander.id]: {
-          borderColor: '#4F46E5',
-          accentColor: '#8B5CF6',
+          speakingTone: 'Strategic',
+          portraitStyleId: 'sumi-e-ink',
         },
       },
     }))
@@ -194,8 +194,8 @@ describe('buildOrgTree', () => {
         displayName: 'Atlas',
         avatarUrl: '/api/commanders/cmdr-1/avatar',
         profile: {
-          borderColor: '#4F46E5',
-          accentColor: '#8B5CF6',
+          speakingTone: 'Strategic',
+          portraitStyleId: 'sumi-e-ink',
         },
         status: 'running',
         costUsd: 8,

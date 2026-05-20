@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Play, Square } from 'lucide-react'
+import { useFontScale } from '@/hooks/use-font-scale'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { Icon, STATE_COLOR } from '@modules/components/hervald'
 import type { AgentSession, AgentType, ProviderModelOption, ProviderRegistryEntry } from '@/types'
@@ -156,8 +157,22 @@ const chatSettingsSelectStyle: React.CSSProperties = {
   fontSize: 12,
   padding: '7px 8px',
 }
+
+const chatLifecycleButtonStyle: React.CSSProperties = {
+  background: 'var(--hv-bg)',
+  border: '1px solid var(--hv-border-firm)',
+  borderRadius: 999,
+  color: 'var(--hv-fg)',
+  cursor: 'pointer',
+  padding: '3px 8px',
+  fontSize: 'calc(10.5px * var(--hv-font-scale, 1))',
+  letterSpacing: '0.04em',
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+}
 const COLLAPSE_STORAGE_KEY = 'hervald-sessions-collapsed'
-const FONT_SCALE_STORAGE_KEY = 'hervald-sessions-font-scale'
 const SHOW_EXITED_STORAGE_KEY = 'hervald-sessions-show-exited'
 const DEFAULT_COLLAPSED: Record<SectionKey, boolean> = {
   workers: false,
@@ -167,9 +182,6 @@ const DEFAULT_SHOW_EXITED: Record<SectionKey, boolean> = {
   workers: false,
   automation: false,
 }
-const MIN_SCALE = 0.8
-const MAX_SCALE = 1.6
-const SCALE_STEP = 0.1
 const EXITED_SESSION_STATUSES = new Set(['exited', 'completed'])
 
 function readCollapsedState(): Record<SectionKey, boolean> {
@@ -192,15 +204,6 @@ function readCollapsedState(): Record<SectionKey, boolean> {
   } catch {
     return { ...DEFAULT_COLLAPSED }
   }
-}
-
-function readFontScale(): number {
-  if (typeof window === 'undefined') return 1
-  const raw = window.localStorage.getItem(FONT_SCALE_STORAGE_KEY)
-  if (!raw) return 1
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed)) return 1
-  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, parsed))
 }
 
 function readShowExitedState(): Record<SectionKey, boolean> {
@@ -285,7 +288,7 @@ function SessionListSection({
             background: 'transparent',
             border: 'none',
             color: 'var(--hv-fg-faint)',
-            fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
+            fontSize: 'calc(10.5px * var(--hv-font-scale, 1))',
             letterSpacing: '0.14em',
             textTransform: 'uppercase',
             cursor: 'pointer',
@@ -309,7 +312,7 @@ function SessionListSection({
               background: 'transparent',
               border: 'none',
               color: 'var(--hv-fg-subtle)',
-              fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
+              fontSize: 'calc(10px * var(--hv-font-scale, 1))',
               letterSpacing: '0.02em',
               cursor: 'pointer',
               padding: 0,
@@ -364,7 +367,7 @@ function SessionListSection({
                 borderBottom: 'none',
                 cursor: 'pointer',
                 textAlign: 'left',
-                fontSize: 'calc(12px * var(--hv-sessions-scale, 1))',
+                fontSize: 'calc(12px * var(--hv-font-scale, 1))',
                 color:
                   selectedChatId === s.id ? 'var(--hv-fg)' : 'var(--hv-fg-faint)',
                 gap: 8,
@@ -405,7 +408,7 @@ function SessionListSection({
               {s.age && (
                 <span
                   style={{
-                    fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
+                    fontSize: 'calc(10.5px * var(--hv-font-scale, 1))',
                     letterSpacing: '0.02em',
                     marginLeft: 8,
                     flexShrink: 0,
@@ -436,6 +439,13 @@ function formatConversationMeta(conversation: ConversationRecord): string {
   return `${providerMeta} · ${conversation.surface} · ${conversation.id.slice(0, 8)}`
 }
 
+function hasConversationAction(
+  conversation: ConversationRecord,
+  action: keyof NonNullable<ConversationRecord['allowedActions']>,
+): boolean {
+  return conversation.allowedActions?.[action] === true
+}
+
 interface ConversationChatRowProps {
   conversation: ConversationRecord
   selected: boolean
@@ -447,6 +457,144 @@ interface ConversationChatRowProps {
   onArchive?: (id: string) => void | Promise<void>
   onRemove?: (id: string) => void | Promise<void>
   providerOptions?: ReadonlyArray<ConversationProviderOption>
+}
+
+function CommanderNewChatRow({
+  commander,
+  onCreateChat,
+}: {
+  commander: Commander
+  onCreateChat: () => void | Promise<void>
+}) {
+  return (
+    <div
+      data-testid="commander-new-chat-row"
+      data-commander-id={commander.id}
+      style={{
+        width: '100%',
+        padding: '6px 20px 6px 34px',
+      }}
+    >
+      <button
+        className="font-body"
+        type="button"
+        data-testid="commander-new-chat-button"
+        data-test-id="commander-new-chat-button"
+        onClick={() => {
+          void onCreateChat()
+        }}
+        aria-label={`New chat for ${commander.name}`}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          gap: 8,
+          background: 'var(--hv-surface-card)',
+          borderWidth: 2,
+          borderStyle: 'solid',
+          borderColor: 'var(--hv-fg)',
+          borderRadius: 'var(--hv-radius-sharp)',
+          color: 'var(--hv-fg)',
+          cursor: 'pointer',
+          padding: '8px 10px',
+          fontSize: 'calc(12px * var(--hv-font-scale, 1))',
+          fontWeight: 400,
+          letterSpacing: 0,
+          textTransform: 'none',
+        }}
+      >
+        <Icon name="plus" size={12} />
+        <span>New Chat</span>
+      </button>
+    </div>
+  )
+}
+
+function CommanderTeamDropdown({
+  commander,
+  workers,
+  approvals,
+}: {
+  commander: Commander
+  workers: Worker[]
+  approvals: Approval[]
+}) {
+  const [open, setOpen] = useState(false)
+  const teamMembers = workers.filter((worker) => (
+    (worker.kind === 'worker' || worker.kind === 'tool')
+    && worker.creator?.kind === 'commander'
+    && worker.creator.id === commander.id
+  ))
+
+  if (commander.isVirtual) {
+    return null
+  }
+
+  return (
+    <div data-testid="commander-team-dropdown" data-commander-id={commander.id}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '7px 20px 7px 34px',
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--hv-fg-subtle)',
+          cursor: 'pointer',
+          textAlign: 'left',
+          fontSize: 'calc(10.5px * var(--hv-font-scale, 1))',
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+        }}
+      >
+        <span style={{ fontSize: 10, width: 8 }}>{open ? '▾' : '▸'}</span>
+        <span style={{ flex: 1 }}>Team</span>
+        <span>· {teamMembers.length}</span>
+        {approvals.length > 0 && (
+          <span style={{ color: 'var(--vermillion-seal)' }}>{approvals.length}</span>
+        )}
+      </button>
+      {open && (
+        <div style={{ padding: '0 20px 6px 48px' }}>
+          {teamMembers.length > 0 ? teamMembers.map((worker) => (
+            <div
+              key={worker.id}
+              className="font-mono"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                padding: '5px 0',
+                color: 'var(--hv-fg-faint)',
+                fontSize: 'calc(11px * var(--hv-font-scale, 1))',
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {worker.label ?? worker.name}
+              </span>
+              <span style={{ flexShrink: 0 }}>{worker.state}</span>
+            </div>
+          )) : (
+            <div
+              style={{
+                padding: '4px 0 8px',
+                color: 'var(--hv-fg-faint)',
+                fontSize: 'calc(11px * var(--hv-font-scale, 1))',
+              }}
+            >
+              No delegated workers.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -465,9 +613,17 @@ function ConversationChatRow({
   onRemove,
   providerOptions = [],
 }: ConversationChatRowProps) {
-  const canStart = conversation.status === 'idle' || (conversation.status as string) === 'paused'
-  const canStop = conversation.status === 'active'
-  const canEditProviderModel = canStart && Boolean(onSwapProvider)
+  const canStart = hasConversationAction(conversation, 'start') || hasConversationAction(conversation, 'resume')
+  const canStop = hasConversationAction(conversation, 'pause')
+  const displayStatus = conversation.displayState?.status ?? conversation.status
+  const disabledLifecycleAction = !canStart && !canStop
+    ? displayStatus === 'active'
+      ? 'stop'
+      : displayStatus === 'idle'
+        ? 'start'
+        : null
+    : null
+  const canEditProviderModel = hasConversationAction(conversation, 'updateProvider') && Boolean(onSwapProvider)
   const conversationName = typeof conversation.name === 'string' ? conversation.name : ''
   const [menuOpen, setMenuOpen] = useState(false)
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
@@ -492,7 +648,9 @@ function ConversationChatRow({
   const currentModel = conversation.model ?? ''
   const providerModelChanged = Boolean(providerDraft)
     && (providerDraft !== currentProvider || modelDraft !== currentModel)
-  const hasActions = Boolean(onRename || canEditProviderModel || onArchive || onRemove)
+  const canArchive = hasConversationAction(conversation, 'archive')
+  const canRemove = hasConversationAction(conversation, 'delete')
+  const hasActions = Boolean(onRename || canEditProviderModel || (canArchive && onArchive) || (canRemove && onRemove))
 
   useEffect(() => {
     const nextProvider = conversation.agentType
@@ -619,7 +777,7 @@ function ConversationChatRow({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                fontSize: 'calc(11.5px * var(--hv-sessions-scale, 1))',
+                fontSize: 'calc(11.5px * var(--hv-font-scale, 1))',
                 color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-faint)',
               }}
             >
@@ -633,7 +791,7 @@ function ConversationChatRow({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
+                fontSize: 'calc(10px * var(--hv-font-scale, 1))',
                 color: 'var(--hv-fg-subtle)',
                 letterSpacing: '0.04em',
                 textTransform: 'uppercase',
@@ -655,15 +813,7 @@ function ConversationChatRow({
               onStart(conversation.id)
             }}
             style={{
-              background: 'transparent',
-              border: '1px solid var(--hv-border-hair)',
-              borderRadius: 999,
-              color: 'var(--hv-fg-subtle)',
-              cursor: 'pointer',
-              padding: '3px 8px',
-              fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
-              letterSpacing: '0.04em',
-              flexShrink: 0,
+              ...chatLifecycleButtonStyle,
             }}
           >
             <Play size={14} aria-hidden="true" />
@@ -681,18 +831,29 @@ function ConversationChatRow({
               void onStop(conversation.id)
             }}
             style={{
-              background: 'transparent',
-              border: '1px solid var(--hv-border-hair)',
-              borderRadius: 999,
-              color: 'var(--hv-fg-subtle)',
-              cursor: 'pointer',
-              padding: '3px 8px',
-              fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
-              letterSpacing: '0.04em',
-              flexShrink: 0,
+              ...chatLifecycleButtonStyle,
             }}
           >
             <Square size={14} aria-hidden="true" />
+          </button>
+        )}
+
+        {disabledLifecycleAction && (
+          <button
+            className="font-mono"
+            type="button"
+            data-testid="commander-chat-disabled-lifecycle-button"
+            aria-label={disabledLifecycleAction === 'stop' ? 'Stop chat unavailable' : 'Start chat unavailable'}
+            disabled
+            style={{
+              ...chatLifecycleButtonStyle,
+              cursor: 'not-allowed',
+              opacity: 0.38,
+            }}
+          >
+            {disabledLifecycleAction === 'stop'
+              ? <Square size={14} aria-hidden="true" />
+              : <Play size={14} aria-hidden="true" />}
           </button>
         )}
 
@@ -752,7 +913,7 @@ function ConversationChatRow({
                     borderRadius: 12,
                     border: '1px solid var(--hv-border-hair)',
                     background: 'var(--hv-bg-raised)',
-                    boxShadow: '0 12px 28px rgba(0, 0, 0, 0.12)',
+                    boxShadow: 'var(--hv-shadow-float)',
                   }}
                 >
                   {onRename && (
@@ -845,7 +1006,7 @@ function ConversationChatRow({
                     </>
                   )}
 
-                  {onArchive && (
+                  {canArchive && onArchive && (
                     <button
                       type="button"
                       data-testid="commander-chat-close-button"
@@ -858,7 +1019,7 @@ function ConversationChatRow({
                     </button>
                   )}
 
-                  {onRemove && (
+                  {canRemove && onRemove && (
                     <button
                       type="button"
                       data-testid="commander-chat-remove-button"
@@ -1021,8 +1182,15 @@ export function SessionsColumn({
   const commanderCount = commanders.filter((commander) => !commander.isVirtual).length
 
   const [collapsed, setCollapsed] = useState<Record<SectionKey, boolean>>(readCollapsedState)
-  const [fontScale, setFontScale] = useState<number>(readFontScale)
   const [showExited, setShowExited] = useState<Record<SectionKey, boolean>>(readShowExitedState)
+  const {
+    fontScale,
+    adjustFontScale,
+    minFontScale,
+    maxFontScale,
+    fontScaleStep,
+    isSaving: isFontScaleSaving,
+  } = useFontScale()
   const mergedAutomationSessions = automationSessions.length > 0
     ? automationSessions
     : [...cronSessions, ...sentinelSessions]
@@ -1037,14 +1205,6 @@ export function SessionsColumn({
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(FONT_SCALE_STORAGE_KEY, String(fontScale))
-    } catch {
-      // ignore
-    }
-  }, [fontScale])
-
-  useEffect(() => {
-    try {
       window.localStorage.setItem(SHOW_EXITED_STORAGE_KEY, JSON.stringify(showExited))
     } catch {
       // ignore
@@ -1055,20 +1215,17 @@ export function SessionsColumn({
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
 
-  const adjustScale = useCallback((delta: number) => {
-    setFontScale((prev) => {
-      const next = Math.round((prev + delta) * 100) / 100
-      return Math.min(MAX_SCALE, Math.max(MIN_SCALE, next))
-    })
-  }, [])
-
   const toggleShowExited = useCallback((key: SectionKey) => {
     setShowExited((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
 
+  const canDecreaseFontScale = fontScale > minFontScale + 1e-6
+  const canIncreaseFontScale = fontScale < maxFontScale - 1e-6
+
   return (
     <aside
       data-testid="sessions-column"
+      data-test-id="sessions-column"
       style={
         {
           width: 232,
@@ -1078,7 +1235,6 @@ export function SessionsColumn({
           flexDirection: 'column',
           overflow: 'hidden',
           flexShrink: 0,
-          ['--hv-sessions-scale' as string]: String(fontScale),
         } as React.CSSProperties
       }
     >
@@ -1107,6 +1263,7 @@ export function SessionsColumn({
       {/* Scrollable session list */}
       <div
         data-testid="sessions-scroll"
+        data-test-id="sessions-scroll"
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -1115,9 +1272,10 @@ export function SessionsColumn({
       >
         {/* Section 1 — Commanders (always visible). Each commander's chats are
             rendered nested under that commander when the commander is selected. */}
-        <div data-testid="commanders-list">
+        <div data-testid="commanders-list" data-test-id="commanders-list">
           {commanders.map((c) => {
             const isSelected = selectedCommanderId === c.id
+            const canCreateChat = isSelected && !c.isVirtual && Boolean(onCreateChatForCommander)
             const commanderConversations = isSelected
               ? conversations.filter((conv) => (
                 conv.commanderId === c.id
@@ -1129,23 +1287,28 @@ export function SessionsColumn({
               <div
                 key={c.id}
                 data-testid="commander-block"
+                data-test-id="commander-block"
                 data-commander-id={c.id}
               >
                 <SessionRow
                   commander={c}
                   selected={isSelected}
                   onClick={() => onSelectCommander(c.id)}
-                  onCreateChat={
-                    isSelected && !c.isVirtual && onCreateChatForCommander
-                      ? () => { void onCreateChatForCommander(c.id) }
-                      : undefined
-                  }
                   approvals={approvals.filter((a) => a.commanderId === c.id)}
                 />
+
+                {isSelected && (
+                  <CommanderTeamDropdown
+                    commander={c}
+                    workers={workers}
+                    approvals={approvals.filter((a) => a.commanderId === c.id)}
+                  />
+                )}
 
                 {isSelected && commanderConversations.length > 0 && (
                   <div
                     data-testid="commander-chat-list"
+                    data-test-id="commander-chat-list"
                     data-commander-id={c.id}
                     style={{ paddingBottom: 6 }}
                   >
@@ -1166,6 +1329,13 @@ export function SessionsColumn({
                     ))}
                   </div>
                 )}
+
+                {canCreateChat && onCreateChatForCommander ? (
+                  <CommanderNewChatRow
+                    commander={c}
+                    onCreateChat={() => onCreateChatForCommander(c.id)}
+                  />
+                ) : null}
               </div>
             )
           })}
@@ -1174,10 +1344,11 @@ export function SessionsColumn({
         {sessionActionError && (
           <div
             data-testid="sessions-action-error"
+            data-test-id="sessions-action-error"
             style={{
               padding: '12px 20px 0',
               color: 'var(--vermillion-seal)',
-              fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
+              fontSize: 'calc(10.5px * var(--hv-font-scale, 1))',
               lineHeight: 1.5,
             }}
           >
@@ -1185,7 +1356,7 @@ export function SessionsColumn({
           </div>
         )}
 
-        <div data-testid="workers-section">
+        <div data-testid="workers-section" data-test-id="workers-section">
           <SessionListSection
             label="Workers"
             sessions={workerSessions}
@@ -1222,7 +1393,7 @@ export function SessionsColumn({
           />
         </div>
 
-        <div data-testid="automations-section">
+        <div data-testid="automations-section" data-test-id="automations-section">
           <SessionListSection
             label="Automations"
             sessions={mergedAutomationSessions}
@@ -1240,6 +1411,7 @@ export function SessionsColumn({
       <div
         className="font-body"
         data-testid="sessions-footer"
+        data-test-id="sessions-footer"
         style={{
           padding: '10px 12px 12px 20px',
           borderTop: '1px solid var(--hv-border-hair)',
@@ -1264,8 +1436,8 @@ export function SessionsColumn({
             className="font-body"
             type="button"
             aria-label="Decrease text size"
-            onClick={() => adjustScale(-SCALE_STEP)}
-            disabled={fontScale <= MIN_SCALE + 1e-6}
+            onClick={() => adjustFontScale(-fontScaleStep)}
+            disabled={!canDecreaseFontScale || isFontScaleSaving}
             style={{
               background: 'transparent',
               border: '1px solid var(--hv-border-hair)',
@@ -1273,8 +1445,8 @@ export function SessionsColumn({
               padding: '1px 6px',
               fontSize: 10,
               letterSpacing: '0.02em',
-              cursor: fontScale <= MIN_SCALE + 1e-6 ? 'not-allowed' : 'pointer',
-              opacity: fontScale <= MIN_SCALE + 1e-6 ? 0.4 : 1,
+              cursor: !canDecreaseFontScale || isFontScaleSaving ? 'not-allowed' : 'pointer',
+              opacity: !canDecreaseFontScale || isFontScaleSaving ? 0.4 : 1,
               borderRadius: 2,
             }}
           >
@@ -1284,8 +1456,8 @@ export function SessionsColumn({
             className="font-body"
             type="button"
             aria-label="Increase text size"
-            onClick={() => adjustScale(SCALE_STEP)}
-            disabled={fontScale >= MAX_SCALE - 1e-6}
+            onClick={() => adjustFontScale(fontScaleStep)}
+            disabled={!canIncreaseFontScale || isFontScaleSaving}
             style={{
               background: 'transparent',
               border: '1px solid var(--hv-border-hair)',
@@ -1293,8 +1465,8 @@ export function SessionsColumn({
               padding: '1px 6px',
               fontSize: 12,
               letterSpacing: '0.02em',
-              cursor: fontScale >= MAX_SCALE - 1e-6 ? 'not-allowed' : 'pointer',
-              opacity: fontScale >= MAX_SCALE - 1e-6 ? 0.4 : 1,
+              cursor: !canIncreaseFontScale || isFontScaleSaving ? 'not-allowed' : 'pointer',
+              opacity: !canIncreaseFontScale || isFontScaleSaving ? 0.4 : 1,
               borderRadius: 2,
             }}
           >

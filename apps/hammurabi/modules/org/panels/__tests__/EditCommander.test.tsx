@@ -19,6 +19,7 @@ vi.mock('@modules/org/hooks/useOrgActions', () => ({
 }))
 
 vi.mock('@modules/commanders/hooks/useCommander', () => ({
+  COMMANDERS_QUERY_KEY: ['commanders', 'sessions'],
   generateCommanderAvatar: mocks.generateCommanderAvatar,
 }))
 
@@ -193,12 +194,12 @@ describe('EditCommander', () => {
     mocks.fetchOrgCommanderDetail.mockResolvedValue({
       id: 'cmd-1',
       displayName: 'Atlas',
-      persona: 'Owns the build pipeline.',
       agentType: 'claude',
       effort: 'max',
       cwd: '/tmp/atlas',
       maxTurns: 9,
       contextMode: 'fat',
+      ui: { portraitStyleId: 'sumi-e' },
       created: '2026-05-01T00:00:00.000Z',
       templateId: 'template-atlas',
       replicatedFromCommanderId: null,
@@ -258,6 +259,16 @@ describe('EditCommander', () => {
     })
     await flushReact()
 
+    const portraitStyleSelect = document.body.querySelector<HTMLSelectElement>('[data-testid="edit-commander-portrait-style-select"]')
+    if (!portraitStyleSelect) {
+      throw new Error('Missing portrait style select')
+    }
+
+    await act(async () => {
+      setElementValue(portraitStyleSelect, 'chibi-sticker')
+    })
+    await flushReact()
+
     await vi.waitFor(() => {
       expect(document.body.querySelector<HTMLButtonElement>('[data-testid="edit-commander-save-button"]')?.disabled).toBe(false)
     })
@@ -269,8 +280,10 @@ describe('EditCommander', () => {
     expect(mocks.updateOrgCommander).toHaveBeenCalledWith('cmd-1', {
       displayName: 'Atlas Prime',
       maxTurns: 21,
+      portraitStyleId: 'chibi-sticker',
     })
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ORG_QUERY_KEY })
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['commanders', 'sessions'] })
     expect(onUpdated).toHaveBeenCalledWith('Atlas Prime')
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -292,12 +305,12 @@ describe('EditCommander', () => {
         id: 'cmd-1',
         displayName: 'Atlas',
         avatarUrl: '/api/commanders/cmd-1/avatar',
-        persona: 'Owns the build pipeline.',
         agentType: 'claude',
         effort: 'max',
         cwd: '/tmp/atlas',
         maxTurns: 9,
         contextMode: 'fat',
+        ui: { portraitStyleId: 'sumi-e' },
         created: '2026-05-01T00:00:00.000Z',
         templateId: 'template-atlas',
         replicatedFromCommanderId: null,
@@ -309,12 +322,12 @@ describe('EditCommander', () => {
         id: 'cmd-1',
         displayName: 'Atlas',
         avatarUrl: '/api/commanders/cmd-1/avatar',
-        persona: 'Owns the build pipeline.',
         agentType: 'claude',
         effort: 'max',
         cwd: '/tmp/atlas',
         maxTurns: 9,
         contextMode: 'fat',
+        ui: { portraitStyleId: 'sumi-e' },
         created: '2026-05-01T00:00:00.000Z',
         templateId: 'template-atlas',
         replicatedFromCommanderId: null,
@@ -334,14 +347,25 @@ describe('EditCommander', () => {
 
     await vi.waitFor(() => {
       expect(document.body.querySelector<HTMLImageElement>('[data-testid="edit-commander-avatar-preview"]')?.getAttribute('src')).toBe('/api/commanders/cmd-1/avatar')
+      expect(document.body.querySelector('[data-testid="edit-commander-portrait-panel"]')?.textContent).toContain('Portrait')
       expect(document.body.querySelector('[data-testid="edit-commander-generate-avatar-button"]')).not.toBeNull()
     })
+
+    const styleSelect = document.body.querySelector<HTMLSelectElement>('[data-testid="edit-commander-portrait-style-select"]')
+    if (!styleSelect) {
+      throw new Error('Missing portrait style select')
+    }
+
+    await act(async () => {
+      setElementValue(styleSelect, 'designer-toy-3d')
+    })
+    await flushReact()
 
     await click('[data-testid="edit-commander-generate-avatar-button"]')
 
     await vi.waitFor(() => {
       expect(document.body.querySelector('[data-testid="edit-commander-generate-avatar-confirm-modal"]')?.textContent).toContain(
-        "Generate avatar from this commander's COMMANDER.md? This will overwrite the current avatar.",
+        "Generate a Glossy 3D toy avatar from this commander's COMMANDER.md? This will overwrite the current avatar.",
       )
     })
 
@@ -351,12 +375,16 @@ describe('EditCommander', () => {
     await flushReact()
 
     await vi.waitFor(() => {
-      expect(mocks.generateCommanderAvatar).toHaveBeenCalledWith({ commanderId: 'cmd-1' })
+      expect(mocks.generateCommanderAvatar).toHaveBeenCalledWith({
+        commanderId: 'cmd-1',
+        styleId: 'designer-toy-3d',
+      })
       expect(document.body.querySelector<HTMLImageElement>('[data-testid="edit-commander-avatar-preview"]')?.getAttribute('src')).toBe('/api/commanders/cmd-1/avatar?t=123456789')
     })
 
     expect(mocks.fetchOrgCommanderDetail).toHaveBeenCalledTimes(2)
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ORG_QUERY_KEY })
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['commanders', 'sessions'] })
     expect(queryClient.getQueryData<OrgTree>(orgQueryKey)?.commanders[0]?.avatarUrl).toBe(
       '/api/commanders/cmd-1/avatar?t=123456789',
     )
@@ -367,12 +395,12 @@ describe('EditCommander', () => {
       id: 'cmd-1',
       displayName: 'Atlas',
       avatarUrl: '/api/commanders/cmd-1/avatar',
-      persona: 'Owns the build pipeline.',
       agentType: 'claude',
       effort: 'max',
       cwd: '/tmp/atlas',
       maxTurns: 9,
       contextMode: 'fat',
+      ui: { portraitStyleId: 'sumi-e' },
       created: '2026-05-01T00:00:00.000Z',
       templateId: 'template-atlas',
       replicatedFromCommanderId: null,

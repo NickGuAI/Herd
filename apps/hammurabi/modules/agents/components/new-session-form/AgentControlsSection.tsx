@@ -7,6 +7,11 @@ import {
   type ClaudeAdaptiveThinkingMode,
 } from '../../../claude-adaptive-thinking.js'
 import { CLAUDE_EFFORT_LEVELS, type ClaudeEffortLevel } from '../../../claude-effort.js'
+import {
+  MAX_CLAUDE_MAX_THINKING_TOKENS,
+  MIN_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '../../../claude-max-thinking-tokens.js'
 
 interface AgentControlsSectionProps {
   providers: readonly ProviderRegistryEntry[]
@@ -19,6 +24,8 @@ interface AgentControlsSectionProps {
   setEffort: (value: ClaudeEffortLevel) => void
   adaptiveThinking: ClaudeAdaptiveThinkingMode
   setAdaptiveThinking: (value: ClaudeAdaptiveThinkingMode) => void
+  maxThinkingTokens: ClaudeMaxThinkingTokens
+  setMaxThinkingTokens: (value: ClaudeMaxThinkingTokens) => void
 }
 
 export function AgentControlsSection({
@@ -32,6 +39,8 @@ export function AgentControlsSection({
   setEffort,
   adaptiveThinking,
   setAdaptiveThinking,
+  maxThinkingTokens,
+  setMaxThinkingTokens,
 }: AgentControlsSectionProps) {
   const currentProvider = providers.find((provider) => provider.id === agentType) ?? null
   const sessionTypeOptions = currentProvider?.uiCapabilities.forcedTransport === 'stream'
@@ -55,9 +64,9 @@ export function AgentControlsSection({
               className={cn(
                 'flex-1 text-center rounded-lg border px-3 py-2 transition-colors min-h-[44px] font-mono text-sm',
                 agentType === provider.id
-                  ? 'border-sumi-black bg-sumi-black text-washi-aged'
-                  : 'border-ink-border bg-washi-aged text-sumi-black hover:border-ink-border-hover',
-                resumeLocked && 'cursor-not-allowed opacity-60 hover:border-ink-border',
+                  ? 'border-[color:var(--hv-fg)] bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]'
+                  : 'border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[color:var(--hv-fg)] hover:border-[color:var(--hv-border-soft)]',
+                resumeLocked && 'cursor-not-allowed opacity-60 hover:border-[color:var(--hv-border-hair)]',
               )}
             >
               {provider.label}
@@ -78,16 +87,16 @@ export function AgentControlsSection({
               className={cn(
                 'flex-1 text-left rounded-lg border px-3 py-2 transition-colors min-h-[44px]',
                 transportType === option.value
-                  ? 'border-sumi-black bg-sumi-black text-washi-aged'
-                  : 'border-ink-border bg-washi-aged text-sumi-black hover:border-ink-border-hover',
-                resumeLocked && 'cursor-not-allowed opacity-60 hover:border-ink-border',
+                  ? 'border-[color:var(--hv-fg)] bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]'
+                  : 'border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[color:var(--hv-fg)] hover:border-[color:var(--hv-border-soft)]',
+                resumeLocked && 'cursor-not-allowed opacity-60 hover:border-[color:var(--hv-border-hair)]',
               )}
             >
               <div className="font-mono text-xs">{option.label}</div>
               <div
                 className={cn(
                   'text-whisper mt-1',
-                  transportType === option.value ? 'text-washi-aged/80' : 'text-sumi-diluted',
+                  transportType === option.value ? 'text-[color:var(--hv-fg-inverse)]' : 'text-[color:var(--hv-fg-subtle)]',
                 )}
               >
                 {option.description}
@@ -110,7 +119,7 @@ export function AgentControlsSection({
 
       <div>
         <label className="section-title block mb-2">Approval</label>
-        <div className="rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-sm text-sumi-gray">
+        <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2 text-sm text-[color:var(--hv-fg-muted)]">
           Hammurabi approval is always on. Safe internal actions auto-approve fast; outbound or
           policy-matching actions enter the review queue.
         </div>
@@ -125,7 +134,7 @@ export function AgentControlsSection({
               onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
               disabled={resumeLocked}
               className={cn(
-                'w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover',
+                'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
                 resumeLocked && 'cursor-not-allowed opacity-60',
               )}
             >
@@ -133,7 +142,7 @@ export function AgentControlsSection({
                 <option key={level} value={level}>{level}</option>
               ))}
             </select>
-            <p className="mt-1 text-whisper text-sumi-mist">
+            <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
               Default is `max`. Resume reuses the selected session’s Claude effort.
             </p>
           </div>
@@ -145,7 +154,7 @@ export function AgentControlsSection({
               onChange={(event) => setAdaptiveThinking(event.target.value as ClaudeAdaptiveThinkingMode)}
               disabled={resumeLocked}
               className={cn(
-                'w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover',
+                'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
                 resumeLocked && 'cursor-not-allowed opacity-60',
               )}
             >
@@ -153,10 +162,33 @@ export function AgentControlsSection({
                 <option key={entry} value={entry}>{entry}</option>
               ))}
             </select>
-            <p className="mt-1 text-whisper text-sumi-mist">
-              Default is `enabled`. Keep it enabled for `--effort max`; disable only to force fixed `MAX_THINKING_TOKENS`.
+            <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
+              Default is `disabled` for fixed `MAX_THINKING_TOKENS`; enable only when the smaller adaptive budget is wanted.
             </p>
           </div>
+
+          {currentProvider?.uiCapabilities.supportsMaxThinkingTokens ? (
+            <div>
+              <label className="section-title block mb-2">Max Thinking Tokens</label>
+              <input
+                type="number"
+                min={MIN_CLAUDE_MAX_THINKING_TOKENS}
+                max={MAX_CLAUDE_MAX_THINKING_TOKENS}
+                step={1}
+                required
+                value={maxThinkingTokens}
+                onChange={(event) => setMaxThinkingTokens(Number(event.target.value))}
+                disabled={resumeLocked}
+                className={cn(
+                  'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
+                  resumeLocked && 'cursor-not-allowed opacity-60',
+                )}
+              />
+              <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
+                Default is `128000`. Valid range is 1024-256000.
+              </p>
+            </div>
+          ) : null}
         </>
       ) : null}
     </>

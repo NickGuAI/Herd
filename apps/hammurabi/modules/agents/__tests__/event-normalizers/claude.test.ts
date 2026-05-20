@@ -29,7 +29,7 @@ describe('agents/event-normalizers/claude', () => {
     }))
   })
 
-  it('maps ExitPlanMode input plans to planning.proposed', () => {
+  it('maps ExitPlanMode input plans to blocking plan approvals', () => {
     const result = normalizeClaudeEvent({
       type: 'assistant',
       message: {
@@ -47,9 +47,21 @@ describe('agents/event-normalizers/claude', () => {
     })
 
     expect(result).toEqual(withClaudeSource({
-      type: 'planning',
-      action: 'proposed',
+      type: 'plan_approval',
+      interactionKind: 'plan_approval',
+      toolId: 'plan-exit',
+      toolName: 'ExitPlanMode',
       plan: '1. Inspect the stream path\n2. Patch the normalizer',
+      approveLabel: 'Approve',
+      rejectLabel: 'Reject',
+      customResponseLabel: 'Add response',
+      providerContext: {
+        provider: 'claude',
+        backend: 'cli',
+        toolUseId: 'plan-exit',
+        toolName: 'ExitPlanMode',
+        answerFormat: 'claude.exit_plan_mode',
+      },
     }))
   })
 
@@ -109,6 +121,7 @@ describe('agents/event-normalizers/claude', () => {
     expect(result).toEqual(withClaudeSource({
       type: 'planning',
       action: 'decision',
+      toolId: 'plan-exit',
       approved: true,
       message: 'Proceeding with the approved plan.',
     }))
@@ -132,5 +145,31 @@ describe('agents/event-normalizers/claude', () => {
     }
 
     expect(normalizeClaudeEvent(event)).toEqual(withClaudeSource(event))
+  })
+
+  it('projects signed empty thinking blocks into the backend-owned redaction text', () => {
+    const signature = 'A'.repeat(464)
+
+    const result = normalizeClaudeEvent({
+      type: 'assistant',
+      message: {
+        id: 'assistant-thinking',
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: '', signature }],
+      },
+    })
+
+    expect(result).toEqual(withClaudeSource({
+      type: 'assistant',
+      message: {
+        id: 'assistant-thinking',
+        role: 'assistant',
+        content: [{
+          type: 'thinking',
+          thinking: `(reasoning content redacted by Claude · ${signature.length} bytes signed)`,
+          signature,
+        }],
+      },
+    }))
   })
 })

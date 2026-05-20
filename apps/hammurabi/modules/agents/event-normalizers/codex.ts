@@ -150,6 +150,12 @@ export function normalizeCodexEvent(method: string, params: unknown): HammurabiE
       }
       return null
     }
+    case 'item/plan/updated':
+    case 'item/planApproval/requested':
+      // The current Codex sidecar protocol does not emit a plan/proposal
+      // approval signal. If one appears, map it to the shared plan_approval
+      // contract with provider reply context instead of adding Codex-only UI.
+      return null
     case 'item/completed': {
       const item = asObject(p.item)
       if (!item) return null
@@ -176,7 +182,11 @@ export function normalizeCodexEvent(method: string, params: unknown): HammurabiE
           message: {
             id: itemId,
             role: 'assistant',
-            content: [{ type: 'thinking', thinking }],
+            content: [{
+              type: 'thinking',
+              thinking,
+              presentation: { mergeWithActiveThinking: true },
+            }],
           },
         })
       }

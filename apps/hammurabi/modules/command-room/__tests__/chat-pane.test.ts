@@ -113,8 +113,10 @@ describe('ChatPane', () => {
     for (const themeClass of ['hv-light', 'hv-dark']) {
       const html = renderMessages(messages, themeClass)
 
-      expect(html).toContain('msg-agent-md break-words text-zinc-900 dark:text-zinc-100')
-      expect(html).toContain('msg-plan-markdown break-words text-zinc-900 dark:text-zinc-100')
+      expect(html).toContain('msg-agent-md break-words text-[color:var(--hv-fg)]')
+      expect(html).toContain('msg-plan-markdown break-words text-[color:var(--hv-fg)]')
+      expect(html).not.toContain('msg-agent-md break-words text-zinc-900 dark:text-zinc-100')
+      expect(html).not.toContain('msg-plan-markdown break-words text-zinc-900 dark:text-zinc-100')
       expect(html).not.toContain('msg-agent-md break-words text-zinc-100')
       expect(html).not.toContain('msg-plan-markdown break-words text-zinc-100')
       expect(html).not.toContain('prose-invert prose-sm max-w-none break-words text-zinc-100')
@@ -208,10 +210,21 @@ describe('ChatPane', () => {
         toolName: 'Agent',
         toolStatus: 'running',
         subagentDescription: 'Investigate flaky test',
+        children: [
+          {
+            id: 'tool-agent-1-child-1',
+            kind: 'system',
+            text: 'Read the failing test output',
+          },
+        ],
       },
     ])
 
     expect(html).toContain('Running Sub-agents')
+    expect(html).toContain('msg-subagent')
+    expect(html).toContain('Sub-agent')
     expect(html).toContain('Investigate flaky test')
+    expect(html).toContain('Read the failing test output')
+    expect(html).not.toContain('Agent: Investigate flaky test')
   })
 })

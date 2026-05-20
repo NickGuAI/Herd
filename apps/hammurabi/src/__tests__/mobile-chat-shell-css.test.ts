@@ -17,6 +17,19 @@ function getBlock(selector: string): string {
   return css.slice(bodyStart, bodyEnd)
 }
 
+function getBlockFromMarker(marker: string): string {
+  const startIndex = css.indexOf(marker)
+  if (startIndex === -1) {
+    throw new Error(`Missing CSS marker: ${marker}`)
+  }
+  const bodyStart = css.indexOf('{', startIndex) + 1
+  const bodyEnd = css.indexOf('\n  }', bodyStart)
+  if (bodyStart === 0 || bodyEnd === -1) {
+    throw new Error(`Unterminated CSS block for marker: ${marker}`)
+  }
+  return css.slice(bodyStart, bodyEnd)
+}
+
 describe('mobile chat shell CSS contracts', () => {
   it('uses column layout for the mobile session header so page dots stack below the action row', () => {
     const headerBlock = getBlock('.session-view-overlay .session-header')
@@ -47,5 +60,17 @@ describe('mobile chat shell CSS contracts', () => {
     expect(lightBlock).toContain('--msg-border-subtle: var(--hv-border-soft);')
 
     expect(lightBlock).not.toContain('--msg-surface: var(--hv-bg);')
+  })
+
+  it('keeps markdown emphasis readable by inheriting Sumi-e chat foreground tokens', () => {
+    const overlayStrongBlock = getBlockFromMarker('.session-view-overlay .msg-agent strong,')
+    const hervaldStrongBlock = getBlockFromMarker('.hervald-chat-pane .msg-agent-md strong,')
+
+    expect(overlayStrongBlock).toContain('font-weight: 500;')
+    expect(overlayStrongBlock).toContain('color: var(--msg-text);')
+    expect(hervaldStrongBlock).toContain('font-weight: 500;')
+    expect(hervaldStrongBlock).toContain('color: currentColor;')
+    expect(css).not.toContain('#f0ede5')
+    expect(css).not.toContain('font-weight: 600;')
   })
 })

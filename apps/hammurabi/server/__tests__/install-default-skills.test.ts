@@ -90,6 +90,14 @@ async function seedFakeBin(binDir: string): Promise<void> {
     path.join(binDir, 'curl'),
     `#!/usr/bin/env bash
 set -euo pipefail
+out_file=""
+args=("$@")
+for ((i = 0; i < $#; i++)); do
+  if [[ "\${args[$i]}" == "-o" ]]; then
+    next=$((i + 1))
+    out_file="\${args[$next]}"
+  fi
+done
 for arg in "$@"; do
   case "$arg" in
     http://127.0.0.1:*/api/health)
@@ -101,6 +109,10 @@ for arg in "$@"; do
       ;;
   esac
 done
+if [[ -n "\${FAKE_HERVALD_ARCHIVE:-}" && -n "$out_file" ]]; then
+  cp "$FAKE_HERVALD_ARCHIVE" "$out_file"
+  exit 0
+fi
 exit 0
 `,
   )
@@ -109,6 +121,10 @@ exit 0
     path.join(binDir, 'git'),
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "\${FAKE_GIT_FAIL_IF_USED:-0}" == "1" ]]; then
+  echo "git should not be required for fresh installer bootstrap" >&2
+  exit 42
+fi
 if [[ "\${1:-}" == "clone" ]]; then
   for last; do :; done
   mkdir -p "$last"
@@ -119,15 +135,24 @@ exit 0
   )
 }
 
+async function createRepoArchive(repoDir: string, archivePath: string): Promise<void> {
+  await execFile('tar', ['-czf', archivePath, '-C', repoDir, '.'])
+}
+
 function hermeticNodeStem(): string {
   const platform = process.platform === 'darwin' ? 'darwin' : process.platform === 'linux' ? 'linux' : process.platform
   const arch = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : process.arch
   return `node-v22.12.0-${platform}-${arch}`
 }
 
+function installerPath(fakeBin: string): string {
+  return `${fakeBin}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`
+}
+
 async function seedHermeticToolchain(toolchainDir: string): Promise<void> {
   const nodeBinDir = path.join(toolchainDir, hermeticNodeStem(), 'bin')
   const pnpmBinDir = path.join(toolchainDir, 'pnpm-10.23.0', 'bin')
+  const realNodePath = process.execPath
 
   await writeExecutable(
     path.join(nodeBinDir, 'node'),
@@ -148,7 +173,7 @@ if [[ "\${1:-}" == */hammurabi.mjs ]]; then
   sleep 0.25
   exit 0
 fi
-exec node "$@"
+exec ${JSON.stringify(realNodePath)} "$@"
 `,
   )
 
@@ -165,6 +190,46 @@ if [[ -n "$expected_node_bin" ]]; then
       exit 127
       ;;
   esac
+fi
+prefix=""
+package=""
+while [[ "$#" -gt 0 ]]; do
+  case "\${1:-}" in
+    --prefix)
+      prefix="\${2:-}"
+      shift 2
+      ;;
+    --global|-g|install)
+      shift
+      ;;
+    *)
+      package="\${1:-}"
+      shift
+      ;;
+  esac
+done
+if [[ -n "$prefix" && -n "$package" ]]; then
+  mkdir -p "$prefix/bin"
+  case "$package" in
+    @google/gemini-cli*) bin="gemini" ;;
+    @openai/codex*) bin="codex" ;;
+    @anthropic-ai/claude-code*) bin="claude" ;;
+    opencode-ai*) bin="opencode" ;;
+    pnpm@*) bin="pnpm" ;;
+    *) bin="" ;;
+  esac
+  if [[ -n "$bin" ]]; then
+    cat > "$prefix/bin/$bin" <<BIN
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "--version" ]]; then
+  printf '$bin-test-version\\n'
+  exit 0
+fi
+exit 1
+BIN
+    chmod +x "$prefix/bin/$bin"
+  fi
 fi
 exit 0
 `,
@@ -240,11 +305,11 @@ describe('Hervald installers bundle write-new-skill by default', () => {
       {
         cwd: path.dirname(scriptPath),
         env: {
-          ...process.env,
           HOME: homeDir,
-          PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+          PATH: installerPath(fakeBin),
           FAKE_GIT_CLONE_SOURCE: sourceRepo,
           HERVALD_EXPECTED_NODE_BIN_DIR: expectedNodeBinDir,
+          HERVALD_CONFIGURE_PROVIDERS: '0',
           HAMMURABI_DATA_DIR: path.join(homeDir, '.hammurabi'),
           HAMMURABI_TOOLCHAIN_DIR: toolchainDir,
           HAMMURABI_INSTALL_AUTOSTART: '0',
@@ -258,7 +323,57 @@ describe('Hervald installers bundle write-new-skill by default', () => {
     await assertInstalledSkill(homeDir)
   })
 
-  it('clones Hervald before running a standalone installer file', async () => {
+  it('configures selected provider tooling non-interactively from installer env', async () => {
+    const workspace = await makeTempDir('hammurabi-install-provider-setup-')
+    const sourceRepo = path.join(workspace, 'source-repo')
+    const homeDir = path.join(workspace, 'home')
+    const fakeBin = path.join(workspace, 'bin')
+    const toolchainDir = path.join(workspace, 'toolchain')
+    const expectedNodeBinDir = path.join(toolchainDir, hermeticNodeStem(), 'bin')
+    const installerRelativePath = path.join('apps', 'hammurabi', 'install.sh')
+    const dataDir = path.join(homeDir, '.hammurabi')
+
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(fakeBin, { recursive: true })
+    await seedSkillRepo(sourceRepo, installerRelativePath)
+    await seedFakeBin(fakeBin)
+    await seedHermeticToolchain(toolchainDir)
+
+    const scriptPath = path.join(sourceRepo, installerRelativePath)
+    const result = await execFile(
+      'bash',
+      [scriptPath],
+      {
+        cwd: path.dirname(scriptPath),
+        env: {
+          HOME: homeDir,
+          PATH: installerPath(fakeBin),
+          FAKE_GIT_CLONE_SOURCE: sourceRepo,
+          HERVALD_EXPECTED_NODE_BIN_DIR: expectedNodeBinDir,
+          HERVALD_PROVIDERS: 'gemini',
+          HERVALD_GEMINI_API_KEY: 'gemini-test-api-key',
+          HAMMURABI_DATA_DIR: dataDir,
+          HAMMURABI_TOOLCHAIN_DIR: toolchainDir,
+          HAMMURABI_INSTALL_AUTOSTART: '0',
+          HAMMURABI_INSTALL_TIMEOUT_SECONDS: '5',
+        },
+        maxBuffer: 1024 * 1024,
+      },
+    )
+
+    expect(result.stdout).toContain('Configuring provider CLIs')
+    expect(result.stdout).toContain('Gemini CLI installed')
+    expect(result.stdout).toContain('Gemini auth saved')
+    expect(result.stdout).toContain('Provider readiness')
+    await expect(readFile(path.join(homeDir, '.hammurabi-env'), 'utf8')).resolves.toContain(
+      'export GEMINI_API_KEY=',
+    )
+    await expect(readFile(path.join(dataDir, 'machines.json'), 'utf8')).resolves.toContain(
+      '"id": "local"',
+    )
+  })
+
+  it('downloads Hervald before running a standalone installer file without git', async () => {
     const workspace = await makeTempDir('hammurabi-install-standalone-')
     const sourceRepo = path.join(workspace, 'source-repo')
     const homeDir = path.join(workspace, 'home')
@@ -267,6 +382,7 @@ describe('Hervald installers bundle write-new-skill by default', () => {
     const expectedNodeBinDir = path.join(toolchainDir, hermeticNodeStem(), 'bin')
     const checkoutDir = path.join(workspace, 'checkout')
     const standaloneDir = path.join(workspace, 'standalone')
+    const archivePath = path.join(workspace, 'hervald.tar.gz')
     const installerRelativePath = path.join('apps', 'hammurabi', 'install.sh')
 
     await mkdir(homeDir, { recursive: true })
@@ -275,6 +391,7 @@ describe('Hervald installers bundle write-new-skill by default', () => {
     await seedSkillRepo(sourceRepo, installerRelativePath)
     await seedFakeBin(fakeBin)
     await seedHermeticToolchain(toolchainDir)
+    await createRepoArchive(sourceRepo, archivePath)
 
     const scriptPath = path.join(standaloneDir, 'install.sh')
     await cp(path.join(sourceRepo, installerRelativePath), scriptPath)
@@ -286,12 +403,14 @@ describe('Hervald installers bundle write-new-skill by default', () => {
       {
         cwd: standaloneDir,
         env: {
-          ...process.env,
           HOME: homeDir,
-          PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+          PATH: installerPath(fakeBin),
+          FAKE_GIT_FAIL_IF_USED: '1',
           FAKE_GIT_CLONE_SOURCE: sourceRepo,
+          FAKE_HERVALD_ARCHIVE: archivePath,
           HERVALD_CHECKOUT_DIR: checkoutDir,
           HERVALD_EXPECTED_NODE_BIN_DIR: expectedNodeBinDir,
+          HERVALD_CONFIGURE_PROVIDERS: '0',
           HAMMURABI_DATA_DIR: path.join(homeDir, '.hammurabi'),
           HAMMURABI_TOOLCHAIN_DIR: toolchainDir,
           HAMMURABI_INSTALL_AUTOSTART: '0',
@@ -301,9 +420,11 @@ describe('Hervald installers bundle write-new-skill by default', () => {
       },
     )
 
-    expect(result.stdout).toContain('Cloning Hervald into')
+    expect(result.stdout).toContain('Downloading Hervald into')
+    expect(result.stdout).toContain('downloaded Hervald to')
     expect(result.stdout).toContain('Installing default skills')
     await access(path.join(checkoutDir, 'apps', 'hammurabi', 'install.sh'))
+    await access(path.join(checkoutDir, '.hervald-installer-checkout'))
     await assertInstalledSkill(homeDir)
   })
 })

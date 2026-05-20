@@ -10,6 +10,10 @@ import {
   DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '../../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '../../claude-max-thinking-tokens.js'
 import type { CreateAutomationTaskInput } from '../../automations/hooks/useAutomations'
 import { NewSessionForm } from '../../agents/components/NewSessionForm'
 import { ProviderModelSelect, resolveProviderModelOptions } from './ProviderModelSelect'
@@ -77,6 +81,9 @@ export function CreateAutomationTaskForm({
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   )
+  const [maxThinkingTokens, setMaxThinkingTokens] = useState<ClaudeMaxThinkingTokens>(
+    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  )
   const [model, setModel] = useState<string | null>(null)
   const [selectedHost, setSelectedHost] = useState('')
   const [selectedSkill, setSelectedSkill] = useState('')
@@ -121,6 +128,7 @@ export function CreateAutomationTaskForm({
       setTransportType('stream')
       setEffort(DEFAULT_CLAUDE_EFFORT_LEVEL)
       setAdaptiveThinking(DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
+      setMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
       setModel(null)
       setSelectedHost('')
       setSelectedSkill('')
@@ -143,6 +151,8 @@ export function CreateAutomationTaskForm({
         setEffort={setEffort}
         adaptiveThinking={adaptiveThinking}
         setAdaptiveThinking={setAdaptiveThinking}
+        maxThinkingTokens={maxThinkingTokens}
+        setMaxThinkingTokens={setMaxThinkingTokens}
         agentType={agentType}
         setAgentType={setAgentType}
         transportType={transportType}

@@ -2,11 +2,22 @@
 
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SkillsPicker } from '../SkillsPicker'
 
+const { useSkillsMock } = vi.hoisted(() => ({
+  useSkillsMock: vi.fn(),
+}))
+
 vi.mock('@/hooks/use-skills', () => ({
-  useSkills: () => ({
+  useSkills: useSkillsMock,
+}))
+
+let root: Root | null = null
+let container: HTMLDivElement | null = null
+
+beforeEach(() => {
+  useSkillsMock.mockReturnValue({
     data: [
       {
         name: 'deploy',
@@ -15,12 +26,10 @@ vi.mock('@/hooks/use-skills', () => ({
         argumentHint: '--prod',
       },
     ],
+    isError: false,
     isLoading: false,
-  }),
-}))
-
-let root: Root | null = null
-let container: HTMLDivElement | null = null
+  })
+})
 
 function renderPicker() {
   container = document.createElement('div')
@@ -69,8 +78,22 @@ describe('SkillsPicker', () => {
     const button = findSkillButton('deploy')
 
     expect(button.className).toContain('[-webkit-tap-highlight-color:transparent]')
-    expect(button.className).toContain('[@media(hover:hover)]:hover:bg-ink-wash')
+    expect(button.className).toContain('[@media(hover:hover)]:hover:bg-[var(--hv-surface-hover)]')
     expect(button.className).toContain('sheet-skill--hervald')
     expect(button.className).not.toContain(' hover:bg-ink-wash ')
+  })
+
+  it('shows a load error instead of an empty list when skills auth fails', () => {
+    useSkillsMock.mockReturnValue({
+      data: undefined,
+      isError: true,
+      isLoading: false,
+    })
+
+    renderPicker()
+
+    expect(document.body.textContent).toContain('Unable to load skills')
+    expect(document.body.textContent).not.toContain('No user-invocable skills installed')
+    expect(document.body.textContent).not.toContain('No skills match your search')
   })
 })

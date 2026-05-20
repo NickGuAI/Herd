@@ -24,24 +24,24 @@ export function ChannelsCard({
       data-testid="commander-channels-card"
       data-commander-id={commander.id}
       onClick={() => navigate(`/channels?commander=${encodeURIComponent(commander.id)}`)}
-      className="card-sumi flex h-full min-h-40 flex-col gap-4 p-5 text-left transition-colors hover:bg-ink-wash"
+      className="card-sumi flex h-full min-h-40 flex-col gap-4 p-5 text-left transition-colors hover:bg-[var(--hv-surface-hover)]"
     >
       <span className="flex items-start justify-between gap-3">
         <span>
           <span className="section-title block">Channels</span>
-          <span className="mt-1 block text-sm text-sumi-diluted">{total} channels</span>
+          <span className="mt-1 block text-sm text-[color:var(--hv-fg-subtle)]">{total} channels</span>
         </span>
-        <RadioTower size={16} className="text-sumi-diluted" aria-hidden="true" />
+        <RadioTower size={16} className="text-[color:var(--hv-fg-subtle)]" aria-hidden="true" />
       </span>
       <span className="mt-auto space-y-1">
         {entries.map(([provider, count]) => (
-          <span key={provider} className="flex items-center justify-between gap-3 text-sm text-sumi-black">
+          <span key={provider} className="flex items-center justify-between gap-3 text-sm text-[color:var(--hv-fg)]">
             <span>{PROVIDER_LABELS[provider] ?? provider}</span>
             <span>{count}</span>
           </span>
         ))}
       </span>
-      <span className="self-end text-lg text-sumi-diluted" aria-hidden="true">→</span>
+      <span className="self-end text-lg text-[color:var(--hv-fg-subtle)]" aria-hidden="true">→</span>
     </button>
   )
 }

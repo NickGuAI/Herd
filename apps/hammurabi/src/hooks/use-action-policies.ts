@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { DEFAULT_ACTION_POLICY_SETTINGS } from '@modules/policies/settings-defaults'
 import { fetchJson } from '@/lib/api'
 
 export type ActionPolicyMode = 'auto' | 'review' | 'block'
@@ -182,8 +183,10 @@ function normalizeActionPolicyList(payload: unknown): ActionPolicyRecord[] {
   return single ? [single] : []
 }
 
-function normalizePolicySettings(payload: unknown): ActionPolicySettings {
-  const source = isRecord(payload) && isRecord(payload.settings) ? payload.settings : payload
+function normalizePolicySettingsValue(
+  source: unknown,
+  defaults: ActionPolicySettings,
+): ActionPolicySettings {
   return {
     timeoutMinutes:
       isRecord(source) &&
@@ -191,19 +194,27 @@ function normalizePolicySettings(payload: unknown): ActionPolicySettings {
       Number.isFinite(source.timeoutMinutes) &&
       source.timeoutMinutes > 0
         ? Math.round(source.timeoutMinutes)
-        : 15,
+        : defaults.timeoutMinutes,
     timeoutAction:
       isRecord(source) && (source.timeoutAction === 'auto' || source.timeoutAction === 'block')
         ? source.timeoutAction
-        : 'block',
+        : defaults.timeoutAction,
     standingApprovalExpiryDays:
       isRecord(source) &&
       typeof source.standingApprovalExpiryDays === 'number' &&
       Number.isFinite(source.standingApprovalExpiryDays) &&
       source.standingApprovalExpiryDays > 0
         ? Math.round(source.standingApprovalExpiryDays)
-        : 30,
+        : defaults.standingApprovalExpiryDays,
   }
+}
+
+function normalizePolicySettings(payload: unknown): ActionPolicySettings {
+  const defaults = isRecord(payload) && Object.prototype.hasOwnProperty.call(payload, 'defaults')
+    ? normalizePolicySettingsValue(payload.defaults, DEFAULT_ACTION_POLICY_SETTINGS)
+    : DEFAULT_ACTION_POLICY_SETTINGS
+  const source = isRecord(payload) && isRecord(payload.settings) ? payload.settings : payload
+  return normalizePolicySettingsValue(source, defaults)
 }
 
 async function fetchPolicyCommanders(): Promise<PolicyCommander[]> {
@@ -309,6 +320,7 @@ export function usePolicySettings() {
   return useQuery({
     queryKey: policySettingsQueryKey(),
     queryFn: fetchPolicySettings,
+    placeholderData: DEFAULT_ACTION_POLICY_SETTINGS,
     staleTime: 5_000,
     refetchInterval: 15_000,
   })

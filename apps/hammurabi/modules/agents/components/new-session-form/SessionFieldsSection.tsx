@@ -60,7 +60,7 @@ export function SessionFieldsSection({
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+            className="w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]"
             placeholder={namePlaceholder}
             required
             pattern={namePattern || undefined}
@@ -78,7 +78,7 @@ export function SessionFieldsSection({
       <div>
         <label className="section-title block mb-2">Working Directory</label>
         {resumeLocked ? (
-          <div className="rounded-lg border border-ink-border bg-washi-aged px-3 py-2 font-mono text-[16px] text-sumi-black md:text-sm">
+          <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2 font-mono text-[16px] text-[color:var(--hv-fg)] md:text-sm">
             {cwd || '~'}
           </div>
         ) : (
@@ -93,14 +93,14 @@ export function SessionFieldsSection({
         <textarea
           value={task}
           onChange={(event) => setTask(event.target.value)}
-          className="w-full min-h-24 px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+          className="w-full min-h-24 px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]"
           placeholder={taskPlaceholder}
           required={taskRequired}
         />
       </div>
 
       {createError ? (
-        <div className="flex items-start gap-2 rounded-lg bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
+        <div className="flex items-start gap-2 rounded-lg bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-danger)]">
           <AlertTriangle size={15} className="mt-0.5" />
           <span>{createError}</span>
         </div>

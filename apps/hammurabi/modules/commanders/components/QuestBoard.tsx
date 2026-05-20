@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronUp, Plus, X } from 'lucide-react'
 import { cn, timeAgo } from '@/lib/utils'
@@ -378,23 +378,28 @@ function QuestCard({
   const note = latestQuestNote(quest)
   const contract = contractSummary(quest.contract)
   const questArtifacts = parseQuestArtifacts(quest.artifacts)
-  const showInlineCollapsedArtifacts = !expanded && questArtifacts.length > 0 && questArtifacts.length <= 3
 
   return (
-    <article className="rounded-lg border border-ink-border bg-washi-white px-3 py-2.5">
-      <div className="flex items-start justify-between gap-3">
+    <article className={cn(
+      'rounded-lg border border-ink-border bg-washi-white',
+      expanded ? 'px-3 py-2.5' : 'px-2 py-1',
+    )}>
+      <div className={cn('flex justify-between gap-3', expanded ? 'items-start' : 'items-center')}>
         <button
           type="button"
           onClick={() => onToggleExpanded(quest.id)}
-          className="min-w-0 flex-1 text-left"
+          className={cn(
+            'min-w-0 flex-1 text-left',
+            !expanded && 'rounded-md px-1 py-0.5 transition-colors hover:bg-ink-wash focus:outline-none focus:ring-1 focus:ring-sumi-black/10',
+          )}
         >
-          <div className="flex items-start gap-2">
+          <div className={cn('flex min-w-0 gap-2', expanded ? 'items-start' : 'items-center')}>
             <ChevronUp
               size={14}
-              className={cn('mt-0.5 shrink-0 transition-transform duration-200', expanded ? '' : 'rotate-180')}
+              className={cn('shrink-0 transition-transform duration-200', expanded ? 'mt-0.5' : 'rotate-180')}
             />
-            <div className="min-w-0">
-              <p className={cn('text-sm text-sumi-black', expanded ? 'whitespace-pre-wrap' : 'line-clamp-2')}>
+            <div className="min-w-0 flex-1">
+              <p className={cn('text-sm text-sumi-black', expanded ? 'whitespace-pre-wrap' : 'truncate leading-6')}>
                 <span className="font-mono mr-2">{statusMeta.symbol}</span>
                 {quest.instruction}
               </p>
@@ -402,7 +407,7 @@ function QuestCard({
           </div>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          {questArtifacts.length > 0 && (
+          {expanded && questArtifacts.length > 0 && (
             <span className="badge-sumi badge-idle">
               {questArtifacts.length} {questArtifacts.length === 1 ? 'artifact' : 'artifacts'}
             </span>
@@ -410,55 +415,37 @@ function QuestCard({
           <span className={cn('badge-sumi', statusMeta.badgeClassName)}>
             {statusMeta.label}
           </span>
-          <button
-            type="button"
-            onClick={() => void onDelete(quest)}
-            disabled={isDeleting}
-            title="Delete quest"
-            className="rounded border border-ink-border p-1 text-sumi-diluted hover:text-accent-vermillion hover:border-accent-vermillion/40 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-          >
-            <X size={12} />
-          </button>
+          {expanded && (
+            <button
+              type="button"
+              onClick={() => void onDelete(quest)}
+              disabled={isDeleting}
+              title="Delete quest"
+              className="rounded border border-ink-border p-1 text-sumi-diluted hover:text-accent-vermillion hover:border-accent-vermillion/40 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
       </div>
 
-      {contract && (
+      {expanded && contract && (
         <p className="text-whisper text-sumi-diluted mt-1 truncate">{contract}</p>
       )}
 
+      {expanded && (
       <div className="mt-2 flex items-center justify-between gap-3">
         <span className="text-whisper text-sumi-diluted truncate">
           {[commanderLabel, sourceLabel(quest.source)].filter(Boolean).join(' • ')}
         </span>
         <span className="text-whisper text-sumi-diluted shrink-0">{questTimeLabel(quest, status)}</span>
       </div>
+      )}
 
       {expanded && note && (
         <p className="text-whisper text-sumi-mist mt-2 whitespace-pre-wrap">
           {status === 'done' ? 'Completed:' : status === 'failed' ? 'Failed:' : 'Note:'} {note}
         </p>
-      )}
-
-      {showInlineCollapsedArtifacts && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {questArtifacts.map((artifact, index) => {
-            const isHttp = /^https?:\/\//i.test(artifact.href)
-            return (
-              <a
-                key={`${quest.id}-collapsed-${artifact.type}-${artifact.href}-${index}`}
-                href={artifact.href}
-                target={isHttp ? '_blank' : undefined}
-                rel={isHttp ? 'noreferrer' : undefined}
-                className="inline-flex max-w-full items-center rounded border border-ink-border bg-washi-aged px-2 py-0.5 text-whisper text-sumi-diluted hover:border-ink-border-hover hover:text-sumi-black transition-colors"
-                title={artifact.href}
-              >
-                <span className="truncate">
-                  [{QUEST_ARTIFACT_PREFIX[artifact.type]}] {artifactDisplayLabel(artifact)}
-                </span>
-              </a>
-            )
-          })}
-        </div>
       )}
 
       {expanded && questArtifacts.length > 0 && (
@@ -516,7 +503,6 @@ export function QuestBoard({
   const [deletingQuestId, setDeletingQuestId] = useState<string | null>(null)
   const [expandedQuestIds, setExpandedQuestIds] = useState<string[]>([])
   const [showOlderDoneQuests, setShowOlderDoneQuests] = useState(false)
-  const autoExpandedRecentDoneIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (filterCommanderId === 'all') {
@@ -725,10 +711,10 @@ export function QuestBoard({
 
   const quests = questsQuery.data ?? []
   const kanbanColumns: Array<{ key: QuestStatus; title: string; emptyLabel: string }> = [
-    { key: 'pending', title: 'Pending', emptyLabel: 'No pending quests.' },
+    { key: 'pending', title: 'Pending (unclaimed)', emptyLabel: 'No pending quests.' },
     { key: 'active', title: 'Active', emptyLabel: 'No active quests.' },
-    { key: 'done', title: 'Done', emptyLabel: 'No completed quests.' },
     { key: 'failed', title: 'Failed', emptyLabel: 'No failed quests.' },
+    { key: 'done', title: 'Done', emptyLabel: 'No completed quests.' },
   ]
   const questsByStatus = Object.fromEntries(
     kanbanColumns.map(({ key }) => [
@@ -745,33 +731,7 @@ export function QuestBoard({
     const completedTimestamp = resolveCompletedTimestamp(quest)
     return completedTimestamp === null || completedTimestamp < doneHistoryBoundary
   })
-  const recentDoneQuestIds = useMemo(
-    () => recentDoneQuests.map((quest) => quest.id),
-    [recentDoneQuests],
-  )
   const apiError = toErrorMessage(questsQuery.error) ?? toErrorMessage(createQuestMutation.error)
-
-  useEffect(() => {
-    if (recentDoneQuestIds.length === 0) {
-      return
-    }
-
-    setExpandedQuestIds((current) => {
-      const next = [...current]
-      let changed = false
-      for (const questId of recentDoneQuestIds) {
-        if (autoExpandedRecentDoneIdsRef.current.has(questId)) {
-          continue
-        }
-        autoExpandedRecentDoneIdsRef.current.add(questId)
-        if (!next.includes(questId)) {
-          next.push(questId)
-          changed = true
-        }
-      }
-      return changed ? next : current
-    })
-  }, [recentDoneQuestIds])
 
   function renderQuestCard(quest: CommanderQuest) {
     return (
@@ -874,12 +834,15 @@ export function QuestBoard({
         )}
 
         {commanders.length > 0 && !questsQuery.isLoading && !apiError && (
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
+          <div className="space-y-3">
             {kanbanColumns.map((column) => {
               const columnQuests = questsByStatus[column.key]
               const isDoneColumn = column.key === 'done'
               return (
-                <section key={column.key} className="space-y-2">
+                <section
+                  key={column.key}
+                  className="rounded-lg border border-ink-border bg-washi-aged/30 p-2.5 space-y-2"
+                >
                   <div className="flex items-center justify-between rounded-lg border border-ink-border bg-washi-aged/60 px-3 py-2">
                     <p className="text-whisper uppercase tracking-wide text-sumi-diluted">{column.title}</p>
                     <span className="font-mono text-whisper text-sumi-mist">{columnQuests.length}</span>

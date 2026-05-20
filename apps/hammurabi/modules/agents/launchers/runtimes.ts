@@ -4,10 +4,13 @@ import { buildOpenCodeAcpInvocation } from '../adapters/opencode/helpers.js'
 import {
   buildGeminiAcpInvocation,
   buildLoginShellCommand,
+  prepareDaemonMachineLaunchEnvironment,
   prepareMachineLaunchEnvironment,
   buildSshArgs,
+  isDaemonMachine,
   isRemoteMachine,
 } from '../machines.js'
+import type { MachineDaemonRegistry } from '../daemon/registry.js'
 import {
   CODEX_RUNTIME_FORCE_KILL_WAIT_MS,
   CODEX_RUNTIME_TEARDOWN_TIMEOUT_MS,
@@ -53,6 +56,7 @@ function toOpenCodeRuntimeProcessError(error: Error): Error {
 export class GeminiAcpRuntime implements GeminiAcpRuntimeHandle {
   readonly sessionName: string
   readonly machine: (MachineConfig & { host: string }) | null
+  readonly daemonMachine: (MachineConfig & { transport: 'daemon' }) | null
   readonly model?: string
   process: ChildProcess | null = null
   requestId = 0
@@ -64,9 +68,15 @@ export class GeminiAcpRuntime implements GeminiAcpRuntimeHandle {
   transportInitialized = false
   stdioBuffer = ''
 
-  constructor(sessionName: string, machine?: MachineConfig, model?: string) {
+  constructor(
+    sessionName: string,
+    machine?: MachineConfig,
+    model?: string,
+    private readonly daemonRegistry?: Pick<MachineDaemonRegistry, 'spawnProcess'>,
+  ) {
     this.sessionName = sessionName
     this.machine = isRemoteMachine(machine) ? machine : null
+    this.daemonMachine = isDaemonMachine(machine) ? machine : null
     this.model = typeof model === 'string' && model.trim().length > 0 ? model.trim() : undefined
   }
 
@@ -75,6 +85,7 @@ export class GeminiAcpRuntime implements GeminiAcpRuntimeHandle {
       sessionName: this.sessionName,
       pid: this.process?.pid ?? null,
       machineId: this.machine?.id ?? null,
+      daemonMachineId: this.daemonMachine?.id ?? null,
       model: this.model ?? null,
       pendingRequests: this.pendingRequests.size,
       listenerSessions: this.notificationListeners.size,
@@ -283,6 +294,23 @@ export class GeminiAcpRuntime implements GeminiAcpRuntimeHandle {
               },
             )
           })()
+        : this.daemonMachine
+          ? (() => {
+              if (!this.daemonRegistry) {
+                throw new Error(`Daemon machine "${this.daemonMachine.id}" is not connected`)
+              }
+              const preparedLaunch = prepareDaemonMachineLaunchEnvironment(this.daemonMachine)
+              const command = buildLoginShellCommand(
+                buildGeminiAcpInvocation(this.model),
+                undefined,
+                preparedLaunch.sourcedEnvFile,
+              )
+              return this.daemonRegistry.spawnProcess(this.daemonMachine.id, {
+                command: 'sh',
+                args: ['-lc', command],
+                env: preparedLaunch.env,
+              })
+            })()
         : spawn(
           GEMINI_ACP_COMMAND,
           this.model
@@ -294,7 +322,7 @@ export class GeminiAcpRuntime implements GeminiAcpRuntimeHandle {
           },
         )
       this.attachProcess(cp)
-      this.log('info', this.machine ? 'Spawned remote Gemini ACP runtime' : 'Spawned Gemini ACP runtime')
+      this.log('info', this.machine ? 'Spawned remote Gemini ACP runtime' : (this.daemonMachine ? 'Spawned daemon Gemini ACP runtime' : 'Spawned Gemini ACP runtime'))
     }
 
     await this.sendRequest('initialize', {
@@ -425,6 +453,7 @@ export class GeminiAcpRuntime implements GeminiAcpRuntimeHandle {
 export class OpenCodeAcpRuntime implements OpenCodeAcpRuntimeHandle {
   readonly sessionName: string
   readonly machine: (MachineConfig & { host: string }) | null
+  readonly daemonMachine: (MachineConfig & { transport: 'daemon' }) | null
   readonly model?: string
   process: ChildProcess | null = null
   requestId = 0
@@ -436,9 +465,15 @@ export class OpenCodeAcpRuntime implements OpenCodeAcpRuntimeHandle {
   transportInitialized = false
   stdioBuffer = ''
 
-  constructor(sessionName: string, machine?: MachineConfig, model?: string) {
+  constructor(
+    sessionName: string,
+    machine?: MachineConfig,
+    model?: string,
+    private readonly daemonRegistry?: Pick<MachineDaemonRegistry, 'spawnProcess'>,
+  ) {
     this.sessionName = sessionName
     this.machine = isRemoteMachine(machine) ? machine : null
+    this.daemonMachine = isDaemonMachine(machine) ? machine : null
     this.model = typeof model === 'string' && model.trim().length > 0 ? model.trim() : undefined
   }
 
@@ -447,6 +482,7 @@ export class OpenCodeAcpRuntime implements OpenCodeAcpRuntimeHandle {
       sessionName: this.sessionName,
       pid: this.process?.pid ?? null,
       machineId: this.machine?.id ?? null,
+      daemonMachineId: this.daemonMachine?.id ?? null,
       model: this.model ?? null,
       pendingRequests: this.pendingRequests.size,
       listenerSessions: this.notificationListeners.size,
@@ -655,6 +691,22 @@ export class OpenCodeAcpRuntime implements OpenCodeAcpRuntimeHandle {
               },
             )
           })()
+        : this.daemonMachine
+          ? (() => {
+              if (!this.daemonRegistry) {
+                throw new Error(`Daemon machine "${this.daemonMachine.id}" is not connected`)
+              }
+              const preparedLaunch = prepareDaemonMachineLaunchEnvironment(this.daemonMachine)
+              const command = buildOpenCodeAcpInvocation({
+                model: this.model,
+                envFile: preparedLaunch.sourcedEnvFile,
+              })
+              return this.daemonRegistry.spawnProcess(this.daemonMachine.id, {
+                command: 'sh',
+                args: ['-lc', command],
+                env: preparedLaunch.env,
+              })
+            })()
         : spawn(
           OPENCODE_ACP_COMMAND,
           this.model
@@ -666,7 +718,7 @@ export class OpenCodeAcpRuntime implements OpenCodeAcpRuntimeHandle {
           },
         )
       this.attachProcess(cp)
-      this.log('info', this.machine ? 'Spawned remote OpenCode ACP runtime' : 'Spawned OpenCode ACP runtime')
+      this.log('info', this.machine ? 'Spawned remote OpenCode ACP runtime' : (this.daemonMachine ? 'Spawned daemon OpenCode ACP runtime' : 'Spawned OpenCode ACP runtime'))
     }
 
     await this.sendRequest('initialize', {

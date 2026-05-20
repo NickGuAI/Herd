@@ -32,6 +32,7 @@ import {
 } from '@modules/agents/components/SessionComposer'
 import type { MsgItem } from '@modules/agents/messages/model'
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
 import { StreamingDots } from './StreamingDots'
 import { SessionApprovalsButton } from './SessionApprovalsButton'
 import { getKillConfirmationMessage } from './session-helpers'
@@ -86,13 +87,18 @@ export interface MobileSessionShellProps {
   onBack: () => void
   onKill?: () => void | Promise<void>
   onOpenWorkspace?: () => void
+  onOpenWorkspaceFile?: (path: string) => void
   onOpenSkills?: () => void
   onNewQuest?: () => void
   workers?: WorkerBadge[]
   onOpenWorkers?: () => void
   rootClassName?: string
   contextFilePaths?: string[]
+  contextDirectoryPaths?: string[]
+  contextFileAnnotations?: WorkspacePendingFileAnnotation[]
   onRemoveContextFilePath?: (filePath: string) => void
+  onRemoveContextDirectoryPath?: (directoryPath: string) => void
+  onRemoveContextFileAnnotation?: (commentId: string) => void
   onClearContextFilePaths?: () => void
   showComposerWorkspaceShortcut?: boolean
   isStreaming?: boolean
@@ -109,19 +115,17 @@ export interface MobileSessionShellProps {
   ) => void | Promise<void>
   onArchiveConversation?: (conversationId: string) => void | Promise<void>
   onRemoveConversation?: (conversationId: string) => void | Promise<void>
+  headerAccessory?: ReactNode
   belowHeader?: ReactNode
 }
 
 type ConversationProviderOption = Pick<ProviderRegistryEntry, 'id' | 'label' | 'availableModels'>
 
-function formatDuration(durationSec?: number): string | null {
-  if (typeof durationSec !== 'number' || Number.isNaN(durationSec) || durationSec < 0) {
-    return null
-  }
-
-  const minutes = Math.floor(durationSec / 60)
-  const seconds = Math.floor(durationSec % 60)
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+function hasConversationAction(
+  conversation: ConversationRecord | null | undefined,
+  action: keyof NonNullable<ConversationRecord['allowedActions']>,
+): boolean {
+  return conversation?.allowedActions?.[action] === true
 }
 
 export function MobileSessionShell({
@@ -131,7 +135,6 @@ export function MobileSessionShell({
   agentType,
   wsStatus,
   costUsd,
-  durationSec,
   messages,
   hasOlderMessages = false,
   loadingOlderMessages = false,
@@ -159,12 +162,17 @@ export function MobileSessionShell({
   onBack,
   onKill,
   onOpenWorkspace,
+  onOpenWorkspaceFile,
   onNewQuest,
   workers,
   onOpenWorkers,
   rootClassName,
   contextFilePaths = [],
+  contextDirectoryPaths = [],
+  contextFileAnnotations = [],
   onRemoveContextFilePath,
+  onRemoveContextDirectoryPath,
+  onRemoveContextFileAnnotation,
   onClearContextFilePaths,
   showComposerWorkspaceShortcut = false,
   isStreaming = false,
@@ -177,16 +185,19 @@ export function MobileSessionShell({
   onSwapConversationProvider,
   onArchiveConversation,
   onRemoveConversation,
+  headerAccessory,
   belowHeader,
 }: MobileSessionShellProps) {
   const usesOverlayChrome = rootClassName?.includes('session-view-overlay') ?? false
   const [showOverflowMenu, setShowOverflowMenu] = useState(false)
   const [showConversationProviderMenu, setShowConversationProviderMenu] = useState(false)
   const [showAddToChatSheet, setShowAddToChatSheet] = useState(false)
+  const [showLoadOlderControl, setShowLoadOlderControl] = useState(false)
   const [isKilling, setIsKilling] = useState(false)
   const [conversationActionBusy, setConversationActionBusy] = useState<string | null>(null)
   const [conversationProviderDraft, setConversationProviderDraft] = useState<AgentType | ''>('')
   const [conversationModelDraft, setConversationModelDraft] = useState('')
+  const shellRef = useRef<HTMLElement>(null)
   const composerRef = useRef<SessionComposerHandle>(null)
   const emptyStateActive = Boolean(emptyState) && !composerEnabled
 
@@ -206,20 +217,6 @@ export function MobileSessionShell({
     return () => window.removeEventListener('keydown', handleWorkspaceShortcut)
   }, [onOpenWorkspace])
 
-  const metaParts = useMemo(() => {
-    const parts: string[] = []
-    if (wsStatus) {
-      parts.push(wsStatus)
-    }
-
-    const formattedDuration = formatDuration(durationSec)
-    if (formattedDuration) {
-      parts.push(formattedDuration)
-    }
-
-    return parts
-  }, [durationSec, wsStatus])
-
   const workspaceShortcutLabel = typeof navigator !== 'undefined' && navigator.platform?.includes('Mac')
     ? '\u2318K'
     : 'Ctrl+K'
@@ -238,9 +235,11 @@ export function MobileSessionShell({
     [conversation?.agentType, providers],
   )
   const conversationName = conversation?.name?.trim() || (conversation ? `chat ${conversation.id.slice(0, 8)}` : '')
-  const canStartConversation = conversation?.status === 'idle' || conversation?.status === 'paused'
-  const canStopConversation = conversation?.status === 'active'
-  const canEditConversationProviderModel = canStartConversation && Boolean(onSwapConversationProvider)
+  const canStartConversation = hasConversationAction(conversation, 'start')
+    || hasConversationAction(conversation, 'resume')
+  const canStopConversation = hasConversationAction(conversation, 'pause')
+  const canEditConversationProviderModel =
+    hasConversationAction(conversation, 'updateProvider') && Boolean(onSwapConversationProvider)
   const activeConversationProvider = providerOptions.find(
     (provider) => provider.id === conversationProviderDraft,
   ) ?? null
@@ -257,8 +256,8 @@ export function MobileSessionShell({
       || canStopConversation
       || onRenameConversation
       || canEditConversationProviderModel
-      || onArchiveConversation
-      || onRemoveConversation
+      || (hasConversationAction(conversation, 'archive') && onArchiveConversation)
+      || (hasConversationAction(conversation, 'delete') && onRemoveConversation)
     ),
   )
 
@@ -298,6 +297,47 @@ export function MobileSessionShell({
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [closeOverflowMenu, showOverflowMenu])
+
+  useEffect(() => {
+    if (!hasOlderMessages || !onLoadOlderMessages) {
+      setShowLoadOlderControl(false)
+      return
+    }
+
+    const scrollHost = shellRef.current?.querySelector<HTMLElement>('.messages-area')
+    if (!scrollHost) {
+      return
+    }
+
+    let touchStartY: number | null = null
+    const updateLoadOlderReveal = () => {
+      setShowLoadOlderControl(scrollHost.scrollTop <= 0)
+    }
+    const handleTouchStart = (event: TouchEvent) => {
+      touchStartY = scrollHost.scrollTop <= 0
+        ? event.touches[0]?.clientY ?? null
+        : null
+    }
+    const handleTouchMove = (event: TouchEvent) => {
+      if (touchStartY === null) {
+        return
+      }
+      const currentY = event.touches[0]?.clientY ?? touchStartY
+      if (currentY - touchStartY > 12) {
+        setShowLoadOlderControl(true)
+      }
+    }
+
+    setShowLoadOlderControl(false)
+    scrollHost.addEventListener('scroll', updateLoadOlderReveal, { passive: true })
+    scrollHost.addEventListener('touchstart', handleTouchStart, { passive: true })
+    scrollHost.addEventListener('touchmove', handleTouchMove, { passive: true })
+    return () => {
+      scrollHost.removeEventListener('scroll', updateLoadOlderReveal)
+      scrollHost.removeEventListener('touchstart', handleTouchStart)
+      scrollHost.removeEventListener('touchmove', handleTouchMove)
+    }
+  }, [hasOlderMessages, onLoadOlderMessages, sessionName])
 
   const handleKill = useCallback(async () => {
     if (!onKill || isKilling) {
@@ -466,6 +506,7 @@ export function MobileSessionShell({
 
   return (
     <section
+      ref={shellRef}
       className={cn(
         'flex min-h-0 flex-1 flex-col overflow-hidden',
         'bg-washi-white text-sumi-black',
@@ -475,66 +516,100 @@ export function MobileSessionShell({
     >
       <header
         className={cn(
-          'session-header border-b px-3 pb-3 pt-4',
+          'session-header h-12 max-h-12 border-b px-2 py-1',
           'border-ink-border bg-washi-white',
         )}
+        data-testid="mobile-session-compact-header"
       >
-        <div className="flex items-center gap-2">
+        <div className="session-header-row flex h-full min-w-0 items-center gap-1.5">
           <button
             type="button"
             className={cn(
-              'session-back inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md transition-colors',
+              'session-back inline-flex h-8 min-h-0 w-8 min-w-0 items-center justify-center rounded-md transition-colors',
               'text-sumi-diluted hover:bg-ink-wash',
             )}
             onClick={onBack}
             aria-label="Back to org"
+            data-mobile-header-item="back"
           >
             <ChevronLeft size={18} />
           </button>
 
-          <div className="session-header-center min-w-0 flex-1 text-center">
-            <p className={cn(
-              'session-header-name truncate font-mono text-sm',
-              'text-sumi-black',
-            )}
-            >
-              {sessionLabel}
-            </p>
-            {chatLabel && (
-              <p className="session-header-chat mt-0.5 truncate text-[11px] tracking-wide opacity-70">
-                {chatLabel}
-              </p>
-            )}
-            {metaParts.length > 0 && (
-              <p
-                className={cn(
-                  'session-header-meta mt-1 text-[11px] uppercase tracking-[0.08em]',
-                  'text-sumi-mist',
-                )}
-              >
-                {wsStatus && (
-                  <span
-                    className={cn(
-                      'mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle',
-                      wsStatus === 'connected'
-                        ? 'bg-emerald-500'
-                        : wsStatus === 'connecting'
-                          ? 'bg-amber-400'
-                          : 'bg-sumi-mist',
-                    )}
-                  />
-                )}
-                {metaParts.join(' · ')}
-              </p>
+          <div
+            className="session-header-avatar flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md border border-ink-border bg-washi-aged/70 text-sumi-diluted"
+            data-testid="mobile-session-avatar"
+            data-mobile-header-item="avatar"
+          >
+            {agentAvatarUrl ? (
+              <img
+                src={agentAvatarUrl}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <Cpu size={14} aria-hidden="true" />
             )}
           </div>
+
+          <div className="session-header-title-group flex min-w-0 flex-1 items-center gap-1 font-mono text-sm">
+            <span
+              className={cn(
+                'session-header-name min-w-0 truncate',
+                'text-sumi-black',
+              )}
+              data-testid="mobile-session-commander-name"
+              data-mobile-header-item="commander"
+            >
+              {sessionLabel}
+            </span>
+            {chatLabel && (
+              <>
+                <span
+                  className="session-header-separator shrink-0 text-sumi-mist"
+                  data-mobile-header-item="separator"
+                  aria-hidden="true"
+                >
+                  ·
+                </span>
+                <span
+                  className="session-header-chat min-w-0 truncate text-[12px] text-sumi-diluted"
+                  data-testid="mobile-session-chat-label"
+                  data-mobile-header-item="chat"
+                >
+                  {chatLabel}
+                </span>
+              </>
+            )}
+          </div>
+
+          {wsStatus && (
+            <span
+              className={cn(
+                'session-header-status-dot h-1.5 w-1.5 shrink-0 rounded-full transition-opacity',
+                wsStatus === 'connected' ? 'bg-emerald-500 opacity-100' : 'bg-sumi-mist opacity-0',
+              )}
+              data-testid="mobile-session-connected-dot"
+              data-mobile-header-item="status"
+              aria-hidden="true"
+            />
+          )}
+
+          {headerAccessory && (
+            <div
+              className="session-header-accessory flex shrink-0 items-center"
+              data-testid="mobile-session-header-accessory"
+              data-mobile-header-item="page-dots"
+            >
+              {headerAccessory}
+            </div>
+          )}
 
           <div className="session-header-actions flex shrink-0 items-center gap-1">
             <div className="relative shrink-0">
               <button
                 type="button"
                 className={cn(
-                  'inline-flex h-9 w-9 items-center justify-center rounded-full border border-ink-border bg-washi-aged/80 text-sumi-diluted backdrop-blur-[2px] transition-colors hover:bg-ink-wash',
+                  'inline-flex h-8 w-8 items-center justify-center rounded-md border border-ink-border bg-washi-aged/80 text-sumi-diluted backdrop-blur-[2px] transition-colors hover:bg-ink-wash',
                 )}
                 onClick={() => {
                   if (showOverflowMenu) {
@@ -546,6 +621,7 @@ export function MobileSessionShell({
                 }}
                 aria-label="Session actions"
                 aria-expanded={showOverflowMenu}
+                data-mobile-header-item="menu"
               >
                 <MoreVertical size={16} />
               </button>
@@ -791,7 +867,7 @@ export function MobileSessionShell({
                       </>
                     )}
 
-                    {onArchiveConversation && conversation && (
+                    {hasConversationAction(conversation, 'archive') && onArchiveConversation && conversation && (
                       <button
                         type="button"
                         className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-xs text-sumi-black transition-colors hover:bg-ink-wash disabled:cursor-not-allowed disabled:opacity-50"
@@ -805,7 +881,7 @@ export function MobileSessionShell({
                       </button>
                     )}
 
-                    {onRemoveConversation && conversation && (
+                    {hasConversationAction(conversation, 'delete') && onRemoveConversation && conversation && (
                       <button
                         type="button"
                         className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-xs text-accent-vermillion transition-colors hover:bg-accent-vermillion/5 disabled:cursor-not-allowed disabled:opacity-50"
@@ -855,12 +931,13 @@ export function MobileSessionShell({
             </div>
           </div>
         </div>
-        {belowHeader && (
-          <div className="mt-3 space-y-2">
-            {belowHeader}
-          </div>
-        )}
       </header>
+
+      {belowHeader && (
+        <div className="space-y-2 px-3 py-2">
+          {belowHeader}
+        </div>
+      )}
 
       {emptyStateActive ? (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -869,8 +946,8 @@ export function MobileSessionShell({
       ) : (
         <>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {hasOlderMessages && onLoadOlderMessages && (
-              <div className="flex justify-center px-4 pt-3">
+            {hasOlderMessages && onLoadOlderMessages && showLoadOlderControl && (
+              <div className="flex justify-center px-4 pt-2" data-testid="mobile-load-older-reveal">
                 <button
                   type="button"
                   className="rounded-[2px_8px_2px_8px] border border-ink-border bg-washi-aged/70 px-3 py-1.5 text-[11px] uppercase tracking-[0.08em] text-sumi-diluted disabled:cursor-wait disabled:opacity-60"
@@ -891,6 +968,7 @@ export function MobileSessionShell({
                 : 'h-full flex-1 px-4 py-4 hervald-chat-pane'}
               agentAvatarUrl={agentAvatarUrl}
               agentAccentColor={agentAccentColor}
+              onOpenWorkspaceFile={onOpenWorkspaceFile}
             />
             {isStreaming && (
               <div className="px-4 pb-2">
@@ -918,7 +996,11 @@ export function MobileSessionShell({
               onSend={onSend}
               placeholder={composerPlaceholder}
               contextFilePaths={contextFilePaths}
+              contextDirectoryPaths={contextDirectoryPaths}
+              contextFileAnnotations={contextFileAnnotations}
               onRemoveContextFilePath={onRemoveContextFilePath}
+              onRemoveContextDirectoryPath={onRemoveContextDirectoryPath}
+              onRemoveContextFileAnnotation={onRemoveContextFileAnnotation}
               onClearContextFilePaths={onClearContextFilePaths}
               onOpenWorkspace={onOpenWorkspace}
               onOpenAddToChat={handleOpenAddToChat}

@@ -82,12 +82,20 @@ export function SessionCard({
   ].filter((value): value is string => Boolean(value))
   const supportsEffort = currentProvider?.uiCapabilities.supportsEffort ?? (rawAgentType === 'claude')
   const [isExpanded, setIsExpanded] = useState(variant === 'row' && selected)
+  const previousSelectedRef = useRef(selected)
 
   useEffect(() => {
     if (variant !== 'row') {
+      previousSelectedRef.current = selected
       return
     }
-    if (!selected) {
+    const wasSelected = previousSelectedRef.current
+    previousSelectedRef.current = selected
+    if (selected) {
+      setIsExpanded(true)
+      return
+    }
+    if (wasSelected && !selected) {
       setIsExpanded(false)
     }
   }, [selected, variant])

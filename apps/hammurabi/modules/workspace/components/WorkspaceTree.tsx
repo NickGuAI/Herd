@@ -53,9 +53,9 @@ function TreeBranch({
                   'flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
                   dark
                     ? 'hover:bg-white/[0.06]'
-                    : 'hover:bg-ink-wash',
-                  isSelected && (dark ? 'bg-white/[0.08]' : 'bg-ink-wash/80'),
-                  isAdded && 'ring-1 ring-emerald-500/40',
+                    : 'hover:bg-[var(--hv-surface-hover)]',
+                  isSelected && (dark ? 'bg-white/[0.08]' : 'bg-[var(--hv-surface-selected)]'),
+                  isAdded && 'ring-1 ring-[color:var(--hv-accent-success)]',
                 )}
                 style={{ paddingLeft: `${depth * 12 + 8}px` }}
                 onClick={() => {
@@ -75,23 +75,23 @@ function TreeBranch({
                       size={12}
                       className={cn(
                         'shrink-0 transition-transform',
-                        dark ? 'text-white/40' : 'text-sumi-mist',
+                        dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-faint)]',
                         isExpanded && 'rotate-90',
                       )}
                     />
                     {isExpanded ? (
-                      <FolderOpen size={13} className={dark ? 'text-white/50' : 'text-sumi-diluted'} />
+                      <FolderOpen size={13} className={dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]'} />
                     ) : (
-                      <Folder size={13} className={dark ? 'text-white/50' : 'text-sumi-diluted'} />
+                      <Folder size={13} className={dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]'} />
                     )}
                   </>
                 ) : (
                   <>
                     <span className="w-3 shrink-0" />
-                    <FileText size={13} className={dark ? 'text-white/40' : 'text-sumi-diluted'} />
+                    <FileText size={13} className={dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]'} />
                   </>
                 )}
-                <span className={cn('font-mono truncate', dark ? 'text-white/75' : 'text-sumi-gray')}>
+                <span className={cn('font-mono truncate', dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-muted)]')}>
                   {node.name}
                 </span>
               </button>
@@ -102,8 +102,8 @@ function TreeBranch({
                   className={cn(
                     'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
                     isAdded
-                      ? 'text-emerald-700 bg-emerald-100 hover:bg-emerald-200'
-                      : 'text-sumi-diluted hover:bg-ink-wash',
+                      ? 'text-[color:var(--hv-accent-success)] bg-[var(--hv-accent-success-wash)] hover:bg-[var(--hv-accent-success-wash)]'
+                      : 'text-[color:var(--hv-fg-subtle)] hover:bg-[var(--hv-surface-hover)]',
                   )}
                   onClick={(event) => {
                     event.stopPropagation()
@@ -116,7 +116,7 @@ function TreeBranch({
                 </button>
               )}
 
-              {isLoading && <Loader2 size={12} className="shrink-0 animate-spin text-sumi-diluted" />}
+              {isLoading && <Loader2 size={12} className="shrink-0 animate-spin text-[color:var(--hv-fg-subtle)]" />}
             </div>
 
             {isDirectory && isExpanded && (
@@ -152,8 +152,8 @@ export function WorkspaceTree(props: WorkspaceTreeProps) {
         className={cn(
           'flex h-full items-center justify-center rounded-lg border border-dashed text-sm',
           dark
-            ? 'border-white/[0.08] text-white/45'
-            : 'border-ink-border text-sumi-diluted',
+            ? 'border-[color:var(--hv-border-soft)] text-[color:var(--hv-fg)]'
+            : 'border-[color:var(--hv-border-hair)] text-[color:var(--hv-fg-subtle)]',
         )}
       >
         Workspace is empty

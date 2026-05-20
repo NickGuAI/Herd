@@ -8,6 +8,10 @@ import {
   isClaudeEffortLevel,
 } from '../../../claude-effort.js'
 import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  isClaudeMaxThinkingTokens,
+} from '../../../claude-max-thinking-tokens.js'
+import {
   normalizeClaudeEvent,
 } from '../../event-normalizers/claude.js'
 import { registerProvider } from '../../providers/registry-core.js'
@@ -27,6 +31,7 @@ import type {
   StreamJsonEvent,
   StreamSession,
 } from '../../types.js'
+import { getDaemonProcessMetadata } from '../../daemon/registry.js'
 import { claudeMachineProvider } from './machine-adapter.js'
 import { claudeApprovalAdapter } from './approval-adapter.js'
 import { availableModels } from './models.js'
@@ -64,11 +69,18 @@ function migrateLegacyClaudeProviderContext(rawProviderContext: unknown) {
           ? raw.adaptiveThinking
           : undefined
       )
+  const maxThinkingTokens = isClaudeMaxThinkingTokens(nested?.maxThinkingTokens)
+    ? nested.maxThinkingTokens
+    : (
+        isClaudeMaxThinkingTokens(raw.maxThinkingTokens)
+          ? raw.maxThinkingTokens
+          : undefined
+      )
 
   if (agentType && agentType !== 'claude') {
     return null
   }
-  if (!sessionId && !effort && !adaptiveThinking) {
+  if (!sessionId && !effort && !adaptiveThinking && !maxThinkingTokens) {
     return null
   }
 
@@ -76,6 +88,7 @@ function migrateLegacyClaudeProviderContext(rawProviderContext: unknown) {
     ...(sessionId ? { sessionId } : {}),
     ...(effort ? { effort } : {}),
     ...(adaptiveThinking ? { adaptiveThinking } : {}),
+    ...(maxThinkingTokens ? { maxThinkingTokens } : {}),
   })
 }
 
@@ -100,8 +113,9 @@ function extractClaudeSessionId(event: StreamJsonEvent | undefined): string | un
 
 function snapshotClaudeSession(session: StreamSession): PersistedStreamSession | null {
   const context = asClaudeProviderContext(session.providerContext)
+  const daemonProcess = getDaemonProcessMetadata(session.process)
   const sessionId = session.lastTurnCompleted ? context?.sessionId : undefined
-  if (!sessionId) {
+  if (!sessionId && !daemonProcess) {
     return null
   }
 
@@ -112,6 +126,9 @@ function snapshotClaudeSession(session: StreamSession): PersistedStreamSession |
     conversationId: session.conversationId,
     agentType: session.agentType,
     model: session.model,
+    effort: context?.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+    adaptiveThinking: context?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+    maxThinkingTokens: context?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     mode: session.mode,
     cwd: session.cwd,
     host: session.host,
@@ -120,15 +137,17 @@ function snapshotClaudeSession(session: StreamSession): PersistedStreamSession |
       : undefined,
     createdAt: session.createdAt,
     providerContext: createClaudeProviderContext({
-      sessionId,
+      ...(sessionId ? { sessionId } : {}),
       effort: context?.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
       adaptiveThinking: context?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+      maxThinkingTokens: context?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     }),
     spawnedBy: session.spawnedBy,
     spawnedWorkers: [...session.spawnedWorkers],
     resumedFrom: session.resumedFrom,
     sessionState: 'active',
     hadResult: Boolean(session.finalResultEvent),
+    daemonProcess,
     conversationEntryCount: session.conversationEntryCount,
     events: [...session.events],
     queuedMessages: session.messageQueue.list(),
@@ -147,6 +166,9 @@ function snapshotExitedClaudeSession(session: StreamSession): ExitedStreamSessio
     conversationId: session.conversationId,
     agentType: session.agentType,
     model: session.model,
+    effort: context.effort,
+    adaptiveThinking: context.adaptiveThinking,
+    maxThinkingTokens: context.maxThinkingTokens,
     mode: session.mode,
     cwd: session.cwd,
     host: session.host,
@@ -160,6 +182,7 @@ function snapshotExitedClaudeSession(session: StreamSession): ExitedStreamSessio
       sessionId: context.sessionId,
       effort: context.effort,
       adaptiveThinking: context.adaptiveThinking,
+      maxThinkingTokens: context.maxThinkingTokens,
     }),
     resumedFrom: session.resumedFrom,
     conversationEntryCount: session.conversationEntryCount,
@@ -179,12 +202,14 @@ export const claudeProvider: ProviderAdapter = registerProvider({
     supportsAutomation: true,
     supportsCommanderConversation: true,
     supportsWorkerDispatch: true,
+    supportsMessageImages: true,
   },
   availableModels,
   machineAuth: claudeMachineProvider,
   uiCapabilities: {
     supportsEffort: true,
     supportsAdaptiveThinking: true,
+    supportsMaxThinkingTokens: true,
     supportsSkills: true,
     supportsLoginMode: true,
     permissionModes: [
@@ -200,6 +225,7 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: getClaudeDisableAdaptiveThinkingEnvValue(
         DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
       ),
+      MAX_THINKING_TOKENS: String(DEFAULT_CLAUDE_MAX_THINKING_TOKENS),
     }
   },
   create(options: ProviderCreateOptions, deps: ProviderAdapterDeps) {
@@ -216,6 +242,7 @@ export const claudeProvider: ProviderAdapter = registerProvider({
         model: options.model,
         effort: options.effort,
         adaptiveThinking: options.adaptiveThinking,
+        maxThinkingTokens: options.maxThinkingTokens,
         createdAt: options.createdAt,
         spawnedBy: options.spawnedBy,
         spawnedWorkers: options.spawnedWorkers,
@@ -224,6 +251,7 @@ export const claudeProvider: ProviderAdapter = registerProvider({
         creator: options.creator,
         conversationId: options.conversationId,
         currentSkillInvocation: options.currentSkillInvocation,
+        daemonProcess: options.daemonProcess,
       },
       deps,
     )
@@ -248,6 +276,8 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       currentSkillInvocation: entry.currentSkillInvocation,
       effort: context?.effort,
       adaptiveThinking: context?.adaptiveThinking,
+      maxThinkingTokens: context?.maxThinkingTokens,
+      daemonProcess: entry.daemonProcess,
     }, deps)
   },
   snapshotForPersist(session) {

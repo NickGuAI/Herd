@@ -7,24 +7,24 @@
 
 @layer base {
   ::selection {
-    background: rgba(28, 28, 28, 0.15);
+    background: var(--hv-ink-wash-02);
   }
 
   .session-view-overlay ::selection {
-    background: rgba(123, 175, 212, 0.35);
+    background: var(--hv-accent-info-wash);
   }
 
   /* Hervald surfaces need a visible selection wash on both paper and dark ink backgrounds. */
   .hv-light ::selection,
   .hervald ::selection,
   .hervald-chat-pane ::selection {
-    background: rgba(194, 59, 34, 0.22);
+    background: var(--hv-accent-danger-wash);
     color: inherit;
   }
 
   /*
    * Dark-mode selection: brand-aligned vermillion wash, tuned brighter than the
-   * --vermillion-seal token (#C23B22) so dark-adapted eyes pick up the chromatic
+   * --vermillion-seal token (var(--hv-accent-danger)) so dark-adapted eyes pick up the chromatic
    * contrast. 40% opacity gives clear luminosity delta and saturated red/orange
    * punch on Sumi-e dark ink surfaces. Explicit color: var(--hv-fg)
    * keeps selected text readable on the wash. Mirrors the light-mode brand
@@ -34,7 +34,7 @@
   .hv-dark.hervald ::selection,
   .hv-dark .hervald ::selection,
   .hv-dark .hervald-chat-pane ::selection {
-    background: rgba(229, 91, 60, 0.4);
+    background: var(--hv-accent-danger-wash);
     color: var(--hv-fg);
   }
 
@@ -54,12 +54,12 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgba(28, 28, 28, 0.1);
+    background: var(--hv-ink-wash-02);
     border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(28, 28, 28, 0.2);
+    background: var(--hv-ink-wash-02);
   }
 
   /*
@@ -118,6 +118,72 @@
     background: var(--hv-ink-wash-01);
   }
 
+  .hervald-prose {
+    color: var(--hv-fg);
+    font-family: var(--hv-font-body);
+    font-size: var(--hv-text-small);
+    line-height: var(--hv-leading-normal);
+  }
+
+  .hervald-prose :where(h1, h2, h3, h4, h5, h6) {
+    color: var(--hv-fg);
+    font-family: var(--hv-font-primary);
+    font-weight: 400;
+    letter-spacing: var(--hv-track-normal);
+    line-height: var(--hv-leading-tight);
+    margin: var(--hv-space-3) 0 var(--hv-space-2);
+  }
+
+  .hervald-prose :where(p, ul, ol, blockquote, pre, table) {
+    margin: 0 0 var(--hv-space-3);
+  }
+
+  .hervald-prose :where(strong, b) {
+    color: var(--hv-fg);
+    font-weight: 500;
+  }
+
+  .hervald-prose :where(a) {
+    color: var(--hv-accent-info);
+    text-decoration-color: var(--hv-border-soft);
+    text-underline-offset: 3px;
+  }
+
+  .hervald-prose :where(code) {
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-soft);
+    background: var(--hv-ink-wash-02);
+    color: var(--hv-fg);
+    font-family: var(--hv-font-mono);
+    padding: 0.1em 0.32em;
+  }
+
+  .hervald-prose :where(pre) {
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved);
+    background: var(--hv-ink-wash-02);
+    color: var(--hv-fg);
+    overflow-x: auto;
+    padding: var(--hv-space-3);
+  }
+
+  .hervald-prose :where(pre code) {
+    border: 0;
+    background: transparent;
+    padding: 0;
+  }
+
+  .hervald-prose :where(blockquote) {
+    border-left: 3px solid var(--hv-border-soft);
+    color: var(--hv-fg-muted);
+    padding-left: var(--hv-space-3);
+  }
+
+  .hervald-prose :where(th, td) {
+    border: 1px solid var(--hv-border-hair);
+    padding: var(--hv-space-2);
+  }
+
   .badge-sumi {
     @apply inline-flex items-center px-3 py-1 text-whisper uppercase;
     background: var(--hv-ink-wash-02);
@@ -162,7 +228,7 @@
   /* ── Bottom Sheet (mobile) ──────────────────────── */
   .sheet-backdrop {
     @apply fixed inset-0 z-[9998] opacity-0 pointer-events-none;
-    background: rgba(28, 28, 28, 0.25);
+    background: var(--hv-ink-wash-02);
     transition: opacity 0.35s;
   }
 
@@ -172,9 +238,9 @@
 
   .sheet {
     @apply fixed bottom-0 left-0 right-0 z-[9999] overflow-y-auto;
-    background: var(--hv-bg, #FAF8F5);
-    color: var(--hv-fg, #1C1C1C);
-    border-top: 1px solid var(--hv-border-hair, rgba(28, 28, 28, 0.06));
+    background: var(--hv-bg);
+    color: var(--hv-fg);
+    border-top: 1px solid var(--hv-border-hair);
     border-radius: 24px 24px 0 0;
     transform: translateY(100%);
     transition: transform 0.5s cubic-bezier(0.23, 1, 0.32, 1);
@@ -187,7 +253,7 @@
   }
 
   .sheet-backdrop--hervald {
-    background: var(--hv-bg-overlay, rgba(28, 28, 28, 0.32));
+    background: var(--hv-bg-overlay, var(--hv-ink-wash-02));
     backdrop-filter: blur(6px);
   }
 
@@ -196,10 +262,10 @@
   }
 
   .sheet--hervald {
-    background: var(--hv-bg, #FAF8F5);
-    border: 1px solid var(--hv-border-hair, rgba(28, 28, 28, 0.06));
+    background: var(--hv-bg);
+    border: 1px solid var(--hv-border-hair, var(--hv-ink-wash-02));
     border-bottom: none;
-    box-shadow: var(--hv-shadow-modal, 0 12px 48px rgba(28, 28, 28, 0.08));
+    box-shadow: var(--hv-shadow-modal, 0 12px 48px var(--hv-ink-wash-02));
   }
 
   .sheet--hervald-dark {
@@ -209,7 +275,7 @@
   }
 
   .sheet--hervald .sheet-handle-bar {
-    background: var(--hv-fg-faint, #A8A19A);
+    background: var(--hv-fg-faint);
   }
 
   .sheet-title--hervald {
@@ -217,59 +283,59 @@
     font-size: 20px;
     font-weight: 400;
     letter-spacing: -0.01em;
-    color: var(--hv-fg, #1C1C1C);
+    color: var(--hv-fg);
   }
 
   .sheet-close--hervald:hover {
-    background: var(--hv-ink-wash-02, rgba(28, 28, 28, 0.04));
+    background: var(--hv-ink-wash-02, var(--hv-ink-wash-02));
   }
 
   .sheet-close-icon--hervald {
-    color: var(--hv-fg-subtle, #8B8B8B);
+    color: var(--hv-fg-subtle);
   }
 
   .sheet-search--hervald {
     border-radius: var(--hv-radius-carved, 2px 12px 2px 12px);
-    border-color: var(--hv-border-hair, rgba(28, 28, 28, 0.06));
-    background: var(--hv-bg-raised, #F0EBE3);
-    color: var(--hv-fg, #1C1C1C);
+    border-color: var(--hv-border-hair, var(--hv-ink-wash-02));
+    background: var(--hv-bg-raised);
+    color: var(--hv-fg);
     font-family: var(--hv-font-body, sans-serif);
-    box-shadow: var(--hv-shadow-inner-hi, inset 0 1px 0 rgba(255, 255, 255, 0.5));
+    box-shadow: var(--hv-shadow-inner-hi, inset 0 1px 0 var(--hv-ink-wash-03));
   }
 
   .sheet-search--hervald::placeholder {
-    color: var(--hv-fg-faint, #A8A19A);
+    color: var(--hv-fg-faint);
   }
 
   .sheet-skill--hervald {
     border-radius: var(--hv-radius-carved, 2px 12px 2px 12px);
-    border-color: var(--hv-border-hair, rgba(28, 28, 28, 0.06));
-    background: var(--hv-bg, #FAF8F5);
-    color: var(--hv-fg, #1C1C1C);
-    box-shadow: var(--hv-shadow-whisper, 0 1px 2px rgba(28, 28, 28, 0.02));
+    border-color: var(--hv-border-hair, var(--hv-ink-wash-02));
+    background: var(--hv-bg);
+    color: var(--hv-fg);
+    box-shadow: var(--hv-shadow-whisper, 0 1px 2px var(--hv-ink-wash-02));
   }
 
   @media (hover: hover) and (pointer: fine) {
     .sheet-skill--hervald:hover {
-      background: var(--hv-bg-raised, #F0EBE3);
-      border-color: var(--hv-border-soft, rgba(28, 28, 28, 0.12));
+      background: var(--hv-bg-raised);
+      border-color: var(--hv-border-soft, var(--hv-ink-wash-02));
     }
   }
 
   .sheet-skill-icon--hervald {
-    color: var(--vermillion-seal, #C23B22);
+    color: var(--vermillion-seal, var(--hv-accent-danger));
   }
 
   .sheet-skill-name--hervald {
-    color: var(--hv-fg, #1C1C1C);
+    color: var(--hv-fg);
   }
 
   .sheet-skill-description--hervald {
-    color: var(--hv-fg-muted, #4A4A4A);
+    color: var(--hv-fg-muted);
   }
 
   .sheet-skill-args--hervald {
-    color: var(--hv-fg-faint, #A8A19A);
+    color: var(--hv-fg-faint);
   }
 
   .sheet-handle {
@@ -282,7 +348,7 @@
     width: 36px;
     height: 4px;
     border-radius: 2px;
-    background: var(--hv-fg-faint, #A8A19A);
+    background: var(--hv-fg-faint);
   }
 
   .add-to-chat-sheet-backdrop {
@@ -310,7 +376,7 @@
     font-size: 20px;
     font-weight: 400;
     letter-spacing: -0.01em;
-    color: var(--hv-fg, #1C1C1C);
+    color: var(--hv-fg);
   }
 
   .add-to-chat-sheet-close {
@@ -324,13 +390,13 @@
     width: 36px;
     height: 36px;
     border-radius: 12px;
-    color: var(--hv-fg-subtle, #8B8B8B);
+    color: var(--hv-fg-subtle);
     transition: background 0.2s ease, color 0.2s ease;
   }
 
   .add-to-chat-sheet-close:hover {
-    background: var(--hv-ink-wash-02, rgba(28, 28, 28, 0.04));
-    color: var(--hv-fg, #1C1C1C);
+    background: var(--hv-ink-wash-02, var(--hv-ink-wash-02));
+    color: var(--hv-fg);
   }
 
   .add-to-chat-sheet-grid {
@@ -346,19 +412,19 @@
     gap: 8px;
     min-height: 132px;
     padding: 16px 14px;
-    border: 1px solid var(--hv-border-hair, rgba(28, 28, 28, 0.06));
+    border: 1px solid var(--hv-border-hair, var(--hv-ink-wash-02));
     border-radius: var(--hv-radius-carved, 2px 14px 2px 14px);
-    background: var(--hv-bg-raised, #F0EBE3);
-    color: var(--hv-fg, #1C1C1C);
+    background: var(--hv-bg-raised);
+    color: var(--hv-fg);
     text-align: left;
     transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
-    box-shadow: var(--hv-shadow-whisper, 0 6px 18px rgba(28, 28, 28, 0.06));
+    box-shadow: var(--hv-shadow-whisper, 0 6px 18px var(--hv-ink-wash-02));
   }
 
   .add-to-chat-sheet-tile:hover {
     transform: translateY(-1px);
-    border-color: var(--hv-border-soft, rgba(28, 28, 28, 0.12));
-    background: color-mix(in srgb, var(--hv-bg-raised, #F0EBE3) 86%, white);
+    border-color: var(--hv-border-soft, var(--hv-ink-wash-02));
+    background: color-mix(in srgb, var(--hv-bg-raised) 86%, white);
   }
 
   .add-to-chat-sheet-tile-icon {
@@ -368,8 +434,8 @@
     width: 40px;
     height: 40px;
     border-radius: 12px;
-    background: var(--hv-ink-wash-02, rgba(28, 28, 28, 0.04));
-    color: var(--hv-fg-muted, #5A5A5A);
+    background: var(--hv-ink-wash-02, var(--hv-ink-wash-02));
+    color: var(--hv-fg-muted);
   }
 
   .add-to-chat-sheet-tile-label {
@@ -382,7 +448,7 @@
   .add-to-chat-sheet-tile-description {
     font-size: 11px;
     line-height: 1.5;
-    color: var(--hv-fg-faint, #8B8B8B);
+    color: var(--hv-fg-faint);
   }
 
   /* ── Terminal Overlay (mobile) ──────────────────── */
@@ -445,12 +511,21 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    padding: 12px 16px;
-    padding-top: calc(12px + var(--safe-top));
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    padding: 4px 8px;
     background: transparent;
     border-bottom: none;
     flex-shrink: 0;
     z-index: 10;
+  }
+  .session-view-overlay .session-header-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    height: 100%;
+    gap: 6px;
   }
   .session-view-overlay .session-header-left {
     display: flex;
@@ -463,9 +538,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
     color: var(--msg-text-secondary);
     flex-shrink: 0;
     transition: background 0.2s;
@@ -473,7 +548,19 @@
     border: none;
     cursor: pointer;
   }
-  .session-view-overlay .session-back:active { background: rgba(224,221,213,0.06); }
+  .session-view-overlay .session-back:active { background: var(--hv-ink-wash-02); }
+  .session-view-overlay .session-header-avatar {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+  .session-view-overlay .session-header-title-group {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1 1 auto;
+    gap: 4px;
+  }
   .session-view-overlay .session-name {
     font-family: var(--font-mono);
     font-size: 14px;
@@ -497,6 +584,21 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .session-view-overlay .session-header-chat {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .session-view-overlay .session-header-separator,
+  .session-view-overlay .session-header-status-dot,
+  .session-view-overlay .session-header-accessory {
+    flex-shrink: 0;
+  }
+  .session-view-overlay .mobile-chat-page-dots {
+    padding: 0;
   }
   .session-view-overlay .session-header-meta {
     font-size: 11px;
@@ -513,11 +615,11 @@
     text-transform: uppercase;
     border-radius: 2px 8px 2px 8px;
     flex-shrink: 0;
-    background: rgba(224, 221, 213, 0.06);
+    background: var(--hv-ink-wash-02);
     color: var(--msg-text-muted);
   }
   .session-view-overlay .session-badge.connected {
-    background: rgba(139, 168, 122, 0.15);
+    background: var(--hv-accent-success-wash);
     color: var(--msg-accent-green);
   }
   .session-view-overlay .session-header-actions {
@@ -533,13 +635,13 @@
     padding: 6px 10px;
     border-radius: 8px;
     font-size: 12px;
-    color: #C23B22;
+    color: var(--hv-accent-danger);
     background: transparent;
     border: none;
     cursor: pointer;
     transition: background 0.2s;
   }
-  .session-view-overlay .session-action-btn:active { background: rgba(194, 59, 34, 0.08); }
+  .session-view-overlay .session-action-btn:active { background: var(--hv-accent-danger-wash); }
   .session-view-overlay .session-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .session-view-overlay .session-close-btn {
     display: flex;
@@ -554,7 +656,7 @@
     cursor: pointer;
     transition: background 0.2s;
   }
-  .session-view-overlay .session-close-btn:active { background: rgba(224,221,213,0.06); }
+  .session-view-overlay .session-close-btn:active { background: var(--hv-ink-wash-02); }
 
   /* ── Session Stats Bar ─────────────────────────── */
   .session-view-overlay .session-stats {
@@ -591,8 +693,8 @@
   .session-view-overlay .running-agents-panel {
     margin-bottom: 12px;
     padding: 10px 12px;
-    border: 1px solid rgba(123, 175, 212, 0.28);
-    background: rgba(123, 175, 212, 0.1);
+    border: 1px solid var(--hv-accent-info-wash);
+    background: var(--hv-accent-info-wash);
     border-radius: 4px 14px 14px 14px;
   }
   .session-view-overlay .running-agents-label {
@@ -643,7 +745,7 @@
     width: 26px;
     height: 26px;
     border-radius: 8px;
-    background: rgba(123, 175, 212, 0.15);
+    background: var(--hv-accent-info-wash);
     color: var(--msg-accent-blue);
     flex-shrink: 0;
     margin-top: 2px;
@@ -653,7 +755,7 @@
   .session-view-overlay .msg-agent {
     padding: 14px 16px;
     background: var(--msg-surface);
-    border: 1px solid rgba(224, 221, 213, 0.12);
+    border: 1px solid var(--hv-ink-wash-02);
     border-left: 3px solid var(--msg-accent-blue);
     border-radius: 2px 16px 16px 16px;
     font-size: 14px;
@@ -662,7 +764,11 @@
     min-width: 0;
     flex: 1;
   }
-  .session-view-overlay .msg-agent strong { font-weight: 600; color: #f0ede5; }
+  .session-view-overlay .msg-agent strong,
+  .session-view-overlay .msg-user strong {
+    font-weight: 500;
+    color: var(--msg-text);
+  }
   .session-view-overlay .msg-agent-md > * + * {
     margin-top: 0.75rem;
   }
@@ -672,9 +778,9 @@
   .session-view-overlay .msg-agent-md h4,
   .session-view-overlay .msg-agent-md h5,
   .session-view-overlay .msg-agent-md h6 {
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.3;
-    color: #f0ede5;
+    color: var(--msg-text);
   }
   .session-view-overlay .msg-agent-md h1 { font-size: 1.25rem; }
   .session-view-overlay .msg-agent-md h2 { font-size: 1.125rem; }
@@ -695,7 +801,7 @@
     text-underline-offset: 2px;
   }
   .session-view-overlay .msg-agent-md a:hover {
-    color: #96c0df;
+    color: var(--msg-accent-blue);
   }
   .session-view-overlay .msg-agent-md blockquote {
     margin: 0;
@@ -720,13 +826,13 @@
     font-size: 12px;
   }
   .session-view-overlay .msg-agent-md th {
-    color: #f0ede5;
-    background: rgba(224, 221, 213, 0.06);
+    color: var(--msg-text);
+    background: var(--hv-ink-wash-02);
   }
   .session-view-overlay .msg-agent-md pre {
     margin: 0;
     padding: 10px 12px;
-    background: rgba(0, 0, 0, 0.26);
+    background: var(--hv-bg-overlay);
     border: 1px solid var(--msg-border);
     border-radius: 8px;
     overflow-x: auto;
@@ -737,7 +843,7 @@
   }
   .session-view-overlay .msg-agent-md :not(pre) > code {
     padding: 2px 6px;
-    background: rgba(224, 221, 213, 0.08);
+    background: var(--hv-ink-wash-02);
     border-radius: 4px;
     color: var(--msg-accent-amber);
   }
@@ -754,23 +860,23 @@
     --hv-chat-card: var(--hv-bg);
     --hv-chat-card-raised: var(--hv-bg-raised);
     --hv-chat-card-muted: var(--hv-ink-wash-01);
-    --hv-chat-inline-code-bg: rgba(28, 28, 28, 0.06);
-    --hv-chat-pre-bg: rgba(28, 28, 28, 0.04);
+    --hv-chat-inline-code-bg: var(--hv-ink-wash-02);
+    --hv-chat-pre-bg: var(--hv-ink-wash-02);
     --hv-chat-pre-border: var(--hv-border-hair);
     --hv-chat-user-bg: var(--hv-fg);
     --hv-chat-user-fg: var(--hv-fg-inverse);
-    --hv-chat-user-inline-code-bg: rgba(255, 255, 255, 0.14);
-    --hv-chat-user-pre-bg: rgba(255, 255, 255, 0.1);
-    --hv-chat-user-pre-border: rgba(255, 255, 255, 0.18);
+    --hv-chat-user-inline-code-bg: var(--hv-ink-wash-03);
+    --hv-chat-user-pre-bg: var(--hv-ink-wash-03);
+    --hv-chat-user-pre-border: var(--hv-ink-wash-03);
     color: var(--hv-fg);
   }
 
   .hv-dark .hervald-chat-pane {
-    --hv-chat-inline-code-bg: rgba(250, 248, 245, 0.08);
-    --hv-chat-pre-bg: rgba(250, 248, 245, 0.04);
-    --hv-chat-user-inline-code-bg: rgba(0, 0, 0, 0.12);
-    --hv-chat-user-pre-bg: rgba(0, 0, 0, 0.08);
-    --hv-chat-user-pre-border: rgba(0, 0, 0, 0.14);
+    --hv-chat-inline-code-bg: var(--hv-ink-wash-02);
+    --hv-chat-pre-bg: var(--hv-ink-wash-02);
+    --hv-chat-user-inline-code-bg: var(--hv-bg-overlay);
+    --hv-chat-user-pre-bg: var(--hv-bg-overlay);
+    --hv-chat-user-pre-border: var(--hv-bg-overlay);
   }
 
   .hervald-chat-pane .session-message-list {
@@ -1000,8 +1106,8 @@
   }
 
   .hervald-chat-pane .msg-ask-chip.selected {
-    border-color: rgba(194, 59, 34, 0.22);
-    background: rgba(194, 59, 34, 0.08);
+    border-color: var(--hv-accent-danger-wash);
+    background: var(--hv-accent-danger-wash);
     color: var(--vermillion-seal);
   }
 
@@ -1037,6 +1143,12 @@
   .hervald-chat-pane .msg-plan-markdown > * + * {
     margin-top: 0.75rem;
   }
+  .hervald-chat-pane .msg-agent-md strong,
+  .hervald-chat-pane .msg-user-md strong,
+  .hervald-chat-pane .msg-plan-markdown strong {
+    font-weight: 500;
+    color: currentColor;
+  }
   .hervald-chat-pane .msg-agent-md h1,
   .hervald-chat-pane .msg-agent-md h2,
   .hervald-chat-pane .msg-agent-md h3,
@@ -1055,7 +1167,7 @@
   .hervald-chat-pane .msg-plan-markdown h4,
   .hervald-chat-pane .msg-plan-markdown h5,
   .hervald-chat-pane .msg-plan-markdown h6 {
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.3;
     color: currentColor;
   }
@@ -1243,12 +1355,12 @@
     border-radius: 6px;
     flex-shrink: 0;
   }
-  .session-view-overlay .msg-tool-icon.read { background: rgba(123, 175, 212, 0.15); color: var(--msg-accent-blue); }
-  .session-view-overlay .msg-tool-icon.edit { background: rgba(196, 160, 85, 0.15); color: var(--msg-accent-amber); }
-  .session-view-overlay .msg-tool-icon.bash { background: rgba(139, 168, 122, 0.15); color: var(--msg-accent-green); }
-  .session-view-overlay .msg-tool-icon.search { background: rgba(160, 157, 149, 0.15); color: var(--msg-text-secondary); }
-  .session-view-overlay .msg-tool-icon.write { background: rgba(196, 122, 110, 0.15); color: var(--msg-accent-red); }
-  .session-view-overlay .msg-tool-icon.agent { background: rgba(123, 175, 212, 0.2); color: var(--msg-accent-blue); }
+  .session-view-overlay .msg-tool-icon.read { background: var(--hv-accent-info-wash); color: var(--msg-accent-blue); }
+  .session-view-overlay .msg-tool-icon.edit { background: var(--hv-accent-warning-wash); color: var(--msg-accent-amber); }
+  .session-view-overlay .msg-tool-icon.bash { background: var(--hv-accent-success-wash); color: var(--msg-accent-green); }
+  .session-view-overlay .msg-tool-icon.search { background: var(--hv-ink-wash-03); color: var(--msg-text-secondary); }
+  .session-view-overlay .msg-tool-icon.write { background: var(--hv-accent-danger-wash); color: var(--msg-accent-red); }
+  .session-view-overlay .msg-tool-icon.agent { background: var(--hv-accent-info-wash); color: var(--msg-accent-blue); }
   .session-view-overlay .msg-tool-name {
     font-family: var(--font-mono);
     font-size: 12px;
@@ -1308,7 +1420,7 @@
     display: none;
   }
   .session-view-overlay .msg-tool-body::-webkit-scrollbar { width: 3px; }
-  .session-view-overlay .msg-tool-body::-webkit-scrollbar-thumb { background: rgba(224,221,213,0.1); border-radius: 2px; }
+  .session-view-overlay .msg-tool-body::-webkit-scrollbar-thumb { background: var(--hv-ink-wash-02); border-radius: 2px; }
   .session-view-overlay .msg-tool.expanded .msg-tool-body { display: block; }
 
   /* ── Diff Lines (inside tool) ─────────────────── */
@@ -1366,8 +1478,8 @@
   /* ── User Message ──────────────────────────────── */
   .session-view-overlay .msg-user {
     padding: 12px 16px;
-    background: rgba(224, 221, 213, 0.08);
-    border: 1px solid rgba(224, 221, 213, 0.06);
+    background: var(--hv-ink-wash-02);
+    border: 1px solid var(--hv-ink-wash-02);
     border-radius: 16px 4px 16px 16px;
     font-size: 14px;
     line-height: 1.55;
@@ -1387,9 +1499,9 @@
   .session-view-overlay .msg-user-md h4,
   .session-view-overlay .msg-user-md h5,
   .session-view-overlay .msg-user-md h6 {
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.3;
-    color: #f0ede5;
+    color: var(--msg-text);
   }
   .session-view-overlay .msg-user-md h1 { font-size: 1.25rem; }
   .session-view-overlay .msg-user-md h2 { font-size: 1.125rem; }
@@ -1410,7 +1522,7 @@
     text-underline-offset: 2px;
   }
   .session-view-overlay .msg-user-md a:hover {
-    color: #96c0df;
+    color: var(--msg-accent-blue);
   }
   .session-view-overlay .msg-user-md blockquote {
     margin: 0;
@@ -1440,13 +1552,13 @@
     font-size: 12px;
   }
   .session-view-overlay .msg-user-md th {
-    color: #f0ede5;
-    background: rgba(224, 221, 213, 0.06);
+    color: var(--msg-text);
+    background: var(--hv-ink-wash-02);
   }
   .session-view-overlay .msg-user-md pre {
     margin: 0;
     padding: 10px 12px;
-    background: rgba(0, 0, 0, 0.26);
+    background: var(--hv-bg-overlay);
     border: 1px solid var(--msg-border);
     border-radius: 8px;
     overflow-x: auto;
@@ -1457,7 +1569,7 @@
   }
   .session-view-overlay .msg-user-md :not(pre) > code {
     padding: 2px 6px;
-    background: rgba(224, 221, 213, 0.08);
+    background: var(--hv-ink-wash-02);
     border-radius: 4px;
     color: var(--msg-accent-amber);
   }
@@ -1508,8 +1620,8 @@
     color: var(--msg-accent-green);
     padding: 10px 14px;
     border-radius: 4px 14px 14px 14px;
-    background: rgba(139, 168, 122, 0.08);
-    border: 1px solid rgba(139, 168, 122, 0.2);
+    background: var(--hv-accent-success-wash);
+    border: 1px solid var(--hv-accent-success-wash);
   }
   .session-view-overlay .msg-ask-question {
     display: flex;
@@ -1546,7 +1658,7 @@
   }
   .session-view-overlay .msg-ask-chip.selected {
     border-color: var(--msg-accent-blue);
-    background: rgba(123, 175, 212, 0.12);
+    background: var(--hv-accent-info-wash);
     color: var(--msg-accent-blue);
   }
   .session-view-overlay .msg-ask-other {
@@ -1570,7 +1682,7 @@
     background: var(--msg-accent-blue);
     color: var(--msg-bg);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     cursor: pointer;
     transition: opacity 0.15s;
   }
@@ -1655,7 +1767,7 @@
     transition: border-color 0.2s;
   }
   .session-view-overlay .input-field::placeholder { color: var(--msg-text-muted); }
-  .session-view-overlay .input-field:focus { border-color: rgba(224, 221, 213, 0.2); }
+  .session-view-overlay .input-field:focus { border-color: var(--hv-ink-wash-02); }
   .session-view-overlay .mic-btn {
     display: flex;
     align-items: center;
@@ -1673,13 +1785,13 @@
   .session-view-overlay .mic-btn:active { transform: scale(0.92); }
   .session-view-overlay .mic-btn.recording {
     color: var(--msg-accent-red);
-    border-color: rgba(196, 122, 110, 0.5);
-    background: rgba(196, 122, 110, 0.12);
+    border-color: var(--hv-accent-danger-wash);
+    background: var(--hv-accent-danger-wash);
     animation: pulse-mic 1.3s ease-in-out infinite;
   }
   @keyframes pulse-mic {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(196, 122, 110, 0.12); }
-    50% { box-shadow: 0 0 0 6px rgba(196, 122, 110, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 var(--hv-accent-danger-wash); }
+    50% { box-shadow: 0 0 0 6px var(--hv-accent-danger-wash); }
   }
   .session-view-overlay .send-btn {
     display: flex;
@@ -1798,8 +1910,8 @@
   .hervald-session-composer .mic-btn:active { transform: scale(0.92); }
   .hervald-session-composer .mic-btn.recording {
     color: var(--msg-accent-red);
-    border-color: rgba(194, 59, 34, 0.35);
-    background: rgba(194, 59, 34, 0.08);
+    border-color: var(--hv-accent-danger-wash);
+    background: var(--hv-accent-danger-wash);
     animation: pulse-mic 1.3s ease-in-out infinite;
   }
   .hervald-session-composer .composer-queue-btn {
@@ -1857,10 +1969,26 @@
     gap: 12px;
     padding-top: 10px;
   }
+  .hervald-session-composer .composer-row--desktop {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 10px;
+  }
   .hervald-session-composer .composer-mobile-actions {
     display: flex;
     align-items: center;
     gap: 10px;
+    margin-left: auto;
+  }
+  .hervald-session-composer .composer-desktop-actions {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 10px;
+  }
+  .hervald-session-composer .composer-desktop-actions--right {
     margin-left: auto;
   }
   .hervald-session-composer .composer-add-btn {
@@ -1894,10 +2022,6 @@
     border: 1px solid var(--msg-border);
   }
 
-  /* Hide the floating approvals FAB/notifications while a session view is open —
-     session header surfaces approvals via the shield icon next to the burger menu. */
-  body:has(.session-view-overlay) .approval-fab { display: none; }
-
   /* ── Session header approvals button ───────────── */
   .session-view-overlay .session-approvals-btn {
     position: relative;
@@ -1915,7 +2039,7 @@
     transition: background 0.2s, color 0.2s;
   }
   .session-view-overlay .session-approvals-btn:hover {
-    background: rgba(224, 221, 213, 0.06);
+    background: var(--hv-ink-wash-02);
     color: var(--msg-text);
   }
   .session-view-overlay .session-approvals-btn.has-pending { color: var(--msg-accent-red); }
@@ -1928,10 +2052,10 @@
     padding: 0 3px;
     border-radius: 7px;
     background: var(--msg-accent-red);
-    color: #ffffff;
+    color: var(--hv-button-seal-fg);
     font-family: var(--font-mono);
     font-size: 9px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 14px;
     text-align: center;
   }
@@ -1940,7 +2064,7 @@
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    box-shadow: 0 0 0 2px rgba(196, 122, 110, 0.25);
+    box-shadow: 0 0 0 2px var(--hv-accent-danger-wash);
     animation: session-approvals-pulse 1.8s ease-in-out infinite;
     pointer-events: none;
   }

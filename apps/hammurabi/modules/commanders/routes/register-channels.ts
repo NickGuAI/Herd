@@ -46,6 +46,7 @@ function toInboundEvent(
     threadId: channelMeta.threadId,
     ...(parsed.message ? { text: parsed.message } : {}),
     ...(parsed.audio ? { audio: parsed.audio } : {}),
+    ...(parsed.metadata ? { metadata: parsed.metadata } : {}),
     rawTimestamp: parsed.rawTimestamp,
     rawSourceId: parsed.rawSourceId,
   }
@@ -229,10 +230,11 @@ export function registerChannelRoutes(
       const delivered = await deliverConversationMessage(
         context,
         resolved.conversation,
-        message,
+        { message },
         {
           ...sendOptions,
           autoStartIdle: true,
+          dispatchChannelReplies: true,
         },
       )
 

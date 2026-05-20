@@ -1,5 +1,6 @@
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type {
   CodexSessionRuntimeHandle,
   GeminiAcpRuntimeHandle,
@@ -16,6 +17,7 @@ export interface ClaudeProviderContext extends ProviderSessionContext {
   sessionId?: string
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
 
 export interface CodexProviderContext extends ProviderSessionContext {
@@ -47,6 +49,7 @@ export interface ProviderContextInit {
   threadId?: string
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
 
 type ProviderContextContainer = {
@@ -117,6 +120,7 @@ export function createProviderContextForAgentType(
     sessionId: init.sessionId,
     effort: init.effort,
     adaptiveThinking: init.adaptiveThinking,
+    maxThinkingTokens: init.maxThinkingTokens,
   })
 }
 

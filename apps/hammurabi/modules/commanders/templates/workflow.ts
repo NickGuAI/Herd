@@ -6,6 +6,7 @@ import { COMMANDER_WORKFLOW_FILE } from '../workflow.js'
 
 export const COMMANDER_WORKFLOW_TEMPLATE_FILE = 'COMMANDER.template.md'
 export const COMMANDER_WORKFLOW_SOURCE_TEMPLATE_FILE = 'workflow.md.template'
+export const COMMANDER_IDENTITY_OPERATING_STYLE_HEADING = '## Identity and Operating Style'
 
 const MODULE_TEMPLATE_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -69,6 +70,35 @@ export function renderCommanderWorkflow(
   return `${withWorkspace.trimEnd()}\n`
 }
 
+export function mergeIdentityOperatingStyleIntoCommanderWorkflowContent(
+  content: string,
+  identityOperatingStyle: string | undefined,
+): string {
+  const operatingStyle = normalizeOptional(identityOperatingStyle)
+  const normalized = content.replace(/\r\n/g, '\n').trimEnd()
+  if (!operatingStyle) {
+    return `${normalized}\n`
+  }
+  if (normalized.includes(operatingStyle)) {
+    return `${normalized}\n`
+  }
+
+  const section = [
+    COMMANDER_IDENTITY_OPERATING_STYLE_HEADING,
+    '',
+    operatingStyle,
+  ].join('\n')
+  const sharedKnowledgeMarker = '\n## Shared Knowledge Bootstrap'
+  const markerIndex = normalized.indexOf(sharedKnowledgeMarker)
+  if (markerIndex >= 0) {
+    const before = normalized.slice(0, markerIndex).trimEnd()
+    const after = normalized.slice(markerIndex).trimStart()
+    return `${before}\n\n${section}\n\n${after}\n`
+  }
+
+  return `${normalized}\n\n${section}\n`
+}
+
 export async function scaffoldCommanderWorkflow(
   commanderId: string,
   input: Omit<CommanderWorkflowTemplateInput, 'commanderId'>,
@@ -90,6 +120,29 @@ export async function scaffoldCommanderWorkflow(
     await writeFile(workflowPath, rendered, 'utf8')
     return workflowPath
   }
+}
+
+export async function mergeIdentityOperatingStyleIntoCommanderWorkflow(
+  commanderId: string,
+  identityOperatingStyle: string | undefined,
+  options: {
+    cwd?: string
+    basePath?: string
+  } = {},
+): Promise<{ workflowPath: string; updated: boolean }> {
+  const workflowPath = await scaffoldCommanderWorkflow(
+    commanderId,
+    { cwd: options.cwd },
+    options.basePath,
+  )
+  const current = await readFile(workflowPath, 'utf8')
+  const next = mergeIdentityOperatingStyleIntoCommanderWorkflowContent(current, identityOperatingStyle)
+  if (next === current) {
+    return { workflowPath, updated: false }
+  }
+
+  await writeFile(workflowPath, next, 'utf8')
+  return { workflowPath, updated: true }
 }
 
 export async function readCommanderWorkflowMarkdown(

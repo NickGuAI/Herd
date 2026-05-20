@@ -2,10 +2,12 @@ import { Suspense, lazy, useMemo, type ComponentType, type LazyExoticComponent }
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { FOUNDER_SETUP_PATH } from '@modules/onboarding/contracts'
 import { useFounderSetupStatus } from '@modules/onboarding/hooks/useFounderOnboarding'
-import type { FrontendModule } from '@/types'
+import { bindFrontendGraphToStaticBindings } from '@/module-graph-bindings'
+import { useModuleGraph } from '@/hooks/use-module-graph'
+import { ModuleGraphProvider } from '@/module-graph-context'
+import type { FrontendModule, FrontendModuleBinding } from '@/types'
+import type { HammurabiModuleGraphResponse } from '@/types/module-graph-api'
 import { Shell } from '@/surfaces/desktop/Shell'
-
-const AutomationsPage = lazy(() => import('@modules/automations/page'))
 
 interface ModuleRoute {
   path: string
@@ -45,14 +47,23 @@ function StartupError({
 }
 
 export function AuthenticatedAppRouter({
-  modules,
+  componentBindings,
+  moduleGraph,
 }: {
-  modules: FrontendModule[]
+  componentBindings: FrontendModuleBinding[]
+  moduleGraph?: HammurabiModuleGraphResponse
 }) {
-  const onboardingModule = modules.find((module) => module.path === FOUNDER_SETUP_PATH)
+  const moduleGraphQuery = useModuleGraph({ enabled: !moduleGraph })
+  const graph = moduleGraph ?? moduleGraphQuery.data ?? null
+  const boundGraph = useMemo(
+    () => (graph ? bindFrontendGraphToStaticBindings(componentBindings, graph) : null),
+    [componentBindings, graph],
+  )
+  const onboardingModule = boundGraph?.routes.find((module) => module.path === FOUNDER_SETUP_PATH)
+  const defaultRoutePath = boundGraph?.routes.find((module) => module.routeId === 'org.ui')?.path ?? '/org'
   const shellModules = useMemo(
-    () => modules.filter((module) => module.path !== FOUNDER_SETUP_PATH),
-    [modules],
+    () => boundGraph?.routes.filter((module) => module.path !== FOUNDER_SETUP_PATH) ?? [],
+    [boundGraph],
   )
   const shellModuleRoutes = useMemo<ModuleRoute[]>(
     () => shellModules.map((module) => ({
@@ -67,10 +78,6 @@ export function AuthenticatedAppRouter({
   )
   const founderSetup = useFounderSetupStatus()
 
-  if (!OnboardingPage) {
-    throw new Error(`Onboarding route "${FOUNDER_SETUP_PATH}" is not registered`)
-  }
-
   if (founderSetup.error) {
     return (
       <StartupError
@@ -82,38 +89,65 @@ export function AuthenticatedAppRouter({
     )
   }
 
-  if (founderSetup.isLoading || !founderSetup.data) {
-    return <Loading />
-  }
-
-  if (founderSetup.data.needsSetup) {
+  if (moduleGraphQuery.error && !moduleGraph) {
     return (
-      <Suspense fallback={<Loading />}>
-        <Routes>
-          <Route path={`${FOUNDER_SETUP_PATH}/*`} element={<OnboardingPage />} />
-          <Route path="*" element={<Navigate to={FOUNDER_SETUP_PATH} replace />} />
-        </Routes>
-      </Suspense>
+      <StartupError
+        error={moduleGraphQuery.error as Error}
+        onRetry={() => {
+          void moduleGraphQuery.refetch()
+        }}
+      />
     )
   }
 
+  if (!graph || !boundGraph || founderSetup.isLoading || !founderSetup.data) {
+    return <Loading />
+  }
+
+  if (!OnboardingPage) {
+    throw new Error(`Onboarding route "${FOUNDER_SETUP_PATH}" is not registered`)
+  }
+
+  if (!founderSetup.data.setupComplete) {
+    const setupRoutePath = founderSetup.data.nextRoute
+    return (
+      <ModuleGraphProvider graph={graph}>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path={`${setupRoutePath}/*`} element={<OnboardingPage />} />
+            <Route path="*" element={<Navigate to={setupRoutePath} replace />} />
+          </Routes>
+        </Suspense>
+      </ModuleGraphProvider>
+    )
+  }
+
+  const completedSetupRoutePath = founderSetup.data.nextRoute || defaultRoutePath
+
   return (
-    <Shell modules={modules}>
-      <Suspense fallback={<Loading />}>
-        <Routes>
-          <Route path="/" element={<Navigate to="/org" replace />} />
-          <Route path={FOUNDER_SETUP_PATH} element={<Navigate to="/org" replace />} />
-          <Route path="/automations" element={<AutomationsPage />} />
-          <Route path="/command-room/automations" element={<Navigate to="/automations" replace />} />
-          {shellModuleRoutes.map((route) => (
-            <Route
-              key={route.path}
-              path={`${route.path}/*`}
-              element={<route.Component />}
-            />
-          ))}
-        </Routes>
-      </Suspense>
-    </Shell>
+    <ModuleGraphProvider graph={graph}>
+      <Shell modules={boundGraph.nav}>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path="/" element={<Navigate to={completedSetupRoutePath} replace />} />
+            <Route path={FOUNDER_SETUP_PATH} element={<Navigate to={completedSetupRoutePath} replace />} />
+            {boundGraph.redirects.map((redirect) => (
+              <Route
+                key={redirect.id}
+                path={redirect.from}
+                element={<Navigate to={redirect.to} replace />}
+              />
+            ))}
+            {shellModuleRoutes.map((route) => (
+              <Route
+                key={route.path}
+                path={`${route.path}/*`}
+                element={<route.Component />}
+              />
+            ))}
+          </Routes>
+        </Suspense>
+      </Shell>
+    </ModuleGraphProvider>
   )
 }

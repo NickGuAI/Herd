@@ -209,7 +209,11 @@ function createApprovalSessionsStub(): ApprovalSessionsStub {
   }
 }
 
-async function startServer(options: { rootDir?: string; now?: () => Date } = {}): Promise<RunningServer> {
+async function startServer(options: {
+  rootDir?: string
+  now?: () => Date
+  buildCommanderNameLookup?: () => Promise<(commanderId: string | null | undefined) => string | null>
+} = {}): Promise<RunningServer> {
   const rootDir = options.rootDir ?? await mkdtemp(path.join(tmpdir(), 'hammurabi-policies-routes-'))
   if (!options.rootDir) {
     tempDirectories.push(rootDir)
@@ -246,6 +250,7 @@ async function startServer(options: { rootDir?: string; now?: () => Date } = {})
     internalToken: INTERNAL_TOKEN,
     approvalCoordinator,
     approvalSessionsInterface: approvalSessions.interface,
+    buildCommanderNameLookup: options.buildCommanderNameLookup,
   })
 
   app.use('/api', policies.router)
@@ -338,6 +343,11 @@ describe('policies routes', () => {
       expect(initialResponse.status).toBe(200)
       expect(await initialResponse.json()).toEqual({
         settings: {
+          timeoutMinutes: 15,
+          timeoutAction: 'block',
+          standingApprovalExpiryDays: 30,
+        },
+        defaults: {
           timeoutMinutes: 15,
           timeoutAction: 'block',
           standingApprovalExpiryDays: 30,
@@ -1067,6 +1077,76 @@ describe('policies routes', () => {
     }
   })
 
+  it('resolves queued approval commander display names in /api/approvals/pending', async () => {
+    const getCommanderName = vi.fn((commanderId: string | null | undefined) =>
+      commanderId === 'commander-atlas' ? 'Atlas' : null,
+    )
+    const buildCommanderNameLookup = vi.fn(async () => getCommanderName)
+    const server = await startServer({
+      buildCommanderNameLookup,
+    })
+
+    try {
+      const knownApproval = await server.approvalCoordinator.enqueue({
+        commanderId: 'commander-atlas',
+        sessionId: 'commander-atlas-conversation-1',
+        actionId: 'send-message',
+        actionLabel: 'Send Message',
+        toolName: 'mcp__slack__post_message',
+        toolInput: {},
+        source: 'claude',
+        context: {
+          summary: 'Atlas wants to post a message.',
+          details: {},
+        },
+      })
+      const unknownApproval = await server.approvalCoordinator.enqueue({
+        commanderId: 'commander-unknown',
+        sessionId: 'commander-unknown-conversation-1',
+        actionId: 'send-message',
+        actionLabel: 'Send Message',
+        toolName: 'mcp__slack__post_message',
+        toolInput: {},
+        source: 'claude',
+        context: {
+          summary: 'Unknown commander wants to post a message.',
+          details: {},
+        },
+      })
+
+      const pendingResponse = await fetch(`${server.baseUrl}/api/approvals/pending`, {
+        headers: AUTH_HEADERS,
+      })
+      const pendingPayload = await pendingResponse.json() as {
+        approvals: Array<Record<string, unknown>>
+      }
+
+      expect(pendingResponse.status).toBe(200)
+      expect(buildCommanderNameLookup).toHaveBeenCalledTimes(1)
+      expect(getCommanderName).toHaveBeenCalledTimes(2)
+      expect(pendingPayload.approvals).toEqual([
+        expect.objectContaining({
+          approvalId: knownApproval.id,
+          commanderId: 'commander-atlas',
+          commanderName: 'Atlas',
+          context: expect.objectContaining({
+            commanderName: 'Atlas',
+          }),
+        }),
+        expect.objectContaining({
+          approvalId: unknownApproval.id,
+          commanderId: 'commander-unknown',
+          commanderName: null,
+          context: expect.not.objectContaining({
+            commanderName: expect.any(String),
+          }),
+        }),
+      ])
+    } finally {
+      await server.close()
+    }
+  })
+
   it('returns pending from the polling endpoint until a review resolves', async () => {
     const server = await startServer()
 
@@ -1336,7 +1416,12 @@ describe('policies routes', () => {
   })
 
   it('streams codex approval queue events and resolves codex approvals through the shared endpoint', async () => {
-    const server = await startServer()
+    const getCommanderName = vi.fn((commanderId: string | null | undefined) =>
+      commanderId === 'commander-2' ? 'Gaia' : null,
+    )
+    const server = await startServer({
+      buildCommanderNameLookup: async () => getCommanderName,
+    })
     const ws = new WebSocket(`${server.baseUrl.replace('http', 'ws')}/api/approvals/stream?api_key=test-key`)
 
     try {
@@ -1374,6 +1459,8 @@ describe('policies routes', () => {
           requestId: 77,
           source: 'codex',
           actionId: 'push-code-prs',
+          commanderId: 'commander-2',
+          commanderName: 'Gaia',
           sessionName: 'codex-session-1',
         }),
       })
@@ -1389,6 +1476,8 @@ describe('policies routes', () => {
           approvalId: 'codex-approval-1',
           requestId: 77,
           source: 'codex',
+          commanderId: 'commander-2',
+          commanderName: 'Gaia',
         }),
       ])
 

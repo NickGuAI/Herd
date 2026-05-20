@@ -19,12 +19,12 @@ export function ScheduleExpressionField({
       <input
         value={schedule}
         onChange={(event) => onScheduleChange(event.target.value)}
-        className="w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged font-mono text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+        className="w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] font-mono text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]"
         placeholder={placeholder}
         required={required}
       />
       {helperText ? (
-        <p className="mt-1 text-whisper text-sumi-mist">{helperText}</p>
+        <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">{helperText}</p>
       ) : null}
     </div>
   )

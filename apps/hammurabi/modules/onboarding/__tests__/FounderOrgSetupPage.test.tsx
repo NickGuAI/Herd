@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '@/contexts/AuthContext'
+import type { FounderOrgSetupResponse, FounderSetupStatus } from '../contracts'
 
 const mocks = vi.hoisted(() => ({
   fetchJson: vi.fn(),
@@ -19,6 +20,56 @@ import { FounderOrgSetupPage } from '../FounderOrgSetupPage'
 
 let root: Root | null = null
 let container: HTMLDivElement | null = null
+
+function setupStatus(overrides: Partial<FounderSetupStatus> = {}): FounderSetupStatus {
+  return {
+    setupComplete: false,
+    defaultValues: {
+      orgDisplayName: '',
+      founderDisplayName: '',
+      founderEmail: '',
+    },
+    validationErrors: {
+      orgDisplayName: 'Org display name is required.',
+      founderDisplayName: 'Founder display name is required.',
+      founderEmail: 'Founder email is required.',
+    },
+    nextRoute: '/welcome',
+    ...overrides,
+  }
+}
+
+function setupResponse(overrides: Partial<FounderOrgSetupResponse> = {}): FounderOrgSetupResponse {
+  return {
+    operator: {
+      id: 'founder-1',
+      kind: 'founder',
+      displayName: 'Nick Gu',
+      email: 'nick@example.com',
+      avatarUrl: null,
+      createdAt: '2026-05-05T00:00:00.000Z',
+    },
+    orgIdentity: {
+      name: 'Gehirn Inc.',
+      createdAt: '2026-05-05T00:00:00.000Z',
+      updatedAt: '2026-05-05T00:00:00.000Z',
+    },
+    nextRoute: '/org',
+    ...overrides,
+  }
+}
+
+function mockSetupPost(response: FounderOrgSetupResponse | Promise<FounderOrgSetupResponse>) {
+  mocks.fetchJson.mockImplementation((url: string) => {
+    if (url === '/api/org/setup-status') {
+      return Promise.resolve(setupStatus())
+    }
+    if (url === '/api/org') {
+      return Promise.resolve(response)
+    }
+    return Promise.reject(new Error(`Unexpected fetchJson URL: ${url}`))
+  })
+}
 
 async function flushReact() {
   await Promise.resolve()
@@ -97,6 +148,12 @@ async function clickSubmit(times: number = 1) {
 describe('FounderOrgSetupPage', () => {
   beforeEach(() => {
     mocks.fetchJson.mockReset()
+    mocks.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/org/setup-status') {
+        return Promise.resolve(setupStatus())
+      }
+      return Promise.reject(new Error(`Unexpected fetchJson URL: ${url}`))
+    })
   })
 
   afterEach(async () => {
@@ -114,21 +171,7 @@ describe('FounderOrgSetupPage', () => {
   })
 
   it('submits founder and org setup, then routes to the org page', async () => {
-    mocks.fetchJson.mockResolvedValue({
-      operator: {
-        id: 'founder-1',
-        kind: 'founder',
-        displayName: 'Nick Gu',
-        email: 'nick@example.com',
-        avatarUrl: null,
-        createdAt: '2026-05-05T00:00:00.000Z',
-      },
-      orgIdentity: {
-        name: 'Gehirn Inc.',
-        createdAt: '2026-05-05T00:00:00.000Z',
-        updatedAt: '2026-05-05T00:00:00.000Z',
-      },
-    })
+    mockSetupPost(setupResponse())
 
     await renderPage()
     await setInputValue('org-display-name-input', 'Gehirn Inc.')
@@ -137,14 +180,17 @@ describe('FounderOrgSetupPage', () => {
     await clickSubmit()
 
     await vi.waitFor(() => {
-      expect(mocks.fetchJson).toHaveBeenCalledTimes(1)
+      expect(mocks.fetchJson).toHaveBeenCalledWith('/api/org', expect.objectContaining({
+        method: 'POST',
+      }))
     })
 
     expect(mocks.fetchJson).toHaveBeenCalledWith('/api/org', expect.objectContaining({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
     }))
-    const request = mocks.fetchJson.mock.calls[0]?.[1] as { body?: string }
+    const postCall = mocks.fetchJson.mock.calls.find(([url]) => url === '/api/org')
+    const request = postCall?.[1] as { body?: string }
     expect(JSON.parse(request.body ?? '{}')).toEqual({
       displayName: 'Gehirn Inc.',
       founder: {
@@ -166,14 +212,37 @@ describe('FounderOrgSetupPage', () => {
     await clickSubmit()
 
     expect(document.body.textContent).toContain('Founder email must be a valid email address.')
-    expect(mocks.fetchJson).not.toHaveBeenCalled()
+    expect(mocks.fetchJson).not.toHaveBeenCalledWith('/api/org', expect.anything())
+  })
+
+  it('seeds founder defaults from the backend setup status contract', async () => {
+    mocks.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/org/setup-status') {
+        return Promise.resolve(setupStatus({
+          defaultValues: {
+            orgDisplayName: '',
+            founderDisplayName: 'Auth0 Founder',
+            founderEmail: 'founder@example.com',
+          },
+        }))
+      }
+      return Promise.reject(new Error(`Unexpected fetchJson URL: ${url}`))
+    })
+
+    await renderPage()
+
+    await vi.waitFor(() => {
+      expect(getInput('founder-display-name-input').value).toBe('Auth0 Founder')
+      expect(getInput('founder-email-input').value).toBe('founder@example.com')
+    })
   })
 
   it('locks duplicate clicks so double-submit only issues one POST', async () => {
-    let resolveRequest: ((value: unknown) => void) | null = null
-    mocks.fetchJson.mockReturnValue(new Promise((resolve) => {
+    let resolveRequest: ((value: FounderOrgSetupResponse) => void) | null = null
+    const pendingResponse = new Promise<FounderOrgSetupResponse>((resolve) => {
       resolveRequest = resolve
-    }))
+    })
+    mockSetupPost(pendingResponse)
 
     await renderPage()
     await setInputValue('org-display-name-input', 'Gehirn Inc.')
@@ -181,23 +250,9 @@ describe('FounderOrgSetupPage', () => {
     await setInputValue('founder-email-input', 'nick@example.com')
     await clickSubmit(2)
 
-    expect(mocks.fetchJson).toHaveBeenCalledTimes(1)
+    expect(mocks.fetchJson.mock.calls.filter(([url]) => url === '/api/org')).toHaveLength(1)
 
-    resolveRequest?.({
-      operator: {
-        id: 'founder-1',
-        kind: 'founder',
-        displayName: 'Nick Gu',
-        email: 'nick@example.com',
-        avatarUrl: null,
-        createdAt: '2026-05-05T00:00:00.000Z',
-      },
-      orgIdentity: {
-        name: 'Gehirn Inc.',
-        createdAt: '2026-05-05T00:00:00.000Z',
-        updatedAt: '2026-05-05T00:00:00.000Z',
-      },
-    })
+    resolveRequest?.(setupResponse())
 
     await vi.waitFor(() => {
       expect(document.body.querySelector('[data-testid="location"]')?.textContent).toBe('/org')

@@ -146,7 +146,11 @@ describe('agents/event-normalizers/codex', () => {
           message: {
             id: 'rs_123',
             role: 'assistant',
-            content: [{ type: 'thinking', thinking: 'Summary part 1Summary part 2Raw reasoning' }],
+            content: [{
+              type: 'thinking',
+              thinking: 'Summary part 1Summary part 2Raw reasoning',
+              presentation: { mergeWithActiveThinking: true },
+            }],
           },
         }),
       )
@@ -167,7 +171,11 @@ describe('agents/event-normalizers/codex', () => {
           message: {
             id: 'rs_structured',
             role: 'assistant',
-            content: [{ type: 'thinking', thinking: 'Summary chunkRaw chunk' }],
+            content: [{
+              type: 'thinking',
+              thinking: 'Summary chunkRaw chunk',
+              presentation: { mergeWithActiveThinking: true },
+            }],
           },
         }),
       )
@@ -188,7 +196,11 @@ describe('agents/event-normalizers/codex', () => {
           message: {
             id: 'rs_456',
             role: 'assistant',
-            content: [{ type: 'thinking', thinking: 'Only summary here' }],
+            content: [{
+              type: 'thinking',
+              thinking: 'Only summary here',
+              presentation: { mergeWithActiveThinking: true },
+            }],
           },
         }),
       )
@@ -209,7 +221,11 @@ describe('agents/event-normalizers/codex', () => {
           message: {
             id: 'rs_789',
             role: 'assistant',
-            content: [{ type: 'thinking', thinking: '' }],
+            content: [{
+              type: 'thinking',
+              thinking: '',
+              presentation: { mergeWithActiveThinking: true },
+            }],
           },
         }),
       )
@@ -228,7 +244,11 @@ describe('agents/event-normalizers/codex', () => {
           message: {
             id: 'rs_000',
             role: 'assistant',
-            content: [{ type: 'thinking', thinking: '' }],
+            content: [{
+              type: 'thinking',
+              thinking: '',
+              presentation: { mergeWithActiveThinking: true },
+            }],
           },
         }),
       )
@@ -291,6 +311,16 @@ describe('agents/event-normalizers/codex', () => {
     it('returns null for unknown methods', () => {
       const result = normalizeCodexEvent('unknown/method', {})
       expect(result).toBeNull()
+    })
+
+    it('keeps Codex plan-like methods unsupported until the runtime emits a real plan signal', () => {
+      expect(normalizeCodexEvent('item/plan/updated', {
+        plan: '1. Patch\n2. Test',
+      })).toBeNull()
+      expect(normalizeCodexEvent('item/planApproval/requested', {
+        toolId: 'codex-plan-1',
+        plan: '1. Patch\n2. Test',
+      })).toBeNull()
     })
   })
 

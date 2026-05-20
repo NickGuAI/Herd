@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  COMMANDER_EMAIL_POLL_CRON,
   COMMANDER_TRANSCRIPT_MAINTENANCE_CRON,
   registerCommanderCron,
 } from '../cron.js'
@@ -76,31 +75,18 @@ describe('registerCommanderCron()', () => {
     )
   })
 
-  it('registers commander email polling when enabled', async () => {
+  it('does not expose commander email polling through commander cron anymore', async () => {
     const schedule = vi.fn()
-    const emailPoller = {
-      pollAll: vi.fn(async () => undefined),
-    }
 
     registerCommanderCron(
       { schedule },
       {
         commanderIdsForCron: ['commander-1'],
-        enableEmailPoll: true,
-        emailPoller,
       },
     )
 
-    const pollJob = schedule.mock.calls.find(
-      (call) => call[0] === COMMANDER_EMAIL_POLL_CRON,
-    )?.[1]
-    expect(typeof pollJob).toBe('function')
-
-    if (!pollJob) {
-      throw new Error('email poll job was not registered')
-    }
-
-    await pollJob()
-    expect(emailPoller.pollAll).toHaveBeenCalledTimes(1)
+    expect(schedule).toHaveBeenCalledTimes(1)
+    const cronModule = await import('../cron.js')
+    expect('COMMANDER_EMAIL_POLL_CRON' in cronModule).toBe(false)
   })
 })

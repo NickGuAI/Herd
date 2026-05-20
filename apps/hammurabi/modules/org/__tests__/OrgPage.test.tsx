@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   useOrgTree: vi.fn(),
   useCommander: vi.fn(),
   createCommander: vi.fn(),
+  fetchJson: vi.fn(),
 }))
 
 vi.mock('@modules/org/hooks/useOrgTree', () => ({
@@ -20,6 +21,10 @@ vi.mock('@modules/org/hooks/useOrgTree', () => ({
 
 vi.mock('@modules/commanders/hooks/useCommander', () => ({
   useCommander: mocks.useCommander,
+}))
+
+vi.mock('@/lib/api', () => ({
+  fetchJson: mocks.fetchJson,
 }))
 
 vi.mock('@modules/commanders/components/CreateCommanderWizard', () => ({
@@ -276,7 +281,16 @@ describe('OrgPage', () => {
     mocks.useOrgTree.mockReset()
     mocks.useCommander.mockReset()
     mocks.createCommander.mockReset()
+    mocks.fetchJson.mockReset()
     mocks.createCommander.mockResolvedValue(undefined)
+    mocks.fetchJson.mockResolvedValue({
+      target: {
+        routeId: 'command-room.ui',
+        path: '/command-room?commander=cmd-1',
+        commanderId: 'cmd-1',
+        conversationId: null,
+      },
+    })
     mocks.useCommander.mockReturnValue({
       createCommander: mocks.createCommander,
       createCommanderPending: false,
@@ -320,7 +334,7 @@ describe('OrgPage', () => {
     expect(document.body.textContent).not.toContain('auth0|')
   })
 
-  it('renders the desktop org sections in heading, founder, automation, grid order', async () => {
+  it('renders the desktop org top row as centered Org, Founder, Recruit name cards before automation and grid', async () => {
     mocks.useOrgTree.mockReturnValue({
       data: createOrgTree(),
       isLoading: false,
@@ -330,18 +344,32 @@ describe('OrgPage', () => {
 
     await renderOrgPage()
 
-    const heading = document.body.querySelector('[data-testid="org-heading-section"]')
-    const founder = document.body.querySelector('[data-testid="org-founder-section"]')
+    const topRow = document.body.querySelector('[data-testid="org-top-row"]')
+    const orgCard = document.body.querySelector('[data-testid="org-row-card-org"]')
+    const userCard = document.body.querySelector('[data-testid="org-row-card-user"]')
+    const hireCard = document.body.querySelector('[data-testid="org-row-card-hire"]')
     const automation = document.body.querySelector('[data-testid="org-global-automation-section"]')
     const grid = document.body.querySelector('[data-testid="org-commander-grid-section"]')
 
-    expect(heading).not.toBeNull()
-    expect(founder).not.toBeNull()
+    expect(topRow).not.toBeNull()
+    expect(orgCard).not.toBeNull()
+    expect(userCard).not.toBeNull()
+    expect(hireCard).not.toBeNull()
     expect(automation).not.toBeNull()
     expect(grid).not.toBeNull()
-    expect(heading?.querySelector('[data-testid="commander-hire-button"]')).not.toBeNull()
-    expect(heading?.compareDocumentPosition(founder as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(founder?.compareDocumentPosition(automation as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(orgCard?.textContent?.trim()).toBe('Gehirn Inc.')
+    expect(userCard?.textContent?.trim()).toBe('Nick Gu')
+    expect(hireCard?.textContent?.trim()).toBe('Recruit')
+    expect(orgCard?.querySelector('h1')?.className).not.toContain('truncate')
+    expect(orgCard?.querySelector('h1')?.className).toContain('[overflow-wrap:anywhere]')
+    expect(topRow?.querySelector('svg')).toBeNull()
+    expect(topRow?.textContent).not.toContain('Invite')
+    expect(topRow?.textContent).not.toContain('Founder')
+    expect(topRow?.textContent).not.toContain('Organization ·')
+    expect(hireCard?.querySelector('[data-testid="commander-hire-button"]')).not.toBeNull()
+    expect(orgCard?.compareDocumentPosition(userCard as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(userCard?.compareDocumentPosition(hireCard as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(topRow?.compareDocumentPosition(automation as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(automation?.compareDocumentPosition(grid as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
@@ -359,7 +387,18 @@ describe('OrgPage', () => {
     expect(document.body.querySelector('[data-testid="global-automation-chip"]')?.textContent).toContain(
       'Global Automation',
     )
-    expect(document.body.querySelectorAll('[data-testid="commander-tile"]')).toHaveLength(orgTree.commanders.length)
+    expect(document.body.querySelector('[data-testid="commander-profile-card-grid"]')).not.toBeNull()
+    const tiles = document.body.querySelectorAll<HTMLElement>('[data-testid="commander-tile"]')
+    expect(tiles).toHaveLength(orgTree.commanders.length)
+    expect(tiles[0]?.textContent).toContain('Atlas')
+    expect(tiles[0]?.textContent).toContain('@atlas')
+    expect(tiles[0]?.textContent).toContain('Running')
+    expect(tiles[0]?.getAttribute('aria-label')).toBe('Open Atlas')
+    expect(tiles[0]?.querySelector('.hv-profile-card-details')).not.toBeNull()
+    expect(tiles[0]?.querySelector('.hv-profile-card-name')?.textContent).toBe('Atlas')
+    expect(tiles[0]?.querySelector('.hv-profile-card-title')?.textContent).toBe('Commander')
+    expect(tiles[0]?.querySelector('.hv-profile-card-portrait-fallback')?.textContent).toBe('')
+    expect(tiles[0]?.getAttribute('style') ?? '').not.toContain('--hv-accent')
     expect(queryCommanderDialog('Atlas')).toBeNull()
     expect(queryCommanderDialog('Borealis')).toBeNull()
     expect(document.body.querySelector('[data-testid="commander-check-on-hero"]')).toBeNull()

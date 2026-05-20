@@ -5,13 +5,29 @@ import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { STATE_COLOR } from '@modules/components/hervald'
+
+const mocks = vi.hoisted(() => ({
+  useFontScale: vi.fn(),
+}))
+
+vi.mock('@/hooks/use-font-scale', () => ({
+  useFontScale: mocks.useFontScale,
+}))
+
 import { SessionsColumn } from '../components/desktop/SessionsColumn'
 
 describe('Hervald SessionsColumn', () => {
   beforeEach(() => {
     window.localStorage.removeItem('hervald-sessions-collapsed')
-    window.localStorage.removeItem('hervald-sessions-font-scale')
     window.localStorage.removeItem('hervald-sessions-show-exited')
+    mocks.useFontScale.mockReturnValue({
+      fontScale: 1,
+      adjustFontScale: vi.fn(),
+      minFontScale: 0.8,
+      maxFontScale: 1.6,
+      fontScaleStep: 0.1,
+      isSaving: false,
+    })
   })
 
   it('opens the commander and session launchers from their respective header buttons', () => {
@@ -362,10 +378,20 @@ describe('Hervald SessionsColumn', () => {
     container.remove()
   })
 
-  it('persists collapse state and font scale to localStorage', () => {
+  it('persists collapse state and delegates font scale changes to the shared hook', () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
+    const adjustFontScale = vi.fn()
+    mocks.useFontScale.mockReturnValue({
+      fontScale: 1,
+      adjustFontScale,
+      minFontScale: 0.8,
+      maxFontScale: 1.6,
+      fontScaleStep: 0.1,
+      isSaving: false,
+    })
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
 
     flushSync(() => {
       root.render(
@@ -394,8 +420,11 @@ describe('Hervald SessionsColumn', () => {
       increase.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    const storedScale = Number(window.localStorage.getItem('hervald-sessions-font-scale'))
-    expect(storedScale).toBeGreaterThan(1)
+    expect(adjustFontScale).toHaveBeenCalledWith(0.1)
+    expect(setItem).not.toHaveBeenCalledWith(
+      expect.stringContaining('font-scale'),
+      expect.any(String),
+    )
 
     const workersHeader = Array.from(container.querySelectorAll('button')).find((b) =>
       b.textContent?.includes('Workers'),
@@ -412,6 +441,7 @@ describe('Hervald SessionsColumn', () => {
     flushSync(() => {
       root.unmount()
     })
+    setItem.mockRestore()
     container.remove()
   })
 })

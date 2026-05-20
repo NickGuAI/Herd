@@ -103,7 +103,7 @@ export function ConversationRow({
           <span
             className="font-body"
             style={{
-              fontSize: 'calc(9.5px * var(--hv-sessions-scale, 1))',
+              fontSize: 'calc(9.5px * var(--hv-font-scale, 1))',
               letterSpacing: '0.16em',
               textTransform: 'uppercase',
               color: 'var(--hv-fg-faint)',
@@ -127,7 +127,7 @@ export function ConversationRow({
           <span
             className="font-body"
             style={{
-              fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
+              fontSize: 'calc(10px * var(--hv-font-scale, 1))',
               letterSpacing: '0.08em',
               textTransform: 'uppercase',
               color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-subtle)',
@@ -137,7 +137,7 @@ export function ConversationRow({
           </span>
           <span
             style={{
-              fontSize: 'calc(10.5px * var(--hv-sessions-scale, 1))',
+              fontSize: 'calc(10.5px * var(--hv-font-scale, 1))',
               color: 'var(--hv-fg-faint)',
             }}
           >
@@ -164,7 +164,7 @@ export function ConversationRow({
             <span
               className="font-mono"
               style={{
-                fontSize: 'calc(11.5px * var(--hv-sessions-scale, 1))',
+                fontSize: 'calc(11.5px * var(--hv-font-scale, 1))',
                 color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-subtle)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -177,7 +177,7 @@ export function ConversationRow({
             {currentTaskLabel ? (
               <span
                 style={{
-                  fontSize: 'calc(11px * var(--hv-sessions-scale, 1))',
+                  fontSize: 'calc(11px * var(--hv-font-scale, 1))',
                   color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-subtle)',
                   border: '1px solid var(--hv-border-soft)',
                   borderRadius: 999,
@@ -194,7 +194,7 @@ export function ConversationRow({
             ) : (
               <span
                 style={{
-                  fontSize: 'calc(11px * var(--hv-sessions-scale, 1))',
+                  fontSize: 'calc(11px * var(--hv-font-scale, 1))',
                   color: 'var(--hv-fg-faint)',
                 }}
               >
@@ -205,7 +205,7 @@ export function ConversationRow({
           <span
             className="font-mono"
             style={{
-              fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
+              fontSize: 'calc(10px * var(--hv-font-scale, 1))',
               color: 'var(--hv-fg-faint)',
               flexShrink: 0,
             }}
@@ -228,7 +228,7 @@ export function ConversationRow({
           border: '1px solid var(--hv-border-hair)',
           background: selected ? 'var(--hv-bg-raised)' : 'transparent',
           color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-subtle)',
-          fontSize: 'calc(10px * var(--hv-sessions-scale, 1))',
+          fontSize: 'calc(10px * var(--hv-font-scale, 1))',
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
           cursor: 'pointer',

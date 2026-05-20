@@ -1,11 +1,21 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentSession } from '@/types'
 import { SessionCard } from '../SessionCard'
+
+vi.mock('@/hooks/use-providers', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-providers')>('@/hooks/use-providers')
+  const { testProviderRegistry } = await vi.importActual<
+    typeof import('../../__tests__/provider-registry-fixture')
+  >('../../__tests__/provider-registry-fixture')
+  return {
+    ...actual,
+    useProviderRegistry: () => ({ data: testProviderRegistry }),
+  }
+})
 
 const reactActEnvironment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean

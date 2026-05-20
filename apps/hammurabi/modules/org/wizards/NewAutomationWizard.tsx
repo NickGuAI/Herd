@@ -14,12 +14,12 @@ import type { NewAutomationCreateRequestBody, NewAutomationOwner } from '@module
 import { EnumSelect, Field, FormModal } from '../components'
 
 const INPUT_CLASS =
-  'min-h-11 w-full rounded-2xl border border-ink-border bg-washi-white px-4 py-2 text-sm text-sumi-black outline-none transition-colors focus:border-sumi-black'
+  'min-h-11 w-full rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-2 text-sm text-[color:var(--hv-fg)] outline-none transition-colors focus:border-[color:var(--hv-field-focus-border)]'
 const TEXTAREA_CLASS = `${INPUT_CLASS} min-h-28 resize-y`
 const PRIMARY_BUTTON_CLASS =
-  'rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90 disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)] disabled:cursor-not-allowed disabled:opacity-60'
 const SECONDARY_BUTTON_CLASS =
-  'rounded-full border border-ink-border px-4 py-2 text-sm text-sumi-black transition-colors hover:bg-ink-wash disabled:cursor-not-allowed disabled:opacity-60'
+  'rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60'
 
 interface NewAutomationWizardProps {
   open: boolean
@@ -161,14 +161,14 @@ export function NewAutomationWizard({
       )}
     >
       {form.errors.global ? (
-        <div className="rounded-2xl border border-accent-vermillion/30 bg-accent-vermillion/10 px-4 py-3 text-sm text-accent-vermillion">
+        <div className="rounded-2xl border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-4 py-3 text-sm text-[color:var(--hv-accent-danger)]">
           {form.errors.global}
         </div>
       ) : null}
 
       {form.step === 'trigger' ? (
         <div className="space-y-4">
-          <p className="text-sm text-sumi-diluted">
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
             Choose how this automation should run for {ownerLabel}.
           </p>
           <Field
@@ -190,7 +190,7 @@ export function NewAutomationWizard({
 
       {form.step === 'details' ? (
         <div className="space-y-4">
-          <p className="text-sm text-sumi-diluted">
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
             Configure the automation payload.
           </p>
 
@@ -281,29 +281,29 @@ export function NewAutomationWizard({
 
       {form.step === 'review' ? (
         <div className="space-y-4">
-          <p className="text-sm text-sumi-diluted">
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
             Review the automation before creating it.
           </p>
           <dl className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-ink-border bg-washi-white px-4 py-3">
-              <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Owner</dt>
-              <dd className="mt-1 text-sm text-sumi-black">{ownerLabel}</dd>
+            <div className="rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
+              <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Owner</dt>
+              <dd className="mt-1 text-sm text-[color:var(--hv-fg)]">{ownerLabel}</dd>
             </div>
-            <div className="rounded-2xl border border-ink-border bg-washi-white px-4 py-3">
-              <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Trigger</dt>
-              <dd className="mt-1 text-sm text-sumi-black">{form.values.trigger}</dd>
+            <div className="rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
+              <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Trigger</dt>
+              <dd className="mt-1 text-sm text-[color:var(--hv-fg)]">{form.values.trigger}</dd>
             </div>
-            <div className="rounded-2xl border border-ink-border bg-washi-white px-4 py-3">
-              <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Name</dt>
-              <dd className="mt-1 text-sm text-sumi-black">{form.values.name}</dd>
+            <div className="rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
+              <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Name</dt>
+              <dd className="mt-1 text-sm text-[color:var(--hv-fg)]">{form.values.name}</dd>
             </div>
-            <div className="rounded-2xl border border-ink-border bg-washi-white px-4 py-3">
-              <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Agent</dt>
-              <dd className="mt-1 text-sm text-sumi-black">{form.values.agentType}</dd>
+            <div className="rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
+              <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Agent</dt>
+              <dd className="mt-1 text-sm text-[color:var(--hv-fg)]">{form.values.agentType}</dd>
             </div>
-            <div className="rounded-2xl border border-ink-border bg-washi-white px-4 py-3 sm:col-span-2">
-              <dt className="text-xs uppercase tracking-[0.16em] text-sumi-diluted">Instruction</dt>
-              <dd className="mt-1 whitespace-pre-wrap text-sm text-sumi-black">
+            <div className="rounded-2xl border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3 sm:col-span-2">
+              <dt className="text-xs uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">Instruction</dt>
+              <dd className="mt-1 whitespace-pre-wrap text-sm text-[color:var(--hv-fg)]">
                 {form.values.instruction}
               </dd>
             </div>

@@ -38,7 +38,7 @@ type CommanderCreateInputWithWizardFields = CommanderCreateInput & {
   agentType?: AgentType
   model?: string | null
   effort?: ClaudeEffortLevel
-  persona?: string
+  identityOperatingStyle?: string
   heartbeat?: {
     intervalMs: number
     messageTemplate?: string
@@ -93,7 +93,9 @@ export function CreateCommanderWizard({
   const [agentType, setAgentType] = useState<AgentType>('claude')
   const [model, setModel] = useState<string | null>(null)
   const [effort, setEffort] = useState<ClaudeEffortLevel>(DEFAULT_CLAUDE_EFFORT_LEVEL)
-  const [persona, setPersona] = useState(initialArchetype?.defaultPersona ?? '')
+  const [identityOperatingStyle, setIdentityOperatingStyle] = useState(
+    initialArchetype?.defaultIdentityOperatingStyle ?? '',
+  )
   const [cwd, setCwd] = useState('')
   const [heartbeatMinutes, setHeartbeatMinutes] = useState(
     String(initialArchetype?.defaultHeartbeatMinutes ?? DEFAULT_HEARTBEAT_MINUTES),
@@ -178,7 +180,7 @@ export function CreateCommanderWizard({
     }
 
     setArchetypeId(archetype.id)
-    setPersona(archetype.defaultPersona)
+    setIdentityOperatingStyle(archetype.defaultIdentityOperatingStyle)
     setHeartbeatMinutes(String(archetype.defaultHeartbeatMinutes))
     setContextMode(archetype.defaultContextMode)
     setFatPinInterval(archetype.defaultContextMode === 'fat' ? '2' : '')
@@ -253,7 +255,7 @@ export function CreateCommanderWizard({
       model,
       effort,
       cwd: cwd.trim() || undefined,
-      persona: persona.trim() || undefined,
+      identityOperatingStyle: identityOperatingStyle.trim() || undefined,
       maxTurns: Number.isFinite(parsedMaxTurns)
         ? parsedMaxTurns
         : runtimeConfig.defaults.maxTurns,
@@ -507,17 +509,17 @@ export function CreateCommanderWizard({
       {step === 2 && (
         <div className="space-y-4">
           <label className="block">
-            <span className={`${LABEL_CLASS} mb-1 block`}>Persona</span>
+            <span className={`${LABEL_CLASS} mb-1 block`}>Identity and operating style</span>
             <textarea
               rows={4}
-              value={persona}
-              onChange={(event) => setPersona(event.target.value)}
+              value={identityOperatingStyle}
+              onChange={(event) => setIdentityOperatingStyle(event.target.value)}
               placeholder="Describe this commander's operating style and responsibilities."
               className={INPUT_CLASS}
               style={{ resize: 'vertical' }}
             />
             <p className="mt-1 text-xs text-sumi-diluted">
-              Added to the commander&apos;s runtime system prompt when the session starts.
+              Written into COMMANDER.md and used as part of the commander&apos;s canonical instructions.
             </p>
           </label>
 
@@ -652,7 +654,7 @@ export function CreateCommanderWizard({
             host={host}
             displayName={displayName.trim() || undefined}
             cwd={cwd.trim() || undefined}
-            persona={persona.trim() || undefined}
+            identityOperatingStyle={identityOperatingStyle.trim() || undefined}
             agentType={agentType}
             effort={effort}
             heartbeatIntervalMs={parsedHeartbeatMs}

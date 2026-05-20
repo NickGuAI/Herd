@@ -345,6 +345,45 @@ export function prepareMachineLaunchEnvironment(
   }
 }
 
+export function prepareDaemonMachineLaunchEnvironment(
+  machine: MachineConfig | undefined,
+): PreparedMachineLaunchEnvironment {
+  const env: NodeJS.ProcessEnv = {}
+  const envFile = machine?.envFile?.trim()
+  if (!envFile) {
+    return { env, sshSendEnvKeys: [] }
+  }
+
+  if (!machine) {
+    return {
+      env,
+      sshSendEnvKeys: [],
+      sourcedEnvFile: envFile,
+    }
+  }
+
+  if (envFile.endsWith('.enc')) {
+    try {
+      return {
+        env: { ...env, ...loadEncryptedEnvEntriesSync(machine, envFile) },
+        sshSendEnvKeys: [],
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return { env, sshSendEnvKeys: [] }
+      }
+      throw error
+    }
+  }
+
+  return {
+    env,
+    sshSendEnvKeys: [],
+    sourcedEnvFile: envFile,
+  }
+}
+
 async function encryptMachineEnvFile(machine: MachineConfig, filePath: string): Promise<string> {
   const contents = await readFile(filePath, 'utf8')
   const parsed = parseMachineEnvContents(contents)

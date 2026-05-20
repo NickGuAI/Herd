@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement, type ReactNode } from 'react'
+import { act, createElement, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -17,6 +17,18 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/hooks/use-is-mobile', () => ({
   useIsMobile: () => false,
+}))
+
+vi.mock('@/lib/api', () => ({
+  fetchJson: vi.fn(async (path: string) => {
+    if (path === '/api/workspace/preferences') {
+      return { panelDefault: 'last-used' }
+    }
+    if (path.includes('/conversations')) {
+      return []
+    }
+    return {}
+  }),
 }))
 
 vi.mock('@/hooks/use-agents', () => ({
@@ -113,19 +125,24 @@ vi.mock('../CenterColumn', () => ({
   ),
 }))
 
-vi.mock('../TeamColumn', () => ({
-  TeamColumn: () => null,
+vi.mock('@modules/workspace/use-workspace', () => ({
+  getWorkspaceSourceKey: (source: { targetId?: string }) => `workspace:${source.targetId ?? 'target'}`,
+  materializeWorkspaceContext: vi.fn(async () => ({ text: '', filePaths: [], directoryPaths: [], fileAnnotations: [] })),
+  openWorkspaceTarget: vi.fn(async (input: { sessionName?: string }) => ({
+    targetId: input.sessionName ? 'wt-worker-1' : 'wt-commander-1',
+    label: input.sessionName ? 'local:/tmp/worker-1' : 'local:/tmp/atlas',
+    host: 'local',
+    rootPath: input.sessionName ? '/tmp/worker-1' : '/tmp/atlas',
+    isReadOnly: false,
+  })),
 }))
 
-vi.mock('../WorkspaceModal', () => ({
-  WorkspaceModal: ({
-    open,
+vi.mock('@modules/workspace/components/WorkspacePanel', () => ({
+  WorkspacePanel: ({
     onInsertPath,
   }: {
-    open: boolean
     onInsertPath?: (path: string) => void
-  }) => open
-    ? createElement(
+  }) => createElement(
       'button',
       {
         type: 'button',
@@ -133,8 +150,19 @@ vi.mock('../WorkspaceModal', () => ({
         onClick: () => onInsertPath?.('docs/spec.md'),
       },
       'Insert docs/spec.md',
-    )
-    : null,
+    ),
+}))
+
+vi.mock('@modules/commanders/components/QuestBoard', () => ({
+  QuestBoard: () => createElement('div', { 'data-testid': 'quest-board' }, 'QuestBoard'),
+}))
+
+vi.mock('@modules/commanders/components/AutomationPanel', () => ({
+  AutomationPanel: () => createElement('div', { 'data-testid': 'automation-panel' }, 'AutomationPanel'),
+}))
+
+vi.mock('@modules/commanders/components/CommanderIdentityTab', () => ({
+  CommanderIdentityTab: () => createElement('div', { 'data-testid': 'identity-panel' }, 'Identity'),
 }))
 
 vi.mock('@modules/components/ModalFormContainer', () => ({
@@ -175,7 +203,6 @@ function buildCommander() {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp/atlas',
-    persona: 'Primary commander',
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '',
@@ -193,7 +220,7 @@ function buildCommander() {
   }
 }
 
-async function renderRoom() {
+async function renderRoom(initialEntry = '/command-room') {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -208,7 +235,7 @@ async function renderRoom() {
   flushSync(() => {
     root?.render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/command-room']}>
+        <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
             <Route path="/command-room/*" element={<CommandRoom />} />
           </Routes>
@@ -221,6 +248,7 @@ async function renderRoom() {
 describe('CommandRoom context file wiring', () => {
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    window.localStorage.clear()
 
     const commander = buildCommander()
 
@@ -325,6 +353,55 @@ describe('CommandRoom context file wiring', () => {
 
     await vi.waitFor(() => {
       expect(contextPaths()).toBe('')
+    })
+  })
+
+  it('renders right-column module buttons above a collapsible workspace panel', async () => {
+    await renderRoom('/command-room?commander=cmd-1&panel=identity')
+
+    const grid = document.body.querySelector<HTMLElement>('[data-testid="command-room-grid"]')
+    expect(grid?.style.gridTemplateColumns).toBe('232px minmax(340px, 1fr) 232px')
+    expect(grid?.getAttribute('data-test-id')).toBe('command-room-grid')
+
+    const rightColumn = document.body.querySelector<HTMLElement>('[data-testid="workspace-right-column"]')
+    expect(rightColumn?.style.display).toBe('flex')
+    expect(rightColumn?.style.width).toBe('232px')
+
+    const actions = document.body.querySelector('[data-testid="right-panel-actions"]')
+    expect(actions?.textContent).toContain('Workspace')
+    expect(actions?.textContent).toContain('Quests')
+    expect(actions?.textContent).toContain('Automations')
+    expect(actions?.textContent).toContain('Identity')
+
+    const workspaceButton = document.body.querySelector<HTMLButtonElement>('[data-testid="right-panel-tab-chat"]')
+    expect(workspaceButton?.getAttribute('data-test-id')).toBe('right-panel-tab-chat')
+
+    const identityButton = document.body.querySelector<HTMLButtonElement>('[data-testid="right-panel-tab-identity"]')
+    expect(identityButton?.style.boxShadow).toBe('var(--hv-shadow-block)')
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="identity-panel"]')).not.toBeNull()
+    })
+
+    flushSync(() => {
+      workspaceButton?.click()
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector<HTMLElement>('[data-testid="workspace-right-column"]')?.style.width).toBe('520px')
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="insert-path"]')).not.toBeNull()
+    })
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))
+      await Promise.resolve()
+    })
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector<HTMLElement>('[data-testid="workspace-right-column"]')?.style.width).toBe('232px')
     })
   })
 })

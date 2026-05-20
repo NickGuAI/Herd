@@ -5,8 +5,11 @@ import { combinedAuth } from '../../../server/middleware/combined-auth.js'
 import { listProviders } from './registry.js'
 import type {
   ProviderAdapter,
+  ProviderDefaults,
   ProviderRegistryEntry,
 } from './provider-adapter.js'
+
+const DEFAULT_PROVIDER_ID = 'claude'
 
 export interface ProviderRegistryRouterOptions {
   apiKeyStore?: ApiKeyStoreLike
@@ -17,7 +20,25 @@ export interface ProviderRegistryRouterOptions {
   internalToken?: string
 }
 
+function providerSupportedTransports(
+  provider: ProviderAdapter,
+): ProviderRegistryEntry['supportedTransports'] {
+  return provider.uiCapabilities.forcedTransport === 'stream'
+    ? ['stream']
+    : ['stream', 'pty']
+}
+
+function providerDefaults(provider: ProviderAdapter): ProviderDefaults {
+  const availableModels = Array.isArray(provider.availableModels) ? provider.availableModels : []
+  return {
+    transportType: 'stream',
+    permissionMode: 'default',
+    model: availableModels.find((model) => model.default)?.id ?? null,
+  }
+}
+
 function toRegistryEntry(provider: ProviderAdapter): ProviderRegistryEntry {
+  const availableModels = Array.isArray(provider.availableModels) ? provider.availableModels : []
   return {
     id: provider.id,
     label: provider.label,
@@ -32,7 +53,10 @@ function toRegistryEntry(provider: ProviderAdapter): ProviderRegistryEntry {
         ? { infoBanner: { ...provider.uiCapabilities.infoBanner } }
         : {}),
     },
-    availableModels: provider.availableModels as ProviderRegistryEntry['availableModels'],
+    availableModels: availableModels as ProviderRegistryEntry['availableModels'],
+    supportedTransports: providerSupportedTransports(provider),
+    defaults: providerDefaults(provider),
+    disabledReason: null,
     ...(provider.machineAuth
       ? {
           machineAuth: {
@@ -66,8 +90,12 @@ export function createProviderRegistryRouter(
   })
 
   router.get('/providers', requireReadAccess, (_req, res) => {
+    const providers = listProviders().map(toRegistryEntry)
     res.json({
-      providers: listProviders().map(toRegistryEntry),
+      defaultProviderId: providers.some((provider) => provider.id === DEFAULT_PROVIDER_ID)
+        ? DEFAULT_PROVIDER_ID
+        : (providers[0]?.id ?? DEFAULT_PROVIDER_ID),
+      providers,
     })
   })
 

@@ -3,8 +3,8 @@ import * as path from 'node:path'
 import {
   migrateProviderContext,
   migratedProviderContextChanged,
-} from '../../migrations/provider-context.js'
-import { writeJsonFileAtomically } from '../../migrations/write-json-file-atomically.js'
+} from './providers/provider-context-migration.js'
+import { writeJsonFileAtomically } from '../json-file.js'
 
 export interface TranscriptEvent {
   type: string

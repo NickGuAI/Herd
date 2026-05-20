@@ -189,6 +189,17 @@ export class AutomationScheduler {
     }))
   }
 
+  shutdown(): void {
+    this.stopAutomationJobs()
+    for (const [name, job] of this.internalJobs) {
+      job.stop?.()
+      job.destroy?.()
+      this.internalJobs.delete(name)
+    }
+    this.questUnsubscribe?.()
+    this.questUnsubscribe = null
+  }
+
   private assertValidInput(input: CreateAutomationInput): void {
     if (input.trigger === 'schedule') {
       if (!input.schedule) {

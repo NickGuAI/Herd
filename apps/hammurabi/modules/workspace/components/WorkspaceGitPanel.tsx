@@ -24,7 +24,7 @@ export function WorkspaceGitPanel({
 }: WorkspaceGitPanelProps) {
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-sumi-diluted">
+      <div className="flex h-full items-center justify-center text-sm text-[color:var(--hv-fg-subtle)]">
         <Loader2 size={16} className="mr-2 animate-spin" />
         Loading Git status…
       </div>
@@ -33,7 +33,7 @@ export function WorkspaceGitPanel({
 
   if (error) {
     return (
-      <div className="rounded-lg border border-accent-vermillion/30 bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
+      <div className="rounded-lg border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-danger)]">
         {error}
       </div>
     )
@@ -48,7 +48,7 @@ export function WorkspaceGitPanel({
       <div
         className={cn(
           'flex h-full flex-col items-center justify-center rounded-lg border border-dashed px-4 text-center',
-          'border-ink-border text-sumi-diluted',
+          'border-[color:var(--hv-border-hair)] text-[color:var(--hv-fg-subtle)]',
         )}
       >
         <GitBranch size={18} className="mb-3" />
@@ -56,7 +56,7 @@ export function WorkspaceGitPanel({
         {!readOnly && onInit && (
           <button
             type="button"
-            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-ink-border px-3 py-1.5 text-xs hover:bg-ink-wash disabled:opacity-60"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-[color:var(--hv-border-hair)] px-3 py-1.5 text-xs hover:bg-[var(--hv-surface-hover)] disabled:opacity-60"
             onClick={onInit}
             disabled={initializing}
           >
@@ -70,32 +70,32 @@ export function WorkspaceGitPanel({
 
   return (
     <div className="grid h-full min-h-0 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <section className="min-h-0 overflow-hidden rounded-lg border border-ink-border bg-washi-white">
-        <header className="border-b border-ink-border bg-washi-aged/60 px-3 py-2">
+      <section className="min-h-0 overflow-hidden rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]">
+        <header className="border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2">
           <p className="section-title flex items-center gap-2">
             <GitBranch size={13} />
             Pending Changes
           </p>
-          <p className="mt-1 font-mono text-xs text-sumi-diluted">
+          <p className="mt-1 font-mono text-xs text-[color:var(--hv-fg-subtle)]">
             {status.branch ?? 'detached'} • +{status.ahead} / -{status.behind}
           </p>
         </header>
         <div className="max-h-[20rem] overflow-auto p-3 space-y-2">
           {status.entries.length === 0 ? (
-            <p className="text-sm text-sumi-diluted">Working tree is clean.</p>
+            <p className="text-sm text-[color:var(--hv-fg-subtle)]">Working tree is clean.</p>
           ) : (
             status.entries.map((entry) => (
-              <div key={`${entry.code}:${entry.path}`} className="rounded-md border border-ink-border px-3 py-2">
-                <p className="font-mono text-xs text-sumi-black">{entry.path}</p>
-                <p className="mt-1 text-whisper text-sumi-diluted">status: {entry.code}</p>
+              <div key={`${entry.code}:${entry.path}`} className="rounded-md border border-[color:var(--hv-border-hair)] px-3 py-2">
+                <p className="font-mono text-xs text-[color:var(--hv-fg)]">{entry.path}</p>
+                <p className="mt-1 text-whisper text-[color:var(--hv-fg-subtle)]">status: {entry.code}</p>
               </div>
             ))
           )}
         </div>
       </section>
 
-      <section className="min-h-0 overflow-hidden rounded-lg border border-ink-border bg-washi-white">
-        <header className="border-b border-ink-border bg-washi-aged/60 px-3 py-2">
+      <section className="min-h-0 overflow-hidden rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]">
+        <header className="border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2">
           <p className="section-title flex items-center gap-2">
             <GitCommitHorizontal size={13} />
             Recent Commits
@@ -103,13 +103,13 @@ export function WorkspaceGitPanel({
         </header>
         <div className="max-h-[20rem] overflow-auto p-3 space-y-2">
           {log.commits.length === 0 ? (
-            <p className="text-sm text-sumi-diluted">No commits yet.</p>
+            <p className="text-sm text-[color:var(--hv-fg-subtle)]">No commits yet.</p>
           ) : (
             log.commits.map((commit) => (
-              <div key={commit.hash} className="rounded-md border border-ink-border px-3 py-2">
-                <p className="font-mono text-xs text-sumi-black">{commit.shortHash}</p>
-                <p className="mt-1 text-sm text-sumi-gray">{commit.subject}</p>
-                <p className="mt-1 text-whisper text-sumi-diluted">
+              <div key={commit.hash} className="rounded-md border border-[color:var(--hv-border-hair)] px-3 py-2">
+                <p className="font-mono text-xs text-[color:var(--hv-fg)]">{commit.shortHash}</p>
+                <p className="mt-1 text-sm text-[color:var(--hv-fg-muted)]">{commit.subject}</p>
+                <p className="mt-1 text-whisper text-[color:var(--hv-fg-subtle)]">
                   {commit.author} • {new Date(commit.authoredAt).toLocaleString()}
                 </p>
               </div>

@@ -1,6 +1,7 @@
 import type { ProviderApprovalAdapter } from '../../policies/provider-approval-adapter.js'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type { ClaudeStreamSessionDeps } from '../adapters/claude/session.js'
 import type { CodexSessionDeps } from '../adapters/codex/session.js'
 import type { GeminiSessionDeps } from '../adapters/gemini/session.js'
@@ -10,9 +11,11 @@ import type {
   AgentType,
   ClaudePermissionMode,
   MachineConfig,
+  PersistedDaemonProcess,
   PersistedStreamSession,
   SessionCreator,
   SessionType,
+  SessionTransportType,
   StreamJsonEvent,
   StreamSession,
   StreamSessionAdapter,
@@ -38,6 +41,7 @@ export interface ProviderInfoBanner {
 export interface ProviderUiCapabilities {
   supportsEffort: boolean
   supportsAdaptiveThinking: boolean
+  supportsMaxThinkingTokens: boolean
   supportsSkills: boolean
   supportsLoginMode: boolean
   forcedTransport?: 'stream'
@@ -52,6 +56,8 @@ export interface ProviderCapabilities {
   supportsCommanderConversation: boolean
   /** Allowed as worker dispatch agentType. */
   supportsWorkerDispatch: boolean
+  /** Accepts image attachments as first-class message input. */
+  supportsMessageImages: boolean
 }
 
 export interface ProviderMachineAuthDescriptor {
@@ -70,6 +76,12 @@ export interface ProviderModelOption {
   default?: boolean
 }
 
+export interface ProviderDefaults {
+  transportType: Exclude<SessionTransportType, 'external'>
+  permissionMode: ClaudePermissionMode
+  model: string | null
+}
+
 export interface ProviderRegistryEntry {
   id: AgentType
   label: string
@@ -77,11 +89,15 @@ export interface ProviderRegistryEntry {
   capabilities: ProviderCapabilities
   uiCapabilities: ProviderUiCapabilities
   availableModels: ProviderModelOption[]
+  supportedTransports: Exclude<SessionTransportType, 'external'>[]
+  defaults: ProviderDefaults
+  disabledReason: string | null
   machineAuth?: ProviderMachineAuthDescriptor
 }
 
 export interface ProviderRegistryResponse {
   providers: ProviderRegistryEntry[]
+  defaultProviderId: AgentType
 }
 
 export type ProviderAdapterDeps =
@@ -107,6 +123,7 @@ export interface ProviderCreateOptions {
   model?: string
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   createdAt?: string
   spawnedBy?: string
   spawnedWorkers?: string[]
@@ -115,6 +132,7 @@ export interface ProviderCreateOptions {
   creator?: SessionCreator
   conversationId?: string
   currentSkillInvocation?: ActiveSkillInvocation
+  daemonProcess?: PersistedDaemonProcess
 }
 
 export interface ProviderAdapter {

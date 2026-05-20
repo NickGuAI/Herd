@@ -14,6 +14,7 @@ import {
 } from '@/hooks/use-api-keys'
 import { useAuth } from '@/contexts/AuthContext'
 import { timeAgo } from '@/lib/utils'
+import { MagicBento, MagicBentoCard } from '@/components/MagicBento'
 import { AccountProfileCard } from './components/AccountProfileCard'
 import { OrgIdentityCard } from '@modules/org-identity/components/OrgIdentityCard'
 
@@ -35,6 +36,12 @@ const AVAILABLE_SCOPES = [
 ] as const
 
 const ALL_SCOPE_VALUES = AVAILABLE_SCOPES.map((s) => s.value)
+
+const FIELD_CLASS =
+  'w-full rounded-lg border border-[var(--hv-field-border)] bg-[var(--hv-field-bg)] px-3 py-2 text-[16px] text-[color:var(--hv-fg)] placeholder:text-[color:var(--hv-field-placeholder)] focus:outline-none focus:border-[var(--hv-field-focus-border)] md:text-sm'
+
+const ERROR_CLASS =
+  'flex items-start gap-2 rounded-lg bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-danger)]'
 
 export default function ApiKeysPage() {
   const auth = useAuth()
@@ -168,118 +175,30 @@ export default function ApiKeysPage() {
 
   return (
     <div className="px-4 py-6 md:px-10 md:py-10">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <h2 className="font-display text-display text-sumi-black">Settings</h2>
-            <p className="mt-2 text-sm text-sumi-diluted leading-relaxed">
-              Account profile, transcription, and API keys.
-            </p>
-          </div>
-          {auth && (
-            <button
-              type="button"
-              onClick={auth.signOut}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sumi-gray hover:bg-ink-wash hover:text-sumi-black transition-colors text-sm shrink-0"
-            >
-              <LogOut size={18} />
-              Sign out
-            </button>
-          )}
-        </div>
-        <p className="mt-4 text-sm text-sumi-diluted leading-relaxed">
-          Configure the founder profile and create scoped keys for agents and scripts. Keys are shown only once at creation time.
-        </p>
-
-        <div className="mt-6 md:mt-8">
-          <OrgIdentityCard />
+      <div className="mx-auto max-w-6xl">
+        <div>
+          <h2 className="font-display text-display text-[color:var(--hv-fg)]">Settings</h2>
+          <p className="mt-2 max-w-2xl text-sm text-[color:var(--hv-fg-subtle)] leading-relaxed">
+            Configure the founder profile, provider keys, and scoped API access for agents and scripts.
+            Keys are shown only once at creation time.
+          </p>
         </div>
 
-        <div className="mt-6 md:mt-8">
-          <AccountProfileCard />
-        </div>
+        <MagicBento className="mt-6 md:mt-8" data-testid="settings-magic-bento">
+          <MagicBentoCard span={6} data-testid="settings-bento-org">
+            <OrgIdentityCard />
+          </MagicBentoCard>
 
-        <div className="mt-6 md:mt-8 grid gap-6 lg:grid-cols-[360px_1fr]">
-          <form onSubmit={handleCreateKey} className="card-sumi p-5 space-y-4 h-fit">
-            <div>
-              <label className="section-title block mb-2">Key Name</label>
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Telemetry Ingest Key"
-                className="w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
-                required
-              />
-            </div>
+          <MagicBentoCard span={6} data-testid="settings-bento-account">
+            <AccountProfileCard />
+          </MagicBentoCard>
 
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="section-title block">Scopes</label>
-                <button
-                  type="button"
-                  className="text-whisper text-sm hover:text-sumi-gray"
-                  onClick={() => {
-                    setSelectedScopes((current) =>
-                      current.length === ALL_SCOPE_VALUES.length ? [] : [...ALL_SCOPE_VALUES],
-                    )
-                  }}
-                >
-                  {selectedScopes.length === ALL_SCOPE_VALUES.length ? 'Clear all' : 'Select all'}
-                </button>
-              </div>
-              <div className="space-y-2">
-                {AVAILABLE_SCOPES.map((scope) => {
-                  const checked = selectedScopes.includes(scope.value)
-                  return (
-                    <label
-                      key={scope.value}
-                      className="flex items-center gap-2 text-sm text-sumi-gray"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => {
-                          setSelectedScopes((current) => {
-                            if (event.target.checked) {
-                              return [...new Set([...current, scope.value])]
-                            }
-                            return current.filter((value) => value !== scope.value)
-                          })
-                        }}
-                      />
-                      <span>
-                        {scope.label}
-                        {'description' in scope ? ` (${scope.description})` : ''}
-                      </span>
-                    </label>
-                  )
-                })}
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={createMutation.isPending}
-              className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-            >
-              <KeyRound size={14} />
-              {createMutation.isPending ? 'Creating...' : 'Create Key'}
-            </button>
-
-            {createError && (
-              <div className="flex items-start gap-2 rounded-lg bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
-                <AlertTriangle size={15} className="mt-0.5" />
-                <span>{createError}</span>
-              </div>
-            )}
-          </form>
-
-          <div className="space-y-4">
-            <div className="card-sumi p-5">
+          <MagicBentoCard span={3} data-testid="settings-bento-transcription">
+            <div className="flex h-full flex-col">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="section-title">Transcription (OpenAI Realtime)</p>
-                  <p className="mt-2 text-sm text-sumi-diluted">
+                  <p className="mt-2 text-sm text-[color:var(--hv-fg-subtle)]">
                     Mic input uses this key for live transcription.
                   </p>
                 </div>
@@ -297,14 +216,10 @@ export default function ApiKeysPage() {
                   type="password"
                   value={openAIApiKey}
                   onChange={(event) => setOpenAIApiKey(event.target.value)}
-                  placeholder={
-                    transcriptionSettings?.configured
-                      ? 'sk-... (stored)'
-                      : 'sk-...'
-                  }
-                  className="w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+                  placeholder={transcriptionSettings?.configured ? 'sk-... (stored)' : 'sk-...'}
+                  className={FIELD_CLASS}
                 />
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="submit"
                     disabled={setOpenAIMutation.isPending}
@@ -316,7 +231,7 @@ export default function ApiKeysPage() {
                     <button
                       type="button"
                       disabled={clearOpenAIMutation.isPending}
-                      className="btn-ghost text-accent-vermillion disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="btn-ghost text-[color:var(--hv-accent-danger)] disabled:opacity-60 disabled:cursor-not-allowed"
                       onClick={handleClearOpenAIKey}
                     >
                       {clearOpenAIMutation.isPending ? 'Removing...' : 'Remove'}
@@ -326,28 +241,30 @@ export default function ApiKeysPage() {
               </form>
 
               {transcriptionSettings?.updatedAt && (
-                <p className="mt-3 text-whisper text-sumi-mist">
+                <p className="mt-3 text-whisper text-[color:var(--hv-fg-faint)]">
                   Updated {timeAgo(transcriptionSettings.updatedAt)}
                 </p>
               )}
 
               {transcriptionError && (
-                <div className="mt-3 flex items-start gap-2 rounded-lg bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
+                <div className={`${ERROR_CLASS} mt-3`}>
                   <AlertTriangle size={15} className="mt-0.5" />
                   <span>{transcriptionError}</span>
                 </div>
               )}
             </div>
+          </MagicBentoCard>
 
-            <div className="card-sumi p-5">
+          <MagicBentoCard span={3} data-testid="settings-bento-image-generation">
+            <div className="flex h-full flex-col">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="section-title">Image Generation (Gemini API)</p>
-                  <p className="mt-2 text-sm text-sumi-diluted">
-                    Used by sumi-style avatar generation in commander edit form.
+                  <p className="mt-2 text-sm text-[color:var(--hv-fg-subtle)]">
+                    Used by avatar generation in the commander edit form.
                   </p>
-                  <p className="mt-2 text-sm text-accent-vermillion">
-                    <strong>This key is for sumi-style avatar generation only. It is NOT the same as the Gemini CLI provider key configured per-machine for agent runtimes.</strong>
+                  <p className="mt-2 text-sm text-[color:var(--hv-accent-danger)]">
+                    This key is for avatar generation only. It is not the Gemini CLI provider key configured per machine.
                   </p>
                 </div>
                 <span
@@ -364,14 +281,10 @@ export default function ApiKeysPage() {
                   type="password"
                   value={geminiApiKey}
                   onChange={(event) => setGeminiApiKey(event.target.value)}
-                  placeholder={
-                    geminiImageSettings?.configured
-                      ? 'AIza... (stored)'
-                      : 'AIza...'
-                  }
-                  className="w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+                  placeholder={geminiImageSettings?.configured ? 'AIza... (stored)' : 'AIza...'}
+                  className={FIELD_CLASS}
                 />
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="submit"
                     disabled={setGeminiMutation.isPending}
@@ -383,7 +296,7 @@ export default function ApiKeysPage() {
                     <button
                       type="button"
                       disabled={clearGeminiMutation.isPending}
-                      className="btn-ghost text-accent-vermillion disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="btn-ghost text-[color:var(--hv-accent-danger)] disabled:opacity-60 disabled:cursor-not-allowed"
                       onClick={handleClearGeminiKey}
                     >
                       {clearGeminiMutation.isPending ? 'Removing...' : 'Remove'}
@@ -393,26 +306,183 @@ export default function ApiKeysPage() {
               </form>
 
               {geminiImageSettings?.updatedAt && (
-                <p className="mt-3 text-whisper text-sumi-mist">
+                <p className="mt-3 text-whisper text-[color:var(--hv-fg-faint)]">
                   Updated {timeAgo(geminiImageSettings.updatedAt)}
                 </p>
               )}
 
               {imageGenerationError && (
-                <div className="mt-3 flex items-start gap-2 rounded-lg bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
+                <div className={`${ERROR_CLASS} mt-3`}>
                   <AlertTriangle size={15} className="mt-0.5" />
                   <span>{imageGenerationError}</span>
                 </div>
               )}
             </div>
+          </MagicBentoCard>
+
+          <MagicBentoCard span={6} data-testid="settings-bento-managed-keys">
+            <div className="flex h-full flex-col">
+              <div className="flex items-center justify-between border-b border-[var(--hv-border-hair)] pb-3">
+                <span className="font-mono text-sm text-[color:var(--hv-fg)]">Managed Keys</span>
+                <span className="text-whisper text-[color:var(--hv-fg-faint)]">{sortedKeys.length} keys</span>
+              </div>
+
+              {isLoading ? (
+                <div className="py-5 text-sm text-[color:var(--hv-fg-subtle)]">Loading keys...</div>
+              ) : (
+                <div className="divide-y divide-[var(--hv-border-hair)]">
+                  {sortedKeys.length === 0 ? (
+                    <div className="py-5 text-sm text-[color:var(--hv-fg-subtle)]">No API keys yet.</div>
+                  ) : (
+                    sortedKeys.map((key) => (
+                      <div
+                        key={key.id}
+                        className="py-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm text-[color:var(--hv-fg)] font-medium">{key.name}</p>
+                          <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)] font-mono truncate">
+                            {key.prefix}...
+                          </p>
+                          <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
+                            Created {timeAgo(key.createdAt)} by {key.createdBy}
+                          </p>
+                          <p className="text-whisper text-[color:var(--hv-fg-faint)]">
+                            Last used {key.lastUsedAt ? timeAgo(key.lastUsedAt) : 'never'}
+                          </p>
+                          <p className="mt-1 text-whisper text-[color:var(--hv-fg-subtle)]">
+                            {key.scopes.length === 0
+                              ? 'No scopes'
+                              : `Scopes: ${key.scopes.join(', ')}`}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-ghost inline-flex items-center gap-2 text-[color:var(--hv-accent-danger)] shrink-0 self-start"
+                          disabled={revokeMutation.isPending}
+                          onClick={() => revokeMutation.mutate(key.id)}
+                        >
+                          <Trash2 size={14} />
+                          Revoke
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {(listError || revokeError) && (
+                <div className={`${ERROR_CLASS} mt-3`}>
+                  <AlertTriangle size={15} className="mt-0.5" />
+                  <span>{listError ?? revokeError}</span>
+                </div>
+              )}
+            </div>
+          </MagicBentoCard>
+
+          {auth && (
+            <MagicBentoCard span={3} data-testid="settings-bento-sign-out">
+              <div className="flex h-full flex-col justify-between gap-4">
+                <div>
+                  <p className="section-title">Session</p>
+                  <p className="mt-2 text-sm text-[color:var(--hv-fg-subtle)]">
+                    End the current browser session.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={auth.signOut}
+                  className="btn-ghost inline-flex items-center justify-center gap-2"
+                >
+                  <LogOut size={18} />
+                  Sign out
+                </button>
+              </div>
+            </MagicBentoCard>
+          )}
+
+          <MagicBentoCard span={9} data-testid="settings-bento-create-key">
+            <form onSubmit={handleCreateKey} className="space-y-4">
+              <div>
+                <label className="section-title block mb-2">Key Name</label>
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Telemetry Ingest Key"
+                  className={FIELD_CLASS}
+                  required
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="section-title block">Scopes</label>
+                  <button
+                    type="button"
+                    className="text-whisper text-sm text-[color:var(--hv-fg-subtle)] hover:text-[color:var(--hv-fg-muted)]"
+                    onClick={() => {
+                      setSelectedScopes((current) =>
+                        current.length === ALL_SCOPE_VALUES.length ? [] : [...ALL_SCOPE_VALUES],
+                      )
+                    }}
+                  >
+                    {selectedScopes.length === ALL_SCOPE_VALUES.length ? 'Clear all' : 'Select all'}
+                  </button>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {AVAILABLE_SCOPES.map((scope) => {
+                    const checked = selectedScopes.includes(scope.value)
+                    return (
+                      <label
+                        key={scope.value}
+                        className="flex items-start gap-2 text-sm text-[color:var(--hv-fg-muted)]"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            setSelectedScopes((current) => {
+                              if (event.target.checked) {
+                                return [...new Set([...current, scope.value])]
+                              }
+                              return current.filter((value) => value !== scope.value)
+                            })
+                          }}
+                        />
+                        <span>
+                          {scope.label}
+                          {'description' in scope ? ` (${scope.description})` : ''}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={createMutation.isPending}
+                className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              >
+                <KeyRound size={14} />
+                {createMutation.isPending ? 'Creating...' : 'Create Key'}
+              </button>
+
+              {createError && (
+                <div className={ERROR_CLASS}>
+                  <AlertTriangle size={15} className="mt-0.5" />
+                  <span>{createError}</span>
+                </div>
+              )}
+            </form>
 
             {createdKey && (
-              <div className="card-sumi p-5 border border-accent-persimmon/40 bg-accent-persimmon/5">
+              <div className="mt-5 rounded-lg border border-[var(--hv-accent-warning)] bg-[var(--hv-accent-warning-wash)] p-4">
                 <p className="section-title">Copy this key now</p>
-                <p className="mt-2 text-sm text-sumi-diluted">
+                <p className="mt-2 text-sm text-[color:var(--hv-fg-subtle)]">
                   This is the only time the raw key is visible.
                 </p>
-                <code className="mt-3 block rounded-md bg-washi-aged px-3 py-2 text-xs break-all">
+                <code className="mt-3 block rounded-md bg-[var(--hv-bg-raised)] px-3 py-2 text-xs break-all text-[color:var(--hv-fg)]">
                   {createdKey.key}
                 </code>
                 <div className="mt-3 flex items-center gap-2">
@@ -434,66 +504,8 @@ export default function ApiKeysPage() {
                 </div>
               </div>
             )}
-
-            <div className="card-sumi overflow-hidden">
-              <div className="px-5 py-3 border-b border-ink-border bg-washi-aged flex items-center justify-between">
-                <span className="font-mono text-sm text-sumi-black">Managed Keys</span>
-                <span className="text-whisper text-sumi-mist">{sortedKeys.length} keys</span>
-              </div>
-
-              {isLoading ? (
-                <div className="p-5 text-sm text-sumi-diluted">Loading keys...</div>
-              ) : (
-                <div className="divide-y divide-ink-border">
-                  {sortedKeys.length === 0 ? (
-                    <div className="p-5 text-sm text-sumi-diluted">No API keys yet.</div>
-                  ) : (
-                    sortedKeys.map((key) => (
-                      <div
-                        key={key.id}
-                        className="p-4 md:p-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm text-sumi-black font-medium">{key.name}</p>
-                          <p className="mt-1 text-whisper text-sumi-mist font-mono truncate">
-                            {key.prefix}...
-                          </p>
-                          <p className="mt-1 text-whisper text-sumi-mist">
-                            Created {timeAgo(key.createdAt)} by {key.createdBy}
-                          </p>
-                          <p className="text-whisper text-sumi-mist">
-                            Last used {key.lastUsedAt ? timeAgo(key.lastUsedAt) : 'never'}
-                          </p>
-                          <p className="mt-1 text-whisper text-sumi-diluted">
-                            {key.scopes.length === 0
-                              ? 'No scopes'
-                              : `Scopes: ${key.scopes.join(', ')}`}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          className="btn-ghost inline-flex items-center gap-2 text-accent-vermillion shrink-0 self-start"
-                          disabled={revokeMutation.isPending}
-                          onClick={() => revokeMutation.mutate(key.id)}
-                        >
-                          <Trash2 size={14} />
-                          Revoke
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            {(listError || revokeError) && (
-              <div className="flex items-start gap-2 rounded-lg bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
-                <AlertTriangle size={15} className="mt-0.5" />
-                <span>{listError ?? revokeError}</span>
-              </div>
-            )}
-          </div>
-        </div>
+          </MagicBentoCard>
+        </MagicBento>
       </div>
     </div>
   )

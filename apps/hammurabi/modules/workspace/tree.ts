@@ -96,6 +96,7 @@ async function listRemoteWorkspaceTreeNodes(
     nodes.push({
       name,
       path: entryRelativePath,
+      parentPath: relativePath,
       type: isDirectory ? 'directory' : 'file',
       extension: isDirectory ? undefined : path.posix.extname(name).replace(/^\./, '') || undefined,
       size: Number.isFinite(parsedSize) ? parsedSize : undefined,
@@ -139,6 +140,7 @@ export async function listWorkspaceTree(
       const node: WorkspaceTreeNode = {
         name: entry.name,
         path: entryRelativePath.split(path.sep).join('/'),
+        parentPath: relativePath,
         type: isDirectory ? 'directory' : 'file',
         extension: isDirectory ? undefined : path.extname(entry.name).replace(/^\./, '') || undefined,
       }

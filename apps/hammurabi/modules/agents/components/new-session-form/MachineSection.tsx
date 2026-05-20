@@ -20,8 +20,11 @@ export function MachineSection({
 }: MachineSectionProps) {
   const [showAddWorkerWizard, setShowAddWorkerWizard] = useState(false)
   const [showAuthWizard, setShowAuthWizard] = useState(false)
+  const localMachine = machines.find((machine) => machine.id === 'local' || machine.host === null) ?? null
   const remoteMachines = machines.filter((machine) => machine.host)
-  const selectedMachine = remoteMachines.find((machine) => machine.id === selectedHost) ?? null
+  const selectedMachine = selectedHost
+    ? machines.find((machine) => machine.id === selectedHost) ?? null
+    : localMachine
 
   return (
     <div>
@@ -33,7 +36,7 @@ export function MachineSection({
               <button
                 type="button"
                 onClick={() => setShowAuthWizard(true)}
-                className="text-xs uppercase tracking-wide text-sumi-diluted underline underline-offset-2"
+                className="text-xs uppercase tracking-wide text-[color:var(--hv-fg-subtle)] underline underline-offset-2"
               >
                 Provider auth
               </button>
@@ -41,7 +44,7 @@ export function MachineSection({
             <button
               type="button"
               onClick={() => setShowAddWorkerWizard(true)}
-              className="text-xs uppercase tracking-wide text-sumi-diluted underline underline-offset-2"
+              className="text-xs uppercase tracking-wide text-[color:var(--hv-fg-subtle)] underline underline-offset-2"
             >
               Add worker
             </button>
@@ -49,7 +52,7 @@ export function MachineSection({
         ) : null}
       </div>
       {resumeLocked ? (
-        <div className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-sm text-sumi-black">
+        <div className="w-full rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2 text-sm text-[color:var(--hv-fg)]">
           {getMachineDisplayValue(resumeSource, machines)}
         </div>
       ) : (
@@ -57,9 +60,9 @@ export function MachineSection({
           <select
             value={selectedHost}
             onChange={(event) => setSelectedHost(event.target.value)}
-            className="w-full px-3 py-2 rounded-lg border border-ink-border bg-washi-aged text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+            className="w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]"
           >
-            <option value="">Local (this server)</option>
+            <option value="">{localMachine?.label ?? 'Local (this server)'}</option>
             {remoteMachines.map((machine) => (
               <option key={machine.id} value={machine.id}>
                 {machine.label} ({machine.user ? `${machine.user}@` : ''}{getMachineConnectionHost(machine)})
@@ -81,7 +84,7 @@ export function MachineSection({
             onClose={() => setShowAuthWizard(false)}
             initialMachine={selectedMachine}
             onMachineReady={(machine) => {
-              setSelectedHost(machine.id)
+              setSelectedHost(machine.host ? machine.id : '')
               setShowAuthWizard(false)
             }}
           />

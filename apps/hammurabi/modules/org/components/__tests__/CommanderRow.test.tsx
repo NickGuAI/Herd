@@ -89,6 +89,7 @@ describe('CommanderRow', () => {
     const editButton = document.body.querySelector<HTMLButtonElement>('[data-testid="commander-edit-button"]')
     expect(editButton?.textContent).toBe('Edit')
     expect(document.body.querySelector('[data-testid="commander-check-on-hero"]')?.textContent).toBe('Check On Atlas')
+    expect(document.body.querySelector('[data-testid="commander-row"]')?.textContent).not.toContain('AT')
 
     await act(async () => {
       editButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))

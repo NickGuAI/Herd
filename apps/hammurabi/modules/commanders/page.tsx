@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
+import { EditCommander } from '@modules/org/panels/EditCommander'
 import { CommanderList } from './components/CommanderList'
 import { CommanderDetailPanel } from './components/CommanderDetailPanel'
 import { useCommander, type CommanderAgentType } from './hooks/useCommander'
@@ -20,6 +21,7 @@ export default function CommandersPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const commander = useCommander()
+  const [editingCommanderId, setEditingCommanderId] = useState<string | null>(null)
 
   const { commanderId: urlCommanderId, tab: urlTab } = parseUrl(location.pathname)
 
@@ -68,6 +70,8 @@ export default function CommandersPage() {
     id: session.id,
     label: session.displayName?.trim() || session.host,
   }))
+  const editingCommander = commander.commanders.find((session) => session.id === editingCommanderId) ?? null
+  const editingCommanderDisplayName = editingCommander?.displayName?.trim() || editingCommander?.host || ''
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -122,6 +126,7 @@ export default function CommandersPage() {
               onBack={() => navigate('/commanders')}
               commanderOptions={commanderOptions}
               onSelectCommander={handleSelectCommander}
+              onEdit={(selectedCommander) => setEditingCommanderId(selectedCommander.id)}
               onOpenChat={handleOpenChat}
               onStartCommander={commander.startCommander}
               onStopCommander={commander.stopCommander}
@@ -156,6 +161,16 @@ export default function CommandersPage() {
           )}
         </div>
       </div>
+      <EditCommander
+        open={Boolean(editingCommander)}
+        commanderId={editingCommander?.id ?? ''}
+        commanderDisplayName={editingCommanderDisplayName}
+        commanders={commanderOptions.map((option) => ({
+          id: option.id,
+          displayName: option.label,
+        }))}
+        onClose={() => setEditingCommanderId(null)}
+      />
     </div>
   )
 }

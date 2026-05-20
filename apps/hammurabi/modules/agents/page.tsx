@@ -24,6 +24,10 @@ import {
   DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '../claude-max-thinking-tokens.js'
 import { NewSessionForm } from './components/NewSessionForm'
 import { DEFAULT_SESSION_TAB, filterSessionsByTab, SESSION_TABS, type SessionTab } from './session-tab'
 import { MobileSessionView } from './page-shell/MobileSessionView'
@@ -50,6 +54,9 @@ export default function AgentsPage() {
   const [effort, setEffort] = useState<ClaudeEffortLevel>(DEFAULT_CLAUDE_EFFORT_LEVEL)
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  )
+  const [maxThinkingTokens, setMaxThinkingTokens] = useState<ClaudeMaxThinkingTokens>(
+    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   )
   const [cwd, setCwd] = useState('')
   const [resumeFromSession, setResumeFromSession] = useState('')
@@ -161,11 +168,20 @@ export default function AgentsPage() {
       setAdaptiveThinking(DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
     }
 
+    if (resumeProvider?.uiCapabilities.supportsMaxThinkingTokens) {
+      const nextMaxThinkingTokens = resumeSource.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
+      if (maxThinkingTokens !== nextMaxThinkingTokens) {
+        setMaxThinkingTokens(nextMaxThinkingTokens)
+      }
+    } else if (maxThinkingTokens !== DEFAULT_CLAUDE_MAX_THINKING_TOKENS) {
+      setMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
+    }
+
     const nextHost = resumeSource.host ?? ''
     if (selectedHost !== nextHost) {
       setSelectedHost(nextHost)
     }
-  }, [adaptiveThinking, agentType, cwd, effort, providers, resumeSource, selectedHost, transportType])
+  }, [adaptiveThinking, agentType, cwd, effort, maxThinkingTokens, providers, resumeSource, selectedHost, transportType])
 
   async function refreshSessions() {
     await queryClient.invalidateQueries({ queryKey: ['agents', 'sessions'] })
@@ -186,6 +202,7 @@ export default function AgentsPage() {
         task: task.trim() || undefined,
         effort,
         adaptiveThinking,
+        maxThinkingTokens,
         cwd: cwd.trim() || undefined,
         resumeFromSession: resumeFromSession || undefined,
         transportType,
@@ -197,6 +214,7 @@ export default function AgentsPage() {
       setTask('')
       setEffort(DEFAULT_CLAUDE_EFFORT_LEVEL)
       setAdaptiveThinking(DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
+      setMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
       setCwd('')
       setResumeFromSession('')
       setAgentType(defaultAgentType)
@@ -216,6 +234,7 @@ export default function AgentsPage() {
     cwd,
     effort,
     isCreating,
+    maxThinkingTokens,
     name,
     resumeFromSession,
     selectedHost,
@@ -338,6 +357,8 @@ export default function AgentsPage() {
                     setEffort={setEffort}
                     adaptiveThinking={adaptiveThinking}
                     setAdaptiveThinking={setAdaptiveThinking}
+                    maxThinkingTokens={maxThinkingTokens}
+                    setMaxThinkingTokens={setMaxThinkingTokens}
                     agentType={agentType}
                     setAgentType={setAgentType}
                     transportType={transportType}
@@ -369,6 +390,8 @@ export default function AgentsPage() {
                   setEffort={setEffort}
                   adaptiveThinking={adaptiveThinking}
                   setAdaptiveThinking={setAdaptiveThinking}
+                  maxThinkingTokens={maxThinkingTokens}
+                  setMaxThinkingTokens={setMaxThinkingTokens}
                   agentType={agentType}
                   setAgentType={setAgentType}
                   transportType={transportType}

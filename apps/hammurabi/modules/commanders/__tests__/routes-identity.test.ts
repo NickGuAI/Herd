@@ -101,7 +101,6 @@ async function createCommander(server: RunningServer, host: string): Promise<{ i
     },
     body: JSON.stringify({
       host,
-      persona: 'Archived runtime guard test commander',
     }),
   })
   expect(createResponse.status).toBe(201)
@@ -117,7 +116,7 @@ describe('commanders identity routes', () => {
     )
   })
 
-  it('stores persona on the commander and scaffolds COMMANDER.md only', async () => {
+  it('writes commander identity into COMMANDER.md without storing session metadata', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hammurabi-commanders-identity-'))
     tempDirs.push(dir)
     const storePath = join(dir, 'sessions.json')
@@ -133,7 +132,7 @@ describe('commanders identity routes', () => {
         },
         body: JSON.stringify({
           host: 'identity-worker',
-          persona: 'Test Commander, generic engineering persona',
+          identityOperatingStyle: 'Test Commander, generic engineering identity',
           cwd: '/workspace/example-repo',
           taskSource: {
             owner: 'NickGuAI',
@@ -143,21 +142,21 @@ describe('commanders identity routes', () => {
         }),
       })
       expect(createResponse.status).toBe(201)
-      const created = (await createResponse.json()) as { id: string; persona?: string }
-      expect(created.persona).toBe('Test Commander, generic engineering persona')
+      const created = (await createResponse.json()) as { id: string }
+      expect('persona' in created).toBe(false)
 
       const persistedSessions = JSON.parse(await readFile(storePath, 'utf8')) as {
         sessions: Array<Record<string, unknown>>
       }
       expect(persistedSessions.sessions).toHaveLength(1)
-      expect(persistedSessions.sessions[0]?.persona).toBe(
-        'Test Commander, generic engineering persona',
-      )
+      expect('persona' in (persistedSessions.sessions[0] ?? {})).toBe(false)
 
       await expect(access(join(memoryBasePath, created.id, '.memory', 'identity.md'))).rejects.toThrow()
 
       const workflowMdPath = join(memoryBasePath, created.id, 'COMMANDER.md')
       const workflowMdOnDisk = await readFile(workflowMdPath, 'utf8')
+      expect(workflowMdOnDisk).toContain('## Identity and Operating Style')
+      expect(workflowMdOnDisk).toContain('Test Commander, generic engineering identity')
       expect(workflowMdOnDisk).toContain(`hammurabi memory save --commander ${created.id} "<fact>"`)
       expect(workflowMdOnDisk).toContain(`hammurabi memory --type=working_memory read --commander ${created.id}`)
       expect(workflowMdOnDisk).not.toContain(`hammurabi memory find --commander ${created.id}`)
@@ -166,10 +165,8 @@ describe('commanders identity routes', () => {
         headers: AUTH_HEADERS,
       })
       expect(listResponse.status).toBe(200)
-      const listed = (await listResponse.json()) as Array<{ id: string; persona?: string }>
-      expect(listed.find((entry) => entry.id === created.id)?.persona).toBe(
-        'Test Commander, generic engineering persona',
-      )
+      const listed = (await listResponse.json()) as Array<{ id: string }>
+      expect('persona' in (listed.find((entry) => entry.id === created.id) ?? {})).toBe(false)
 
       const detailResponse = await fetch(`${server.baseUrl}/api/commanders/${created.id}`, {
         headers: AUTH_HEADERS,
@@ -191,7 +188,7 @@ describe('commanders identity routes', () => {
     }
   })
 
-  it('rejects persona longer than 500 characters', async () => {
+  it('folds legacy persona input into COMMANDER.md and removes it from persisted sessions', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hammurabi-commanders-identity-'))
     tempDirs.push(dir)
     const storePath = join(dir, 'sessions.json')
@@ -207,14 +204,20 @@ describe('commanders identity routes', () => {
         },
         body: JSON.stringify({
           host: 'identity-worker-2',
-          persona: 'x'.repeat(501),
+          persona: 'Legacy identity carried from older clients',
         }),
       })
 
-      expect(response.status).toBe(400)
-      expect(await response.json()).toEqual({
-        error: 'persona must be a string up to 500 characters',
-      })
+      expect(response.status).toBe(201)
+      const created = (await response.json()) as { id: string }
+      expect('persona' in created).toBe(false)
+      const persistedSessions = JSON.parse(await readFile(storePath, 'utf8')) as {
+        sessions: Array<Record<string, unknown>>
+      }
+      expect('persona' in (persistedSessions.sessions[0] ?? {})).toBe(false)
+      const workflowMdOnDisk = await readFile(join(memoryBasePath, created.id, 'COMMANDER.md'), 'utf8')
+      expect(workflowMdOnDisk).toContain('## Identity and Operating Style')
+      expect(workflowMdOnDisk).toContain('Legacy identity carried from older clients')
     } finally {
       await server.close()
     }
@@ -237,7 +240,7 @@ describe('commanders identity routes', () => {
         body: JSON.stringify({
           host: 'template-source',
           displayName: 'Template Source',
-          persona: 'Template export test commander',
+          identityOperatingStyle: 'Template export test commander',
           maxTurns: 42,
           contextMode: 'fat',
         }),
@@ -294,8 +297,8 @@ describe('commanders identity routes', () => {
           displayName: string
           maxTurns?: number
           profile?: {
-            borderColor?: string
-            accentColor?: string
+            speakingTone?: string
+            portraitStyleId?: string
           }
         }
         commanderMd: string
@@ -308,12 +311,10 @@ describe('commanders identity routes', () => {
         commander: {
           displayName: 'Template Source',
           maxTurns: 42,
-          profile: {
-            borderColor: 'var(--hv-accent-plum)',
-            accentColor: 'var(--hv-accent-pine)',
-          },
         },
       })
+      expect(exported.commander.profile ?? {}).not.toHaveProperty('borderColor')
+      expect(exported.commander.profile ?? {}).not.toHaveProperty('accentColor')
       expect(exported.commanderMd).toBe('# Exported Commander\n')
       expect(exported.memorySnapshot.memoryMd).toContain('exported fact')
       expect(exported.skillBindings).toEqual([])
@@ -332,18 +333,16 @@ describe('commanders identity routes', () => {
         displayName: string
         templateId?: string
         ui?: {
-          borderColor?: string
-          accentColor?: string
+          speakingTone?: string
+          portraitStyleId?: string
         }
         url?: string
       }
       expect(imported.id).not.toBe(created.id)
       expect(imported.displayName).toBe('Template Source Copy')
       expect(imported.templateId).toBe(created.id)
-      expect(imported.ui).toMatchObject({
-        borderColor: 'var(--hv-accent-plum)',
-        accentColor: 'var(--hv-accent-pine)',
-      })
+      expect(imported.ui ?? {}).not.toHaveProperty('borderColor')
+      expect(imported.ui ?? {}).not.toHaveProperty('accentColor')
       expect(imported.url).toBe(`/command-room?commander=${imported.id}`)
 
       await expect(readFile(join(memoryBasePath, imported.id, 'COMMANDER.md'), 'utf8')).resolves.toBe('# Exported Commander\n')
@@ -353,7 +352,7 @@ describe('commanders identity routes', () => {
     }
   })
 
-  it('replicates explicit commander colors and defaults missing legacy profile colors', async () => {
+  it('drops explicit commander colors and does not default missing legacy profile colors', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hammurabi-commanders-replicate-profile-'))
     tempDirs.push(dir)
     const storePath = join(dir, 'sessions.json')
@@ -389,14 +388,12 @@ describe('commanders identity routes', () => {
       const explicitReplica = (await explicitReplicaResponse.json()) as {
         id: string
         ui?: {
-          borderColor?: string
-          accentColor?: string
+          speakingTone?: string
+          portraitStyleId?: string
         }
       }
-      expect(explicitReplica.ui).toMatchObject({
-        borderColor: 'var(--hv-accent-bronze)',
-        accentColor: 'var(--hv-accent-red)',
-      })
+      expect(explicitReplica.ui ?? {}).not.toHaveProperty('borderColor')
+      expect(explicitReplica.ui ?? {}).not.toHaveProperty('accentColor')
 
       const legacySource = await createCommander(server, 'legacy-profile-source')
       await rm(join(memoryBasePath, legacySource.id, '.memory', 'profile.json'), { force: true })
@@ -415,12 +412,12 @@ describe('commanders identity routes', () => {
       const defaultReplica = (await defaultReplicaResponse.json()) as {
         id: string
         ui?: {
-          borderColor?: string
-          accentColor?: string
+          speakingTone?: string
+          portraitStyleId?: string
         }
       }
-      expect(defaultReplica.ui?.borderColor).toMatch(/^var\(--hv-accent-/)
-      expect(defaultReplica.ui?.accentColor).toMatch(/^var\(--hv-accent-/)
+      expect(defaultReplica.ui ?? {}).not.toHaveProperty('borderColor')
+      expect(defaultReplica.ui ?? {}).not.toHaveProperty('accentColor')
     } finally {
       await server.close()
     }

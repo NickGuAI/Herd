@@ -53,7 +53,7 @@ export function DirectoryPicker({
         <input
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="flex-1 px-3 py-2 rounded-lg border border-ink-border bg-washi-aged font-mono text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+          className="flex-1 px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] font-mono text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]"
           placeholder="~ (home directory)"
         />
         <button
@@ -64,54 +64,54 @@ export function DirectoryPicker({
               setBrowsePath(value)
             }
           }}
-          className="p-2 rounded-lg border border-ink-border bg-washi-aged hover:bg-ink-wash transition-colors"
+          className="p-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] hover:bg-[var(--hv-surface-hover)] transition-colors"
           aria-label="Browse directories"
         >
-          <FolderOpen size={16} className="text-sumi-diluted" />
+          <FolderOpen size={16} className="text-[color:var(--hv-fg-subtle)]" />
         </button>
       </div>
 
       {isOpen && (
-        <div className="mt-2 rounded-lg border border-ink-border bg-washi-aged max-h-48 overflow-y-auto">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-ink-border bg-ink-wash">
+        <div className="mt-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] max-h-48 overflow-y-auto">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-selected)]">
             <button
               type="button"
               onClick={handleGoUp}
               disabled={!canGoUp}
-              className="p-1 rounded hover:bg-washi-aged transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              className="p-1 rounded hover:bg-[var(--hv-bg-raised)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
               aria-label="Go to parent directory"
             >
-              <ChevronUp size={14} className="text-sumi-diluted" />
+              <ChevronUp size={14} className="text-[color:var(--hv-fg-subtle)]" />
             </button>
-            <span className="font-mono text-xs text-sumi-gray truncate">
+            <span className="font-mono text-xs text-[color:var(--hv-fg-muted)] truncate">
               {data?.parent ?? '~'}
             </span>
           </div>
           {error ? (
-            <div className="px-3 py-3 text-xs text-accent-vermillion">
+            <div className="px-3 py-3 text-xs text-[color:var(--hv-accent-danger)]">
               {error instanceof Error ? error.message : 'Failed to load directories'}
             </div>
           ) : isLoading && !data ? (
-            <div className="px-3 py-3 text-xs text-sumi-mist">Loading directories…</div>
+            <div className="px-3 py-3 text-xs text-[color:var(--hv-fg-faint)]">Loading directories…</div>
           ) : data?.directories.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-sumi-mist">No subdirectories</div>
+            <div className="px-3 py-3 text-xs text-[color:var(--hv-fg-faint)]">No subdirectories</div>
           ) : (
             data?.directories.map((dir) => (
               <div key={dir} className="flex items-center">
                 <button
                   type="button"
                   onClick={() => handleSelect(dir)}
-                  className="flex-1 flex items-center gap-2 px-3 py-2 text-left hover:bg-ink-wash transition-colors"
+                  className="flex-1 flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--hv-surface-hover)] transition-colors"
                 >
-                  <Folder size={14} className="text-sumi-mist shrink-0" />
-                  <span className="font-mono text-xs text-sumi-black truncate">
+                  <Folder size={14} className="text-[color:var(--hv-fg-faint)] shrink-0" />
+                  <span className="font-mono text-xs text-[color:var(--hv-fg)] truncate">
                     {dir.split('/').pop()}
                   </span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleBrowse(dir)}
-                  className="px-2 py-2 text-sumi-mist hover:text-sumi-black transition-colors"
+                  className="px-2 py-2 text-[color:var(--hv-fg-faint)] hover:text-[color:var(--hv-fg)] transition-colors"
                   aria-label={`Browse into ${dir.split('/').pop()}`}
                 >
                   <ChevronRight size={12} />
@@ -122,7 +122,7 @@ export function DirectoryPicker({
         </div>
       )}
 
-      <p className="mt-1 text-whisper text-sumi-mist">
+      <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
         Leave empty to use the home directory
       </p>
     </div>

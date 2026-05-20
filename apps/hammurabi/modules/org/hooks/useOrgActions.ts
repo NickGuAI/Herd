@@ -1,4 +1,5 @@
 import type { ClaudeEffortLevel } from '@modules/claude-effort.js'
+import type { CommanderPortraitStyleId } from '@modules/commanders/portrait-styles'
 import type {
   NewAutomationCreateRequestBody,
   OrgAgentType,
@@ -14,12 +15,14 @@ export interface OrgCommanderDetail {
   operatorId?: string | null
   createdAt?: string | null
   created?: string | null
-  persona?: string | null
   agentType?: OrgAgentType | null
   effort?: ClaudeEffortLevel | null
   cwd?: string | null
   maxTurns?: number | null
   contextMode?: CommanderContextMode | null
+  ui?: {
+    portraitStyleId?: CommanderPortraitStyleId | null
+  } | null
   templateId?: string | null
   replicatedFromCommanderId?: string | null
   runtimeConfig?: {
@@ -44,9 +47,8 @@ export interface CommanderTemplatePackage {
     id?: string
     displayName: string
     profile?: {
-      borderColor?: string
-      accentColor?: string
       speakingTone?: string
+      portraitStyleId?: CommanderPortraitStyleId
     } | null
   }
   commanderMd: string | null

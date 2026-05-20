@@ -8,6 +8,10 @@ import {
   type ClaudeEffortLevel,
 } from '../../claude-effort.js'
 import {
+  parseOptionalClaudeMaxThinkingTokens,
+  type ClaudeMaxThinkingTokens,
+} from '../../claude-max-thinking-tokens.js'
+import {
   DEFAULT_AUTO_ROTATE_ENTRY_THRESHOLD,
   DEFAULT_CODEX_TURN_WATCHDOG_TIMEOUT_MS,
   DEFAULT_MAX_SESSIONS,
@@ -88,6 +92,12 @@ export function parseClaudeAdaptiveThinking(
   rawAdaptiveThinking: unknown,
 ): ClaudeAdaptiveThinkingMode | null | undefined {
   return parseOptionalClaudeAdaptiveThinkingMode(rawAdaptiveThinking)
+}
+
+export function parseClaudeMaxThinkingTokens(
+  rawMaxThinkingTokens: unknown,
+): ClaudeMaxThinkingTokens | null | undefined {
+  return parseOptionalClaudeMaxThinkingTokens(rawMaxThinkingTokens)
 }
 
 export function parseOptionalTask(rawTask: unknown): string | null {

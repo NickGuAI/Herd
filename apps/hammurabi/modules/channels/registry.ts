@@ -19,6 +19,10 @@ export function registerChannelAdapter(adapter: ChannelAdapter): void {
   adapters.set(adapter.provider, adapter)
 }
 
+export function replaceChannelAdapter(adapter: ChannelAdapter): void {
+  adapters.set(adapter.provider, adapter)
+}
+
 export function getChannelAdapter(provider: ChannelProvider): ChannelAdapter | null {
   return adapters.get(provider) ?? null
 }

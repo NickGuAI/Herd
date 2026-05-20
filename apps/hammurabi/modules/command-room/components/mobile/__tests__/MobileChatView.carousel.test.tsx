@@ -14,12 +14,12 @@ import { MobileChatView } from '../MobileChatView'
 vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
   MobileSessionShell: ({
     conversation,
-    belowHeader,
+    headerAccessory,
     emptyState,
     rootClassName,
   }: {
     conversation?: { id: string } | null
-    belowHeader?: ReactNode
+    headerAccessory?: ReactNode
     emptyState?: ReactNode
     rootClassName?: string
   }) => (
@@ -28,7 +28,7 @@ vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
       data-conversation-id={conversation?.id ?? ''}
       data-root-class={rootClassName}
     >
-      {belowHeader}
+      {headerAccessory}
       {emptyState}
     </div>
   ),

@@ -26,7 +26,7 @@ export function WorkspaceFilesTab({
   return (
     <div className="flex h-full min-h-[200px] flex-col gap-3 overflow-y-auto">
       {filteredNodesByParent[''] ? (
-        <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-ink-border bg-washi-white p-2">
+        <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] p-2">
           <WorkspaceTree
             nodesByParent={filteredNodesByParent}
             expandedPaths={expandedPaths}
@@ -40,7 +40,7 @@ export function WorkspaceFilesTab({
           />
         </div>
       ) : (
-        <div className="flex flex-1 items-center justify-center py-8 text-sm text-sumi-diluted">
+        <div className="flex flex-1 items-center justify-center py-8 text-sm text-[color:var(--hv-fg-subtle)]">
           <Loader2 size={16} className="mr-2 animate-spin" />
           Loading workspace...
         </div>

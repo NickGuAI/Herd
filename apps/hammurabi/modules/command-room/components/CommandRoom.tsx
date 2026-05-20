@@ -1,24 +1,24 @@
 /**
  * Hervald — Command Room Assembly.
  *
- * Three-column layout: SessionsColumn (232px) | CenterColumn (fluid) | TeamColumn (260px).
- * Manages shared state: selected commander, active tab, selected worker, workspace modal.
+ * Three-column layout: SessionsColumn (232px) | CenterColumn | right panel.
+ * Manages shared state: selected commander, active right panel, selected worker, and workspace column.
  *
- * ┌──────────┬────────────────────────────┬───────────┐
- * │ Sessions │       Center Column        │   Team    │
- * │  (232px) │         (1fr)              │  (260px)  │
- * │          │                            │           │
- * │ Cmdrs    │  [Chat][Quests][Automations] │ TEAM · N │
- * │ Chats    │  ┌──────────────────────┐  │  workers  │
- * │          │  │  Chat / Placeholder  │  │           │
- * │          │  └──────────────────────┘  │  Detail   │
- * │          │  [Composer]                │           │
- * └──────────┴────────────────────────────┴───────────┘
+ * ┌──────────┬────────────────────────────┬──────────────┐
+ * │ Sessions │       Center Column        │ Right Panel  │
+ * │  (232px) │                            │ 232px / wide │
+ * │          │                            │              │
+ * │ Cmdrs    │  ┌──────────────────────┐  │ Quests/Auto  │
+ * │ Chats    │  │  Chat / Placeholder  │  │ Identity     │
+ * │ Teams    │  │  Chat / Placeholder  │  │              │
+ * │ nested   │  └──────────────────────┘  │  Optional    │
+ * │          │  [Composer]                │              │
+ * └──────────┴────────────────────────────┴──────────────┘
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   createSession,
   getDebriefStatus,
@@ -33,6 +33,9 @@ import { useAgentSessionStream } from '@/hooks/use-agent-session-stream'
 import { useIsMobile } from '@/hooks/use-is-mobile'
 import { createHttpConversationDispatcher } from '@/hooks/send-dispatcher'
 import { useTheme } from '@/lib/theme-context'
+import { fetchJson } from '@/lib/api'
+import { findModuleGraphUiRouteMetadata } from '@/module-graph-bindings'
+import { useModuleGraphContext } from '@/module-graph-context'
 import {
   workerLifecycle,
 } from '@gehirn/hammurabi-cli/session-contract'
@@ -54,11 +57,14 @@ import {
   type ClaudeEffortLevel,
 } from '@modules/claude-effort.js'
 import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '@modules/claude-max-thinking-tokens.js'
+import {
   formatError,
   isNotFoundRequestFailure,
   shouldAttemptDebriefOnKill,
 } from '@modules/agents/page-shell/session-helpers'
-import { supportsQueuedDrafts } from '@modules/agents/queue-capability'
 import { runQueueMutationRequest } from '@modules/agents/queue-mutation'
 import {
   clearSessionQueue,
@@ -78,6 +84,10 @@ import {
   type CommanderSession,
 } from '@modules/commanders/hooks/useCommander'
 import {
+  normalizeCommandRoomGlobalSearchParams,
+  normalizeCommandRoomRouteMetadata,
+} from '@modules/command-room/route-metadata'
+import {
   ACTIVE_CONVERSATION_FETCH_STALE_MS,
   commanderActiveConversationQueryKey,
   fetchCommanderActiveConversation,
@@ -89,6 +99,8 @@ import {
   useStartConversation,
   useStopConversation,
   useUpdateConversation,
+  type ConversationAction,
+  type ConversationRecord,
 } from '@modules/conversation/hooks/use-conversations'
 import { CreateCommanderWizard } from '@modules/commanders/components/CreateCommanderWizard'
 import { SessionsColumn } from './desktop/SessionsColumn'
@@ -96,19 +108,31 @@ import type { ChatSession } from './desktop/SessionsColumn'
 import type { Commander, Worker, Approval } from './desktop/SessionRow'
 import { CenterColumn } from './desktop/CenterColumn'
 import type { HervaldCommander } from './desktop/CenterColumn'
-import { TeamColumn } from './desktop/TeamColumn'
-import { WorkspaceModal } from './desktop/WorkspaceModal'
-import { getWorkspaceSourceKey, type WorkspaceSource } from '@modules/workspace/use-workspace'
+import { AutomationPanel } from '@modules/commanders/components/AutomationPanel'
+import { CommanderIdentityTab } from '@modules/commanders/components/CommanderIdentityTab'
+import { QuestBoard } from '@modules/commanders/components/QuestBoard'
+import { WorkspacePanel } from '@modules/workspace/components/WorkspacePanel'
 import {
+  getWorkspaceSourceKey,
+  openWorkspaceTarget,
+  type WorkspacePendingFileAnnotation,
+  type WorkspaceSource,
+} from '@modules/workspace/use-workspace'
+import type { WorkspaceContextPayload, WorkspaceTreeNode } from '@modules/workspace/types'
+import type { SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
+import {
+  appendQueuedMessagesToTranscript,
   mapSessionMessagesToTranscript,
   mergeHistoricalAndLiveTranscript,
 } from './transcript'
 import { MobileCommandRoom } from './mobile/MobileCommandRoom'
 
-const gridStyle: CSSProperties = {
+const SIDE_COLUMN_WIDTH = 232
+const WORKSPACE_EXPANDED_WIDTH = 520
+const CENTER_COLUMN_MIN_WIDTH = 340
+
+const gridStyleBase: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '232px 1fr 260px',
-  minWidth: 1100,
   width: '100%',
   flex: 1,
   minHeight: 0,
@@ -124,6 +148,14 @@ const shellStyle: CSSProperties = {
 }
 
 const COMMAND_ROOM_TABS = new Set(['chat', 'quests', 'automation', 'identity'])
+const RIGHT_PANEL_TABS = [
+  { id: 'chat', label: 'Workspace' },
+  { id: 'quests', label: 'Quests' },
+  { id: 'automation', label: 'Automations' },
+  { id: 'identity', label: 'Identity' },
+] as const
+const WORKSPACE_OPEN_STORAGE_KEY = 'hervald.command-room.workspace-open'
+type WorkspacePanelDefault = 'open' | 'closed' | 'last-used'
 type SessionGroup = 'workers' | 'automation'
 const GLOBAL_COMMANDER_ROW: Commander = {
   id: GLOBAL_COMMANDER_ID,
@@ -142,6 +174,23 @@ function resolvePanelTab(panel: string | null): string {
   return panel && COMMAND_ROOM_TABS.has(panel) ? panel : 'chat'
 }
 
+function rightPanelButtonStyle(active: boolean): CSSProperties {
+  return {
+    flex: '0 0 auto',
+    border: '1px solid var(--hv-border-firm)',
+    borderRadius: '2px 12px 2px 12px',
+    background: active ? 'var(--hv-fg)' : 'var(--hv-surface-card)',
+    color: active ? 'var(--hv-fg-inverse)' : 'var(--hv-fg-muted)',
+    boxShadow: 'var(--hv-shadow-block)',
+    padding: '9px 12px',
+    fontSize: 11,
+    letterSpacing: '0.08em',
+    lineHeight: 1,
+    textTransform: 'uppercase',
+    whiteSpace: 'nowrap',
+  }
+}
+
 function formatQueueError(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message
@@ -154,29 +203,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function resolveWorkspaceSource({
-  activeSessionName,
-  selectedCommanderId,
+  targetId,
+  label,
+  readOnly,
 }: {
-  activeSessionName?: string | null
-  selectedCommanderId?: string | null
+  targetId?: string | null
+  label?: string | null
+  readOnly?: boolean
 }): WorkspaceSource | null {
-  if (activeSessionName) {
+  if (targetId) {
     return {
-      kind: 'agent-session',
-      sessionName: activeSessionName,
-      // Worker sessions can mutate their own workspace concurrently, so the
-      // desktop Cmd+K surface stays read-only for this source for now.
-      readOnly: true,
-    }
-  }
-
-  if (selectedCommanderId && !isGlobalCommanderId(selectedCommanderId)) {
-    return {
-      kind: 'commander',
-      commanderId: selectedCommanderId,
-      // Commander workspaces are user-owned, so desktop Cmd+K should expose
-      // the full edit affordances already implemented by WorkspacePanel.
-      readOnly: false,
+      kind: 'target',
+      targetId,
+      label: label ?? undefined,
+      readOnly,
     }
   }
 
@@ -273,19 +313,35 @@ function mapAgentSessionToChatSession(session: HervaldAgentSession): ChatSession
       : undefined,
     effort: session.effort,
     adaptiveThinking: session.adaptiveThinking,
+    maxThinkingTokens: session.maxThinkingTokens,
   }
 }
 
-function isConversationScopedSession(
-  session: HervaldAgentSession | null | undefined,
-  conversationId: string,
-): session is HervaldAgentSession {
-  const sessionName = typeof session?.name === 'string'
-    ? session.name
-    : typeof session?.id === 'string'
-      ? session.id
-      : ''
-  return sessionName.includes(`-conversation-${conversationId}`)
+function conversationActionAllowed(
+  conversation: ConversationRecord | null | undefined,
+  action: ConversationAction,
+): boolean {
+  return conversation?.allowedActions?.[action] === true
+}
+
+function conversationDisabledReason(
+  conversation: ConversationRecord | null | undefined,
+  action: ConversationAction,
+  fallback: string,
+): string {
+  return conversation?.displayState?.disabledReasons[action] ?? fallback
+}
+
+function mapConversationLiveSession(conversation: ConversationRecord | null): ChatSession | null {
+  if (!conversation?.liveSession || !conversation.sendTarget) {
+    return null
+  }
+
+  return mapAgentSessionToChatSession({
+    ...(conversation.liveSession as HervaldAgentSession),
+    name: conversation.sendTarget.sessionName,
+    id: conversation.sendTarget.sessionName,
+  })
 }
 
 export function CommandRoom() {
@@ -294,14 +350,24 @@ export function CommandRoom() {
   const isMobile = useIsMobile()
   const commanderState = useCommander()
   const queryClient = useQueryClient()
+  const moduleGraph = useModuleGraphContext()
+  const commandRoomRouteMetadata = useMemo(
+    () => normalizeCommandRoomRouteMetadata(
+      findModuleGraphUiRouteMetadata(moduleGraph, 'command-room.ui'),
+    ),
+    [moduleGraph],
+  )
   const { theme, setTheme } = useTheme()
   const { data: rawAgentSessions = [], refetch: refetchAgentSessions } = useAgentSessions()
   const { data: pendingApprovals = [] } = usePendingApprovals()
   const { data: machines } = useMachines()
-  const panelParam = searchParams.get('panel')
-  const commanderParam = searchParams.get('commander')
-  const normalizedCommanderParam = commanderParam === 'global' ? GLOBAL_COMMANDER_ID : commanderParam
-  const normalizedConversationParam = searchParams.get('conversation')?.trim() || null
+  const { launch: commandRoomLaunch, globalCommander: globalCommanderRoute } = commandRoomRouteMetadata
+  const panelParam = searchParams.get(globalCommanderRoute.panelParam)
+  const commanderParam = searchParams.get(commandRoomLaunch.commanderParam)
+  const normalizedCommanderParam = commanderParam === globalCommanderRoute.commanderValue
+    ? GLOBAL_COMMANDER_ID
+    : commanderParam
+  const normalizedConversationParam = searchParams.get(commandRoomLaunch.conversationParam)?.trim() || null
   const searchParamsString = searchParams.toString()
 
   /* ---- Live data ---- */
@@ -314,9 +380,20 @@ export function CommandRoom() {
 
   /* ---- Shared state ---- */
   const activeTab = resolvePanelTab(panelParam)
-  const [selectedWorkerId, setSelectedWorkerId] = useState<string | undefined>()
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const appliedWorkspaceDefaultRef = useRef<string | null>(null)
+  const [workspaceTarget, setWorkspaceTarget] = useState<{
+    targetId: string
+    label: string
+    readOnly: boolean
+  } | null>(null)
+  const [workspaceRequestedPath, setWorkspaceRequestedPath] = useState<{
+    path: string
+    token: number
+  } | null>(null)
   const [contextFilePaths, setContextFilePaths] = useState<string[]>([])
+  const [contextDirectoryPaths, setContextDirectoryPaths] = useState<string[]>([])
+  const [contextFileAnnotations, setContextFileAnnotations] = useState<WorkspacePendingFileAnnotation[]>([])
   const [showCreateCommanderForm, setShowCreateCommanderForm] = useState(false)
   const [showCreateSessionForm, setShowCreateSessionForm] = useState(false)
   const [showAddWorkerForm, setShowAddWorkerForm] = useState(false)
@@ -327,6 +404,9 @@ export function CommandRoom() {
   const [sessionEffort, setSessionEffort] = useState<ClaudeEffortLevel>(DEFAULT_CLAUDE_EFFORT_LEVEL)
   const [sessionAdaptiveThinking, setSessionAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  )
+  const [sessionMaxThinkingTokens, setSessionMaxThinkingTokens] = useState<ClaudeMaxThinkingTokens>(
+    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   )
   const [sessionAgentType, setSessionAgentType] = useState<AgentType>('claude')
   const [sessionTransportType, setSessionTransportType] =
@@ -423,8 +503,6 @@ export function CommandRoom() {
         processAlive,
       })
       const sessionName = String(session.name || session.id || '')
-      const isLegacyCommanderSession = sessionName.startsWith('commander-')
-        && !sessionName.includes('-conversation-')
       const nextSession = mapAgentSessionToChatSession(session)
 
       if (creator?.kind === 'commander') {
@@ -441,7 +519,7 @@ export function CommandRoom() {
         })
       }
 
-      if (semanticSessionType === 'commander' || isLegacyCommanderSession) {
+      if (semanticSessionType === 'commander') {
         continue
       }
 
@@ -483,48 +561,61 @@ export function CommandRoom() {
     [automationSessions, workerSessions],
   )
   const selectedStandaloneSession = availableSessions.find((session) => session.id === selectedChatSessionId) ?? null
-  const selectedConversationSession = selectedConversation?.liveSession
-    && isConversationScopedSession(
-      selectedConversation.liveSession as HervaldAgentSession,
-      selectedConversation.id,
-    )
-    ? mapAgentSessionToChatSession(selectedConversation.liveSession as HervaldAgentSession)
-    : null
+  const selectedConversationSession = mapConversationLiveSession(selectedConversation)
   const conversationSelectionSettling = urlSelectionPending
     || conversationsLoading
     || Boolean(selectedConversationId && !selectedConversationRecord)
-  const activeStandaloneSession = activeTab === 'chat' ? selectedStandaloneSession : null
-  const activeConversationSession = activeTab === 'chat' ? selectedConversationSession : null
+  const activeStandaloneSession = selectedStandaloneSession
+  const activeConversationSession = selectedConversationSession
   const activeChatSession = activeStandaloneSession ?? activeConversationSession
   const streamSessionName = activeStandaloneSession?.id
-    ?? (!conversationSelectionSettling && activeTab === 'chat' ? selectedConversationSession?.name : undefined)
+    ?? (!conversationSelectionSettling ? selectedConversationSession?.name : undefined)
+  const streamWebSocketPath = activeStandaloneSession || !selectedConversation
+    ? undefined
+    : `/api/conversations/${encodeURIComponent(selectedConversation.id)}/ws`
   const composerSessionName = selectedConversation
-    ? `conversation-${selectedConversation.id}`
+    ? (selectedConversation.sendTarget?.sessionName ?? activeStandaloneSession?.id ?? streamSessionName ?? 'hervald-command-room')
     : (activeStandaloneSession?.id ?? streamSessionName ?? 'hervald-command-room')
   const workspaceSource = resolveWorkspaceSource({
-    activeSessionName: activeStandaloneSession?.id,
-    selectedCommanderId: isGlobalScope ? null : selectedCommanderId,
+    targetId: workspaceTarget?.targetId,
+    label: workspaceTarget?.label,
+    readOnly: workspaceTarget?.readOnly,
   })
+  const workspacePreferencesQuery = useQuery({
+    queryKey: ['workspace', 'preferences'],
+    queryFn: () => fetchJson<{ panelDefault: WorkspacePanelDefault }>('/api/workspace/preferences'),
+    enabled: Boolean(workspaceTarget?.targetId),
+  })
+  const workspacePanelDefault = workspacePreferencesQuery.data?.panelDefault ?? 'last-used'
   const workspaceSelectionKey = useMemo(
     () => workspaceSource ? getWorkspaceSourceKey(workspaceSource) : `none:${composerSessionName}`,
     [composerSessionName, workspaceSource],
   )
+  const rightColumnWidth = workspaceOpen ? WORKSPACE_EXPANDED_WIDTH : SIDE_COLUMN_WIDTH
+  const gridStyle = useMemo<CSSProperties>(() => ({
+    ...gridStyleBase,
+    gridTemplateColumns: isGlobalScope
+      ? `${SIDE_COLUMN_WIDTH}px minmax(${CENTER_COLUMN_MIN_WIDTH}px, 1fr)`
+      : `${SIDE_COLUMN_WIDTH}px minmax(${CENTER_COLUMN_MIN_WIDTH}px, 1fr) ${rightColumnWidth}px`,
+    minWidth: isGlobalScope
+      ? SIDE_COLUMN_WIDTH + CENTER_COLUMN_MIN_WIDTH
+      : SIDE_COLUMN_WIDTH + CENTER_COLUMN_MIN_WIDTH + rightColumnWidth,
+  }), [isGlobalScope, rightColumnWidth])
   const activeChatIsStream = activeChatSession ? activeChatSession.transportType !== 'pty' : true
   const selectedConversationRunning = activeStandaloneSession
     ? activeChatIsStream && activeStandaloneSession.processAlive !== false
     : conversationSelectionSettling
     ? false
-    : selectedConversationSession
-      ? selectedConversationSession.transportType !== 'pty' && selectedConversationSession.processAlive !== false
-    : false
-  const selectedConversationAgentType = activeStandaloneSession?.agentType
-    ?? selectedConversationSession?.agentType
-    ?? selectedCommander?.agentType
+    : Boolean(
+        selectedConversation
+        && selectedConversationSession
+        && selectedConversation.displayState?.hasLiveSession === true
+        && selectedConversation.sendTarget?.transportType !== 'pty',
+      )
   const canQueueDraft = activeStandaloneSession
-    ? activeChatIsStream && supportsQueuedDrafts(selectedConversationAgentType)
+    ? activeChatIsStream
     : selectedConversation
-      ? Boolean(selectedConversationSession?.transportType !== 'pty')
-          && supportsQueuedDrafts(selectedConversationAgentType)
+      ? conversationActionAllowed(selectedConversation, 'queue')
       : false
   const showCommanderRuntimeControls = !activeStandaloneSession && !selectedConversation
   const {
@@ -536,27 +627,27 @@ export function CommandRoom() {
     status: streamStatus,
   } = useAgentSessionStream(streamSessionName, {
     enabled: selectedConversationRunning,
+    websocketPath: streamWebSocketPath,
     onQueueUpdate: setQueueSnapshot,
   })
   const conversationMessagesQuery = useConversationMessages(
     selectedConversation?.id ?? null,
-    activeTab === 'chat' && Boolean(selectedConversation),
+    Boolean(selectedConversation),
   )
   // Per issue 1362 contract: an idle selected conversation (no live session) must
-  // NOT enable normal send/queue. The only valid send target on the
-  // conversation branch is an active conversation backed by a real
-  // conversation-scoped live session — anything else means the message would
-  // 409 at deliverConversationMessage and the user would see send failures.
-  const conversationHasLiveSession = Boolean(selectedConversationSession)
+  // NOT enable normal send/queue. The backend read model owns that policy now,
+  // so Command Room only consumes the projected action flags.
+  const conversationCanSend = conversationActionAllowed(selectedConversation, 'send')
+  const conversationCanSendMedia = conversationActionAllowed(selectedConversation, 'media')
   const composerEnabled = isGlobalScope
     ? false
     : activeStandaloneSession
       ? streamStatus === 'connected' && activeChatIsStream && activeStandaloneSession.processAlive !== false
       : selectedConversation
-        ? selectedConversation.status === 'active' && conversationHasLiveSession
+        ? conversationCanSend || conversationCanSendMedia
         : false
   const composerSendReady = selectedConversation
-    ? selectedConversation.status === 'active' && conversationHasLiveSession
+    ? conversationCanSend || conversationCanSendMedia
     : activeStandaloneSession
       ? streamStatus === 'connected'
       : false
@@ -570,6 +661,7 @@ export function CommandRoom() {
   const transcript = selectedConversation
     ? mergeHistoricalAndLiveTranscript(historicalConversationMessages, liveTranscript)
     : liveTranscript
+  const chatTranscript = appendQueuedMessagesToTranscript(transcript, queueSnapshot)
   const hasOlderConversationMessages = Boolean(
     selectedConversation && conversationMessagesQuery.hasNextPage,
   )
@@ -594,9 +686,9 @@ export function CommandRoom() {
       displayName: commander.displayName,
       host: commander.host,
       status: commander.state,
-      description: commander.persona?.trim() || commander.currentTask?.title,
-      // Wire the backend-supplied UI identity (ui.accentColor + avatarUrl)
-      // so every surface that renders a Commander gets the correct avatar.
+      description: commander.currentTask?.title,
+      // Wire the backend-supplied avatar route so every Commander surface
+      // renders the same profile image without per-commander color identity.
       avatarUrl: commander.avatarUrl ?? null,
       ui: commander.ui ?? null,
     })),
@@ -615,12 +707,12 @@ export function CommandRoom() {
 
     const nextParams = new URLSearchParams(searchParamsString)
     if (desiredPanel) {
-      nextParams.set('panel', desiredPanel)
+      nextParams.set(globalCommanderRoute.panelParam, desiredPanel)
     } else {
-      nextParams.delete('panel')
+      nextParams.delete(globalCommanderRoute.panelParam)
     }
     setSearchParams(nextParams, { replace: true })
-  }, [panelParam, searchParamsString, setSearchParams])
+  }, [globalCommanderRoute.panelParam, panelParam, searchParamsString, setSearchParams])
 
   const handleSelectCommanderId = useCallback(async (commanderId: string) => {
     // Per issue 1362 contract: a single user click → a single backend lookup →
@@ -646,22 +738,30 @@ export function CommandRoom() {
     }
 
     const nextParams = new URLSearchParams(searchParamsString)
-    nextParams.set('commander', isGlobal ? 'global' : commanderId)
+    nextParams.set(
+      commandRoomLaunch.commanderParam,
+      isGlobal ? globalCommanderRoute.commanderValue : commanderId,
+    )
     if (isGlobal) {
-      nextParams.set('panel', 'automation')
+      nextParams.set(globalCommanderRoute.panelParam, globalCommanderRoute.defaultPanel)
     } else {
-      nextParams.delete('panel')
+      nextParams.delete(globalCommanderRoute.panelParam)
     }
     if (activeChatId) {
-      nextParams.set('conversation', activeChatId)
+      nextParams.set(commandRoomLaunch.conversationParam, activeChatId)
     } else {
-      nextParams.delete('conversation')
+      nextParams.delete(commandRoomLaunch.conversationParam)
     }
     setSearchParams(nextParams, { replace: true })
 
     setSelectedConversationId(activeChatId)
     setCommanderSelection(commanderId)
   }, [
+    commandRoomLaunch.commanderParam,
+    commandRoomLaunch.conversationParam,
+    globalCommanderRoute.commanderValue,
+    globalCommanderRoute.defaultPanel,
+    globalCommanderRoute.panelParam,
     queryClient,
     searchParamsString,
     setCommanderSelection,
@@ -678,12 +778,19 @@ export function CommandRoom() {
 
     const nextParams = new URLSearchParams(searchParamsString)
     if (commanderId && !isGlobalCommanderId(commanderId)) {
-      nextParams.set('commander', commanderId)
+      nextParams.set(commandRoomLaunch.commanderParam, commanderId)
     }
-    nextParams.set('conversation', conversationId)
-    nextParams.delete('panel')
+    nextParams.set(commandRoomLaunch.conversationParam, conversationId)
+    nextParams.delete(globalCommanderRoute.panelParam)
     setSearchParams(nextParams, { replace: true })
-  }, [searchParamsString, selectedCommanderId, setSearchParams])
+  }, [
+    commandRoomLaunch.commanderParam,
+    commandRoomLaunch.conversationParam,
+    globalCommanderRoute.panelParam,
+    searchParamsString,
+    selectedCommanderId,
+    setSearchParams,
+  ])
 
   const handleClearConversationSelection = useCallback((
     commanderId = selectedCommanderId,
@@ -694,12 +801,19 @@ export function CommandRoom() {
 
     const nextParams = new URLSearchParams(searchParamsString)
     if (commanderId && !isGlobalCommanderId(commanderId)) {
-      nextParams.set('commander', commanderId)
+      nextParams.set(commandRoomLaunch.commanderParam, commanderId)
     }
-    nextParams.delete('conversation')
-    nextParams.delete('panel')
+    nextParams.delete(commandRoomLaunch.conversationParam)
+    nextParams.delete(globalCommanderRoute.panelParam)
     setSearchParams(nextParams, { replace: true })
-  }, [searchParamsString, selectedCommanderId, setSearchParams])
+  }, [
+    commandRoomLaunch.commanderParam,
+    commandRoomLaunch.conversationParam,
+    globalCommanderRoute.panelParam,
+    searchParamsString,
+    selectedCommanderId,
+    setSearchParams,
+  ])
 
   const handleSelectStandaloneChat = useCallback((chatSessionId: string) => {
     setRequestedNewChatCommanderId(null)
@@ -711,27 +825,120 @@ export function CommandRoom() {
     }
 
     const nextParams = new URLSearchParams(searchParamsString)
-    nextParams.delete('conversation')
-    nextParams.delete('panel')
+    nextParams.delete(commandRoomLaunch.conversationParam)
+    nextParams.delete(globalCommanderRoute.panelParam)
     setSearchParams(nextParams, { replace: true })
-  }, [isMobile, searchParamsString, setSearchParams])
+  }, [
+    commandRoomLaunch.conversationParam,
+    globalCommanderRoute.panelParam,
+    isMobile,
+    searchParamsString,
+    setSearchParams,
+  ])
 
   const refreshSessions = useCallback(async () => {
     await refetchAgentSessions()
   }, [refetchAgentSessions])
 
-  const handleAddContextFilePath = useCallback((filePath: string) => {
+  const setWorkspaceOpenPreference = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+    setWorkspaceOpen((current) => {
+      const resolved = typeof next === 'function' ? next(current) : next
+      try {
+        window.localStorage.setItem(WORKSPACE_OPEN_STORAGE_KEY, resolved ? 'open' : 'closed')
+      } catch {
+        // Storage can be unavailable in embedded/webview contexts.
+      }
+      return resolved
+    })
+  }, [])
+
+  const handleAddWorkspaceContextPath = useCallback((contextPath: string, type: WorkspaceTreeNode['type'] = 'file') => {
+    const normalizedPath = contextPath.trim().replace(/\/+$/u, '')
+    if (!normalizedPath) {
+      return
+    }
+    if (type === 'directory') {
+      setContextDirectoryPaths((current) => (
+        current.includes(normalizedPath) ? current : [...current, normalizedPath]
+      ))
+      return
+    }
     setContextFilePaths((current) => (
-      current.includes(filePath) ? current : [...current, filePath]
+      current.includes(normalizedPath) ? current : [...current, normalizedPath]
     ))
   }, [])
+
+  const handleAddContextFileAnnotation = useCallback((annotation: WorkspacePendingFileAnnotation) => {
+    setContextFileAnnotations((current) => (
+      current.some((entry) => entry.id === annotation.id) ? current : [...current, annotation]
+    ))
+  }, [])
+
+  const handleOpenWorkspaceFilePath = useCallback(async (filePath: string) => {
+    const trimmedPath = filePath.trim()
+    if (!trimmedPath) {
+      return
+    }
+
+    handleActiveTabChange('chat')
+    setWorkspaceOpenPreference(true)
+    setWorkspaceRequestedPath({
+      path: trimmedPath,
+      token: Date.now(),
+    })
+
+    if (workspaceTarget?.targetId) {
+      return
+    }
+
+    const standaloneSessionName = activeStandaloneSession?.id ?? null
+    const fallbackCommanderId = !isGlobalScope && selectedCommanderId ? selectedCommanderId : null
+    if (!selectedConversationId && !standaloneSessionName && !fallbackCommanderId) {
+      return
+    }
+
+    try {
+      const target = await openWorkspaceTarget(
+        selectedConversationId
+          ? { conversationId: selectedConversationId }
+          : standaloneSessionName
+            ? { sessionName: standaloneSessionName }
+            : { commanderId: fallbackCommanderId! },
+      )
+      setWorkspaceTarget({
+        targetId: target.targetId,
+        label: target.label,
+        readOnly: target.isReadOnly,
+      })
+    } catch {
+      setWorkspaceTarget(null)
+    }
+  }, [
+    activeStandaloneSession?.id,
+    handleActiveTabChange,
+    isGlobalScope,
+    selectedCommanderId,
+    selectedConversationId,
+    setWorkspaceOpenPreference,
+    workspaceTarget?.targetId,
+  ])
 
   const handleRemoveContextFilePath = useCallback((filePath: string) => {
     setContextFilePaths((current) => current.filter((entry) => entry !== filePath))
   }, [])
 
+  const handleRemoveContextDirectoryPath = useCallback((directoryPath: string) => {
+    setContextDirectoryPaths((current) => current.filter((entry) => entry !== directoryPath))
+  }, [])
+
+  const handleRemoveContextFileAnnotation = useCallback((annotationId: string) => {
+    setContextFileAnnotations((current) => current.filter((entry) => entry.id !== annotationId))
+  }, [])
+
   const handleClearContextFilePaths = useCallback(() => {
     setContextFilePaths([])
+    setContextDirectoryPaths([])
+    setContextFileAnnotations([])
   }, [])
 
   useEffect(() => {
@@ -741,10 +948,17 @@ export function CommandRoom() {
     if (normalizedCommanderParam !== GLOBAL_COMMANDER_ID) {
       return
     }
-    if (isGlobalScope && activeTab !== 'automation') {
-      handleActiveTabChange('automation')
+    if (isGlobalScope && activeTab !== globalCommanderRoute.defaultPanel) {
+      handleActiveTabChange(globalCommanderRoute.defaultPanel)
     }
-  }, [activeTab, commanderParam, handleActiveTabChange, isGlobalScope, normalizedCommanderParam])
+  }, [
+    activeTab,
+    commanderParam,
+    globalCommanderRoute.defaultPanel,
+    handleActiveTabChange,
+    isGlobalScope,
+    normalizedCommanderParam,
+  ])
 
   useEffect(() => {
     if (!normalizedCommanderParam) {
@@ -785,7 +999,75 @@ export function CommandRoom() {
 
   useEffect(() => {
     setContextFilePaths([])
+    setContextDirectoryPaths([])
+    setContextFileAnnotations([])
   }, [workspaceSelectionKey])
+
+  useEffect(() => {
+    let cancelled = false
+    const standaloneSessionName = activeStandaloneSession?.id ?? null
+    const fallbackCommanderId = !isGlobalScope && selectedCommanderId ? selectedCommanderId : null
+    if (!selectedConversationId && !standaloneSessionName && !fallbackCommanderId) {
+      setWorkspaceTarget(null)
+      return
+    }
+
+    void (async () => {
+      try {
+        const target = await openWorkspaceTarget(
+          selectedConversationId
+            ? { conversationId: selectedConversationId }
+            : standaloneSessionName
+              ? { sessionName: standaloneSessionName }
+              : { commanderId: fallbackCommanderId! },
+        )
+        if (!cancelled) {
+          setWorkspaceTarget({
+            targetId: target.targetId,
+            label: target.label,
+            readOnly: target.isReadOnly,
+          })
+        }
+      } catch {
+        if (!cancelled) {
+          setWorkspaceTarget(null)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeStandaloneSession?.id, isGlobalScope, selectedCommanderId, selectedConversationId])
+
+  useEffect(() => {
+    if (!workspaceSource) {
+      appliedWorkspaceDefaultRef.current = null
+      setWorkspaceOpen(false)
+      return
+    }
+
+    const defaultKey = `${workspaceSelectionKey}:${workspacePanelDefault}`
+    if (appliedWorkspaceDefaultRef.current === defaultKey) {
+      return
+    }
+    appliedWorkspaceDefaultRef.current = defaultKey
+
+    if (workspacePanelDefault === 'open') {
+      setWorkspaceOpen(true)
+      return
+    }
+    if (workspacePanelDefault === 'closed') {
+      setWorkspaceOpen(false)
+      return
+    }
+
+    try {
+      setWorkspaceOpen(window.localStorage.getItem(WORKSPACE_OPEN_STORAGE_KEY) === 'open')
+    } catch {
+      setWorkspaceOpen(false)
+    }
+  }, [workspacePanelDefault, workspaceSelectionKey, workspaceSource])
 
   useEffect(() => {
     if (selectedChatSessionId && !availableSessions.some((session) => session.id === selectedChatSessionId)) {
@@ -794,7 +1076,7 @@ export function CommandRoom() {
   }, [availableSessions, selectedChatSessionId])
 
   useLayoutEffect(() => {
-    if (location.pathname !== '/command-room') {
+    if (location.pathname !== commandRoomLaunch.path) {
       return
     }
 
@@ -802,16 +1084,18 @@ export function CommandRoom() {
       return
     }
 
-    const nextParams = new URLSearchParams(searchParamsString)
-    nextParams.set('commander', 'global')
-    nextParams.set('panel', 'automation')
-    nextParams.delete('conversation')
+    const nextParams = normalizeCommandRoomGlobalSearchParams(
+      new URLSearchParams(searchParamsString),
+      commandRoomRouteMetadata,
+    )
     setSearchParams(nextParams, { replace: true })
     setSelectedChatSessionId(null)
     setSelectedConversationId(null)
     setCommanderSelection(GLOBAL_COMMANDER_ID)
   }, [
     commanderParam,
+    commandRoomLaunch.path,
+    commandRoomRouteMetadata,
     location.pathname,
     searchParamsString,
     setCommanderSelection,
@@ -866,20 +1150,22 @@ export function CommandRoom() {
 
       // Bail if the user navigated again while we were fetching.
       const liveSearch = new URLSearchParams(window.location.search)
-      if (liveSearch.get('commander') !== targetCommander) {
+      if (liveSearch.get(commandRoomLaunch.commanderParam) !== targetCommander) {
         return
       }
-      if (liveSearch.get('conversation')) {
+      if (liveSearch.get(commandRoomLaunch.conversationParam)) {
         return
       }
 
-      liveSearch.set('conversation', activeChatId)
+      liveSearch.set(commandRoomLaunch.conversationParam, activeChatId)
       setSearchParams(liveSearch, { replace: true })
       setSelectedConversationId(activeChatId)
     })()
   }, [
     normalizedCommanderParam,
     normalizedConversationParam,
+    commandRoomLaunch.commanderParam,
+    commandRoomLaunch.conversationParam,
     queryClient,
     requestedNewChatCommanderId,
     setSearchParams,
@@ -891,10 +1177,11 @@ export function CommandRoom() {
     (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k' && workspaceSource) {
         e.preventDefault()
-        setWorkspaceOpen((prev) => !prev)
+        handleActiveTabChange('chat')
+        setWorkspaceOpenPreference((prev) => activeTab === 'chat' ? !prev : true)
       }
     },
-    [workspaceSource],
+    [activeTab, handleActiveTabChange, setWorkspaceOpenPreference, workspaceSource],
   )
 
   useEffect(() => {
@@ -957,20 +1244,6 @@ export function CommandRoom() {
       throw caughtError
     }
   }, [handleSelectStandaloneChat, refreshSessions])
-
-  const handleDismissWorker = useCallback(async (worker: Worker) => {
-    setSessionActionError(null)
-
-    try {
-      await killSession(worker.name)
-      setSelectedWorkerId((current) => (current === worker.id ? undefined : current))
-      await refreshSessions()
-    } catch (caughtError) {
-      const message = formatError(caughtError, 'Failed to dismiss worker')
-      setSessionActionError(message)
-      throw caughtError
-    }
-  }, [refreshSessions])
 
   const fetchQueueSnapshot = useCallback(async (): Promise<SessionQueueSnapshot> => {
     if (!streamSessionName) {
@@ -1044,7 +1317,6 @@ export function CommandRoom() {
             ? selectedConversation.status
             : 'idle',
           description: selectedConversation?.currentTask?.title
-            ?? selectedCommander.persona?.trim()
             ?? selectedCommander.currentTask?.title,
           cost: selectedConversation?.totalCostUsd ?? selectedCommander.totalCostUsd,
           agentType: selectedConversationSession?.agentType ?? selectedCommander.agentType,
@@ -1061,25 +1333,15 @@ export function CommandRoom() {
   const commanderApprovals = approvals.filter(
     (a) => a.commanderId === selectedCommanderId,
   )
-  const teamCommander = activeStandaloneSession
-    ? {
-        id: '',
-        name: activeStandaloneSession.name,
-        status: activeStandaloneSession.status ?? 'active',
-      }
-    : {
-        id: centerCommander.id,
-        name: centerCommander.name,
-        status: centerCommander.status,
-      }
-  const teamWorkers = activeStandaloneSession ? [] : commanderWorkers
-  const teamApprovals = activeStandaloneSession ? [] : commanderApprovals
-
   const submitConversationMessage = useCallback(async ({
     message,
+    images,
+    workspaceContext,
     queue = false,
   }: {
     message: string
+    images?: Array<{ mediaType: string; data: string }>
+    workspaceContext?: WorkspaceContextPayload
     queue?: boolean
   }): Promise<boolean> => {
     if (!selectedConversation) {
@@ -1092,6 +1354,8 @@ export function CommandRoom() {
       const response = await conversationMessageMutation.mutateAsync({
         conversationId: selectedConversation.id,
         message,
+        images,
+        workspaceContext,
         queue,
       })
       return response.accepted
@@ -1136,20 +1400,58 @@ export function CommandRoom() {
     }
   }, [canQueueDraft, refreshQueueSnapshot, streamSessionName])
 
-  const handleSend = useCallback(async ({ text, images }: { text: string; images?: { mediaType: string; data: string }[] }) => {
-    const trimmed = text.trim()
+  const buildWorkspaceContextPayload = useCallback((
+    payload: SessionComposerSubmitPayload,
+  ): WorkspaceContextPayload | undefined => {
+    const context = payload.context
+    const hasContext = Boolean(
+      context?.filePaths?.length
+      || context?.directoryPaths?.length
+      || context?.fileAnnotations?.length,
+    )
+    if (!hasContext) {
+      return undefined
+    }
+    return {
+      ...(workspaceSource?.targetId ? { targetId: workspaceSource.targetId } : {}),
+      ...(selectedConversationId ? { conversationId: selectedConversationId } : {}),
+      ...(context?.filePaths?.length ? { filePaths: context.filePaths } : {}),
+      ...(context?.directoryPaths?.length ? { directoryPaths: context.directoryPaths } : {}),
+      ...(context?.fileAnnotations?.length ? { fileAnnotations: context.fileAnnotations } : {}),
+    }
+  }, [selectedConversationId, workspaceSource?.targetId])
+
+  const handleSend = useCallback((payload: SessionComposerSubmitPayload): boolean | Promise<boolean> => {
+    const trimmed = payload.text.trim()
+    const workspaceContext = buildWorkspaceContextPayload(payload)
+    const { images } = payload
     const attachedImages = images && images.length > 0 ? images : undefined
-    const sendDispatcher = selectedConversation && !attachedImages?.length
+    if (!trimmed && !attachedImages && !workspaceContext) {
+      return false
+    }
+    if (selectedConversation && attachedImages?.length && !conversationActionAllowed(selectedConversation, 'media')) {
+      setSessionActionError(
+        conversationDisabledReason(
+          selectedConversation,
+          'media',
+          'Start or resume the conversation before sending images.',
+        ),
+      )
+      return false
+    }
+    if (selectedConversation && !attachedImages?.length && !conversationActionAllowed(selectedConversation, 'send')) {
+      setSessionActionError(
+        conversationDisabledReason(
+          selectedConversation,
+          'send',
+          'Start or resume the conversation before sending messages.',
+        ),
+      )
+      return false
+    }
+    const sendDispatcher = selectedConversation
       ? conversationSendDispatcher
       : streamSendDispatcher
-
-    if (selectedConversation && attachedImages?.length) {
-      if (!streamSessionName) {
-        setSessionActionError('Start or resume the conversation before sending images.')
-        return false
-      }
-      return sendDispatcher.send({ text: trimmed, images: attachedImages }, pushOptimisticUserMessage)
-    }
 
     if (!selectedConversation) {
       if (!streamSessionName) {
@@ -1157,8 +1459,13 @@ export function CommandRoom() {
       }
     }
 
-    return sendDispatcher.send({ text: trimmed, images: attachedImages }, pushOptimisticUserMessage)
+    return sendDispatcher.send({
+      text: trimmed,
+      images: attachedImages,
+      workspaceContext,
+    }, pushOptimisticUserMessage)
   }, [
+    buildWorkspaceContextPayload,
     conversationSendDispatcher,
     selectedConversation,
     streamSessionName,
@@ -1166,35 +1473,50 @@ export function CommandRoom() {
     pushOptimisticUserMessage,
   ])
 
-  const handleQueue = useCallback(async ({ text, images }: { text: string; images?: { mediaType: string; data: string }[] }) => {
-    const trimmed = text.trim()
+  const handleQueue = useCallback(async (payload: SessionComposerSubmitPayload) => {
+    const trimmed = payload.text.trim()
+    const workspaceContext = buildWorkspaceContextPayload(payload)
+    const { images } = payload
     const queuedImages = images && images.length > 0 ? images : undefined
-    if (!trimmed && !queuedImages) {
+    if (!trimmed && !queuedImages && !workspaceContext) {
       return
     }
 
     if (selectedConversation) {
       if (queuedImages?.length) {
-        if (!streamSessionName) {
-          setSessionActionError('Start or resume the conversation before queueing images.')
+        if (
+          !conversationActionAllowed(selectedConversation, 'queue')
+          || !conversationActionAllowed(selectedConversation, 'media')
+        ) {
+          setSessionActionError(
+            conversationDisabledReason(
+              selectedConversation,
+              !conversationActionAllowed(selectedConversation, 'media') ? 'media' : 'queue',
+              'Start or resume the conversation before queueing images.',
+            ),
+          )
           return
         }
-        await applyQueueMutation(
-          () => queueSessionMessage(streamSessionName, {
-            text: trimmed,
-            images: queuedImages,
-          }),
-          'Failed to queue message',
-          'Queue updated, but failed to refresh queue',
+      } else if (!trimmed && !workspaceContext) {
+        return
+      } else if (!conversationActionAllowed(selectedConversation, 'queue')) {
+        setSessionActionError(
+          conversationDisabledReason(
+            selectedConversation,
+            'queue',
+            'Start or resume the conversation before queueing messages.',
+          ),
         )
         return
       }
-
-      if (!trimmed) {
-        return
+      if (await submitConversationMessage({
+        message: trimmed,
+        images: queuedImages,
+        workspaceContext,
+        queue: true,
+      })) {
+        await refreshQueueSnapshot()
       }
-
-      await submitConversationMessage({ message: trimmed, queue: true })
       return
     }
 
@@ -1206,12 +1528,15 @@ export function CommandRoom() {
       () => queueSessionMessage(streamSessionName, {
         text: trimmed,
         images: queuedImages,
+        workspaceContext,
       }),
       'Failed to queue message',
       'Queue updated, but failed to refresh queue',
     )
   }, [
     applyQueueMutation,
+    buildWorkspaceContextPayload,
+    refreshQueueSnapshot,
     selectedConversation,
     streamSessionName,
     submitConversationMessage,
@@ -1319,11 +1644,14 @@ export function CommandRoom() {
     setSelectedChatSessionId(null)
 
     const nextParams = new URLSearchParams(searchParamsString)
-    nextParams.set('commander', commanderId)
-    nextParams.delete('conversation')
-    nextParams.delete('panel')
+    nextParams.set(commandRoomLaunch.commanderParam, commanderId)
+    nextParams.delete(commandRoomLaunch.conversationParam)
+    nextParams.delete(globalCommanderRoute.panelParam)
     setSearchParams(nextParams, { replace: true })
   }, [
+    commandRoomLaunch.commanderParam,
+    commandRoomLaunch.conversationParam,
+    globalCommanderRoute.panelParam,
     searchParamsString,
     setCommanderSelection,
     setSearchParams,
@@ -1334,12 +1662,12 @@ export function CommandRoom() {
 
     const conversation = conversations.find((entry) => entry.id === conversationId)
     const persistedAgentType = conversation?.agentType
-    const targetAgentType: AgentType = (persistedAgentType ?? selectedCommander?.agentType ?? 'claude') as AgentType
+    const targetAgentType = persistedAgentType ?? selectedCommander?.agentType
 
     try {
       const started = await startConversation.mutateAsync({
         conversationId,
-        agentType: targetAgentType,
+        ...(targetAgentType ? { agentType: targetAgentType as AgentType } : {}),
         ...(typeof conversation?.model === 'string' ? { model: conversation.model } : {}),
       })
       handleSelectConversationId(started.id, started.commanderId)
@@ -1473,6 +1801,7 @@ export function CommandRoom() {
         task: sessionTask.trim(),
         effort: sessionEffort,
         adaptiveThinking: sessionAdaptiveThinking,
+        maxThinkingTokens: sessionMaxThinkingTokens,
         agentType: sessionAgentType,
         transportType: sessionTransportType,
         host: sessionSelectedHost.trim() || undefined,
@@ -1484,6 +1813,7 @@ export function CommandRoom() {
       setSessionTask('')
       setSessionEffort(DEFAULT_CLAUDE_EFFORT_LEVEL)
       setSessionAdaptiveThinking(DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
+      setSessionMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
       setSessionAgentType('claude')
       setSessionTransportType('stream')
       setSessionSelectedHost('')
@@ -1500,6 +1830,7 @@ export function CommandRoom() {
     sessionAgentType,
     sessionCwd,
     sessionEffort,
+    sessionMaxThinkingTokens,
     sessionName,
     sessionSelectedHost,
     sessionTask,
@@ -1513,6 +1844,117 @@ export function CommandRoom() {
     await handleSelectCommanderId(createdCommander.id)
   }, [commanderState, handleSelectCommanderId])
 
+  const renderRightColumnContent = () => {
+    if (activeTab === 'quests') {
+      if (!selectedCommander || isGlobalScope) {
+        return (
+          <div
+            data-testid="right-panel-empty-quests"
+            data-test-id="right-panel-empty-quests"
+            style={{ padding: 20, color: 'var(--hv-fg-subtle)', fontSize: 12, lineHeight: 1.5 }}
+          >
+            Select a commander to view quests.
+          </div>
+        )
+      }
+
+      return (
+        <QuestBoard
+          commanders={[{
+            id: selectedCommander.id,
+            host: selectedCommander.host,
+          }]}
+          selectedCommanderId={selectedCommander.id}
+        />
+      )
+    }
+
+    if (activeTab === 'automation') {
+      return (
+        <AutomationPanel
+          scope={
+            !isGlobalScope && selectedCommander
+              ? { kind: 'commander', commander: { id: selectedCommander.id } }
+              : { kind: 'global' }
+          }
+        />
+      )
+    }
+
+    if (activeTab === 'identity') {
+      if (!selectedCommander || isGlobalScope) {
+        return (
+          <div
+            data-testid="right-panel-empty-identity"
+            data-test-id="right-panel-empty-identity"
+            style={{ padding: 20, color: 'var(--hv-fg-subtle)', fontSize: 12, lineHeight: 1.5 }}
+          >
+            Select a commander to inspect identity.
+          </div>
+        )
+      }
+
+      return <CommanderIdentityTab commander={selectedCommander} />
+    }
+
+    if (workspaceOpen && workspaceSource) {
+      return (
+        <WorkspacePanel
+          source={workspaceSource}
+          position="side"
+          variant="light"
+          onClose={() => setWorkspaceOpenPreference(false)}
+          onInsertPath={handleAddWorkspaceContextPath}
+          onAddAnnotationContext={handleAddContextFileAnnotation}
+          requestedPath={workspaceRequestedPath?.path ?? null}
+          requestedPathToken={workspaceRequestedPath?.token ?? 0}
+        />
+      )
+    }
+
+    if (workspaceSource) {
+      return (
+        <div
+          data-testid="workspace-hidden-panel"
+          data-test-id="workspace-hidden-panel"
+          style={{
+            padding: 20,
+            color: 'var(--hv-fg-subtle)',
+            fontSize: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          <p style={{ margin: 0 }}>Workspace is hidden.</p>
+          <button
+            type="button"
+            data-testid="workspace-hidden-open-button"
+            data-test-id="workspace-hidden-open-button"
+            className="btn-ghost"
+            style={{ marginTop: 12 }}
+            onClick={() => setWorkspaceOpenPreference(true)}
+          >
+            Open workspace
+          </button>
+        </div>
+      )
+    }
+
+    return (
+      <div
+        data-testid="workspace-empty-panel"
+        data-test-id="workspace-empty-panel"
+        style={{
+          padding: 20,
+          color: 'var(--hv-fg-subtle)',
+          fontSize: 12,
+          lineHeight: 1.5,
+        }}
+      >
+        Select or start a conversation to inspect its workspace.
+      </div>
+    )
+  }
+
   if (isMobile) {
     return (
       <MobileCommandRoom
@@ -1524,7 +1966,7 @@ export function CommandRoom() {
         onSelectCommanderId={handleSelectCommanderId}
         selectedCommanderRunning={selectedCommanderRunning}
         selectedCommanderAgentType={selectedCommander?.agentType}
-        transcript={transcript}
+        transcript={chatTranscript}
         hasOlderMessages={hasOlderConversationMessages}
         loadingOlderMessages={loadingOlderConversationMessages}
         onLoadOlderMessages={handleLoadOlderConversationMessages}
@@ -1537,6 +1979,7 @@ export function CommandRoom() {
         canQueueDraft={canQueueDraft}
         theme={theme}
         onSetTheme={setTheme}
+        commandRoomRouteMetadata={commandRoomRouteMetadata}
         isStreaming={isStreaming}
         streamStatus={streamStatus}
         conversations={visibleConversations}
@@ -1556,6 +1999,12 @@ export function CommandRoom() {
         onRemoveQueuedMessage={(messageId) => { void handleRemoveQueuedMessage(messageId) }}
         onQueue={handleQueue}
         onSend={handleSend}
+        contextFileAnnotations={contextFileAnnotations}
+        onRemoveContextFileAnnotation={handleRemoveContextFileAnnotation}
+        onClearContextFileAnnotations={handleClearContextFilePaths}
+        onOpenWorkspaceFile={handleOpenWorkspaceFilePath}
+        workspaceRequestedPath={workspaceRequestedPath?.path ?? null}
+        workspaceRequestedPathToken={workspaceRequestedPath?.token ?? 0}
         workspaceSource={workspaceSource}
         onCreateChatForCommander={handleRequestNewChatForCommander}
         onCreateConversation={handleCreateChatForCommander}
@@ -1576,15 +2025,20 @@ export function CommandRoom() {
   return (
     <div
       data-testid="command-room-shell"
+      data-test-id="command-room-shell"
       style={shellStyle}
     >
-      <div style={gridStyle}>
+      <div
+        data-testid="command-room-grid"
+        data-test-id="command-room-grid"
+        style={gridStyle}
+      >
         <SessionsColumn
           selectedCommanderId={selectedCommanderId}
           onSelectCommander={(id) => {
             void handleSelectCommanderId(id)
             if (id === GLOBAL_COMMANDER_ID) {
-              handleActiveTabChange('automation')
+              handleActiveTabChange(globalCommanderRoute.defaultPanel)
             }
           }}
           onCreateCommander={handleOpenCreateCommander}
@@ -1616,7 +2070,7 @@ export function CommandRoom() {
           isGlobalScope={isGlobalScope}
           hasSelectedConversation={Boolean(selectedConversation)}
           activeChatSession={activeChatSession}
-          transcript={transcript}
+          transcript={chatTranscript}
           hasOlderMessages={hasOlderConversationMessages}
           loadingOlderMessages={loadingOlderConversationMessages}
           onLoadOlderMessages={handleLoadOlderConversationMessages}
@@ -1632,7 +2086,19 @@ export function CommandRoom() {
           onKillSession={(sessionName, agentType) =>
             handleKillSession(sessionName, agentType, activeChatSession?.transportType)
           }
-          onOpenWorkspace={workspaceSource ? () => setWorkspaceOpen(true) : undefined}
+          onOpenWorkspace={selectedConversationId || activeStandaloneSession || (!isGlobalScope && selectedCommanderId)
+            ? () => {
+                handleActiveTabChange('chat')
+                setWorkspaceOpenPreference(true)
+              }
+            : undefined}
+          globalAutomationPanel={isGlobalScope && activeTab === 'automation'
+            ? (
+                <AutomationPanel
+                  scope={{ kind: 'global' }}
+                />
+              )
+            : undefined}
           onCreateChat={!isGlobalScope && selectedCommanderId
             ? (agentType: AgentType, model: string | null) => {
                 void handleCreateChatForCommander(selectedCommanderId, agentType, model)
@@ -1649,10 +2115,15 @@ export function CommandRoom() {
           composerSendReady={composerSendReady}
           canQueueDraft={canQueueDraft}
           contextFilePaths={contextFilePaths}
+          contextDirectoryPaths={contextDirectoryPaths}
+          contextFileAnnotations={contextFileAnnotations}
           onRemoveContextFilePath={handleRemoveContextFilePath}
+          onRemoveContextDirectoryPath={handleRemoveContextDirectoryPath}
+          onRemoveContextFileAnnotation={handleRemoveContextFileAnnotation}
           onClearContextFilePaths={handleClearContextFilePaths}
           onQueue={(payload) => { void handleQueue(payload) }}
           onSend={(payload) => { void handleSend(payload) }}
+          onOpenWorkspaceFile={handleOpenWorkspaceFilePath}
           queueSnapshot={queueSnapshot}
           queueError={queueError}
           isQueueMutating={isQueueMutating}
@@ -1663,32 +2134,76 @@ export function CommandRoom() {
           onSetTheme={setTheme}
         />
 
-        <TeamColumn
-          commander={teamCommander}
-          workers={teamWorkers.map((worker) => ({
-            ...worker,
-            kind: worker.kind ?? 'worker',
-            state: worker.state ?? 'idle',
-          }))}
-          approvals={teamApprovals.map((a) => ({
-            id: a.id,
-            commanderId: a.commanderId || '',
-            workerId: a.workerId || '',
-            action: a.action || '',
-          }))}
-          selectedWorkerId={activeStandaloneSession ? undefined : selectedWorkerId}
-          onSelectWorker={setSelectedWorkerId}
-          onOpenWorkspace={workspaceSource ? () => setWorkspaceOpen(true) : () => undefined}
-          onDismissWorker={(worker) => { void handleDismissWorker(worker) }}
-        />
+        {!isGlobalScope && (
+          <aside
+            data-testid="workspace-right-column"
+            data-test-id="workspace-right-column"
+            style={{
+              background: 'var(--hv-bg-raised)',
+              borderLeft: '1px solid var(--hv-border-hair)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              minWidth: 0,
+              width: rightColumnWidth,
+              transition: 'width 180ms var(--hv-ease-gentle)',
+            }}
+          >
+            <div
+              data-testid="right-panel-actions"
+              data-test-id="right-panel-actions"
+              style={{
+                display: 'flex',
+                gap: 10,
+                padding: '16px 18px 14px',
+                borderBottom: '1px solid var(--hv-border-hair)',
+                overflowX: 'auto',
+              }}
+            >
+              {RIGHT_PANEL_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  data-testid={`right-panel-tab-${tab.id}`}
+                  data-test-id={`right-panel-tab-${tab.id}`}
+                  aria-pressed={activeTab === tab.id}
+                  className="font-mono"
+                  style={rightPanelButtonStyle(activeTab === tab.id)}
+                  onClick={() => {
+                    handleActiveTabChange(tab.id)
+                    if (tab.id === 'chat') {
+                      setWorkspaceOpenPreference(true)
+                    }
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: 'hidden',
+                padding: '18px',
+              }}
+            >
+              <div
+                data-testid="right-panel-content"
+                data-test-id="right-panel-content"
+                style={{
+                  height: '100%',
+                  minHeight: 0,
+                  overflow: 'hidden',
+                }}
+              >
+                {renderRightColumnContent()}
+              </div>
+            </div>
+          </aside>
+        )}
       </div>
 
-      <WorkspaceModal
-        open={workspaceOpen}
-        onClose={() => setWorkspaceOpen(false)}
-        source={workspaceSource}
-        onInsertPath={handleAddContextFilePath}
-      />
       <ModalFormContainer
         open={showCreateSessionForm}
         title="New Session"
@@ -1705,6 +2220,8 @@ export function CommandRoom() {
           setEffort={setSessionEffort}
           adaptiveThinking={sessionAdaptiveThinking}
           setAdaptiveThinking={setSessionAdaptiveThinking}
+          maxThinkingTokens={sessionMaxThinkingTokens}
+          setMaxThinkingTokens={setSessionMaxThinkingTokens}
           agentType={sessionAgentType}
           setAgentType={setSessionAgentType}
           transportType={sessionTransportType}

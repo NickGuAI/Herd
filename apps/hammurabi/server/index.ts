@@ -8,8 +8,9 @@ import { bootstrapDefaultMasterKey } from './api-keys/bootstrap.js'
 import { ProviderSecretsStore } from './api-keys/provider-secrets-store.js'
 import { ApiKeyJsonStore } from './api-keys/store.js'
 import { createModules } from './module-registry.js'
+import { mountDeclaredBodyParsers } from './module-http-mount.js'
+import { createWebSocketUpgradeResolver } from './websocket-upgrade-resolver.js'
 import { isCorsOriginAllowed, parseAllowedCorsOrigins } from './cors.js'
-import { createApiKeysRouter } from './routes/api-keys.js'
 import { createInstallScriptRouter } from './routes/install-script.js'
 import { AppSettingsStore } from '../modules/settings/store.js'
 import type { AppTheme } from '../modules/settings/types.js'
@@ -71,7 +72,7 @@ const providerSecretsStore = new ProviderSecretsStore()
 const maxAgentSessions = process.env.HAMMURABI_MAX_AGENT_SESSIONS
   ? parseInt(process.env.HAMMURABI_MAX_AGENT_SESSIONS, 10)
   : undefined
-const { modules, otelRouter } = createModules({
+const { modules, otelRouter, moduleGraph } = createModules({
   apiKeyStore,
   providerSecretsStore,
   transcriptionKeyStore: providerSecretsStore,
@@ -90,19 +91,12 @@ app.use(
   }),
 )
 
-// Mount OTEL receiver at /v1 BEFORE the global JSON parser.
-// The OTEL router has its own express.json({ limit: '5mb' }) parser;
-// the global parser's default 100kb limit would reject large OTEL batches
-// before the OTEL router ever sees them.
-app.use('/v1', otelRouter)
+mountDeclaredBodyParsers(app, moduleGraph.mountPlan.parsers)
 
-// Image-accepting agent routes (/api/agents/sessions/:name/queue, /send, /message)
-// need a higher body limit BEFORE the global parser. The websocket path validates
-// images per-image (20 MB raw / ~26.67 MB base64) and per-batch (5 max) — total
-// ~100 MB. Match here so HTTP queue/send/message endpoints accept the same
-// payloads instead of hitting Express's 100 KB default and rejecting image-bearing
-// drafts as "message too big". Same containment pattern as the OTEL escape above.
-app.use('/api/agents', express.json({ limit: '100mb' }))
+// Mount OTEL receiver at /v1 BEFORE the global JSON parser.
+// The parser limit is declared in the telemetry module manifest and mounted
+// through the loader mount plan above.
+app.use('/v1', otelRouter)
 
 app.use(express.json())
 
@@ -123,14 +117,6 @@ app.get('/api/health', (_req, res) => {
     },
   })
 })
-
-app.use(
-  '/api/auth',
-  createApiKeysRouter({
-    store: apiKeyStore,
-    providerSecretsStore,
-  }),
-)
 
 // Mount module routes
 for (const mod of modules) {
@@ -183,13 +169,25 @@ if (process.env.NODE_ENV === 'production' && existsSync(distDir)) {
 }
 
 const server = createServer(app)
+const websocketUpgradeResolver = createWebSocketUpgradeResolver(
+  moduleGraph.mountPlan.websockets.flatMap((declaration) => {
+    const ownerModule = modules.find((module) => module.name === declaration.ownerModuleId)
+    if (!ownerModule?.handleUpgrade) {
+      return []
+    }
+
+    return [{
+      declaration,
+      handleUpgrade: ownerModule.handleUpgrade,
+    }]
+  }),
+)
 
 server.on('upgrade', (req, socket, head) => {
-  for (const mod of modules) {
-    if (mod.handleUpgrade && req.url?.startsWith(mod.routePrefix)) {
-      mod.handleUpgrade(req, socket, head)
-      return
-    }
+  const resolved = websocketUpgradeResolver(req)
+  if (resolved) {
+    resolved.route.handleUpgrade(req, socket, head)
+    return
   }
   socket.destroy()
 })

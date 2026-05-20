@@ -39,7 +39,7 @@ describe('AgentAvatar — live commander shape', () => {
           displayName: 'Test Commander',
           host: 'atlas',
           avatarUrl: '/commander-assets/atlas-id/avatar',
-          ui: { accentColor: '#C23B22' },
+          ui: null,
         }}
         size={32}
       />,
@@ -54,7 +54,7 @@ describe('AgentAvatar — live commander shape', () => {
     expect(img?.getAttribute('alt')).toBe('Test Commander')
   })
 
-  it('renders the initial letter when avatarUrl is absent, colored by ui.accentColor', async () => {
+  it('renders a neutral empty tile when avatarUrl is absent using Sumi-e tokens', async () => {
     await render(
       <AgentAvatar
         commander={{
@@ -62,7 +62,7 @@ describe('AgentAvatar — live commander shape', () => {
           displayName: 'Demo User',
           host: 'zephyr',
           avatarUrl: null,
-          ui: { accentColor: '#D4763A' },
+          ui: null,
         }}
         size={32}
       />,
@@ -71,12 +71,11 @@ describe('AgentAvatar — live commander shape', () => {
     const avatar = document.querySelector('[data-testid="agent-avatar"]') as HTMLElement | null
     expect(avatar).not.toBeNull()
     expect(avatar?.querySelector('img')).toBeNull()
-    expect(avatar?.textContent).toBe('D')
-    // Accent color flows through to the letter color + border.
-    expect(avatar?.style.color.toLowerCase()).toContain('212') // rgb(212, 118, 58) from #D4763A
+    expect(avatar?.textContent).toBe('')
+    expect(avatar?.getAttribute('style')).not.toContain('--hv-avatar-accent')
   })
 
-  it('falls back to a deterministic accent when ui.accentColor is missing', async () => {
+  it('does not synthesize per-commander accent colors when ui is missing', async () => {
     await render(
       <AgentAvatar
         commander={{
@@ -92,12 +91,11 @@ describe('AgentAvatar — live commander shape', () => {
 
     const avatar = document.querySelector('[data-testid="agent-avatar"]') as HTMLElement | null
     expect(avatar).not.toBeNull()
-    expect(avatar?.textContent).toBe('S')
-    // Deterministic fallback uses the semantic token palette.
-    expect(avatar?.getAttribute('style')).toContain('--hv-avatar-accent')
+    expect(avatar?.textContent).toBe('')
+    expect(avatar?.getAttribute('style')).not.toContain('--hv-avatar-accent')
   })
 
-  it('derives the initial from host when displayName is empty', async () => {
+  it('stays empty when displayName is empty and host is present', async () => {
     await render(
       <AgentAvatar
         commander={{
@@ -112,7 +110,7 @@ describe('AgentAvatar — live commander shape', () => {
     )
 
     const avatar = document.querySelector('[data-testid="agent-avatar"]')
-    expect(avatar?.textContent).toBe('O')
+    expect(avatar?.textContent).toBe('')
   })
 
   it('raises border weight when active is true', async () => {
@@ -123,7 +121,7 @@ describe('AgentAvatar — live commander shape', () => {
           displayName: 'Active',
           host: 'active',
           avatarUrl: null,
-          ui: { accentColor: '#6B7B5E' },
+          ui: null,
         }}
         size={32}
         active
@@ -132,8 +130,52 @@ describe('AgentAvatar — live commander shape', () => {
 
     const avatar = document.querySelector('[data-testid="agent-avatar"]') as HTMLElement | null
     expect(avatar).not.toBeNull()
-    // Active border is `1.5px solid {accent}`; inactive is a faded
-    // `{accent}33` 1px. We just assert the width pumped up.
-    expect(avatar?.style.border.startsWith('1.5px')).toBe(true)
+    expect(avatar?.textContent).toBe('')
+    expect(avatar?.getAttribute('style')).not.toContain('--hv-avatar-accent')
+  })
+
+  it('defaults to a circle and supports the opt-in rounded square shape', async () => {
+    await render(
+      <AgentAvatar
+        commander={{
+          id: 'square-cmd',
+          displayName: 'Square',
+          host: 'square',
+          avatarUrl: null,
+          ui: null,
+        }}
+        size={30}
+        shape="square"
+      />,
+    )
+
+    let avatar = document.querySelector('[data-testid="agent-avatar"]') as HTMLElement | null
+    expect(avatar).not.toBeNull()
+    expect(avatar?.style.borderRadius).toBe('var(--hv-radius-md)')
+
+    flushSync(() => {
+      root?.unmount()
+    })
+    root = null
+    container?.remove()
+    container = null
+    document.body.innerHTML = ''
+
+    await render(
+      <AgentAvatar
+        commander={{
+          id: 'circle-cmd',
+          displayName: 'Circle',
+          host: 'circle',
+          avatarUrl: null,
+          ui: null,
+        }}
+        size={30}
+      />,
+    )
+
+    avatar = document.querySelector('[data-testid="agent-avatar"]') as HTMLElement | null
+    expect(avatar).not.toBeNull()
+    expect(avatar?.style.borderRadius).toBe('50%')
   })
 })

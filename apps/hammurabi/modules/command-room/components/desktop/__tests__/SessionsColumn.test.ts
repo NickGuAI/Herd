@@ -1,7 +1,21 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { SessionsColumn } from '../SessionsColumn'
+
+const mocks = vi.hoisted(() => ({
+  useFontScale: vi.fn(() => ({
+    fontScale: 1,
+    adjustFontScale: vi.fn(),
+    minFontScale: 0.8,
+    maxFontScale: 1.6,
+    fontScaleStep: 0.1,
+    isSaving: false,
+  })),
+}))
+
+vi.mock('@/hooks/use-font-scale', () => ({
+  useFontScale: mocks.useFontScale,
+}))
 
 vi.mock('@modules/agents/page-shell/SessionCard', () => ({
   SessionCard: ({ session, variant }: { session: { name: string; sessionType?: string }; variant?: string }) => createElement(
@@ -10,6 +24,8 @@ vi.mock('@modules/agents/page-shell/SessionCard', () => ({
     `SessionCard:${session.name}:${session.sessionType ?? 'none'}:${variant ?? 'card'}`,
   ),
 }))
+
+import { SessionsColumn } from '../SessionsColumn'
 
 describe('SessionsColumn', () => {
   it('preserves sessionType when rendering worker session cards', () => {

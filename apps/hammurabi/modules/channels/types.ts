@@ -13,6 +13,70 @@ export type SeededChannelProvider =
 export type ChannelProvider = SeededChannelProvider | (string & {})
 export type CommanderChannelProvider = ChannelProvider
 
+export type ChannelDescriptorFieldKind =
+  | 'text'
+  | 'password'
+  | 'number'
+  | 'checkbox'
+  | 'textarea'
+  | 'select'
+  | 'static'
+
+export interface ChannelDescriptorOption {
+  value: string
+  label: string
+}
+
+export interface ChannelDescriptorField {
+  key: string
+  label: string
+  kind: ChannelDescriptorFieldKind
+  required?: boolean
+  secret?: boolean
+  readonly?: boolean
+  placeholder?: string
+  helperText?: string
+  defaultValue?: string | number | boolean | string[]
+  section?: string
+  configPath?: string
+  formKey?: string
+  options?: ChannelDescriptorOption[]
+  min?: number
+}
+
+export interface ChannelProviderPairingDescriptor {
+  mode: 'none' | 'qr'
+  transport?: string
+  statusPollIntervalMs?: number
+}
+
+export interface ChannelCommanderBindingDescriptor {
+  mode: 'account-commander'
+  fieldKey: string
+  label: string
+  source: 'bindingState.defaultCommanderId'
+  emptyLabel?: string
+}
+
+export interface ChannelCommanderBindingState {
+  defaultCommanderId?: string
+  effectiveCommanderId: string
+  source: 'binding-state' | 'binding-owner' | 'legacy-provider-config'
+}
+
+export interface ChannelProviderDescriptor {
+  provider: CommanderChannelProvider
+  label: string
+  fields: ChannelDescriptorField[]
+  configDefaults: Record<string, unknown>
+  formDefaults: Record<string, string | boolean>
+  credentialFields: string[]
+  policyFields: string[]
+  pairing: ChannelProviderPairingDescriptor
+  commanderBinding: ChannelCommanderBindingDescriptor
+  bindingState?: ChannelCommanderBindingState
+}
+
 export type ChannelPolicyMode = 'open' | 'allowlist' | 'disabled'
 
 export type ChannelChatType =
@@ -75,6 +139,7 @@ export interface ChannelInboundEvent {
   text?: string
   audio?: ChannelAudioInbound
   media?: ChannelMediaPayload[]
+  metadata?: Record<string, unknown>
   rawTimestamp: string | number
   rawSourceId: string
 }
@@ -88,6 +153,7 @@ export interface ChannelOutboundPayload {
 
 export interface ChannelPairingChallenge {
   provider: ChannelProvider
+  commanderId?: string
   kind?: string
   id?: string
   accountId?: string
@@ -96,6 +162,11 @@ export interface ChannelPairingChallenge {
   url?: string
   instructions?: string
   metadata?: Record<string, unknown>
+}
+
+export interface ChannelPairingStatus extends ChannelPairingChallenge {
+  state: string
+  connected: boolean
 }
 
 export interface ChannelPairingInput {
@@ -137,6 +208,20 @@ export type ChannelInboundDecision =
   | { allowed: true; reason?: string }
   | { allowed: false; reason?: string }
 
+export interface ChannelAdapterStatus {
+  provider: ChannelProvider
+  accountId: string
+  state: string
+  connected: boolean
+  transport?: string
+  lastQrAt?: string
+  lastError?: string
+  lastEventAt?: string
+  qrCode?: string
+  qrDataUrl?: string
+  metadata?: Record<string, unknown>
+}
+
 export interface ChannelAdapter<TConfig = unknown> {
   provider: ChannelProvider
   capabilities: ChannelCapabilities
@@ -148,6 +233,7 @@ export interface ChannelAdapter<TConfig = unknown> {
     challenge: ChannelPairingChallenge,
     response: ChannelPairingResponse,
   ): Promise<CommanderChannelBinding>
+  getPairingStatus?(challenge: ChannelPairingChallenge): Promise<ChannelPairingStatus>
   send(
     runtime: ChannelRuntime<TConfig>,
     conversation: Conversation,
@@ -157,6 +243,7 @@ export interface ChannelAdapter<TConfig = unknown> {
     runtime: ChannelRuntime<TConfig>,
     event: ChannelInboundEvent,
   ): Promise<ChannelInboundDecision>
+  getStatus?(binding: CommanderChannelBinding): Promise<ChannelAdapterStatus>
 }
 
 export interface ChannelBindingPolicyConfig {
@@ -165,6 +252,7 @@ export interface ChannelBindingPolicyConfig {
   dmAllowlist?: string[]
   groupAllowlist?: string[]
   allowlist?: string[]
+  globalAllowlist?: string[]
   requireMention?: boolean
   [key: string]: unknown
 }

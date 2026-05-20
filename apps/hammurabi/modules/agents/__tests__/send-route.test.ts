@@ -408,6 +408,58 @@ describe('POST /sessions/:name/send (codex)', () => {
     }
   })
 
+  it('materializes structured workspace context on the backend /message path', async () => {
+    const codexSidecar = installMockCodexSidecar()
+    const server = await startServer()
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'codex-http-workspace-context',
+          mode: 'default',
+          transportType: 'stream',
+          agentType: 'codex',
+        }),
+      })
+
+      expect(createResponse.status).toBe(201)
+
+      const sendResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-http-workspace-context/message`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: 'Use the attached context.',
+          workspaceContext: {
+            filePaths: ['docs/no-target.md'],
+            fileAnnotations: [{
+              path: 'docs/note.md',
+              body: 'Fallback annotation body.',
+            }],
+          },
+        }),
+      })
+
+      expect(sendResponse.status).toBe(200)
+      await vi.waitFor(() => {
+        expect(codexSidecar.turnStartInputs).toHaveLength(1)
+      })
+      expect(codexSidecar.turnStartInputs[0]).toContain('@docs/no-target.md')
+      expect(codexSidecar.turnStartInputs[0]).toContain('Fallback annotation body.')
+      expect(codexSidecar.turnStartInputs[0]).toContain('Use the attached context.')
+    } finally {
+      await server.close()
+      await codexSidecar.close()
+    }
+  })
+
   it('spawns one Codex runtime per session and routes sends without cross-session coupling', async () => {
     const codexSidecar = installMockCodexSidecar()
     const server = await startServer()

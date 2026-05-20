@@ -4,13 +4,14 @@ import {
   migrateProviderContext,
   migratedProviderContextChanged,
   sanitizeProviderContextForPersistence,
-} from '../../../migrations/provider-context.js'
+} from '../providers/provider-context-migration.js'
 import { resolveCommanderDataDir } from '../../commanders/paths.js'
-import { writeJsonFileAtomically } from '../../../migrations/write-json-file-atomically.js'
+import { writeJsonFileAtomically } from '../../json-file.js'
 import { resolveModuleDataDir } from '../../data-dir.js'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
 } from '../../claude-adaptive-thinking.js'
+import { DEFAULT_CLAUDE_MAX_THINKING_TOKENS } from '../../claude-max-thinking-tokens.js'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
 import type { MachineRegistryStore } from '../machines.js'
 import {
@@ -93,12 +94,14 @@ export function buildTranscriptMeta(session: StreamSession): TranscriptMeta {
     model: session.model,
     effort: session.effort,
     adaptiveThinking: session.adaptiveThinking,
+    maxThinkingTokens: session.maxThinkingTokens,
     cwd: session.cwd,
     host: session.host,
     createdAt: session.createdAt,
     providerContext: sanitizeProviderContextForPersistence(session.providerContext, {
       effort: session.effort,
       adaptiveThinking: session.adaptiveThinking,
+      maxThinkingTokens: session.maxThinkingTokens,
     }),
     spawnedBy: session.spawnedBy,
   }
@@ -341,6 +344,7 @@ export async function restorePersistedSessions(
         const provider = getProvider(entry.agentType)
         const supportsEffort = provider?.uiCapabilities.supportsEffort ?? false
         const supportsAdaptiveThinking = provider?.uiCapabilities.supportsAdaptiveThinking ?? false
+        const supportsMaxThinkingTokens = provider?.uiCapabilities.supportsMaxThinkingTokens ?? false
         deps.exitedStreamSessions.set(entry.name, {
           phase: 'exited',
           hadResult,
@@ -363,6 +367,9 @@ export async function restorePersistedSessions(
             : undefined,
           adaptiveThinking: supportsAdaptiveThinking
             ? entry.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE
+            : undefined,
+          maxThinkingTokens: supportsMaxThinkingTokens
+            ? entry.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
             : undefined,
           resumedFrom: entry.resumedFrom,
           conversationEntryCount: entry.conversationEntryCount ?? countCompletedTurnEntries(events),

@@ -7,7 +7,6 @@
  * Import them as named exports wherever needed.
  */
 import type { CSSProperties, ReactNode } from 'react'
-import { deterministicCommanderAccentColor } from '@modules/commanders/commander-visual-profile'
 import { ICONS } from './icons'
 
 /* ============================================================
@@ -112,22 +111,12 @@ export function StatusDot({
    AgentAvatar
    ============================================================
    Canonical Hervald commander avatar. Accepts the live
-   `CommanderSession` shape (`ui.accentColor`, `avatarUrl`,
-   `displayName`/`name`/`host`) and renders either an `<img>` when
-   `avatarUrl` is present OR a round tile with the commander's
-   initial letter colored by the accent. Used on every surface that
-   shows a commander (desktop + mobile) so the visual identity is
-   consistent.
+   `CommanderSession` shape (`avatarUrl`, `displayName`/`name`/`host`)
+   and renders either an `<img>` when `avatarUrl` is present OR a neutral
+   empty tile. Used on every surface that shows a commander (desktop + mobile)
+   so the visual identity is consistent without per-commander color identity
+   or text fallback artifacts.
    ============================================================ */
-
-function initialFromCommander(commander: AgentAvatarCommander): string {
-  const source =
-    commander.displayName?.trim() ||
-    commander.name?.trim() ||
-    commander.host?.trim() ||
-    'H'
-  return source.charAt(0).toUpperCase()
-}
 
 export interface AgentAvatarCommander {
   id?: string
@@ -135,16 +124,14 @@ export interface AgentAvatarCommander {
   displayName?: string
   host?: string
   avatarUrl?: string | null
-  ui?: {
-    accentColor?: string | null
-    borderColor?: string | null
-  } | null
+  ui?: unknown
 }
 
 interface AgentAvatarProps {
   commander: AgentAvatarCommander
   size?: number
   active?: boolean
+  shape?: 'circle' | 'square'
   style?: CSSProperties
 }
 
@@ -152,36 +139,25 @@ export function AgentAvatar({
   commander,
   size = 32,
   active = false,
+  shape = 'circle',
   style = {},
 }: AgentAvatarProps) {
-  const accent =
-    commander.ui?.accentColor?.trim() ||
-    commander.ui?.borderColor?.trim() ||
-    deterministicCommanderAccentColor(commander.id)
-  const accentIsToken = accent.startsWith('var(')
-  const accentStyle = accentIsToken
-    ? ({ '--hv-avatar-accent': accent } as CSSProperties)
-    : {}
-  const accentPaint = accentIsToken ? 'var(--hv-avatar-accent)' : accent
-  const initial = initialFromCommander(commander)
+  const avatarRadius = shape === 'square' ? 'var(--hv-radius-md)' : '50%'
 
   const wrapperStyle: CSSProperties = {
     width: size,
     height: size,
     flexShrink: 0,
-    borderRadius: '50%',
+    borderRadius: avatarRadius,
     overflow: 'hidden',
-    background: 'var(--aged-paper)',
+    background: 'var(--hv-bg-raised)',
     border: active
-      ? `1.5px solid ${accentPaint}`
-      : accentIsToken
-        ? '1px solid var(--hv-border-soft)'
-        : `1px solid ${accent}33`,
+      ? '1.5px solid var(--hv-border-firm)'
+      : '1px solid var(--hv-border-soft)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    ...accentStyle,
     ...style,
   }
 
@@ -209,14 +185,12 @@ export function AgentAvatar({
         ...wrapperStyle,
         fontSize: size * 0.44,
         fontStyle: 'italic',
-        color: accentPaint,
+        color: 'var(--hv-fg-muted)',
         fontWeight: 400,
         letterSpacing: 0,
       }}
       data-testid="agent-avatar"
-    >
-      {initial}
-    </div>
+    />
   )
 }
 

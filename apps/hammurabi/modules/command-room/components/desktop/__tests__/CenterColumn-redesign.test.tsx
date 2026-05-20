@@ -7,6 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CenterColumn, type CenterColumnProps } from '../CenterColumn'
 
+vi.mock('@/hooks/use-providers', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-providers')>('@/hooks/use-providers')
+  const { testProviderRegistry } = await vi.importActual<
+    typeof import('../../../../agents/__tests__/provider-registry-fixture')
+  >('../../../../agents/__tests__/provider-registry-fixture')
+  return {
+    ...actual,
+    useProviderRegistry: () => ({ data: testProviderRegistry }),
+  }
+})
+
 vi.mock('@/hooks/use-approvals', () => ({
   usePendingApprovals: () => ({ data: [] }),
   useApprovalDecision: () => ({ mutateAsync: vi.fn() }),
@@ -74,10 +85,6 @@ vi.mock('@modules/commanders/components/CommanderStartControl', () => ({
 
 vi.mock('../ChatPane', () => ({
   ChatPane: () => createElement('div', { 'data-testid': 'chat-pane' }, 'ChatPane'),
-}))
-
-vi.mock('../QueueDock', () => ({
-  QueueDock: () => createElement('div', { 'data-testid': 'queue-dock' }, 'QueueDock'),
 }))
 
 let root: Root | null = null
@@ -152,31 +159,18 @@ describe('CenterColumn redesign', () => {
     delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT
   })
 
-  it('drops cost text and shows the running Stop button in the tab bar', async () => {
+  it('removes the desktop center header chrome and boxes the bottom composer', async () => {
     await render(<CenterColumn {...buildProps()} />)
 
     expect(document.body.textContent).not.toContain('$')
-
-    const stopButton = document.querySelector('[data-testid="commander-stop-button"]') as HTMLButtonElement | null
-    expect(stopButton).not.toBeNull()
-    expect(stopButton?.textContent).toContain('Stop')
-  })
-
-  it('hides the Stop button when the commander is idle', async () => {
-    await render(
-      <CenterColumn
-        {...buildProps({
-          commander: {
-            id: 'atlas-id',
-            name: 'atlas',
-            status: 'idle',
-            agentType: 'codex',
-          },
-        })}
-      />,
-    )
-
     expect(document.querySelector('[data-testid="commander-stop-button"]')).toBeNull()
+    expect(document.querySelector('[data-testid="conversation-status-indicator"]')).toBeNull()
+    expect(document.querySelector('button[aria-label="Use light theme"]')).toBeNull()
+    expect(document.querySelector('button[aria-label="Use dark theme"]')).toBeNull()
+
+    const composerBox = document.querySelector<HTMLElement>('[data-testid="compact-chat-composer"]')
+    expect(composerBox).not.toBeNull()
+    expect(composerBox?.style.boxShadow).toBe('var(--hv-shadow-block)')
   })
 
   it('shows a Create Conversation panel with a provider dropdown, and only POSTs on explicit Create click', async () => {
@@ -242,5 +236,52 @@ describe('CenterColumn redesign', () => {
     )
 
     expect(document.body.textContent).toContain('⌘K workspace')
+  })
+
+  it('opens the shared queue panel from the desktop composer queue button', async () => {
+    await render(
+      <CenterColumn
+        {...buildProps({
+          hasSelectedConversation: true,
+          activeChatSession: {
+            id: 'atlas-chat',
+            name: 'atlas-chat',
+            label: 'Atlas Chat',
+            created: '2026-05-15T12:00:00.000Z',
+            pid: 4242,
+            sessionType: 'stream',
+            agentType: 'codex',
+            status: 'running',
+          },
+          queueSnapshot: {
+            currentMessage: null,
+            items: [{
+              id: 'queued-desktop-1',
+              text: 'Follow up from the desktop composer',
+              priority: 'normal',
+              queuedAt: '2026-05-15T12:05:00.000Z',
+            }],
+            totalCount: 1,
+            maxSize: 8,
+          },
+        })}
+      />,
+    )
+
+    expect(document.querySelector('[data-testid="queue-dock"]')).toBeNull()
+
+    const queueButton = document.querySelector('button[aria-label="Open queue"]') as HTMLButtonElement | null
+    expect(queueButton).not.toBeNull()
+    expect(queueButton?.textContent).toBe('Queue 1/8')
+
+    flushSync(() => {
+      queueButton?.click()
+    })
+
+    const panel = document.body.querySelector('[data-testid="queue-panel"]')
+    expect(panel).not.toBeNull()
+    expect(panel?.textContent).toContain('Follow up from the desktop composer')
+    expect(panel?.textContent).toContain('Press Tab')
+    expect(panel?.textContent).toContain('Clear')
   })
 })

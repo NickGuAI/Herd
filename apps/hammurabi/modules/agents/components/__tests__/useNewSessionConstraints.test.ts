@@ -4,6 +4,7 @@ import {
   getForcedTransportType,
   getNormalizedAdaptiveThinking,
   getNormalizedEffort,
+  getNormalizedMaxThinkingTokens,
 } from '../new-session-form/useNewSessionConstraints'
 
 const providers = [
@@ -14,6 +15,7 @@ const providers = [
     uiCapabilities: {
       supportsEffort: true,
       supportsAdaptiveThinking: true,
+      supportsMaxThinkingTokens: true,
       supportsSkills: true,
       supportsLoginMode: true,
       permissionModes: [{ value: 'default', label: 'default', description: 'claude' }],
@@ -26,6 +28,7 @@ const providers = [
     uiCapabilities: {
       supportsEffort: false,
       supportsAdaptiveThinking: false,
+      supportsMaxThinkingTokens: false,
       supportsSkills: false,
       supportsLoginMode: true,
       permissionModes: [{ value: 'default', label: 'default', description: 'codex' }],
@@ -38,6 +41,7 @@ const providers = [
     uiCapabilities: {
       supportsEffort: false,
       supportsAdaptiveThinking: false,
+      supportsMaxThinkingTokens: false,
       supportsSkills: false,
       supportsLoginMode: false,
       forcedTransport: 'stream' as const,
@@ -59,7 +63,10 @@ describe('useNewSessionConstraints helpers', () => {
     expect(getNormalizedEffort(providers, 'gemini', 'high')).toBe('max')
     expect(getNormalizedEffort(providers, 'claude', 'high')).toBeNull()
 
-    expect(getNormalizedAdaptiveThinking(providers, 'codex', 'disabled')).toBe('enabled')
+    expect(getNormalizedAdaptiveThinking(providers, 'codex', 'enabled')).toBe('disabled')
     expect(getNormalizedAdaptiveThinking(providers, 'claude', 'disabled')).toBeNull()
+
+    expect(getNormalizedMaxThinkingTokens(providers, 'codex', 64000)).toBe(128000)
+    expect(getNormalizedMaxThinkingTokens(providers, 'claude', 64000)).toBeNull()
   })
 })

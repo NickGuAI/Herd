@@ -231,6 +231,71 @@ describe('useStreamEventProcessor replay user handling', () => {
     harness.cleanup()
   })
 
+  it('stores replayed plan approval events as unanswered ask messages', () => {
+    const harness = createHarness()
+
+    harness.dispatchReplayEvent({
+      type: 'plan_approval',
+      interactionKind: 'plan_approval',
+      toolId: 'plan-exit',
+      toolName: 'ExitPlanMode',
+      plan: '1. Normalize plan proposal\n2. Wait for approval',
+      approveLabel: 'Approve',
+      rejectLabel: 'Reject',
+      customResponseLabel: 'Add response',
+      providerContext: {
+        provider: 'claude',
+        backend: 'cli',
+        toolUseId: 'plan-exit',
+        toolName: 'ExitPlanMode',
+        answerFormat: 'claude.exit_plan_mode',
+      },
+    })
+
+    expect(harness.getMessages()).toEqual([
+      expect.objectContaining({
+        kind: 'ask',
+        toolId: 'plan-exit',
+        toolName: 'ExitPlanMode',
+        askInteractionKind: 'plan_approval',
+        askAnswered: false,
+        planApprovalPlan: '1. Normalize plan proposal\n2. Wait for approval',
+      }),
+    ])
+
+    harness.cleanup()
+  })
+
+  it('keeps waiting queued messages out of the transcript', () => {
+    const harness = createHarness()
+
+    harness.dispatchLiveEvent({
+      type: 'queue_update',
+      queue: {
+        currentMessage: {
+          id: 'queue-current',
+          text: 'queued message currently waiting on transport',
+          priority: 'high',
+          queuedAt: '2026-05-19T00:00:00.000Z',
+        },
+        items: [
+          {
+            id: 'queue-backlog',
+            text: 'queued backlog message',
+            priority: 'normal',
+            queuedAt: '2026-05-19T00:00:01.000Z',
+          },
+        ],
+        maxSize: 8,
+        totalCount: 2,
+      },
+    })
+
+    expect(harness.getMessages()).toEqual([])
+
+    harness.cleanup()
+  })
+
   it('renders delivered queued_message user events live without requiring replay', () => {
     const harness = createHarness()
 
@@ -244,6 +309,56 @@ describe('useStreamEventProcessor replay user handling', () => {
     })
 
     expect(harness.getMessages()).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        text: 'queued follow-up that actually started',
+      }),
+    ])
+
+    harness.cleanup()
+  })
+
+  it('renders delivered queued_message user events during replay', () => {
+    const harness = createHarness()
+
+    harness.dispatchReplayEvent({
+      type: 'user',
+      subtype: 'queued_message',
+      message: {
+        role: 'user',
+        content: 'replayed queued follow-up',
+      },
+    })
+
+    expect(harness.getMessages()).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        text: 'replayed queued follow-up',
+      }),
+    ])
+
+    harness.cleanup()
+  })
+
+  it('does not render duplicate queued_message user echoes', () => {
+    const harness = createHarness()
+    const event: StreamEvent = {
+      type: 'user',
+      subtype: 'queued_message',
+      message: {
+        role: 'user',
+        content: 'queued follow-up that actually started',
+      },
+    }
+
+    harness.dispatchReplayEvent(event)
+    harness.dispatchLiveEvent(event)
+    harness.dispatchLiveEvent(event)
+
+    const queuedUserMessages = harness.getMessages().filter((message) => (
+      message.kind === 'user' && message.text === 'queued follow-up that actually started'
+    ))
+    expect(queuedUserMessages).toEqual([
       expect.objectContaining({
         kind: 'user',
         text: 'queued follow-up that actually started',
@@ -413,7 +528,7 @@ const claudeSource = {
 }
 
 describe('useStreamEventProcessor Claude thinking handling (issue #1004)', () => {
-  it('renders a Thinking row with summarized plaintext when CLAUDE_CODE_EXTRA_BODY is in effect', () => {
+  it('renders a Thinking row with backend-normalized summarized plaintext when CLAUDE_CODE_EXTRA_BODY is in effect', () => {
     // Wire shape from /tmp/probe-extrabody.jsonl — Opus 4-7 with the
     // CLAUDE_CODE_EXTRA_BODY env var injected by buildClaudeSpawnEnv.
     const harness = createHarness()
@@ -428,7 +543,7 @@ describe('useStreamEventProcessor Claude thinking handling (issue #1004)', () =>
           {
             type: 'thinking',
             thinking:
-              " I'm thinking through how to structure a practical debugging approach for Node memory leaks—the user wants a clear 3-step plan, so I should focus on the key phases.",
+              "I'm thinking through how to structure a practical debugging approach for Node memory leaks—the user wants a clear 3-step plan, so I should focus on the key phases.",
             signature: 'ZXhhbXBsZS1zaWduYXR1cmUtYmxvYi0xNzI0LWJ5dGVz',
           },
         ],
@@ -444,7 +559,7 @@ describe('useStreamEventProcessor Claude thinking handling (issue #1004)', () =>
     harness.cleanup()
   })
 
-  it('renders a Thinking row with the redaction stub when body is empty but signature is present', () => {
+  it('renders a Thinking row with the backend-normalized redaction stub', () => {
     // Wire shape from /tmp/probe-with-flag.jsonl — Opus 4-7 baseline
     // (no extra-body env), encrypted thinking only.
     const harness = createHarness()
@@ -457,7 +572,11 @@ describe('useStreamEventProcessor Claude thinking handling (issue #1004)', () =>
       message: {
         id: 'claude-opus-encrypted',
         role: 'assistant',
-        content: [{ type: 'thinking', thinking: '', signature }],
+        content: [{
+          type: 'thinking',
+          thinking: `(reasoning content redacted by Claude · ${signature.length} bytes signed)`,
+          signature,
+        }],
       },
     })
 
@@ -516,7 +635,11 @@ describe('useStreamEventProcessor Codex thinking completion handling', () => {
       message: {
         id: 'codex-reasoning-after-deltas',
         role: 'assistant',
-        content: [{ type: 'thinking', thinking: 'Final completed reasoning' }],
+        content: [{
+          type: 'thinking',
+          thinking: 'Final completed reasoning',
+          presentation: { mergeWithActiveThinking: true },
+        }],
       },
     })
 
@@ -543,7 +666,11 @@ describe('useStreamEventProcessor Codex thinking completion handling', () => {
       message: {
         id: 'codex-reasoning-completed-no-delta',
         role: 'assistant',
-        content: [{ type: 'thinking', thinking: 'Completed reasoning text' }],
+        content: [{
+          type: 'thinking',
+          thinking: 'Completed reasoning text',
+          presentation: { mergeWithActiveThinking: true },
+        }],
       },
     })
 
@@ -577,7 +704,11 @@ describe('useStreamEventProcessor Codex thinking completion handling', () => {
       message: {
         id: 'codex-reasoning-completed-with-delta',
         role: 'assistant',
-        content: [{ type: 'thinking', thinking: 'Authoritative completed reasoning' }],
+        content: [{
+          type: 'thinking',
+          thinking: 'Authoritative completed reasoning',
+          presentation: { mergeWithActiveThinking: true },
+        }],
       },
     })
 

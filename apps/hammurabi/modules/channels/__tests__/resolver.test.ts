@@ -159,6 +159,83 @@ describe('resolveInboundChannelMessage', () => {
     }
   })
 
+  it('allows trusted WhatsApp self-chat messages under the default allowlist policy', async () => {
+    const stores = await createTempChannelStores()
+    try {
+      await stores.accountBindingStore.create({
+        commanderId: COMMANDER_ID,
+        provider: 'whatsapp',
+        accountId: 'acct-1',
+        displayName: 'WhatsApp',
+        config: { dmPolicy: 'allowlist' },
+      })
+      const event = makeInboundEvent({
+        peerId: '15551234567@s.whatsapp.net',
+        metadata: {
+          selfAuthored: true,
+          selfChat: true,
+        },
+      })
+
+      const result = await resolveInboundChannelMessage(
+        {
+          event,
+          commanderId: COMMANDER_ID,
+          channelMeta: makeChannelMeta(event),
+          lastRoute: makeLastRoute(event),
+        },
+        stores,
+      )
+
+      expect(result).toMatchObject({
+        ok: true,
+        created: true,
+        binding: {
+          commanderId: COMMANDER_ID,
+          provider: 'whatsapp',
+          accountId: 'acct-1',
+          peerId: '15551234567@s.whatsapp.net',
+        },
+      })
+    } finally {
+      await stores.cleanup()
+    }
+  })
+
+  it('does not allow trusted WhatsApp self-chat messages when DMs are disabled', async () => {
+    const stores = await createTempChannelStores()
+    try {
+      await stores.accountBindingStore.create({
+        commanderId: COMMANDER_ID,
+        provider: 'whatsapp',
+        accountId: 'acct-1',
+        displayName: 'WhatsApp',
+        config: { dmPolicy: 'disabled' },
+      })
+      const event = makeInboundEvent({
+        peerId: '15551234567@s.whatsapp.net',
+        metadata: {
+          selfAuthored: true,
+          selfChat: true,
+        },
+      })
+
+      const result = await resolveInboundChannelMessage(
+        {
+          event,
+          commanderId: COMMANDER_ID,
+          channelMeta: makeChannelMeta(event),
+          lastRoute: makeLastRoute(event),
+        },
+        stores,
+      )
+
+      expect(result).toEqual({ ok: false, dropped: true, reason: 'policy-denied' })
+    } finally {
+      await stores.cleanup()
+    }
+  })
+
   it('atomically creates a surface binding and conversation when policy allows', async () => {
     const stores = await createTempChannelStores()
     try {
@@ -193,6 +270,74 @@ describe('resolveInboundChannelMessage', () => {
       })
       await expect(stores.conversationStore.listAll()).resolves.toHaveLength(1)
       await expect(stores.surfaceBindingStore.list()).resolves.toHaveLength(1)
+    } finally {
+      await stores.cleanup()
+    }
+  })
+
+  it('accepts formatted phone numbers in WhatsApp direct-message allowlists', async () => {
+    const stores = await createTempChannelStores()
+    try {
+      await stores.accountBindingStore.create({
+        commanderId: COMMANDER_ID,
+        provider: 'whatsapp',
+        accountId: 'acct-1',
+        displayName: 'WhatsApp',
+        config: { dmPolicy: 'allowlist', dmAllowlist: ['(555) 123-4567'] },
+      })
+      const event = makeInboundEvent({
+        peerId: '15551234567@s.whatsapp.net',
+      })
+
+      const result = await resolveInboundChannelMessage(
+        {
+          event,
+          commanderId: COMMANDER_ID,
+          channelMeta: makeChannelMeta(event),
+          lastRoute: makeLastRoute(event),
+        },
+        stores,
+      )
+
+      expect(result).toMatchObject({
+        ok: true,
+        created: true,
+        binding: {
+          peerId: '15551234567@s.whatsapp.net',
+        },
+      })
+    } finally {
+      await stores.cleanup()
+    }
+  })
+
+  it('does not phone-normalize WhatsApp group allowlists', async () => {
+    const stores = await createTempChannelStores()
+    try {
+      await stores.accountBindingStore.create({
+        commanderId: COMMANDER_ID,
+        provider: 'whatsapp',
+        accountId: 'acct-1',
+        displayName: 'WhatsApp',
+        config: { groupPolicy: 'allowlist', groupAllowlist: ['120363012345'] },
+      })
+      const event = makeInboundEvent({
+        chatType: 'group',
+        peerId: '120363012345@g.us',
+        groupId: '120363012345@g.us',
+      })
+
+      const result = await resolveInboundChannelMessage(
+        {
+          event,
+          commanderId: COMMANDER_ID,
+          channelMeta: makeChannelMeta(event),
+          lastRoute: makeLastRoute(event),
+        },
+        stores,
+      )
+
+      expect(result).toEqual({ ok: false, dropped: true, reason: 'policy-denied' })
     } finally {
       await stores.cleanup()
     }

@@ -789,6 +789,81 @@ describe("stream sessions", () => {
       }
     })
 
+  it('routes Codex image messages through the app-server turn input', async () => {
+      const sidecar = installMockCodexSidecar()
+      const server = await startServer()
+
+      try {
+        const createResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'codex-image-send',
+            mode: 'default',
+            transportType: 'stream',
+            agentType: 'codex',
+          }),
+        })
+        expect(createResponse.status).toBe(201)
+
+        const ws = await connectWs(server.baseUrl, 'codex-image-send')
+        const received: Array<{ type: string; message?: { content?: unknown } }> = []
+        ws.on('message', (data) => {
+          const parsed = JSON.parse(data.toString()) as { type: string; message?: { content?: unknown } }
+          if (parsed.type !== 'replay') {
+            received.push(parsed)
+          }
+        })
+
+        const image = {
+          mediaType: 'image/png',
+          data: 'aW1hZ2UtYnl0ZXM=',
+        }
+        const sendResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-image-send/message`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ text: '', images: [image] }),
+        })
+
+        expect(sendResponse.status).toBe(200)
+        expect(await sendResponse.json()).toMatchObject({ sent: true, queued: false })
+
+        await vi.waitFor(() => {
+          const userEvent = received.find((event) => event.type === 'user')
+          expect(userEvent).toBeDefined()
+          expect(userEvent?.message?.content).toEqual([
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: image.data,
+              },
+            },
+          ])
+        })
+
+        const turnRequests = sidecar.getRequests('turn/start')
+        expect(turnRequests).toHaveLength(1)
+        expect(turnRequests[0].params).toEqual({
+          threadId: 'thread-1',
+          effort: 'xhigh',
+          input: [{ type: 'image', url: `data:image/png;base64,${image.data}` }],
+        })
+
+        ws.close()
+      } finally {
+        await sidecar.closeServer()
+        await server.close()
+      }
+    })
+
   it('does not spin hot Codex direct-send retries while a busy turn is falling back to queue', async () => {
       const sidecar = installMockCodexSidecar()
       sidecar.setTurnStartBehavior('busy')
@@ -922,6 +997,18 @@ describe("stream sessions", () => {
           })
         })
 
+        const waitingSession = server.agents.sessionsInterface.getSession('codex-direct-send-preemption')
+        const waitingUserTexts = (waitingSession?.events ?? []).flatMap((event) => {
+          if (event.type !== 'user') {
+            return []
+          }
+          const content = (event as { message?: { content?: unknown } }).message?.content
+          return typeof content === 'string' ? [content] : []
+        })
+        expect(waitingUserTexts).not.toContain('stop')
+        expect(waitingUserTexts).not.toContain('A')
+        expect(waitingUserTexts).not.toContain('visible queue')
+
         const requestCountBeforeStop = sidecar.getRequests('turn/start').length
         sidecar.emitNotification('turn/completed', {
           threadId: 'thread-1',
@@ -965,6 +1052,23 @@ describe("stream sessions", () => {
           const newTurnStarts = sidecar.getRequests('turn/start').slice(requestCountBeforeVisibleQueue)
           expect(newTurnStarts.length).toBeGreaterThan(0)
           expect(getTurnStartText(newTurnStarts[newTurnStarts.length - 1])).toBe('visible queue')
+        })
+
+        await vi.waitFor(() => {
+          const session = server.agents.sessionsInterface.getSession('codex-direct-send-preemption')
+          const queuedUserEvents = (session?.events ?? []).filter((event) => {
+            if (event.type !== 'user') {
+              return false
+            }
+            const content = (event as { message?: { content?: unknown } }).message?.content
+            return content === 'stop' || content === 'A' || content === 'visible queue'
+          })
+          expect(queuedUserEvents.map((event) => (
+            (event as { message?: { content?: unknown } }).message?.content
+          ))).toEqual(['stop', 'A', 'visible queue'])
+          expect(queuedUserEvents.map((event) => (
+            (event as { subtype?: string }).subtype
+          ))).toEqual(['queued_message', 'queued_message', 'queued_message'])
         })
       } finally {
         await sidecar.closeServer()

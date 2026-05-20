@@ -3,11 +3,11 @@
  *
  * Visual spec:
  *  - 7px status dot (color from STATE_COLOR)
- *  - Commander name in JetBrains Mono 13px
- *  - Italic description (first sentence, truncated)
+ *  - 44px commander avatar
+ *  - Commander name in JetBrains Mono 13px, name-only row
  *  - Pending count badge when pendingCount > 0
  *  - Selected state: ink-wash-02 bg + 2px solid foreground left border
- *  - When selected: inline New Chat action for the selected commander
+ *  - Active state: full strength; inactive state: dimmed
  */
 import type { SessionCreator } from '@/types'
 import { AgentAvatar, Icon, STATE_COLOR } from '@modules/components/hervald'
@@ -28,15 +28,10 @@ export interface Commander {
   iconName?: string
   isVirtual?: boolean
   // Threaded through from `CommanderSession` so surfaces can render a proper
-  // commander avatar via `<AgentAvatar />`. `ui.accentColor` is the operator's
-  // chosen theme color from the commander profile route; a deterministic
-  // fallback is used when it's absent. `avatarUrl` points at the backend
+  // commander avatar via `<AgentAvatar />`. `avatarUrl` points at the backend
   // avatar asset route when the operator has uploaded an image.
   avatarUrl?: string | null
-  ui?: {
-    accentColor?: string | null
-    borderColor?: string | null
-  } | null
+  ui?: unknown
 }
 
 export interface Worker {
@@ -62,7 +57,6 @@ interface SessionRowProps {
   commander: Commander
   selected: boolean
   onClick: () => void
-  onCreateChat?: () => void
   approvals?: Approval[]
 }
 
@@ -70,10 +64,10 @@ export function SessionRow({
   commander,
   selected,
   onClick,
-  onCreateChat,
   approvals = [],
 }: SessionRowProps) {
   const pendingCount = approvals.length
+  const isActive = ACTIVE_STATES.has(commander.status)
 
   return (
     <div data-testid="commander-row" data-commander-id={commander.id}>
@@ -82,10 +76,10 @@ export function SessionRow({
         onClick={onClick}
         style={{
           width: '100%',
-          padding: '10px 20px',
+          padding: '10px 16px 10px 18px',
           display: 'flex',
-          alignItems: 'flex-start',
-          gap: 10,
+          alignItems: 'center',
+          gap: 12,
           background: selected ? 'var(--hv-ink-wash-02)' : 'transparent',
           borderLeft: selected
             ? '2px solid var(--hv-fg)'
@@ -95,7 +89,8 @@ export function SessionRow({
           borderBottom: 'none',
           cursor: 'pointer',
           textAlign: 'left',
-          transition: `background 0.15s var(--hv-ease-gentle)`,
+          opacity: isActive ? 1 : 0.58,
+          transition: 'background 0.15s var(--hv-ease-gentle), opacity 0.15s var(--hv-ease-gentle)',
         }}
       >
         {commander.iconName ? (
@@ -108,20 +103,21 @@ export function SessionRow({
             }}
           />
         ) : (
-          <div style={{ position: 'relative', marginTop: 2, flexShrink: 0 }}>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
             <AgentAvatar
               commander={commander}
-              size={20}
-              active={ACTIVE_STATES.has(commander.status)}
+              size={44}
+              shape="square"
+              active={isActive}
             />
             <span
               aria-hidden
               style={{
                 position: 'absolute',
-                right: -2,
-                bottom: -2,
-                width: 7,
-                height: 7,
+                right: -3,
+                bottom: -3,
+                width: 8,
+                height: 8,
                 borderRadius: '50%',
                 background: STATE_COLOR[commander.status] ?? STATE_COLOR.idle,
                 border: '2px solid var(--hv-bg)',
@@ -136,14 +132,19 @@ export function SessionRow({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              gap: 6,
             }}
           >
             <span
               className="font-mono"
               style={{
+                minWidth: 0,
                 fontSize: 13,
                 color: 'var(--hv-fg)',
-                letterSpacing: '-0.01em',
+                letterSpacing: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
               {commander.name}
@@ -155,8 +156,8 @@ export function SessionRow({
                 style={{
                   fontSize: 10,
                   padding: '1px 6px',
-                  background: 'rgba(194,59,34,0.10)',
-                  color: 'var(--vermillion-seal)',
+                  background: 'var(--hv-accent-danger-wash)',
+                  color: 'var(--hv-accent-danger)',
                   borderRadius: '2px 6px 2px 6px',
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
@@ -169,55 +170,8 @@ export function SessionRow({
               </span>
             )}
           </div>
-
-          {commander.description && (
-            <div
-              className="font-body"
-              style={{
-                fontSize: 11.5,
-                color: 'var(--hv-fg-subtle)',
-                marginTop: 2,
-                fontStyle: 'italic',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {commander.description.split('.')[0].toLowerCase()}
-            </div>
-          )}
         </div>
       </button>
-
-      {selected && onCreateChat && (
-        <div style={{ padding: '2px 0 8px' }}>
-          <div style={{ padding: '0 20px 6px 36px' }}>
-            <button
-              className="font-mono"
-              type="button"
-              data-testid="commander-new-chat-button"
-              onClick={onCreateChat}
-              aria-label={`New chat for ${commander.name}`}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                background: 'transparent',
-                border: '1px solid var(--hv-border-hair)',
-                borderRadius: 999,
-                color: 'var(--hv-fg-subtle)',
-                cursor: 'pointer',
-                padding: '3px 8px',
-                fontSize: 11,
-                letterSpacing: '0.04em',
-              }}
-            >
-              <Icon name="plus" size={10} />
-              <span>New Chat</span>
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

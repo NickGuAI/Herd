@@ -31,7 +31,7 @@ export default function BottomSheet({
       position={anchoredToBottom ? 'bottom-sheet' : 'top-sheet'}
       portalThemeClassName={dark ? 'hv-dark' : undefined}
       contentClassName={cn(
-        'flex w-full flex-col overflow-hidden bg-washi-white',
+        'flex w-full flex-col overflow-hidden bg-[var(--hv-surface-card)]',
         anchoredToBottom
           ? 'rounded-t-2xl md:max-w-2xl md:rounded-xl'
           : 'rounded-b-2xl md:max-w-2xl md:rounded-xl',
@@ -43,8 +43,8 @@ export default function BottomSheet({
       </div>
 
       {title ? (
-        <div className="border-b border-ink-border px-4 pb-3 pt-2">
-          <h2 className="font-display text-heading text-sumi-black">{title}</h2>
+        <div className="border-b border-[color:var(--hv-border-hair)] px-4 pb-3 pt-2">
+          <h2 className="font-display text-heading text-[color:var(--hv-fg)]">{title}</h2>
         </div>
       ) : null}
 

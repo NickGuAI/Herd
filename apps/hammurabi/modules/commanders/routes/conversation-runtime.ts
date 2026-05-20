@@ -4,7 +4,9 @@ import {
 } from '../memory/module.js'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type { AgentType, StreamJsonEvent, StreamSession } from '../../agents/types.js'
+import type { QueuedMessageImage } from '../../agents/message-queue.js'
 import { mapStreamEventsToMessages } from '../../agents/messages/history.js'
 import type { MsgItem } from '../../agents/messages/model.js'
 import { readTranscriptEvents } from '../../agents/transcript-store.js'
@@ -13,7 +15,7 @@ import type { CommanderSession } from '../store.js'
 import { resolveCommanderWorkflow } from '../workflow-resolution.js'
 import type { Conversation } from '../conversation-store.js'
 import type { CommanderRoutesContext } from './types.js'
-import { sanitizeProviderContextForPersistence } from '../../../migrations/provider-context.js'
+import { sanitizeProviderContextForPersistence } from '../../agents/providers/provider-context-migration.js'
 import { getProvider } from '../../agents/providers/registry.js'
 
 export function buildConversationSessionName(conversation: Conversation): string {
@@ -101,6 +103,7 @@ export interface ConversationSpawnOptions {
   agentType?: AgentType
   model?: string | null
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
 
 interface PreparedConversationSession {
@@ -115,6 +118,7 @@ interface PreparedConversationSession {
     model?: string
     effort?: ClaudeEffortLevel
     adaptiveThinking?: ClaudeAdaptiveThinkingMode
+    maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
     host?: string
     resumeProviderContext?: Conversation['providerContext']
@@ -170,6 +174,9 @@ async function prepareConversationSession(
   const adaptiveThinking = provider?.uiCapabilities.supportsAdaptiveThinking
     ? spawnOptions?.adaptiveThinking
     : undefined
+  const maxThinkingTokens = provider?.uiCapabilities.supportsMaxThinkingTokens
+    ? spawnOptions?.maxThinkingTokens
+    : undefined
   const cwd = commander.cwd ?? undefined
   const host = commander.host ?? undefined
   const workflow = await resolveCommanderWorkflow(
@@ -178,12 +185,11 @@ async function prepareConversationSession(
     context.commanderBasePath,
   )
   const built = await buildCommanderSessionSeedFromResolvedWorkflow(
-    {
-      commanderId,
-      cwd,
-      persona: commander.persona,
-      currentTask: conversation.currentTask,
-      taskSource: commander.taskSource,
+      {
+        commanderId,
+        cwd,
+        currentTask: conversation.currentTask,
+        taskSource: commander.taskSource,
       maxTurns: commander.maxTurns,
       memoryBasePath: context.commanderBasePath,
     },
@@ -202,6 +208,7 @@ async function prepareConversationSession(
       model,
       effort,
       adaptiveThinking,
+      maxThinkingTokens,
       cwd,
       host,
       resumeProviderContext: conversation.providerContext,
@@ -238,6 +245,7 @@ function sanitizeConversationProviderContext(
   return sanitizeProviderContextForPersistence(session.providerContext, {
     effort: session.effort,
     adaptiveThinking: session.adaptiveThinking,
+    maxThinkingTokens: session.maxThinkingTokens,
   }) ?? undefined
 }
 
@@ -307,6 +315,8 @@ export async function startConversationSession(
   initialMessage?: string | null,
   spawnOptions?: ConversationSpawnOptions,
   sendOptions?: { queue?: boolean; priority?: 'high' | 'normal' | 'low' },
+  dispatchChannelReplies = false,
+  channelReplySkipCompletedTurns = 0,
 ): Promise<{ conversation: Conversation; sent: boolean }> {
   const prepared = await prepareConversationSession(
     context,
@@ -324,6 +334,7 @@ export async function startConversationSession(
   if (reusingLiveSession) {
     refreshLiveConversationSessionPrompt(existingSession, createSessionInput)
   } else {
+    removeChannelReplyForwarder(context, sessionName)
     sessionsInterface.deleteSession(sessionName)
   }
 
@@ -344,6 +355,11 @@ export async function startConversationSession(
     commanderId,
     prepared.commander.heartbeat,
   )
+  if (dispatchChannelReplies) {
+    ensureChannelReplyForwarder(context, heartbeatConversation, {
+      skipCompletedTurns: channelReplySkipCompletedTurns,
+    })
+  }
 
   const messageToSend = initialMessage ?? (reusingLiveSession ? null : STARTUP_PROMPT)
   const sent = messageToSend
@@ -351,6 +367,7 @@ export async function startConversationSession(
     : true
   if (!sent) {
     context.heartbeatManager.stop(heartbeatConversation.id)
+    removeChannelReplyForwarder(context, sessionName)
     sessionsInterface.deleteSession(sessionName)
     await context.conversationStore.update(conversation.id, (current) => ({
       ...current,
@@ -438,12 +455,13 @@ export async function swapConversationProvider(
 export interface DeliverConversationMessageOptions {
   queue?: boolean
   priority?: 'high' | 'normal' | 'low'
+  dispatchChannelReplies?: boolean
   /**
-   * When `true`, an `idle` conversation is auto-started using `message` as the
-   * initial prompt instead of returning 409. This is the explicit opt-in for
-   * channel webhook surfaces (whatsapp/telegram/discord) where the inbound
-   * message itself is the implicit start signal — UI surfaces must keep the
-   * default `false` so explicit Start clicks remain the only resume path.
+   * When `true`, an `idle` conversation is auto-started before delivering the
+   * message instead of returning 409. This is the explicit opt-in for channel
+   * webhook surfaces (whatsapp/telegram/discord) where the inbound message
+   * itself is the implicit start signal — UI surfaces must keep the default
+   * `false` so explicit Start clicks remain the only resume path.
    * See codex-review P1 on PR #1279 (comment 3174904129).
    */
   autoStartIdle?: boolean
@@ -452,6 +470,107 @@ export interface DeliverConversationMessageOptions {
    * Ignored when the conversation is already active.
    */
   startSpawnOptions?: ConversationSpawnOptions
+}
+
+export interface ConversationMessagePayload {
+  message: string
+  images?: QueuedMessageImage[]
+}
+
+function eventType(event: StreamJsonEvent): string {
+  return typeof event.type === 'string' ? event.type : ''
+}
+
+function extractAssistantReplyText(events: readonly StreamJsonEvent[]): string | null {
+  const messages = mapStreamEventsToMessages(events)
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.kind !== 'agent') {
+      continue
+    }
+    const text = message.text.trim()
+    if (text) {
+      return text
+    }
+  }
+  return null
+}
+
+function removeChannelReplyForwarder(
+  context: CommanderRoutesContext,
+  sessionName: string,
+): void {
+  const unsubscribe = context.channelReplyForwarders.get(sessionName)
+  if (!unsubscribe) {
+    return
+  }
+  unsubscribe()
+  context.channelReplyForwarders.delete(sessionName)
+}
+
+interface ChannelReplyForwarderOptions {
+  skipCompletedTurns?: number
+}
+
+function ensureChannelReplyForwarder(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  options: ChannelReplyForwarderOptions = {},
+): void {
+  if (!conversation.channelMeta || !conversation.lastRoute || !context.sessionsInterface) {
+    return
+  }
+
+  const sessionName = buildConversationSessionName(conversation)
+  if (context.channelReplyForwarders.has(sessionName)) {
+    return
+  }
+
+  let turnEvents: StreamJsonEvent[] = []
+  let skippedCompletedTurns = Math.max(0, Math.floor(options.skipCompletedTurns ?? 0))
+  const unsubscribe = context.sessionsInterface.subscribeToEvents(sessionName, (event) => {
+    const type = eventType(event)
+    if (type === 'message_start') {
+      turnEvents = [event]
+    } else {
+      turnEvents.push(event)
+    }
+
+    if (type !== 'result') {
+      return
+    }
+
+    if (skippedCompletedTurns > 0) {
+      skippedCompletedTurns -= 1
+      turnEvents = []
+      return
+    }
+
+    const replyText = extractAssistantReplyText(turnEvents)
+    turnEvents = []
+    if (!replyText) {
+      return
+    }
+
+    void context.dispatchCommanderChannelReply({
+      commanderId: conversation.commanderId,
+      conversationId: conversation.id,
+      message: replyText,
+    }).then((result) => {
+      if (!result.ok) {
+        console.warn(
+          `[channels] Failed to dispatch assistant reply for conversation "${conversation.id}": ${result.error}`,
+        )
+      }
+    }).catch((error) => {
+      console.warn(
+        `[channels] Failed to dispatch assistant reply for conversation "${conversation.id}":`,
+        error,
+      )
+    })
+  })
+
+  context.channelReplyForwarders.set(sessionName, unsubscribe)
 }
 
 export async function persistConversationRuntimeSnapshot(
@@ -489,6 +608,7 @@ export async function stopConversationSession(
   nextStatus: Conversation['status'],
 ): Promise<Conversation | null> {
   const sessionName = buildConversationSessionName(conversation)
+  removeChannelReplyForwarder(context, sessionName)
   const updated = await persistConversationRuntimeSnapshot(context, conversation, nextStatus)
   context.heartbeatManager.stop(conversation.id)
   context.sessionsInterface?.deleteSession(sessionName)
@@ -515,7 +635,7 @@ export async function stopConversationSession(
 export async function deliverConversationMessage(
   context: CommanderRoutesContext,
   conversation: Conversation,
-  message: string,
+  payload: ConversationMessagePayload,
   options?: DeliverConversationMessageOptions,
 ): Promise<
   | {
@@ -541,6 +661,10 @@ export async function deliverConversationMessage(
   const sendOptions = options?.queue === undefined && options?.priority === undefined
     ? undefined
     : { queue: options.queue, priority: options.priority }
+  const sessionPayload = {
+    text: payload.message,
+    images: payload.images && payload.images.length > 0 ? [...payload.images] : undefined,
+  }
 
   const liveSession = getLiveConversationSession(context, conversation)
   if (!liveSession) {
@@ -549,9 +673,11 @@ export async function deliverConversationMessage(
         context,
         conversation.commanderId,
         conversation,
-        message,
+        null,
         options.startSpawnOptions,
-        sendOptions,
+        undefined,
+        options.dispatchChannelReplies === true,
+        options.dispatchChannelReplies === true ? 1 : 0,
       )
       if (!started.sent) {
         return {
@@ -560,10 +686,31 @@ export async function deliverConversationMessage(
           error: `Conversation "${conversation.id}" could not be auto-started`,
         }
       }
+      const sessionName = buildConversationSessionName(started.conversation)
+      const autoStartedSendOptions = sendOptions ?? { queue: true, priority: 'normal' as const }
+      const sent = await context.sessionsInterface?.sendToSession(
+        sessionName,
+        sessionPayload,
+        autoStartedSendOptions,
+      )
+      if (!sent) {
+        await stopConversationSession(context, started.conversation, 'idle')
+        return {
+          ok: false,
+          status: 503,
+          error: `Conversation "${conversation.id}" could not receive its auto-start message`,
+        }
+      }
+      const updated = await context.conversationStore.update(started.conversation.id, (current) => ({
+        ...current,
+        status: 'active',
+        lastMessageAt: new Date().toISOString(),
+      }))
+      await updateCommanderDerivedState(context, conversation.commanderId)
       return {
         ok: true,
         createdSession: true,
-        conversation: started.conversation,
+        conversation: updated ?? started.conversation,
       }
     }
     if (conversation.status === 'idle') {
@@ -581,7 +728,10 @@ export async function deliverConversationMessage(
   }
 
   const sessionName = buildConversationSessionName(conversation)
-  const sent = await context.sessionsInterface?.sendToSession(sessionName, message, sendOptions)
+  if (options?.dispatchChannelReplies) {
+    ensureChannelReplyForwarder(context, conversation)
+  }
+  const sent = await context.sessionsInterface?.sendToSession(sessionName, sessionPayload, sendOptions)
   if (!sent) {
     return {
       ok: false,

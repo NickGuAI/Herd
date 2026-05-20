@@ -10,11 +10,11 @@ interface ChatPaneProps {
   onDeny: (approval: PendingApproval) => void
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   agentAvatarUrl?: string | null
-  agentAccentColor?: string | null
   sessionId?: string
   hasOlderMessages?: boolean
   loadingOlderMessages?: boolean
   onLoadOlderMessages?: () => void
+  onOpenWorkspaceFile?: (path: string) => void
 }
 
 function ApprovalDivider() {
@@ -45,17 +45,19 @@ export function ChatPane({
   onDeny,
   onAnswer,
   agentAvatarUrl,
-  agentAccentColor,
   sessionId = 'hervald-chat',
   hasOlderMessages = false,
   loadingOlderMessages = false,
   onLoadOlderMessages,
+  onOpenWorkspaceFile,
 }: ChatPaneProps) {
   return (
     <div
       className="hervald-chat-pane"
       style={{
-        padding: '20px 32px 16px',
+        minWidth: 0,
+        padding: '16px 18px 12px',
+        overflowWrap: 'anywhere',
       }}
     >
       {hasOlderMessages && onLoadOlderMessages && (
@@ -87,8 +89,8 @@ export function ChatPane({
         sessionId={sessionId}
         onAnswer={onAnswer}
         agentAvatarUrl={agentAvatarUrl ?? undefined}
-        agentAccentColor={agentAccentColor ?? undefined}
         className="hervald-chat-transcript"
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
       />
 
       {approvals.length > 0 && (

@@ -77,7 +77,7 @@ export function SelectedDetailCard({
         {isBlocked && (
           <Chip
             tone="warning"
-            style={{ border: '1px solid rgba(212,118,58,0.35)', fontSize: 10, letterSpacing: '0.14em' }}
+            style={{ border: '1px solid var(--hv-accent-warning)', fontSize: 10, letterSpacing: '0.14em' }}
           >
             WAITING
           </Chip>
@@ -117,7 +117,7 @@ export function SelectedDetailCard({
             fontSize: 10.5,
             letterSpacing: '0.14em',
             textTransform: 'uppercase',
-            color: 'var(--vermillion-seal)',
+            color: 'var(--hv-accent-danger)',
             marginBottom: 12,
           }}
         >
@@ -192,10 +192,10 @@ function btnStyle(kind: 'primary' | 'ghost-vermillion' | 'ghost' | 'ghost-critic
     return { ...base, background: 'var(--hv-fg)', color: 'var(--hv-fg-inverse)', borderColor: 'var(--hv-fg)' }
   }
   if (kind === 'ghost-vermillion') {
-    return { ...base, background: 'transparent', color: 'var(--vermillion-seal)', borderColor: 'rgba(194,59,34,0.35)' }
+    return { ...base, background: 'transparent', color: 'var(--hv-accent-danger)', borderColor: 'var(--hv-accent-danger)' }
   }
   if (kind === 'ghost-critical') {
-    return { ...base, background: 'transparent', color: 'var(--vermillion-seal)', borderColor: 'rgba(194,59,34,0.35)' }
+    return { ...base, background: 'transparent', color: 'var(--hv-accent-danger)', borderColor: 'var(--hv-accent-danger)' }
   }
   return { ...base, background: 'transparent', color: 'var(--hv-fg-muted)', borderColor: 'var(--hv-border-firm)' }
 }

@@ -24,7 +24,7 @@ import {
   buildOpenCodeSystemPrompt,
   mapOpenCodeMode,
 } from './helpers.js'
-import { isRemoteMachine } from '../../machines.js'
+import { isDaemonMachine, isRemoteMachine } from '../../machines.js'
 import {
   asObject,
   cloneActiveSkillInvocation,
@@ -346,7 +346,7 @@ export async function createOpenCodeAcpSession(
     agentType: 'opencode',
     mode,
     cwd: sessionCwd,
-    host: isRemoteMachine(options.machine) ? options.machine.id : undefined,
+    host: isRemoteMachine(options.machine) || isDaemonMachine(options.machine) ? options.machine.id : undefined,
     currentSkillInvocation: cloneActiveSkillInvocation(options.currentSkillInvocation),
     spawnedBy: options.spawnedBy,
     spawnedWorkers: options.spawnedWorkers ? [...options.spawnedWorkers] : [],
@@ -390,64 +390,67 @@ export async function createOpenCodeAcpSession(
   ensureOpenCodeProviderContext(session).notificationCleanup = runtime.addNotificationListener(
     resumeSessionId,
     ({ method, params, requestId }) => {
-    if (requestId !== undefined) {
-      const permissionRequest = buildOpenCodeApprovalRawEvent(session, requestId, asObject(params), deps)
-      if (!permissionRequest) {
+      if (method === 'session/update') {
+        const payload = asObject(params)
+        const update = asObject(payload?.update)
+        const updateForNormalization = requestId !== undefined && update
+          ? { ...update, requestId }
+          : payload?.update
+        trackOpenCodeToolCallSnapshot(session, asObject(updateForNormalization))
+        const normalized = normalizeOpenCodeSessionUpdate(
+          updateForNormalization,
+          session.opencodeTurnState ?? createOpenCodeTurnState(),
+        )
+        if (!normalized) {
+          return
+        }
+        const events = Array.isArray(normalized) ? normalized : [normalized]
+        for (const event of events) {
+          deps.appendEvent(session, event)
+          deps.broadcastEvent(session, event)
+        }
         return
       }
 
-      const actionPolicyGate = deps.getActionPolicyGate?.()
-      if (!actionPolicyGate) {
-        const unavailableEvent: StreamJsonEvent = {
-          type: 'system',
-          text: 'Hammurabi approval gate is unavailable. OpenCode request denied.',
+      if (requestId !== undefined) {
+        const permissionRequest = buildOpenCodeApprovalRawEvent(session, requestId, asObject(params), deps)
+        if (!permissionRequest) {
+          return
         }
-        deps.appendEvent(session, unavailableEvent)
-        deps.broadcastEvent(session, unavailableEvent)
-        deps.schedulePersistedSessionsWrite()
-        readOpenCodeRuntime(session)?.sendResponse(requestId, {
-          outcome: {
-            outcome: 'cancelled',
-          },
+
+        const actionPolicyGate = deps.getActionPolicyGate?.()
+        if (!actionPolicyGate) {
+          const unavailableEvent: StreamJsonEvent = {
+            type: 'system',
+            text: 'Hammurabi approval gate is unavailable. OpenCode request denied.',
+          }
+          deps.appendEvent(session, unavailableEvent)
+          deps.broadcastEvent(session, unavailableEvent)
+          deps.schedulePersistedSessionsWrite()
+          readOpenCodeRuntime(session)?.sendResponse(requestId, {
+            outcome: {
+              outcome: 'cancelled',
+            },
+          })
+          return
+        }
+
+        void handleProviderApproval(opencodeApprovalAdapter, permissionRequest, session, { actionPolicyGate }).catch((error) => {
+          const detail = error instanceof Error ? error.message : String(error)
+          const failureEvent: StreamJsonEvent = {
+            type: 'system',
+            text: `OpenCode approval handling failed: ${detail}`,
+          }
+          deps.appendEvent(session, failureEvent)
+          deps.broadcastEvent(session, failureEvent)
+          deps.schedulePersistedSessionsWrite()
+          readOpenCodeRuntime(session)?.sendResponse(requestId, {
+            outcome: {
+              outcome: 'cancelled',
+            },
+          })
         })
-        return
       }
-
-      void handleProviderApproval(opencodeApprovalAdapter, permissionRequest, session, { actionPolicyGate }).catch((error) => {
-        const detail = error instanceof Error ? error.message : String(error)
-        const failureEvent: StreamJsonEvent = {
-          type: 'system',
-          text: `OpenCode approval handling failed: ${detail}`,
-        }
-        deps.appendEvent(session, failureEvent)
-        deps.broadcastEvent(session, failureEvent)
-        deps.schedulePersistedSessionsWrite()
-        readOpenCodeRuntime(session)?.sendResponse(requestId, {
-          outcome: {
-            outcome: 'cancelled',
-          },
-        })
-      })
-      return
-    }
-
-    if (method !== 'session/update') {
-      return
-    }
-    const payload = asObject(params)
-    trackOpenCodeToolCallSnapshot(session, asObject(payload?.update))
-    const normalized = normalizeOpenCodeSessionUpdate(
-      payload?.update,
-      session.opencodeTurnState ?? createOpenCodeTurnState(),
-    )
-    if (!normalized) {
-      return
-    }
-    const events = Array.isArray(normalized) ? normalized : [normalized]
-    for (const event of events) {
-      deps.appendEvent(session, event)
-      deps.broadcastEvent(session, event)
-    }
     },
   )
 

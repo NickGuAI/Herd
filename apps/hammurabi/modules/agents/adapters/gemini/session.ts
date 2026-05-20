@@ -24,7 +24,7 @@ import {
   buildGeminiSystemPrompt,
   mapGeminiMode,
 } from './helpers.js'
-import { isRemoteMachine } from '../../machines.js'
+import { isDaemonMachine, isRemoteMachine } from '../../machines.js'
 import {
   asObject,
   cloneActiveSkillInvocation,
@@ -346,7 +346,7 @@ export async function createGeminiAcpSession(
     agentType: 'gemini',
     mode,
     cwd: sessionCwd,
-    host: isRemoteMachine(options.machine) ? options.machine.id : undefined,
+    host: isRemoteMachine(options.machine) || isDaemonMachine(options.machine) ? options.machine.id : undefined,
     currentSkillInvocation: cloneActiveSkillInvocation(options.currentSkillInvocation),
     spawnedBy: options.spawnedBy,
     spawnedWorkers: options.spawnedWorkers ? [...options.spawnedWorkers] : [],

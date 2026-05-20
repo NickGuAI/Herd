@@ -13,7 +13,11 @@ import {
   CalendarClock,
   FolderOpen,
   ShieldCheck,
+  RadioTower,
+  Sparkles,
+  Circle,
 } from 'lucide-react'
+import type { FrontendNavItem } from '@/types'
 import { cn } from '@/lib/utils'
 
 const iconMap: Record<string, React.ComponentType<LucideProps>> = {
@@ -28,49 +32,40 @@ const iconMap: Record<string, React.ComponentType<LucideProps>> = {
   CalendarClock,
   FolderOpen,
   ShieldCheck,
+  RadioTower,
+  Sparkles,
+  Circle,
   Settings,
 }
 
-/** Short labels for mobile bottom nav */
-const SHORT_LABELS: Record<string, string> = {
-  'command-room': 'Command',
-  'api-keys': 'Settings',
-}
-
-interface NavItem {
-  name: string
-  label: string
-  icon: string
-  path: string
+interface BottomNavItem extends FrontendNavItem {
   badge?: number
-  hideFromNav?: boolean
-  navGroup?: 'primary' | 'secondary'
 }
 
 export function BottomNav({
   modules,
   forceVisible = false,
 }: {
-  modules: NavItem[]
+  modules: BottomNavItem[]
   forceVisible?: boolean
 }) {
   return (
     <nav
       className={cn(
-        'fixed bottom-0 left-0 right-0 z-20 flex items-stretch justify-around border-t border-ink-border bg-washi-white pb-[env(safe-area-inset-bottom,0px)]',
+        'fixed bottom-0 left-0 right-0 z-20 flex items-stretch justify-around border-t border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] pb-[env(safe-area-inset-bottom,0px)]',
         !forceVisible && 'md:hidden',
       )}
     >
       {modules.filter((mod) => !mod.hideFromNav && (mod.navGroup ?? 'primary') === 'primary').map((mod) => {
-        const Icon = iconMap[mod.icon]
+        const Icon = iconMap[mod.icon] ?? Circle
         return (
           <NavLink
             key={mod.name}
             to={mod.path}
             className={({ isActive }) =>
               cn(
-                'flex flex-1 flex-col items-center justify-center gap-1 pt-2.5 pb-2 text-sumi-black/70 transition-colors duration-300',
-                isActive && 'text-sumi-black',
+                'flex flex-1 flex-col items-center justify-center gap-1 pt-2.5 pb-2 text-[color:var(--hv-fg)] transition-colors duration-300',
+                isActive && 'text-[color:var(--hv-fg)]',
               )
             }
           >
@@ -79,15 +74,15 @@ export function BottomNav({
                 <span className="relative">
                   {Icon && <Icon size={24} />}
                   {mod.badge && mod.badge > 0 ? (
-                    <span className="absolute right-[-6px] top-0 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-accent-vermillion px-1 text-[9px] font-semibold leading-none text-washi-white">
+                    <span className="absolute right-[-6px] top-0 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-[var(--hv-accent-danger-wash)] px-1 text-[9px] font-medium leading-none text-[color:var(--hv-fg-inverse)]">
                       {mod.badge}
                     </span>
                   ) : null}
                 </span>
                 <span className="text-[12px] uppercase tracking-wider">
-                  {SHORT_LABELS[mod.name] ?? mod.label}
+                  {mod.label}
                 </span>
-                <span className={cn('block w-1 h-1 rounded-full', isActive ? 'bg-sumi-black' : 'bg-transparent')} />
+                <span className={cn('block w-1 h-1 rounded-full', isActive ? 'bg-[var(--hv-button-primary-bg)]' : 'bg-transparent')} />
               </>
             )}
           </NavLink>

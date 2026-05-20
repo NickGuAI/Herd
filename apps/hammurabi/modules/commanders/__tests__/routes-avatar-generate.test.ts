@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ProviderSecretsStoreLike } from '../../../server/api-keys/provider-secrets-store'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
+import { DEFAULT_COMMANDER_AVATAR_URL } from '../commander-profile'
 import { createCommandersRouter, type CommandersRouterOptions } from '../routes'
 
 const WRITE_AUTH_HEADERS = {
@@ -125,7 +126,6 @@ async function createCommander(server: RunningServer, host = 'atlas'): Promise<{
     },
     body: JSON.stringify({
       host,
-      persona: 'Avatar generation test commander',
     }),
   })
   expect(response.status).toBe(201)
@@ -157,7 +157,11 @@ describe('commanders avatar generate route', () => {
       const created = await createCommander(server)
       const response = await fetch(`${server.baseUrl}/api/commanders/${created.id}/avatar/generate`, {
         method: 'POST',
-        headers: WRITE_AUTH_HEADERS,
+        headers: {
+          ...WRITE_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ styleId: 'designer-toy-3d' }),
       })
 
       expect(response.status).toBe(200)
@@ -165,6 +169,9 @@ describe('commanders avatar generate route', () => {
         avatarUrl: `/api/commanders/${created.id}/avatar`,
       })
       expect(generateGeminiImage).toHaveBeenCalledTimes(1)
+      expect(generateGeminiImage).toHaveBeenCalledWith(expect.objectContaining({
+        prompt: expect.stringContaining('Portrait style (Glossy 3D toy):'),
+      }))
 
       const avatarPath = join(memoryBasePath, created.id, 'avatar.png')
       expect(await readFile(avatarPath, 'utf8')).toBe('generated-png')
@@ -176,6 +183,65 @@ describe('commanders avatar generate route', () => {
 
       const profilePath = join(memoryBasePath, created.id, '.memory', 'profile.json')
       expect(await readFile(profilePath, 'utf8')).toContain('"avatar": "avatar.png"')
+      expect(await readFile(profilePath, 'utf8')).toContain('"portraitStyleId": "designer-toy-3d"')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('returns the bundled default avatar URL until a custom avatar exists', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-avatar-default-'))
+    tempDirs.push(dir)
+    const server = await startServer({
+      sessionStorePath: join(dir, 'sessions.json'),
+      memoryBasePath: join(dir, 'memory'),
+    })
+
+    try {
+      const created = await createCommander(server)
+      const listResponse = await fetch(`${server.baseUrl}/api/commanders`, {
+        headers: WRITE_AUTH_HEADERS,
+      })
+      expect(listResponse.status).toBe(200)
+      const listBody = await listResponse.json() as Array<{ id: string; avatarUrl?: string | null }>
+      expect(listBody.find((entry) => entry.id === created.id)?.avatarUrl).toBe(DEFAULT_COMMANDER_AVATAR_URL)
+
+      const detailResponse = await fetch(`${server.baseUrl}/api/commanders/${created.id}`, {
+        headers: WRITE_AUTH_HEADERS,
+      })
+      expect(detailResponse.status).toBe(200)
+      expect((await detailResponse.json()) as { avatarUrl?: string | null }).toMatchObject({
+        avatarUrl: DEFAULT_COMMANDER_AVATAR_URL,
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('rejects unknown avatar generation styles', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-avatar-generate-'))
+    tempDirs.push(dir)
+    const server = await startServer({
+      sessionStorePath: join(dir, 'sessions.json'),
+      memoryBasePath: join(dir, 'memory'),
+      providerSecretsStore: createProviderSecretsStore('AIza-test'),
+    })
+
+    try {
+      const created = await createCommander(server)
+      const response = await fetch(`${server.baseUrl}/api/commanders/${created.id}/avatar/generate`, {
+        method: 'POST',
+        headers: {
+          ...WRITE_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ styleId: 'unknown-style' }),
+      })
+
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: 'styleId must be one of: sumi-e, chibi-sticker, designer-toy-3d',
+      })
     } finally {
       await server.close()
     }

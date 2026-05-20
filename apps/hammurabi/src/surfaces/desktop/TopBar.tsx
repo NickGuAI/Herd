@@ -9,14 +9,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { Moon, Sun } from 'lucide-react'
 import { useTheme } from '@/lib/theme-context'
-
-interface NavItem {
-  name: string
-  label: string
-  path: string
-  hideFromNav?: boolean
-  navGroup?: 'primary' | 'secondary'
-}
+import type { FrontendNavItem } from '@/types'
 
 /** Status counts displayed in the top bar */
 export interface TopBarCounts {
@@ -27,26 +20,8 @@ export interface TopBarCounts {
 }
 
 interface TopBarProps {
-  modules: NavItem[]
+  modules: FrontendNavItem[]
   counts?: TopBarCounts
-}
-
-/** Short uppercase labels for top bar tab nav */
-const TAB_LABELS: Record<string, string> = {
-  'command-room': 'Command Room',
-  'api-keys': 'Settings',
-  telemetry: 'Telemetry',
-  services: 'Services',
-  policies: 'Policies',
-}
-
-/** Breadcrumb labels (full names) */
-const BREADCRUMB_LABELS: Record<string, string> = {
-  'command-room': 'COMMAND ROOM',
-  telemetry: 'TELEMETRY',
-  services: 'SERVICES',
-  policies: 'POLICIES',
-  'api-keys': 'SETTINGS',
 }
 
 const headerStyle: CSSProperties = {
@@ -156,7 +131,7 @@ const iconButtonStyle: CSSProperties = {
   cursor: 'pointer',
 }
 
-function isModuleActive(module: NavItem, pathname: string) {
+function isModuleActive(module: FrontendNavItem, pathname: string) {
   return pathname === module.path || pathname.startsWith(module.path + '/')
 }
 
@@ -186,17 +161,18 @@ export function TopBar({ modules, counts }: TopBarProps) {
   }, [showOverflow])
 
   // Resolve current module name from path
-  const currentModule = modules.find(
+  const desktopModules = modules.filter((module) => module.surfaces.includes('desktop'))
+  const currentModule = desktopModules.find(
     (m) => isModuleActive(m, location.pathname),
   )
   const breadcrumb = currentModule
-    ? BREADCRUMB_LABELS[currentModule.name] || currentModule.label.toUpperCase()
+    ? currentModule.label.toUpperCase()
     : 'COMMAND ROOM'
 
-  const primaryTabs = modules.filter(
+  const primaryTabs = desktopModules.filter(
     (m) => !m.hideFromNav && (m.navGroup ?? 'primary') === 'primary',
   )
-  const secondaryTabs = modules.filter(
+  const secondaryTabs = desktopModules.filter(
     (m) => !m.hideFromNav && m.navGroup === 'secondary',
   )
   const activeSecondary = secondaryTabs.some((mod) => isModuleActive(mod, location.pathname))
@@ -234,7 +210,7 @@ export function TopBar({ modules, counts }: TopBarProps) {
                 : '1px solid transparent',
             })}
           >
-            {TAB_LABELS[mod.name] || mod.label}
+            {mod.label}
           </NavLink>
         ))}
         {secondaryTabs.length > 0 && (
@@ -271,7 +247,7 @@ export function TopBar({ modules, counts }: TopBarProps) {
                       background: isActive ? 'var(--hv-ink-wash-02)' : 'transparent',
                     })}
                   >
-                    {TAB_LABELS[mod.name] || mod.label}
+                    {mod.label}
                   </NavLink>
                 ))}
               </div>

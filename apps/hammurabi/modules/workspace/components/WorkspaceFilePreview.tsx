@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FileCode2, FileImage, FileWarning, Loader2, Pencil, Save, Trash2 } from 'lucide-react'
+import { ExternalLink, FileCode2, FileImage, FileWarning, Loader2, Pencil, Save, Trash2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { getAccessToken } from '@/lib/api'
@@ -21,39 +21,27 @@ interface WorkspaceFilePreviewProps {
   onSave?: () => void
   onRename?: () => void
   onDelete?: () => void
-  onInsertPath?: (path: string) => void
+  onInsertPath?: (path: string, type: 'file') => void
   variant?: 'light' | 'dark'
-}
-
-export function buildWorkspacePdfPreviewUrl(
-  sessionId: string,
-  path: string,
-  accessToken?: string | null,
-): string {
-  return buildWorkspaceRawUrl(
-    {
-      kind: 'agent-session',
-      id: sessionId,
-      label: sessionId,
-    },
-    path,
-    accessToken,
-  )
+  displayMode?: 'editor' | 'preview'
+  showHeader?: boolean
+  showTextActions?: boolean
 }
 
 export function buildWorkspaceRawUrl(
   source: WorkspaceSourceDescriptor,
   path: string,
   accessToken?: string | null,
-): string {
+): string | null {
+  if (!source.id.trim()) {
+    return null
+  }
   const query = new URLSearchParams({ path })
   if (accessToken) {
     query.set('access_token', accessToken)
   }
-  const basePath = source.kind === 'agent-session'
-    ? `/api/agents/sessions/${encodeURIComponent(source.id)}/workspace/raw`
-    : `/api/commanders/${encodeURIComponent(source.id)}/workspace/raw`
-  return `${basePath}?${query.toString()}`
+  query.set('targetId', source.id)
+  return `/api/workspace/raw?${query.toString()}`
 }
 
 export function WorkspaceFilePreview({
@@ -69,36 +57,42 @@ export function WorkspaceFilePreview({
   onRename = () => undefined,
   onDelete = () => undefined,
   onInsertPath,
-  variant = 'light',
+  displayMode = 'editor',
+  showHeader = true,
+  showTextActions = true,
 }: WorkspaceFilePreviewProps) {
-  const dark = variant === 'dark'
-  const isMarkdownPreview = preview?.kind === 'text' && readOnly && preview.path.toLowerCase().endsWith('.md')
-  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
-  const pdfPreviewSource = preview?.kind === 'pdf'
-    && (preview.workspace.source.kind === 'agent-session' || preview.workspace.source.kind === 'commander')
+  const isMarkdownPreview = preview?.kind === 'text'
+    && (displayMode === 'preview' || readOnly)
+    && preview.path.toLowerCase().endsWith('.md')
+  const isReadOnlyTextPreview = preview?.kind === 'text'
+    && !isMarkdownPreview
+    && (displayMode === 'preview' || readOnly)
+  const [rawFileUrl, setRawFileUrl] = useState<string | null>(null)
+  const rawPreviewSource = (preview?.kind === 'pdf' || preview?.kind === 'binary')
+    && preview.workspace.source.kind === 'target'
     ? preview.workspace.source
     : null
-  const pdfPreviewPath = preview?.kind === 'pdf' ? preview.path : null
+  const rawPreviewPath = preview?.kind === 'pdf' || preview?.kind === 'binary' ? preview.path : null
 
   useEffect(() => {
     let cancelled = false
 
-    if (!pdfPreviewSource || !pdfPreviewPath) {
-      setPdfPreviewUrl(null)
+    if (!rawPreviewSource || !rawPreviewPath) {
+      setRawFileUrl(null)
       return () => {
         cancelled = true
       }
     }
 
-    setPdfPreviewUrl(null)
+    setRawFileUrl(null)
     void getAccessToken()
       .then((token) => {
         if (cancelled) {
           return
         }
-        setPdfPreviewUrl(buildWorkspaceRawUrl(
-          pdfPreviewSource,
-          pdfPreviewPath,
+        setRawFileUrl(buildWorkspaceRawUrl(
+          rawPreviewSource,
+          rawPreviewPath,
           token,
         ))
       })
@@ -106,23 +100,23 @@ export function WorkspaceFilePreview({
         if (cancelled) {
           return
         }
-        setPdfPreviewUrl(buildWorkspaceRawUrl(
-          pdfPreviewSource,
-          pdfPreviewPath,
+        setRawFileUrl(buildWorkspaceRawUrl(
+          rawPreviewSource,
+          rawPreviewPath,
         ))
       })
 
     return () => {
       cancelled = true
     }
-  }, [pdfPreviewPath, pdfPreviewSource])
+  }, [rawPreviewPath, rawPreviewSource])
 
   if (!selectedPath) {
     return (
       <div
         className={cn(
           'flex h-full items-center justify-center rounded-lg border border-dashed text-sm',
-          'border-ink-border text-sumi-diluted',
+          'border-[color:var(--hv-border-hair)] text-[color:var(--hv-fg-subtle)]',
         )}
       >
         Select a file to preview it
@@ -132,7 +126,7 @@ export function WorkspaceFilePreview({
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-sumi-diluted">
+      <div className="flex h-full items-center justify-center text-sm text-[color:var(--hv-fg-subtle)]">
         <Loader2 size={16} className="mr-2 animate-spin" />
         Loading preview…
       </div>
@@ -141,7 +135,7 @@ export function WorkspaceFilePreview({
 
   if (error) {
     return (
-      <div className="rounded-lg border border-accent-vermillion/30 bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
+      <div className="rounded-lg border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-danger)]">
         {error}
       </div>
     )
@@ -152,62 +146,64 @@ export function WorkspaceFilePreview({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-ink-border bg-washi-white">
-      <div className="flex items-center justify-between gap-3 border-b border-ink-border bg-washi-aged/60 px-3 py-2">
-        <div className="min-w-0">
-          <p className="truncate font-mono text-xs text-sumi-gray">
-            {preview.path}
-          </p>
-          <p className="text-whisper text-sumi-diluted">
-            {preview.kind} • {preview.size} bytes
-          </p>
-        </div>
-        <div className="flex items-center gap-1">
-          {onInsertPath && (
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-xs hover:bg-ink-wash"
-              onClick={() => onInsertPath(preview.path)}
-            >
-              Add to context
-            </button>
-          )}
-          {!readOnly && (
-            <>
-              <button type="button" className="rounded-md p-1.5 hover:bg-ink-wash" onClick={onRename} aria-label="Rename file">
-                <Pencil size={13} />
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]">
+      {showHeader && (
+        <div className="flex items-center justify-between gap-3 border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2">
+          <div className="min-w-0">
+            <p className="truncate font-mono text-xs text-[color:var(--hv-fg-muted)]">
+              {preview.path}
+            </p>
+            <p className="text-whisper text-[color:var(--hv-fg-subtle)]">
+              {preview.kind} • {preview.size} bytes
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            {onInsertPath && (
+              <button
+                type="button"
+                className="rounded-md px-2 py-1 text-xs hover:bg-[var(--hv-surface-hover)]"
+                onClick={() => onInsertPath(preview.path, 'file')}
+              >
+                Add to context
               </button>
-              <button type="button" className="rounded-md p-1.5 text-accent-vermillion hover:bg-accent-vermillion/10" onClick={onDelete} aria-label="Delete file">
-                <Trash2 size={13} />
-              </button>
-            </>
-          )}
+            )}
+            {!readOnly && (
+              <>
+                <button type="button" className="rounded-md p-1.5 hover:bg-[var(--hv-surface-hover)]" onClick={onRename} aria-label="Rename file">
+                  <Pencil size={13} />
+                </button>
+                <button type="button" className="rounded-md p-1.5 text-[color:var(--hv-accent-danger)] hover:bg-[var(--hv-accent-danger-wash)]" onClick={onDelete} aria-label="Delete file">
+                  <Trash2 size={13} />
+                </button>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {preview.kind === 'image' && preview.content && (
         <div className="flex-1 min-h-0 overflow-auto p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm text-sumi-diluted">
+          <div className="mb-3 flex items-center gap-2 text-sm text-[color:var(--hv-fg-subtle)]">
             <FileImage size={15} />
             Image preview
           </div>
-          <img src={preview.content} alt={preview.name} className="max-w-full rounded-lg border border-ink-border" />
+          <img src={preview.content} alt={preview.name} className="max-w-full rounded-lg border border-[color:var(--hv-border-hair)]" />
         </div>
       )}
 
       {preview.kind === 'pdf' && (
-        pdfPreviewUrl ? (
-          <object data={pdfPreviewUrl} type="application/pdf" className="flex-1 w-full">
-            <embed src={pdfPreviewUrl} type="application/pdf" className="w-full h-full" />
-            <p className="p-4 text-sm">Your browser doesn't support inline PDF preview. <a href={pdfPreviewUrl} className="underline">Open the PDF</a>.</p>
+        rawFileUrl ? (
+          <object data={rawFileUrl} type="application/pdf" className="flex-1 w-full">
+            <embed src={rawFileUrl} type="application/pdf" className="w-full h-full" />
+            <p className="p-4 text-sm">Your browser doesn't support inline PDF preview. <a href={rawFileUrl} className="underline">Open the PDF</a>.</p>
           </object>
-        ) : pdfPreviewSource && pdfPreviewPath ? (
-          <div className="flex flex-1 items-center justify-center px-4 text-sm text-sumi-diluted">
+        ) : rawPreviewSource && rawPreviewPath ? (
+          <div className="flex flex-1 items-center justify-center px-4 text-sm text-[color:var(--hv-fg-subtle)]">
             <Loader2 size={16} className="mr-2 animate-spin" />
             Loading PDF preview…
           </div>
         ) : (
-          <div className="flex flex-1 items-center justify-center px-4 text-sm text-sumi-diluted">
+          <div className="flex flex-1 items-center justify-center px-4 text-sm text-[color:var(--hv-fg-subtle)]">
             <FileWarning size={16} className="mr-2" />
             PDF preview is not available for this workspace source
           </div>
@@ -215,27 +211,47 @@ export function WorkspaceFilePreview({
       )}
 
       {preview.kind === 'binary' && (
-        <div className="flex flex-1 items-center justify-center px-4 text-sm text-sumi-diluted">
-          <FileWarning size={16} className="mr-2" />
-          Binary file preview is not available
+        <div className="flex flex-1 items-center justify-center overflow-auto px-4 py-8 text-sm text-[color:var(--hv-fg-subtle)]">
+          <div className="max-w-xl rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-5">
+            <div className="mb-3 flex items-center gap-2 text-[color:var(--hv-fg)]">
+              <FileWarning size={16} />
+              <span className="font-medium">Inline preview is not available for this file.</span>
+            </div>
+            <p className="leading-relaxed">
+              Office and iWork files such as DOCX, DOC, XLSX, PPTX, and Pages need a conversion step before the browser can render them faithfully.
+            </p>
+            {rawFileUrl && (
+              <a
+                href={rawFileUrl}
+                className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-3 py-2 text-xs text-[color:var(--hv-fg)] hover:bg-[var(--hv-surface-hover)]"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink size={13} />
+                Open raw file
+              </a>
+            )}
+          </div>
         </div>
       )}
 
       {preview.kind === 'text' && (
         <div className="flex-1 min-h-0 flex flex-col">
-          <div className="flex items-center justify-between px-3 py-2 text-whisper text-sumi-diluted">
+          <div className="flex items-center justify-between px-3 py-2 text-whisper text-[color:var(--hv-fg-subtle)]">
             <div className="flex items-center gap-2">
               <FileCode2 size={13} />
               <span>
                 {isMarkdownPreview
                   ? (preview.truncated ? 'Markdown preview truncated to 256KB' : 'Rendered markdown preview')
-                  : (preview.truncated ? 'Preview truncated to 256KB' : 'Editable text preview')}
+                  : (preview.truncated
+                    ? 'Preview truncated to 256KB'
+                    : (readOnly || displayMode === 'preview' ? 'Text preview' : 'Editable text preview'))}
               </span>
             </div>
-            {!readOnly && (
+            {!readOnly && showTextActions && (
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-md border border-ink-border px-2 py-1 text-xs hover:bg-ink-wash disabled:opacity-60"
+                className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-2 py-1 text-xs hover:bg-[var(--hv-surface-hover)] disabled:opacity-60"
                 onClick={onSave}
                 disabled={saving}
               >
@@ -248,20 +264,29 @@ export function WorkspaceFilePreview({
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-auto border-t px-6 py-4',
-                'border-ink-border bg-washi-white',
+                'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]',
               )}
             >
-              <article className={cn('prose prose-sm max-w-none break-words', dark && 'prose-invert')}>
+              <article className="hervald-prose max-w-none break-words">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {draftContent}
                 </ReactMarkdown>
               </article>
             </div>
+          ) : isReadOnlyTextPreview ? (
+            <pre
+              className={cn(
+                'flex-1 min-h-0 overflow-auto whitespace-pre-wrap break-words border-t p-4 font-mono text-xs leading-relaxed',
+                'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-[color:var(--hv-fg-muted)]',
+              )}
+            >
+              {draftContent}
+            </pre>
           ) : (
             <textarea
               className={cn(
                 'flex-1 min-h-[14rem] resize-none border-t p-3 font-mono text-xs outline-none',
-                'border-ink-border bg-washi-white text-sumi-gray',
+                'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-[color:var(--hv-fg-muted)]',
               )}
               value={draftContent}
               onChange={(event) => onDraftChange(event.target.value)}

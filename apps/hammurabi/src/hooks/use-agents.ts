@@ -4,6 +4,9 @@ import type {
   AgentSession,
   CreateMachineInput,
   CreateSessionInput,
+  MachineDaemonPairResponse,
+  MachineDaemonRevokeResponse,
+  MachineDaemonStatus,
   MachineAuthSetupInput,
   MachineAuthStatusReport,
   Machine,
@@ -53,6 +56,35 @@ export async function createMachine(input: CreateMachineInput): Promise<Machine>
 export async function fetchMachineAuthStatus(machineId: string): Promise<MachineAuthStatusReport> {
   return fetchJson<MachineAuthStatusReport>(
     `/api/agents/machines/${encodeURIComponent(machineId)}/auth-status`,
+  )
+}
+
+export async function fetchMachineDaemonStatus(machineId: string): Promise<MachineDaemonStatus> {
+  return fetchJson<MachineDaemonStatus>(
+    `/api/agents/machines/${encodeURIComponent(machineId)}/daemon/status`,
+  )
+}
+
+export async function pairMachineDaemon(
+  machineId: string,
+  input: { label?: string; cwd?: string } = {},
+): Promise<MachineDaemonPairResponse> {
+  return fetchJson<MachineDaemonPairResponse>(
+    `/api/agents/machines/${encodeURIComponent(machineId)}/daemon/pair`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export async function revokeMachineDaemon(machineId: string): Promise<MachineDaemonRevokeResponse> {
+  return fetchJson<MachineDaemonRevokeResponse>(
+    `/api/agents/machines/${encodeURIComponent(machineId)}/daemon/revoke`,
+    { method: 'POST' },
   )
 }
 
@@ -108,6 +140,15 @@ export function useMachineAuthStatus(machineId?: string, enabled = true) {
     queryKey: ['agents', 'machines', machineId ?? '', 'auth-status'],
     queryFn: () => fetchMachineAuthStatus(machineId ?? ''),
     enabled: enabled && typeof machineId === 'string' && machineId.trim().length > 0,
+  })
+}
+
+export function useMachineDaemonStatus(machineId?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['agents', 'machines', machineId ?? '', 'daemon-status'],
+    queryFn: () => fetchMachineDaemonStatus(machineId ?? ''),
+    enabled: enabled && typeof machineId === 'string' && machineId.trim().length > 0,
+    refetchInterval: enabled ? 5000 : false,
   })
 }
 

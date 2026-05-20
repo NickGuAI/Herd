@@ -1,4 +1,4 @@
-import { ArrowLeft, MessageSquare, Square, Triangle, Zap } from 'lucide-react'
+import { ArrowLeft, MessageSquare, Pencil, Square, Triangle, Zap } from 'lucide-react'
 import type { AgentType } from '@/types'
 import { cn } from '@/lib/utils'
 import { fetchVoid } from '@/lib/api'
@@ -49,6 +49,7 @@ export function CommanderDetailPanel({
   onBack,
   commanderOptions,
   onSelectCommander,
+  onEdit,
   onOpenChat,
   onStartCommander,
   onStopCommander,
@@ -78,6 +79,7 @@ export function CommanderDetailPanel({
   onBack: () => void
   commanderOptions: Array<{ id: string; label: string }>
   onSelectCommander: (commanderId: string) => void
+  onEdit?: (commander: CommanderSession) => void
   onOpenChat?: (commanderId: string) => void
   onStartCommander?: (commanderId: string) => Promise<void>
   onStopCommander?: (commanderId: string) => Promise<void>
@@ -181,9 +183,10 @@ export function CommanderDetailPanel({
                 type="button"
                 onClick={() => void triggerHeartbeat(commander.id)}
                 title="Trigger heartbeat"
+                aria-label="Trigger heartbeat"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 px-2.5 py-1.5 text-xs text-amber-600 hover:bg-amber-500/10 transition-colors"
               >
-                <Zap size={12} />
+                <Zap size={12} aria-hidden="true" />
                 <span className="hidden sm:inline">HB</span>
               </button>
             )}
@@ -212,14 +215,29 @@ export function CommanderDetailPanel({
               </button>
             )}
 
+            {/* Edit identity/profile */}
+            {onEdit && (
+              <button
+                type="button"
+                data-testid="commander-detail-edit-button"
+                onClick={() => onEdit(commander)}
+                aria-label="Edit commander"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[color:var(--hv-button-ghost-border)] px-2.5 py-1.5 text-xs text-[color:var(--hv-button-ghost-fg)] transition-colors hover:bg-[var(--hv-button-ghost-hover-bg)]"
+              >
+                <Pencil size={12} aria-hidden="true" />
+                <span className="hidden sm:inline">Edit</span>
+              </button>
+            )}
+
             {/* Open Chat */}
             {onOpenChat && (
               <button
                 type="button"
                 onClick={() => onOpenChat(commander.id)}
+                aria-label="Open chat with commander"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-ink-border px-2.5 py-1.5 text-xs hover:bg-ink-wash transition-colors"
               >
-                <MessageSquare size={12} />
+                <MessageSquare size={12} aria-hidden="true" />
                 <span className="hidden sm:inline">Chat</span>
               </button>
             )}

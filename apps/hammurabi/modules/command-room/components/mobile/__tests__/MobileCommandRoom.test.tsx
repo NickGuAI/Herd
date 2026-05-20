@@ -94,6 +94,7 @@ function buildProvider(id: string, label: string) {
     uiCapabilities: {
       supportsEffort: id === 'claude',
       supportsAdaptiveThinking: id === 'claude',
+      supportsMaxThinkingTokens: id === 'claude',
       supportsSkills: id === 'claude',
       supportsLoginMode: id !== 'gemini',
       forcedTransport: id === 'gemini' ? 'stream' : undefined,
@@ -113,7 +114,6 @@ function buildCommander(overrides: Partial<Record<string, unknown>> = {}) {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp/atlas',
-    persona: 'Primary commander',
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '',
@@ -393,8 +393,10 @@ describe('CommandRoom mobile branch', () => {
       expect(document.body.querySelector('[data-testid="mobile-automations"]')).toBeNull()
     })
 
+    await vi.waitFor(() => {
+      expect(mocks.setSelectedCommanderId).toHaveBeenCalledWith('__global__')
+    })
     expect(mocks.fetchCommanderActiveConversation).not.toHaveBeenCalled()
-    expect(mocks.setSelectedCommanderId).toHaveBeenCalledWith('__global__')
   })
 
   it('normalizes ?commander=global to the automation panel on mobile', async () => {

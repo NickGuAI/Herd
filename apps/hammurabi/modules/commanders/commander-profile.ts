@@ -2,15 +2,17 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveCommanderPaths } from './paths.js'
 import { ensureCommanderVisualProfile } from './commander-visual-profile.js'
+import {
+  DEFAULT_COMMANDER_PORTRAIT_STYLE_ID,
+  parseCommanderPortraitStyleId,
+  type CommanderPortraitStyleId,
+} from './portrait-styles.js'
 
 export const COMMANDER_PROFILE_FILE = 'profile.json'
+export const DEFAULT_COMMANDER_AVATAR_URL = '/assets/commanders/atlas-profile.jpg'
 
 /** Optional UI metadata stored at `<commander>/.memory/profile.json` on disk. */
 export interface CommanderUiProfile {
-  /** CSS color for card border (e.g. `#2d3748`, `rgb(0,0,0)`) */
-  borderColor?: string
-  /** Accent for agent message rail in chat (e.g. `#38bdf8`) */
-  accentColor?: string
   /** Short note for humans / future prompt tuning (not injected into agent by default) */
   speakingTone?: string
   /**
@@ -18,6 +20,8 @@ export interface CommanderUiProfile {
    * Examples: `avatar.png`, `.memory/avatar.webp`
    */
   avatar?: string
+  /** Built-in art direction used for generated commander headshots. */
+  portraitStyleId?: CommanderPortraitStyleId
 }
 
 const MAX_STRING = 500
@@ -48,47 +52,24 @@ function trimAvatarPath(value: unknown): string | undefined {
   return t
 }
 
-function isReasonableCssColor(value: string): boolean {
-  if (value.length > 80) {
-    return false
-  }
-  if (/^var\(--[a-z0-9-]+\)$/i.test(value)) {
-    return true
-  }
-  if (/^#[0-9a-f]{3,8}$/i.test(value)) {
-    return true
-  }
-  if (/^rgba?\(/i.test(value)) {
-    return true
-  }
-  if (/^[a-z][a-z0-9-]*$/i.test(value) && value.length <= 40) {
-    return true
-  }
-  return false
-}
-
 export function sanitizeUiProfile(raw: unknown): CommanderUiProfile | null {
   if (!raw || typeof raw !== 'object') {
     return null
   }
   const o = raw as Record<string, unknown>
-  const borderColor = trimString(o.borderColor)
-  const accentColor = trimString(o.accentColor)
   const speakingTone = trimString(o.speakingTone)
   const avatar = trimAvatarPath(o.avatar)
+  const portraitStyleId = parseCommanderPortraitStyleId(o.portraitStyleId)
 
   const out: CommanderUiProfile = {}
-  if (borderColor && isReasonableCssColor(borderColor)) {
-    out.borderColor = borderColor
-  }
-  if (accentColor && isReasonableCssColor(accentColor)) {
-    out.accentColor = accentColor
-  }
   if (speakingTone) {
     out.speakingTone = speakingTone
   }
   if (avatar) {
     out.avatar = avatar
+  }
+  if (portraitStyleId) {
+    out.portraitStyleId = portraitStyleId
   }
   return Object.keys(out).length > 0 ? out : null
 }
@@ -134,18 +115,31 @@ export async function resolveCommanderAvatarPath(
   }
 }
 
+export async function resolveCommanderAvatarUrl(
+  commanderId: string,
+  basePath: string,
+  profile: CommanderUiProfile | null,
+): Promise<string> {
+  const avatarPath = await resolveCommanderAvatarPath(commanderId, basePath, profile)
+  return avatarPath
+    ? `/api/commanders/${encodeURIComponent(commanderId)}/avatar`
+    : DEFAULT_COMMANDER_AVATAR_URL
+}
+
 export function profileForApiResponse(
   commanderId: string,
   profile: CommanderUiProfile | null,
-): { borderColor: string; accentColor: string; speakingTone?: string } {
-  const { borderColor, accentColor, speakingTone } = ensureCommanderVisualProfile(
+): {
+  speakingTone?: string
+  portraitStyleId: CommanderPortraitStyleId
+} {
+  const cleanProfile = ensureCommanderVisualProfile(
     commanderId,
     profile,
   )
   return {
-    borderColor,
-    accentColor,
-    ...(speakingTone ? { speakingTone } : {}),
+    portraitStyleId: cleanProfile.portraitStyleId ?? DEFAULT_COMMANDER_PORTRAIT_STYLE_ID,
+    ...(cleanProfile.speakingTone ? { speakingTone: cleanProfile.speakingTone } : {}),
   }
 }
 

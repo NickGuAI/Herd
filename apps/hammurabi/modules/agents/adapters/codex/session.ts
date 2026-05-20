@@ -7,6 +7,7 @@ import {
 import {
   DEFAULT_SESSION_MESSAGE_QUEUE_LIMIT,
   SessionMessageQueue,
+  type QueuedMessageImage,
 } from '../../message-queue.js'
 import type { ActionPolicyGate } from '../../../policies/action-policy-gate.js'
 import { handleProviderApproval } from '../../../policies/provider-approval-adapter.js'
@@ -24,6 +25,7 @@ import {
   toCompletedSession,
 } from '../../session/state.js'
 import { truncateLogText } from '../../session/helpers.js'
+import { isDaemonMachine } from '../../machines.js'
 import type {
   AnySession,
   ClaudePermissionMode,
@@ -167,8 +169,47 @@ function getCodexActiveTurnId(session: StreamSession): string | undefined {
   return session.activeTurnId
 }
 
-function buildCodexTurnInput(text: string): Array<{ type: 'text'; text: string }> {
-  return [{ type: 'text', text }]
+type CodexTurnInput =
+  | { type: 'text'; text: string }
+  | { type: 'image'; url: string }
+
+function buildCodexImageDataUrl(image: QueuedMessageImage): string {
+  return `data:${image.mediaType};base64,${image.data}`
+}
+
+function buildCodexTurnInput(text: string, images?: QueuedMessageImage[]): CodexTurnInput[] {
+  const input: CodexTurnInput[] = []
+  if (text.length > 0) {
+    input.push({ type: 'text', text })
+  }
+  for (const image of images ?? []) {
+    input.push({ type: 'image', url: buildCodexImageDataUrl(image) })
+  }
+  return input
+}
+
+function buildCodexUserEventContent(
+  text: string,
+  images?: QueuedMessageImage[],
+): string | Array<
+  { type: 'text'; text: string } |
+  { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+> {
+  if (!images || images.length === 0) {
+    return text
+  }
+
+  return [
+    ...(text ? [{ type: 'text' as const, text }] : []),
+    ...images.map((image) => ({
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: image.mediaType,
+        data: image.data,
+      },
+    })),
+  ]
 }
 
 function classifyCodexDispatchError(
@@ -220,7 +261,11 @@ function classifyCodexDispatchError(
   }
 }
 
-export async function startCodexTurn(session: StreamSession, text: string): Promise<void> {
+export async function startCodexTurn(
+  session: StreamSession,
+  text: string,
+  images?: QueuedMessageImage[],
+): Promise<void> {
   const resumeThreadId = readCodexThreadId(session)
   if (!resumeThreadId) {
     throw new Error('Codex session is missing a thread id')
@@ -233,11 +278,16 @@ export async function startCodexTurn(session: StreamSession, text: string): Prom
   await runtime.sendRequest('turn/start', {
     threadId: resumeThreadId,
     effort: 'xhigh',
-    input: buildCodexTurnInput(text),
+    input: buildCodexTurnInput(text, images),
   })
 }
 
-async function steerCodexTurn(session: StreamSession, turnId: string, text: string): Promise<void> {
+async function steerCodexTurn(
+  session: StreamSession,
+  turnId: string,
+  text: string,
+  images?: QueuedMessageImage[],
+): Promise<void> {
   const resumeThreadId = readCodexThreadId(session)
   if (!resumeThreadId) {
     throw new Error('Codex session is missing a thread id')
@@ -250,7 +300,7 @@ async function steerCodexTurn(session: StreamSession, turnId: string, text: stri
   await runtime.sendRequest('turn/steer', {
     threadId: resumeThreadId,
     expectedTurnId: turnId,
-    input: buildCodexTurnInput(text),
+    input: buildCodexTurnInput(text, images),
   })
 }
 
@@ -599,6 +649,8 @@ export async function sendTextToCodexSession(
     | 'setCompletedSession'
     | 'setExitedSession'
   >,
+  options: { userEventSubtype?: string } = {},
+  images?: QueuedMessageImage[],
 ): Promise<CodexSendAttemptResult> {
   const pendingRecovery = codexTransportRecoveryPromises.get(session)
   if (pendingRecovery) {
@@ -613,9 +665,9 @@ export async function sendTextToCodexSession(
   deps.resetActiveTurnState(session)
   try {
     if (activeTurnId) {
-      await steerCodexTurn(session, activeTurnId, text)
+      await steerCodexTurn(session, activeTurnId, text, images)
     } else {
-      await startCodexTurn(session, text)
+      await startCodexTurn(session, text, images)
     }
   } catch (error) {
     if (deps.getActiveSession(session.name) !== session) {
@@ -648,7 +700,8 @@ export async function sendTextToCodexSession(
   deps.scheduleTurnWatchdog(session)
   const userEvent: StreamJsonEvent = {
     type: 'user',
-    message: { role: 'user', content: text },
+    ...(options.userEventSubtype ? { subtype: options.userEventSubtype } : {}),
+    message: { role: 'user', content: buildCodexUserEventContent(text, images) },
   } as unknown as StreamJsonEvent
   deps.appendEvent(session, userEvent)
   deps.broadcastEvent(session, userEvent)
@@ -672,7 +725,7 @@ export function createCodexSessionAdapter(
   >,
 ): StreamSessionAdapter {
   return {
-    async dispatchSend(session, text, mode, images) {
+    async dispatchSend(session, text, mode, images, options) {
       const normalizedImages = images && images.length > 0 ? [...images] : undefined
 
       if (mode === 'queue') {
@@ -688,21 +741,7 @@ export function createCodexSessionAdapter(
         return { ok: true, delivered: 'queued', message, position }
       }
 
-      if (normalizedImages?.length) {
-        if (!text) {
-          const imageEventText = 'Image-only messages are not supported in Codex sessions. Please include text with your image.'
-          const imageEvent: StreamJsonEvent = {
-            type: 'system',
-            text: imageEventText,
-          }
-          deps.appendEvent(session, imageEvent)
-          deps.broadcastEvent(session, imageEvent)
-          return { ok: false, retryable: false, reason: imageEventText }
-        }
-        console.warn(`[agents] Codex session ${session.name}: ignoring ${normalizedImages.length} image(s) — not yet supported`)
-      }
-
-      const result = await sendTextToCodexSession(session, text, deps)
+      const result = await sendTextToCodexSession(session, text, deps, options, normalizedImages)
       if (!result.ok) {
         return result
       }
@@ -756,7 +795,7 @@ async function createCodexSessionFromThread(
     agentType: 'codex',
     mode,
     cwd: sessionCwd,
-    host: options.machine?.host ? options.machine.id : undefined,
+    host: options.machine?.host || isDaemonMachine(options.machine) ? options.machine.id : undefined,
     currentSkillInvocation: cloneActiveSkillInvocation(options.currentSkillInvocation),
     spawnedBy: options.spawnedBy,
     spawnedWorkers: options.spawnedWorkers ? [...options.spawnedWorkers] : [],

@@ -181,6 +181,38 @@ afterEach(async () => {
 })
 
 describe('org route', () => {
+  it('reports fresh founder setup status without relying on a founder 404', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
+    tempDirs.push(dataDir)
+    process.env.HAMMURABI_DATA_DIR = dataDir
+
+    const server = await startServer(dataDir)
+
+    try {
+      const response = await fetch(`${server.baseUrl}/api/org/setup-status`, {
+        headers: API_KEY_HEADERS,
+      })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({
+        setupComplete: false,
+        defaultValues: {
+          orgDisplayName: '',
+          founderDisplayName: '',
+          founderEmail: '',
+        },
+        validationErrors: {
+          orgDisplayName: 'Org display name is required.',
+          founderDisplayName: 'Founder display name is required.',
+          founderEmail: 'Founder email is required.',
+        },
+        nextRoute: '/welcome',
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
   it('updates org identity through the mounted org identity route', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
     tempDirs.push(dataDir)
@@ -310,6 +342,7 @@ describe('org route', () => {
         orgIdentity: {
           name: 'Gehirn Inc.',
         },
+        nextRoute: '/org',
       })
       expect(created.operator.id).toMatch(/^founder-/)
 
@@ -345,6 +378,20 @@ describe('org route', () => {
         },
         orgIdentity: {
           name: 'Gehirn Inc.',
+        },
+      })
+
+      const completedSetupResponse = await fetch(`${server.baseUrl}/api/org/setup-status`, {
+        headers: API_KEY_HEADERS,
+      })
+      expect(completedSetupResponse.status).toBe(200)
+      expect(await completedSetupResponse.json()).toMatchObject({
+        setupComplete: true,
+        nextRoute: '/org',
+        defaultValues: {
+          orgDisplayName: 'Gehirn Inc.',
+          founderDisplayName: 'Nick Gu',
+          founderEmail: 'nick@example.com',
         },
       })
 
@@ -400,11 +447,12 @@ describe('org route', () => {
         status: 'idle',
         templateId: 'gaia-onboarding',
         profile: {
-          borderColor: expect.stringMatching(/^var\(--hv-accent-/),
-          accentColor: expect.stringMatching(/^var\(--hv-accent-/),
+          portraitStyleId: expect.any(String),
           speakingTone: 'Mother-of-all onboarding',
         },
       })
+      expect(firstPayload.commanders[0].profile).not.toHaveProperty('borderColor')
+      expect(firstPayload.commanders[0].profile).not.toHaveProperty('accentColor')
 
       const secondRead = await fetch(`${server.baseUrl}/api/org`, {
         headers: API_KEY_HEADERS,
@@ -434,7 +482,7 @@ describe('org route', () => {
     }
   })
 
-  it('normalizes legacy commander profiles in GET /api/org', async () => {
+  it('normalizes legacy commander profiles in GET /api/org without color identity', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
     tempDirs.push(dataDir)
     process.env.HAMMURABI_DATA_DIR = dataDir
@@ -467,10 +515,11 @@ describe('org route', () => {
       expect(payload.commanders[0]).toMatchObject({
         id: '00000000-0000-4000-a000-000000000123',
         profile: {
-          borderColor: expect.stringMatching(/^var\(--hv-accent-/),
-          accentColor: expect.stringMatching(/^var\(--hv-accent-/),
+          portraitStyleId: expect.any(String),
         },
       })
+      expect(payload.commanders[0].profile).not.toHaveProperty('borderColor')
+      expect(payload.commanders[0].profile).not.toHaveProperty('accentColor')
     } finally {
       await server.close()
     }
@@ -502,6 +551,63 @@ describe('org route', () => {
       expect(response.status).toBe(400)
       expect(await response.json()).toEqual({
         error: 'founder.email must be a valid email address',
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('returns the canonical org check-on command-room target with the active conversation', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
+    tempDirs.push(dataDir)
+    process.env.HAMMURABI_DATA_DIR = dataDir
+
+    const commanderDataDir = join(dataDir, 'commander')
+    const commanderId = '00000000-0000-4000-a000-000000000123'
+    const sessionStore = new CommanderSessionStore(join(commanderDataDir, 'sessions.json'))
+    await sessionStore.create({
+      id: commanderId,
+      host: 'atlas',
+      state: 'running',
+      created: '2026-05-08T00:00:00.000Z',
+      agentType: 'claude',
+      effort: 'medium',
+      heartbeat: createDefaultHeartbeatConfig(),
+      maxTurns: 20,
+      contextMode: 'thin',
+      taskSource: null,
+    })
+    const conversationStore = new ConversationStore(commanderDataDir)
+    const conversation = await conversationStore.create({
+      commanderId,
+      surface: 'ui',
+      status: 'active',
+      currentTask: null,
+      lastHeartbeat: null,
+      heartbeatTickCount: 0,
+      completedTasks: 0,
+      totalCostUsd: 0,
+      creationSource: 'ui',
+      createdByKind: 'human',
+      createdAt: '2026-05-08T00:01:00.000Z',
+      lastMessageAt: '2026-05-08T00:02:00.000Z',
+    })
+
+    const server = await startServer(dataDir, { realCommanderStores: true })
+
+    try {
+      const response = await fetch(`${server.baseUrl}/api/org/commanders/${commanderId}/check-on-target`, {
+        headers: API_KEY_HEADERS,
+      })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({
+        target: {
+          routeId: 'command-room.ui',
+          path: `/command-room?commander=${commanderId}&conversation=${conversation.id}`,
+          commanderId,
+          conversationId: conversation.id,
+        },
       })
     } finally {
       await server.close()

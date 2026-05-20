@@ -139,12 +139,14 @@ export const codexProvider: ProviderAdapter = registerProvider({
     supportsAutomation: true,
     supportsCommanderConversation: true,
     supportsWorkerDispatch: true,
+    supportsMessageImages: true,
   },
   availableModels,
   machineAuth: codexMachineProvider,
   uiCapabilities: {
     supportsEffort: false,
     supportsAdaptiveThinking: false,
+    supportsMaxThinkingTokens: false,
     supportsSkills: false,
     supportsLoginMode: true,
     permissionModes: [

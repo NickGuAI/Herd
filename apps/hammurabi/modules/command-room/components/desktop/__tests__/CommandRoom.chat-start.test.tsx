@@ -104,6 +104,17 @@ function buildIdleConversation(overrides: Partial<ConversationRecord> = {}): Con
     createdAt: '2026-05-01T08:00:00.000Z',
     lastMessageAt: '2026-05-01T08:00:00.000Z',
     liveSession: null,
+    allowedActions: {
+      send: false,
+      queue: false,
+      media: false,
+      start: true,
+      pause: false,
+      resume: true,
+      archive: true,
+      delete: true,
+      updateProvider: true,
+    },
     ...overrides,
   }
 }
@@ -119,7 +130,6 @@ function buildCommander(overrides: Partial<Record<string, unknown>> = {}) {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp/atlas',
-    persona: 'Primary commander',
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '',
@@ -145,10 +155,12 @@ function buildProvider(id: string, label: string) {
       supportsAutomation: true,
       supportsCommanderConversation: true,
       supportsWorkerDispatch: true,
+      supportsMessageImages: true,
     },
     uiCapabilities: {
       supportsEffort: id === 'claude',
       supportsAdaptiveThinking: id === 'claude',
+      supportsMaxThinkingTokens: id === 'claude',
       supportsSkills: id === 'claude',
       supportsLoginMode: id !== 'gemini',
       permissionModes: [{ value: 'default', label: 'default', description: label }],

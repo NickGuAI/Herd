@@ -5,6 +5,26 @@ import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+
+const mocks = vi.hoisted(() => ({
+  useFontScale: vi.fn(),
+}))
+
+vi.mock('@/hooks/use-font-scale', () => ({
+  useFontScale: mocks.useFontScale,
+}))
+
+vi.mock('@/hooks/use-providers', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-providers')>('@/hooks/use-providers')
+  const { testProviderRegistry } = await vi.importActual<
+    typeof import('../../../../agents/__tests__/provider-registry-fixture')
+  >('../../../../agents/__tests__/provider-registry-fixture')
+  return {
+    ...actual,
+    useProviderRegistry: () => ({ data: testProviderRegistry }),
+  }
+})
+
 import { SessionsColumn } from '../SessionsColumn'
 
 describe('SessionsColumn conversations', () => {
@@ -16,6 +36,14 @@ describe('SessionsColumn conversations', () => {
   beforeEach(() => {
     originalActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true
+    mocks.useFontScale.mockReturnValue({
+      fontScale: 1,
+      adjustFontScale: vi.fn(),
+      minFontScale: 0.8,
+      maxFontScale: 1.6,
+      fontScaleStep: 0.1,
+      isSaving: false,
+    })
   })
 
   afterEach(async () => {
@@ -28,9 +56,24 @@ describe('SessionsColumn conversations', () => {
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = originalActEnvironment
   })
 
+  function buildAllowedActions(status: ConversationRecord['status'] | 'paused'): ConversationRecord['allowedActions'] {
+    const idleLike = status === 'idle' || status === 'paused'
+    return {
+      send: status === 'active',
+      queue: status === 'active',
+      media: status === 'active',
+      start: idleLike,
+      pause: status === 'active',
+      resume: idleLike,
+      archive: true,
+      delete: true,
+      updateProvider: idleLike,
+    }
+  }
+
   function buildConversation(
     id: string,
-    status: ConversationRecord['status'],
+    status: ConversationRecord['status'] | 'paused',
     overrides: Partial<ConversationRecord> = {},
   ): ConversationRecord {
     return {
@@ -60,8 +103,9 @@ describe('SessionsColumn conversations', () => {
       agentType: 'claude',
       model: null,
       liveSession: null,
+      allowedActions: buildAllowedActions(status),
       ...overrides,
-    }
+    } as ConversationRecord
   }
 
   it('routes the selected commander New Chat button to the provider-picker request callback', async () => {
@@ -94,7 +138,7 @@ describe('SessionsColumn conversations', () => {
               status: 'idle',
             },
           ],
-          conversations: [],
+          conversations: [buildConversation('conv-existing', 'idle', { name: 'Existing chat' })],
           workers: [],
           approvals: [],
           workerSessions: [],
@@ -104,13 +148,23 @@ describe('SessionsColumn conversations', () => {
       )
     })
 
-    const launchButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('New Chat'),
-    )
+    const chatList = container.querySelector('[data-testid="commander-chat-list"]')
+    const newChatRow = container.querySelector<HTMLElement>('[data-testid="commander-new-chat-row"]')
+    const launchButton = container.querySelector('[data-testid="commander-new-chat-button"]')
     if (!(launchButton instanceof HTMLButtonElement)) {
       throw new Error('expected selected commander New Chat button to render')
     }
 
+    expect(chatList).not.toBeNull()
+    expect(newChatRow).not.toBeNull()
+    expect(chatList?.compareDocumentPosition(newChatRow as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(newChatRow?.getAttribute('style')).toContain('padding: 6px 20px 6px 34px')
+    expect(launchButton.getAttribute('style')).toContain('width: 100%')
+    expect(launchButton.getAttribute('style')).toContain('border-width: 2px')
+    expect(launchButton.getAttribute('style')).toContain('border-style: solid')
+    expect(launchButton.getAttribute('style')).toContain('border-radius: var(--hv-radius-sharp)')
+    expect(launchButton.getAttribute('style')).toContain('justify-content: flex-start')
+    expect(launchButton.getAttribute('style')).toContain('font-weight: 400')
     expect(container.textContent).not.toContain('Attach')
 
     flushSync(() => {

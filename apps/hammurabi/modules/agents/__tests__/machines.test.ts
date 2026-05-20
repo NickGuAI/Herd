@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   buildSshArgs,
   buildTailscalePingArgs,
+  createMachineRegistryStore,
   parseTailscalePingOutput,
 } from '../machines'
 import type { MachineConfig } from '../types'
@@ -188,5 +192,40 @@ describe('agents/machines: tailscale helpers', () => {
         'pong from home-mac.tail2bb6ea.ts.net (100.101.102.103) via DERP(sea) in 18ms',
       ),
     ).toBe('100.101.102.103')
+  })
+})
+
+describe('agents/machines: registry defaults', () => {
+  const tempDirs: string[] = []
+
+  async function createRegistryPath(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-default-local-machine-'))
+    tempDirs.push(dir)
+    return join(dir, 'machines.json')
+  }
+
+  it('exposes the backend-owned local machine when the registry file is missing', async () => {
+    const store = createMachineRegistryStore(await createRegistryPath())
+
+    await expect(store.readMachineRegistry()).resolves.toEqual([
+      { id: 'local', label: 'Local (this server)', host: null },
+    ])
+  })
+
+  it('preserves the local machine when writing a registry that only contains remotes', async () => {
+    const store = createMachineRegistryStore(await createRegistryPath())
+
+    await expect(store.writeMachineRegistry([
+      { id: 'gpu-1', label: 'GPU', host: '10.0.1.50' },
+    ])).resolves.toEqual([
+      { id: 'local', label: 'Local (this server)', host: null },
+      { id: 'gpu-1', label: 'GPU', host: '10.0.1.50' },
+    ])
+  })
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
+    )
   })
 })

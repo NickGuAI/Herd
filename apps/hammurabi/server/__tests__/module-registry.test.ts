@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ApiKeyRecord, ApiKeyStoreLike } from '../api-keys/store.js'
+import type { HammurabiModule } from '../module-runtime.js'
 import { createModules, resolveCommandRoomMonitorOptions } from '../module-registry.js'
 
 const API_KEY_HEADERS = {
@@ -36,7 +37,17 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
       createdBy: 'test',
       createdAt: '2026-03-18T00:00:00.000Z',
       lastUsedAt: null,
-      scopes: ['commanders:read', 'org:write'],
+      scopes: ['agents:read', 'commanders:read', 'org:write'],
+    },
+    'commanders-key': {
+      id: 'commanders-key-id',
+      name: 'Commanders Key',
+      keyHash: 'hash',
+      prefix: 'hmrb_cmd',
+      createdBy: 'test',
+      createdAt: '2026-03-18T00:00:00.000Z',
+      lastUsedAt: null,
+      scopes: ['commanders:read'],
     },
   } satisfies Record<string, ApiKeyRecord>
 
@@ -64,7 +75,13 @@ interface RunningServer {
   close: () => Promise<void>
 }
 
-async function startRegistryServer(): Promise<RunningServer> {
+function defaultModuleFilter(module: HammurabiModule): boolean {
+  return module.name === 'operators' || module.name === 'org' || module.name === 'module-graph'
+}
+
+async function startRegistryServer(
+  moduleFilter: (module: HammurabiModule) => boolean = defaultModuleFilter,
+): Promise<RunningServer> {
   const app = express()
   app.use(express.json())
 
@@ -74,7 +91,7 @@ async function startRegistryServer(): Promise<RunningServer> {
     maxAgentSessions: 1,
   })
   for (const module of modules) {
-    if (module.name === 'operators' || module.name === 'org') {
+    if (moduleFilter(module)) {
       app.use(module.routePrefix, module.router)
     }
   }
@@ -137,6 +154,129 @@ describe('resolveCommandRoomMonitorOptions', () => {
 })
 
 describe('createModules', () => {
+  it('exposes declared runtime capabilities and the loader-backed module graph', () => {
+    const { capabilities, moduleGraph, modules } = createModules({
+      apiKeyStore: createTestApiKeyStore(),
+      initializeAutomationScheduler: false,
+      maxAgentSessions: 1,
+    })
+
+    expect(capabilities.providers.get('auth.api-keys')).toBe('api-keys')
+    expect(capabilities.providers.get('agents.sessions-interface')).toBe('agents')
+    expect(capabilities.providers.get('policies.action-gate')).toBe('policies')
+    expect(capabilities.providers.get('automations.scheduler')).toBe('automations')
+    expect(capabilities.consumers.get('agents.sessions-interface')).toContain('commanders')
+    expect(moduleGraph.manifestById.get('module-graph')?.server.routes[0]?.mount).toBe('/api/modules')
+    expect(modules.some((module) => module.name === 'module-graph')).toBe(true)
+
+    const modulesByName = new Map(modules.map((module) => [module.name, module]))
+    expect(modulesByName.get('automations')?.routePrefix).toBe(
+      moduleGraph.mountPlan.routes.find((route) => route.id === 'automations.api')?.mount,
+    )
+    expect(modulesByName.get('module-graph')?.routePrefix).toBe(
+      moduleGraph.mountPlan.routes.find((route) => route.id === 'module-graph.api')?.mount,
+    )
+    expect(modulesByName.has('sentinels')).toBe(false)
+  })
+
+  it('serves graph metadata without exposing provider secrets or storage roots', async () => {
+    const server = await startRegistryServer()
+    try {
+      const response = await fetch(`${server.baseUrl}/api/modules`, {
+        headers: API_KEY_HEADERS,
+      })
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as {
+        modules: Array<{
+          id: string
+          ui: { routes: Array<{ id: string; metadata?: Record<string, unknown> }> }
+        }>
+        routes: Array<{ id: string; mount: string; methods: string[]; parserIds: string[] }>
+        storage: Array<{ keys: string[]; roots?: string[]; files?: string[] }>
+        providers: Array<{ id: string; label: string; modelIds: string[]; machineAuth?: { cliBinaryName: string } }>
+      }
+      expect(body.routes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'module-graph.api', mount: '/api/modules' }),
+        expect.objectContaining({ id: 'api-keys.api', mount: '/api/auth' }),
+      ]))
+      expect(body.providers.length).toBeGreaterThan(0)
+      expect(body.providers[0]).not.toHaveProperty('preparePtyEnv')
+      expect(body.storage.some((entry) => 'roots' in entry || 'files' in entry)).toBe(false)
+      expect(
+        body.routes.filter((route) => route.id === 'workspace.api'),
+      ).toEqual([
+        expect.objectContaining({ mount: '/api/workspace', methods: ['GET', 'POST', 'PUT'], parserIds: [] }),
+      ])
+      const commandRoomRoute = body.modules
+        .find((module) => module.id === 'command-room')
+        ?.ui.routes.find((route) => route.id === 'command-room.ui')
+      expect(commandRoomRoute?.metadata).toMatchObject({
+        launch: {
+          path: '/command-room',
+          commanderParam: 'commander',
+          conversationParam: 'conversation',
+        },
+        globalCommander: {
+          commanderValue: 'global',
+          panelParam: 'panel',
+          defaultPanel: 'automation',
+        },
+      })
+      expect(JSON.stringify(body)).not.toMatch(/keyHash|authEnvKeys|preparePtyEnv/i)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('serves bootstrap graph metadata to valid API keys without agent scope', async () => {
+    const server = await startRegistryServer()
+    try {
+      const response = await fetch(`${server.baseUrl}/api/modules`, {
+        headers: {
+          'x-hammurabi-api-key': 'commanders-key',
+        },
+      })
+
+      expect(response.status).toBe(200)
+      const body = await response.json() as {
+        routes: Array<{ id: string; mount: string }>
+      }
+      expect(body.routes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'module-graph.api', mount: '/api/modules' }),
+      ]))
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('mounts canonical agents and providers API routes from the manifest-backed registry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-module-registry-agents-'))
+    tempDirs.push(dir)
+    const dataDir = join(dir, 'data')
+    process.env.HAMMURABI_DATA_DIR = dataDir
+    process.env.COMMANDER_DATA_DIR = join(dataDir, 'commander')
+
+    const server = await startRegistryServer(
+      (module) => module.name === 'agents' || module.name === 'providers',
+    )
+    try {
+      for (const path of ['/api/agents/sessions', '/api/agents/machines', '/api/agents/world', '/api/providers']) {
+        const response = await fetch(`${server.baseUrl}${path}`)
+        expect(response.status, path).not.toBe(404)
+        expect(response.headers.get('content-type') ?? '', path).toContain('application/json')
+        await expect(response.json(), path).resolves.toHaveProperty('error')
+      }
+
+      for (const path of ['/api/sessions', '/api/machines', '/api/world']) {
+        const response = await fetch(`${server.baseUrl}${path}`)
+        expect(response.status, path).toBe(404)
+      }
+    } finally {
+      await server.close()
+    }
+  })
+
   it('shares founder setup writes with the operators route after an initial missing-founder read', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hammurabi-module-registry-founder-'))
     tempDirs.push(dir)

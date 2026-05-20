@@ -13,11 +13,11 @@ import { useOpenAITranscription, useOpenAITranscriptionConfig } from '@/hooks/us
 import { useSpeechRecognition } from '@/hooks/use-speech-recognition'
 import type { AgentType, SessionQueueSnapshot } from '@/types'
 import { cn } from '@/lib/utils'
-import { supportsQueuedDrafts } from '../queue-capability'
 import { getQueuePendingCount } from '../queue-state'
 import { SkillsPicker } from './SkillsPicker'
-import { MobileQueuePanel } from './MobileQueuePanel'
+import { QueuePanel } from './QueuePanel'
 import { useSessionDraft } from '../page-shell/use-session-draft'
+import type { WorkspaceContextRequest, WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
 
 export interface SessionComposerImage {
   mediaType: string
@@ -27,6 +27,7 @@ export interface SessionComposerImage {
 export interface SessionComposerSubmitPayload {
   text: string
   images?: SessionComposerImage[]
+  context?: Pick<WorkspaceContextRequest, 'filePaths' | 'directoryPaths' | 'fileAnnotations'>
 }
 
 interface SessionComposerProps {
@@ -40,7 +41,11 @@ interface SessionComposerProps {
   sendReady?: boolean
   isStreaming?: boolean
   contextFilePaths?: string[]
+  contextDirectoryPaths?: string[]
+  contextFileAnnotations?: WorkspacePendingFileAnnotation[]
   onRemoveContextFilePath?: (filePath: string) => void
+  onRemoveContextDirectoryPath?: (directoryPath: string) => void
+  onRemoveContextFileAnnotation?: (annotationId: string) => void
   onClearContextFilePaths?: () => void
   onOpenWorkspace?: () => void
   onOpenAddToChat?: () => void
@@ -74,7 +79,6 @@ function basename(filePath: string): string {
 
 export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposerProps>(function SessionComposer({
   sessionName,
-  agentType,
   theme = 'light',
   variant = 'desktop',
   placeholder = 'Send a message...',
@@ -83,7 +87,11 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   sendReady = true,
   isStreaming = false,
   contextFilePaths = [],
+  contextDirectoryPaths = [],
+  contextFileAnnotations = [],
   onRemoveContextFilePath,
+  onRemoveContextDirectoryPath,
+  onRemoveContextFileAnnotation,
   onClearContextFilePaths,
   onOpenWorkspace,
   onOpenAddToChat,
@@ -127,15 +135,20 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   } = activeTranscription
 
   const isMobileVariant = variant === 'mobile'
-  const queueDraftsSupported = !disabled && supportsQueuedDrafts(agentType) && typeof onQueue === 'function'
+  const queueDraftsSupported = !disabled && typeof onQueue === 'function'
   const totalQueuedCount = getQueuePendingCount(queueSnapshot)
   const queueMaxSize = typeof queueSnapshot?.maxSize === 'number' ? queueSnapshot.maxSize : 0
-  const showMobileQueueButton = isMobileVariant && !disabled && queueMaxSize > 0
+  const canOpenQueuePanel = !disabled && queueMaxSize > 0
+  const showMobileQueueButton = isMobileVariant && canOpenQueuePanel
+  const queueButtonLabel = queueMaxSize > 0
+    ? `Queue ${totalQueuedCount}/${queueMaxSize}`
+    : 'Queue'
+  const hasContextAttachments = contextFilePaths.length > 0 || contextDirectoryPaths.length > 0 || contextFileAnnotations.length > 0
   const canQueueDraft = (
     queueDraftsSupported
-    && (inputText.trim().length > 0 || pendingImages.length > 0)
+    && (inputText.trim().length > 0 || pendingImages.length > 0 || hasContextAttachments)
   )
-  const canSend = !disabled && sendReady && (inputText.trim().length > 0 || pendingImages.length > 0)
+  const canSend = !disabled && sendReady && (inputText.trim().length > 0 || pendingImages.length > 0 || hasContextAttachments)
   const primaryActionUsesQueue = isMobileVariant && isStreaming && queueDraftsSupported
   const primaryActionDisabled = primaryActionUsesQueue ? !canQueueDraft : !canSend
   const primaryActionLabel = primaryActionUsesQueue
@@ -150,9 +163,11 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
       : isMobileVariant
         ? 'Send message'
         : 'Send'
-  const queueButtonTitle = !queueDraftsSupported
-    ? 'Queue is only available for stream agent sessions'
-    : 'Queue message (Tab)'
+  const queueButtonTitle = canOpenQueuePanel
+    ? 'Open queue'
+    : !queueDraftsSupported
+      ? 'Queue is only available for stream agent sessions'
+      : 'Queue unavailable'
   const footerHint = disabled
     ? (disabledMessage ?? 'Composer unavailable')
     : queueDraftsSupported
@@ -191,23 +206,52 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     clearDraft()
   }
 
-  async function handleSend() {
+  function buildContextPayload(): SessionComposerSubmitPayload['context'] | undefined {
+    const filePaths = contextFilePaths.filter((filePath) => filePath.trim().length > 0)
+    const directoryPaths = contextDirectoryPaths.filter((directoryPath) => directoryPath.trim().length > 0)
+    const fileAnnotations = contextFileAnnotations
+      .filter((annotation) => annotation.path.trim().length > 0 && annotation.body.trim().length > 0)
+      .map((annotation) => ({
+        path: annotation.path,
+        body: annotation.body,
+        quote: annotation.quote ?? null,
+        range: annotation.range ?? null,
+      }))
+    if (filePaths.length === 0 && directoryPaths.length === 0 && fileAnnotations.length === 0) {
+      return undefined
+    }
+    return {
+      ...(filePaths.length > 0 ? { filePaths } : {}),
+      ...(directoryPaths.length > 0 ? { directoryPaths } : {}),
+      ...(fileAnnotations.length > 0 ? { fileAnnotations } : {}),
+    }
+  }
+
+  function handleSend() {
     const text = inputText.trim()
-    if ((!text && pendingImages.length === 0) || disabled || !sendReady) {
+    const context = buildContextPayload()
+    if ((!text && pendingImages.length === 0 && !context) || disabled || !sendReady) {
       return
     }
 
     const images = pendingImages.slice()
-    const sent = await onSend({
-      text: contextFilePaths.length > 0
-        ? `${contextFilePaths.map((filePath) => `@${filePath}`).join(' ')}\n${text}`.trim()
-        : text,
-      images: images.length > 0 ? images : undefined,
-    })
+    let sent: boolean | void | Promise<boolean | void>
+    try {
+      sent = onSend({
+        text,
+        images: images.length > 0 ? images : undefined,
+        context,
+      })
+    } catch {
+      return
+    }
     if (sent === false) {
       return
     }
     clearComposer()
+    void Promise.resolve(sent).catch(() => {
+      // Transport errors are surfaced by the owner callback; the composer only owns draft state.
+    })
   }
 
   async function handleQueueDraft() {
@@ -216,11 +260,11 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     }
 
     const images = pendingImages.slice()
+    const context = buildContextPayload()
     const queued = await onQueue({
-      text: contextFilePaths.length > 0
-        ? `${contextFilePaths.map((filePath) => `@${filePath}`).join(' ')}\n${inputText.trim()}`.trim()
-        : inputText.trim(),
+      text: inputText.trim(),
       images: images.length > 0 ? images : undefined,
+      context,
     })
     if (queued === false) {
       return
@@ -323,7 +367,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   return (
     <div className="hervald-session-composer">
       <div className="input-bar">
-        {contextFilePaths.length > 0 && (
+        {hasContextAttachments && (
           <div className="flex flex-wrap gap-1.5 px-1 pb-1">
             {contextFilePaths.map((filePath) => (
               <span
@@ -337,6 +381,40 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
                   onClick={() => onRemoveContextFilePath?.(filePath)}
                   className="file-chip-remove"
                   aria-label={`Remove ${basename(filePath)}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {contextDirectoryPaths.map((directoryPath) => (
+              <span
+                key={directoryPath}
+                className="file-chip"
+                title={directoryPath}
+              >
+                {basename(`${directoryPath.replace(/\/+$/u, '')}/`)}
+                <button
+                  type="button"
+                  onClick={() => onRemoveContextDirectoryPath?.(directoryPath)}
+                  className="file-chip-remove"
+                  aria-label={`Remove ${basename(`${directoryPath.replace(/\/+$/u, '')}/`)}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {contextFileAnnotations.map((annotation) => (
+              <span
+                key={annotation.id}
+                className="file-chip"
+                title={`${annotation.path}\n${annotation.body}`}
+              >
+                {basename(annotation.path)} annotation
+                <button
+                  type="button"
+                  onClick={() => onRemoveContextFileAnnotation?.(annotation.id)}
+                  className="file-chip-remove"
+                  aria-label={`Remove annotation for ${basename(annotation.path)}`}
                 >
                   ×
                 </button>
@@ -356,7 +434,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
                 />
                 <button
                   type="button"
-                  className="composer-attachment-remove absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-sumi-black text-washi-white text-xs leading-none"
+                  className="composer-attachment-remove absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)] text-xs leading-none"
                   onClick={() => setPendingImages((prev) => prev.filter((_, imageIndex) => imageIndex !== index))}
                   aria-label="Remove image"
                 >
@@ -404,9 +482,9 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
                   className="composer-queue-btn composer-queue-btn--mobile"
                   onClick={() => setShowQueuePanel(true)}
                   aria-label="Open queue"
-                  title={`Queue ${totalQueuedCount}/${queueMaxSize}`}
+                  title={queueButtonLabel}
                 >
-                  {`Queue ${totalQueuedCount}/${queueMaxSize}`}
+                  {queueButtonLabel}
                 </button>
               )}
 
@@ -445,68 +523,77 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
             </div>
           </>
         ) : (
-          <div className="composer-row flex items-end gap-2">
-            {renderComposerField()}
+          <>
+            <div className="composer-field-stack">
+              {renderComposerField()}
+            </div>
 
-            <button
-              type="button"
-              className="composer-icon-btn p-2 text-[var(--msg-text-muted)] transition-colors hover:text-[var(--msg-text)] disabled:cursor-not-allowed disabled:opacity-40"
-              onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach image"
-              title="Attach image"
-              disabled={disabled || pendingImages.length >= MAX_PENDING_IMAGES}
-            >
-              <Paperclip size={18} />
-            </button>
+            <div className="composer-row composer-row--desktop">
+              <div className="composer-desktop-actions">
+                <button
+                  type="button"
+                  className="composer-icon-btn p-2 text-[var(--msg-text-muted)] transition-colors hover:text-[var(--msg-text)] disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Attach image"
+                  title="Attach image"
+                  disabled={disabled || pendingImages.length >= MAX_PENDING_IMAGES}
+                >
+                  <Paperclip size={18} />
+                </button>
 
-            <button
-              type="button"
-              className={cn(
-                'composer-icon-btn p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-                showSkills ? 'text-[var(--msg-text)]' : 'text-[var(--msg-text-muted)] hover:text-[var(--msg-text)]',
-              )}
-              onClick={() => setShowSkills(true)}
-              aria-label="Skills"
-              disabled={disabled}
-            >
-              <Zap size={18} />
-            </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'composer-icon-btn p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    showSkills ? 'text-[var(--msg-text)]' : 'text-[var(--msg-text-muted)] hover:text-[var(--msg-text)]',
+                  )}
+                  onClick={() => setShowSkills(true)}
+                  aria-label="Skills"
+                  disabled={disabled}
+                >
+                  <Zap size={18} />
+                </button>
 
-            {isMicSupported && (
-              <button
-                type="button"
-                className={cn('mic-btn', isMicListening && 'recording')}
-                onClick={handleMicToggle}
-                aria-label={isMicListening ? 'Stop voice input' : 'Start voice input'}
-                aria-pressed={isMicListening}
-                title={isMicListening ? 'Stop listening' : 'Start voice input'}
-                disabled={disabled}
-              >
-                <Mic size={18} />
-              </button>
-            )}
+                {isMicSupported && (
+                  <button
+                    type="button"
+                    className={cn('mic-btn', isMicListening && 'recording')}
+                    onClick={handleMicToggle}
+                    aria-label={isMicListening ? 'Stop voice input' : 'Start voice input'}
+                    aria-pressed={isMicListening}
+                    title={isMicListening ? 'Stop listening' : 'Start voice input'}
+                    disabled={disabled}
+                  >
+                    <Mic size={18} />
+                  </button>
+                )}
 
-            <button
-              type="button"
-              className="composer-queue-btn rounded-lg border border-[var(--msg-border)] px-3 py-2 font-mono text-[11px] text-[var(--msg-text-muted)] transition-colors hover:bg-[var(--msg-surface-elevated)] disabled:cursor-not-allowed disabled:opacity-40"
-              onClick={() => void handleQueueDraft()}
-              disabled={!canQueueDraft}
-              title={queueButtonTitle}
-            >
-              Queue
-            </button>
+                <button
+                  type="button"
+                  className="composer-queue-btn composer-queue-btn--mobile rounded-lg border border-[var(--msg-border)] px-3 py-2 font-mono text-[11px] text-[var(--msg-text-muted)] transition-colors hover:bg-[var(--msg-surface-elevated)] disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={() => setShowQueuePanel(true)}
+                  disabled={!canOpenQueuePanel}
+                  aria-label="Open queue"
+                  title={queueButtonTitle}
+                >
+                  {queueButtonLabel}
+                </button>
+              </div>
 
-            <button
-              type="button"
-              className="send-btn"
-              onClick={() => void handleSend()}
-              disabled={!canSend}
-              aria-label="Send"
-              title={!sendReady && !disabled ? 'Connecting…' : 'Send'}
-            >
-              <ArrowUp size={18} />
-            </button>
-          </div>
+              <div className="composer-desktop-actions composer-desktop-actions--right">
+                <button
+                  type="button"
+                  className="send-btn"
+                  onClick={() => void handleSend()}
+                  disabled={!canSend}
+                  aria-label="Send"
+                  title={!sendReady && !disabled ? 'Connecting…' : 'Send'}
+                >
+                  <ArrowUp size={18} />
+                </button>
+              </div>
+            </div>
+          </>
         )}
 
         <div className="composer-footer flex items-center justify-between px-3 pb-1 pt-0.5">
@@ -537,12 +624,14 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
         onClose={() => setShowSkills(false)}
       />
 
-      <MobileQueuePanel
+      <QueuePanel
         open={showQueuePanel}
         theme={theme}
         queueSnapshot={queueSnapshot}
         queueError={queueError}
         isQueueMutating={isQueueMutating}
+        canQueueDraft={canQueueDraft}
+        onQueueDraft={handleQueueDraft}
         onClearQueue={onClearQueue}
         onMoveQueuedMessage={onMoveQueuedMessage}
         onRemoveQueuedMessage={onRemoveQueuedMessage}

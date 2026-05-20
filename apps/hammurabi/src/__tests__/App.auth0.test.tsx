@@ -37,15 +37,7 @@ vi.mock('@/app/AuthenticatedAppRouter', () => ({
 }))
 
 vi.mock('@/module-registry', () => ({
-  modules: [],
-}))
-
-vi.mock('@/hooks/use-is-mobile', () => ({
-  useIsMobile: () => false,
-}))
-
-vi.mock('../modules/approvals/ApprovalCenter', () => ({
-  ApprovalCenter: () => null,
+  moduleComponentBindings: [],
 }))
 
 import App from '../App'

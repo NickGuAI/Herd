@@ -8,7 +8,7 @@ import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../claude-effort.js'
 import {
   profileForApiResponse,
   readCommanderUiProfile,
-  resolveCommanderAvatarPath,
+  resolveCommanderAvatarUrl,
   writeCommanderUiProfile,
 } from '../commanders/commander-profile.js'
 import { ensureCommanderVisualProfile } from '../commanders/commander-visual-profile.js'
@@ -23,16 +23,30 @@ import {
 import { QuestStore } from '../commanders/quest-store.js'
 import { createDefaultCommanderRuntimeConfig } from '../commanders/runtime-config.shared.js'
 import { CommanderSessionStore, type CommanderSession } from '../commanders/store.js'
-import { scaffoldCommanderWorkflow } from '../commanders/templates/workflow.js'
+import { mergeIdentityOperatingStyleIntoCommanderWorkflow } from '../commanders/templates/workflow.js'
 import { defaultOperatorStorePath, OperatorStore } from '../operators/store.js'
 import { FOUNDER_OPERATOR_NOT_FOUND_ERROR } from '../operators/constants.js'
 import type { Operator } from '../operators/types.js'
 import { createFounderBootstrapCandidate } from '../operators/founder-bootstrap.js'
-import type { FounderOrgSetupRequest, FounderOrgSetupResponse } from '../onboarding/contracts.js'
-import { FOUNDER_SETUP_EMAIL_PATTERN } from '../onboarding/contracts.js'
+import {
+  DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
+  FOUNDER_SETUP_COMPLETED_PATH,
+  FOUNDER_SETUP_EMAIL_PATTERN,
+  FOUNDER_SETUP_PATH,
+  validateFounderOrgSetupFormValues,
+  type FounderOrgSetupRequest,
+  type FounderOrgSetupResponse,
+  type FounderSetupStatus,
+} from '../onboarding/contracts.js'
+import { buildCommandRoomLaunchTarget } from '../command-room/route-metadata.js'
 import { createOrgIdentityRouter } from '../org-identity/route.js'
 import { normalizeOrgName, OrgIdentityStore, OrgIdentityValidationError } from '../org-identity/store.js'
-import { buildOrgTree, type BuildOrgTreeDependencies, type OrgCommanderRecord } from './aggregator.js'
+import {
+  buildOrgTree,
+  type BuildOrgTreeDependencies,
+  type OrgCommanderRecord,
+  type OrgConversationRecord,
+} from './aggregator.js'
 
 export interface OrgRouterOptions {
   operatorStore?: BuildOrgTreeDependencies['operatorStore']
@@ -64,14 +78,17 @@ type FutureCommanderOrgFields = {
 type OrgSessionStore = Pick<CommanderSessionStore, 'list'> &
   Partial<Pick<CommanderSessionStore, 'create'>>
 
-type OrgConversationStore = BuildOrgTreeDependencies['conversationStore'] &
-  Partial<Pick<ConversationStore, 'ensureDefaultConversation'>>
+type OrgLaunchConversationRecord = OrgConversationRecord & { id?: string }
+
+type OrgConversationStore = {
+  listByCommander(commanderId: string): Promise<ReadonlyArray<OrgLaunchConversationRecord>>
+} & Partial<Pick<ConversationStore, 'ensureDefaultConversation' | 'getActiveChatForCommander'>>
 
 const GAIA_HOST = 'gaia'
 const GAIA_DISPLAY_NAME = 'Gaia'
 const GAIA_TEMPLATE_ID = 'gaia-onboarding'
 const GAIA_SPEAKING_TONE = 'Mother-of-all onboarding'
-const GAIA_PERSONA = [
+const GAIA_IDENTITY = [
   'Gaia is the mother-of-all onboarding commander for Hervald.',
   'She helps the founder understand the organization, create and manage commanders, and keep onboarding decisions routed through backend APIs instead of fragile frontend-only logic.',
 ].join(' ')
@@ -140,8 +157,7 @@ function createProfileStore(commanderDataDir: string): BuildOrgTreeDependencies[
   return {
     async getAvatarUrl(commanderId: string): Promise<string | null> {
       const profile = await readCommanderUiProfile(commanderId, commanderDataDir)
-      const avatarPath = await resolveCommanderAvatarPath(commanderId, commanderDataDir, profile)
-      return avatarPath ? `/api/commanders/${encodeURIComponent(commanderId)}/avatar` : null
+      return resolveCommanderAvatarUrl(commanderId, commanderDataDir, profile)
     },
     async getProfile(commanderId: string) {
       return profileForApiResponse(commanderId, await readCommanderUiProfile(commanderId, commanderDataDir))
@@ -203,6 +219,15 @@ function parseFounderOrgSetupRequest(raw: unknown): FounderOrgSetupRequest {
     }
     throw error
   }
+}
+
+function parseCommanderId(raw: unknown): string | null {
+  if (typeof raw !== 'string') {
+    return null
+  }
+
+  const normalized = raw.trim()
+  return normalized.length > 0 ? normalized : null
 }
 
 function buildFounderIdFromEmail(email: string): string {
@@ -306,7 +331,6 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
       const session: CommanderSession = {
         id: randomUUID(),
         host: GAIA_HOST,
-        persona: GAIA_PERSONA,
         state: 'idle',
         created: createdAt,
         agentType: 'claude',
@@ -328,7 +352,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
             currentTask: null,
           })
           : Promise.resolve(),
-        scaffoldCommanderWorkflow(created.id, {}, commanderDataDir),
+        mergeIdentityOperatingStyleIntoCommanderWorkflow(created.id, GAIA_IDENTITY, { basePath: commanderDataDir }),
         setCommanderDisplayName(commanderDataDir, created.id, GAIA_DISPLAY_NAME),
         writeCommanderUiProfile(created.id, commanderDataDir, ensureCommanderVisualProfile(created.id, {
           speakingTone: GAIA_SPEAKING_TONE,
@@ -377,6 +401,85 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
     internalToken: options.internalToken,
   }))
 
+  async function buildFounderSetupStatus(user: AuthUser | undefined): Promise<FounderSetupStatus> {
+    const founder = await operatorStore.getFounder()
+    const orgIdentity = founder ? await orgIdentityStore.get() : null
+    const bootstrapCandidate = founder ? null : createFounderBootstrapCandidate(user)
+    const defaultValues = founder
+      ? {
+          orgDisplayName: orgIdentity?.name ?? '',
+          founderDisplayName: founder.displayName,
+          founderEmail: founder.email ?? '',
+        }
+      : {
+          ...DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
+          founderDisplayName: bootstrapCandidate?.displayName ?? '',
+          founderEmail: bootstrapCandidate?.email ?? '',
+        }
+
+    return {
+      setupComplete: Boolean(founder),
+      defaultValues,
+      validationErrors: validateFounderOrgSetupFormValues(defaultValues),
+      nextRoute: founder ? FOUNDER_SETUP_COMPLETED_PATH : FOUNDER_SETUP_PATH,
+    }
+  }
+
+  async function getActiveConversationId(commanderId: string): Promise<string | null> {
+    try {
+      if (typeof conversationStore.getActiveChatForCommander === 'function') {
+        const activeConversation = await conversationStore.getActiveChatForCommander(commanderId)
+        return activeConversation?.id ?? null
+      }
+
+      const conversations = await conversationStore.listByCommander(commanderId)
+      const activeConversation = conversations
+        .filter((conversation) => (
+          conversation.id
+          && (conversation.status === 'active' || conversation.status === 'idle')
+          && (conversation.surface === undefined || ['ui', 'cli', 'api'].includes(conversation.surface))
+        ))
+        .sort((left, right) => {
+          if (left.status !== right.status) {
+            return left.status === 'active' ? -1 : 1
+          }
+          const createdDelta = Date.parse(right.createdAt ?? '') - Date.parse(left.createdAt ?? '')
+          return Number.isFinite(createdDelta) && createdDelta !== 0
+            ? createdDelta
+            : String(left.id).localeCompare(String(right.id))
+        })[0]
+      return activeConversation?.id ?? null
+    } catch {
+      return null
+    }
+  }
+
+  router.get('/setup-status', requireReadAccess, async (req, res) => {
+    res.json(await buildFounderSetupStatus(req.user))
+  })
+
+  router.get('/commanders/:id/check-on-target', requireReadAccess, async (req, res) => {
+    const commanderId = parseCommanderId(req.params.id)
+    if (!commanderId) {
+      res.status(400).json({ error: 'Invalid commander id' })
+      return
+    }
+
+    const sessions = await sessionStore.list()
+    if (!sessions.some((session) => session.id === commanderId)) {
+      res.status(404).json({ error: `Commander "${commanderId}" not found` })
+      return
+    }
+
+    const conversationId = await getActiveConversationId(commanderId)
+    res.json({
+      target: buildCommandRoomLaunchTarget({
+        commanderId,
+        conversationId,
+      }),
+    })
+  })
+
   router.post('/', requireWriteAccess, async (req, res) => {
     if (!founderWriteStore) {
       res.status(500).json({ error: 'Founder setup is not available for this org router' })
@@ -421,6 +524,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
     const response: FounderOrgSetupResponse = {
       operator,
       orgIdentity,
+      nextRoute: FOUNDER_SETUP_COMPLETED_PATH,
     }
 
     res.status(existingFounder ? 200 : 201).json(response)

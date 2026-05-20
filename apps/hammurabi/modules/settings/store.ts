@@ -3,6 +3,11 @@ import path from 'node:path'
 import { resolveModuleDataDir } from '../data-dir.js'
 import type { AppSettings, AppTheme } from './types.js'
 
+export const APP_FONT_SCALE_MIN = 0.8
+export const APP_FONT_SCALE_MAX = 1.6
+export const APP_FONT_SCALE_STEP = 0.1
+export const DEFAULT_APP_FONT_SCALE = 1
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -15,9 +20,35 @@ export function normalizeAppTheme(value: unknown): AppTheme | null {
   return value === 'light' || value === 'dark' ? value : null
 }
 
+function roundAppFontScale(value: number): number {
+  return Math.round(value * 10) / 10
+}
+
+function clampAppFontScale(value: number): number {
+  return Math.min(APP_FONT_SCALE_MAX, Math.max(APP_FONT_SCALE_MIN, value))
+}
+
+export function normalizeAppFontScale(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null
+  }
+  if (value < APP_FONT_SCALE_MIN || value > APP_FONT_SCALE_MAX) {
+    return null
+  }
+  return roundAppFontScale(value)
+}
+
+function normalizePersistedAppFontScale(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null
+  }
+  return clampAppFontScale(roundAppFontScale(value))
+}
+
 function defaultSettings(now: () => Date): AppSettings {
   return {
     theme: 'light',
+    fontScale: DEFAULT_APP_FONT_SCALE,
     updatedAt: now().toISOString(),
   }
 }
@@ -30,6 +61,7 @@ function parsePersistedSettings(raw: unknown, now: () => Date): AppSettings {
 
   return {
     theme: normalizeAppTheme(raw.theme) ?? fallback.theme,
+    fontScale: normalizePersistedAppFontScale(raw.fontScale) ?? fallback.fontScale,
     updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt.trim().length > 0
       ? raw.updatedAt.trim()
       : fallback.updatedAt,
@@ -61,15 +93,19 @@ export class AppSettingsStore {
     return cloneSettings(created)
   }
 
-  async update(input: Partial<Pick<AppSettings, 'theme'>>): Promise<AppSettings> {
+  async update(input: Partial<Pick<AppSettings, 'theme' | 'fontScale'>>): Promise<AppSettings> {
     return this.withMutationLock(async () => {
       const current = await this.readFromDisk() ?? defaultSettings(this.now)
       const theme = input.theme === undefined
         ? current.theme
         : normalizeAppTheme(input.theme) ?? current.theme
+      const fontScale = input.fontScale === undefined
+        ? current.fontScale
+        : normalizeAppFontScale(input.fontScale) ?? current.fontScale
       const next: AppSettings = {
         ...current,
         theme,
+        fontScale,
         updatedAt: this.now().toISOString(),
       }
 

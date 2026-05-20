@@ -2,8 +2,10 @@ import { Router } from 'express'
 import { homedir } from 'node:os'
 import { readdir, readFile, writeFile, mkdir, stat } from 'node:fs/promises'
 import path from 'node:path'
+import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
+import { discoverSkillDirectorySources } from './skill-roots.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,13 +42,13 @@ export interface SkillsRouterOptions {
   auth0Domain?: string
   auth0Audience?: string
   auth0ClientId?: string
+  verifyAuth0Token?: (token: string) => Promise<AuthUser>
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const AGENT_SKILLS_DIR = path.join(homedir(), 'App', 'agent-skills')
 const CONFIG_DIR = path.join(homedir(), '.config', 'gehirn')
 
 function parseFrontmatter(content: string): Record<string, string | boolean> {
@@ -171,26 +173,19 @@ function configFileName(dirName: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Skill discovery — scans ~/App/agent-skills/{pkg}/{skill}/SKILL.md
+// Skill discovery — scans installed skill roots and bundled agent-skills packages.
 // ---------------------------------------------------------------------------
 
-async function discoverSkills(): Promise<SkillInfo[]> {
+export async function discoverSkills(): Promise<SkillInfo[]> {
   const skills: SkillInfo[] = []
   const seen = new Set<string>()
 
-  let packages: string[]
-  try {
-    const entries = await readdir(AGENT_SKILLS_DIR, { withFileTypes: true })
-    packages = entries.filter((e) => e.isDirectory()).map((e) => e.name)
-  } catch {
-    return skills
-  }
+  const skillSources = await discoverSkillDirectorySources()
 
-  for (const pkg of packages) {
-    const pkgDir = path.join(AGENT_SKILLS_DIR, pkg)
+  for (const skillSource of skillSources) {
     let skillDirs: string[]
     try {
-      const entries = await readdir(pkgDir, { withFileTypes: true })
+      const entries = await readdir(skillSource.dir, { withFileTypes: true })
       skillDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name)
     } catch {
       continue
@@ -198,7 +193,7 @@ async function discoverSkills(): Promise<SkillInfo[]> {
 
     for (const dirName of skillDirs) {
       if (seen.has(dirName)) continue
-      const skillMd = path.join(pkgDir, dirName, 'SKILL.md')
+      const skillMd = path.join(skillSource.dir, dirName, 'SKILL.md')
       try {
         const content = await readFile(skillMd, 'utf-8')
         const fm = parseFrontmatter(content)
@@ -214,7 +209,7 @@ async function discoverSkills(): Promise<SkillInfo[]> {
           userInvocable: fm['user-invocable'] === true || fm['user-invocable'] === 'true',
           argumentHint: typeof fm['argument-hint'] === 'string' ? fm['argument-hint'] : undefined,
           allowedTools: typeof fm['allowed-tools'] === 'string' ? fm['allowed-tools'] : undefined,
-          source: pkg,
+          source: skillSource.source,
           hasConfig: confExists,
           configPath: confPath,
         })
@@ -240,17 +235,17 @@ async function readSkillConfig(dirName: string): Promise<SkillConfig> {
     exists: false,
   }
 
-  // Try to find template in agent-skills for structure/comments
+  // Try to find template in installed skill roots for structure/comments.
   try {
-    const entries = await readdir(AGENT_SKILLS_DIR, { withFileTypes: true })
-    for (const pkg of entries.filter((e) => e.isDirectory())) {
-      const templatePath = path.join(AGENT_SKILLS_DIR, pkg.name, dirName, `${dirName}.conf`)
+    const skillSources = await discoverSkillDirectorySources()
+    for (const skillSource of skillSources) {
+      const templatePath = path.join(skillSource.dir, dirName, `${dirName}.conf`)
       if (await fileExists(templatePath)) {
         result.templatePath = templatePath
         break
       }
       // Also check .conf.template
-      const templatePath2 = path.join(AGENT_SKILLS_DIR, pkg.name, dirName, `${dirName}.conf.template`)
+      const templatePath2 = path.join(skillSource.dir, dirName, `${dirName}.conf.template`)
       if (await fileExists(templatePath2)) {
         result.templatePath = templatePath2
         break
@@ -289,11 +284,11 @@ async function writeSkillConfig(
   // Read template for comment preservation
   let templateContent: string | undefined
   try {
-    const entries = await readdir(AGENT_SKILLS_DIR, { withFileTypes: true })
-    for (const pkg of entries.filter((e) => e.isDirectory())) {
+    const skillSources = await discoverSkillDirectorySources()
+    for (const skillSource of skillSources) {
       for (const candidate of [
-        path.join(AGENT_SKILLS_DIR, pkg.name, dirName, `${dirName}.conf`),
-        path.join(AGENT_SKILLS_DIR, pkg.name, dirName, `${dirName}.conf.template`),
+        path.join(skillSource.dir, dirName, `${dirName}.conf`),
+        path.join(skillSource.dir, dirName, `${dirName}.conf.template`),
       ]) {
         if (await fileExists(candidate)) {
           templateContent = await readFile(candidate, 'utf-8')
@@ -392,17 +387,23 @@ export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
   const requireReadAccess = combinedAuth({
     apiKeyStore: options.apiKeyStore,
     requiredApiKeyScopes: ['skills:read'],
+    requiredAuth0Permissions: ['skills:read', 'commanders:read'],
+    auth0PermissionMode: 'any',
     domain: options.auth0Domain,
     audience: options.auth0Audience,
     clientId: options.auth0ClientId,
+    verifyToken: options.verifyAuth0Token,
   })
 
   const requireWriteAccess = combinedAuth({
     apiKeyStore: options.apiKeyStore,
     requiredApiKeyScopes: ['skills:write'],
+    requiredAuth0Permissions: ['skills:write', 'commanders:write'],
+    auth0PermissionMode: 'any',
     domain: options.auth0Domain,
     audience: options.auth0Audience,
     clientId: options.auth0ClientId,
+    verifyToken: options.verifyAuth0Token,
   })
 
   // GET /api/skills — list all installed skills

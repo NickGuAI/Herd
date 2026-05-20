@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -88,6 +87,8 @@ async function renderIdentityTab() {
       ),
     )
   })
+
+  return { container }
 }
 
 describe('CommanderIdentityTab', () => {
@@ -105,7 +106,80 @@ describe('CommanderIdentityTab', () => {
       })
     }
     document.body.innerHTML = ''
+    document.documentElement.className = ''
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
+  })
+
+  it('keeps identity markdown and controls on Sumi-e semantic tokens in dark mode', async () => {
+    document.documentElement.className = 'hv-dark'
+    mocks.fetchJson.mockImplementation(async (url: string) => {
+      if (url === '/api/commanders/72e40eda-4ab1-457a-a91d-e5ab7ac2f5d3') {
+        return {
+          workflowMd: [
+            '# Command style',
+            '',
+            '**Bold identity text** with `inline code`.',
+            '',
+            '> Keep the commander readable.',
+          ].join('\n'),
+          runtimeConfig: {
+            defaults: { maxTurns: 12 },
+            limits: { maxTurns: 25 },
+          },
+        }
+      }
+
+      throw new Error(`Unexpected fetchJson call: ${url}`)
+    })
+
+    const { container } = await renderIdentityTab()
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('.hervald-prose strong')?.textContent).toBe('Bold identity text')
+    })
+
+    const markdown = container.querySelector<HTMLElement>('.hervald-prose')
+    if (!markdown) {
+      throw new Error('expected tokenized identity markdown wrapper')
+    }
+    expect(markdown.classList.contains('prose')).toBe(false)
+    expect(markdown.classList.contains('prose-sm')).toBe(false)
+
+    const maxTurnsInput = container.querySelector<HTMLInputElement>('input[type="number"][max="25"]')
+    if (!maxTurnsInput) {
+      throw new Error('expected max turns input')
+    }
+    expect(maxTurnsInput.className).toContain('bg-[var(--hv-field-bg)]')
+    expect(maxTurnsInput.className).toContain('text-[color:var(--hv-fg)]')
+
+    const html = container.innerHTML
+    expect(html).not.toContain('text-sumi')
+    expect(html).not.toContain('bg-washi')
+    expect(html).not.toContain('border-ink')
+    expect(html).not.toContain('prose prose-')
+  })
+
+  it('opens COMMANDER.md by default while runtime details start collapsed', async () => {
+    mocks.fetchJson.mockImplementation(async (url: string) => {
+      if (url === '/api/commanders/72e40eda-4ab1-457a-a91d-e5ab7ac2f5d3') {
+        return {
+          workflowMd: '# Identity',
+          runtimeConfig: {
+            defaults: { maxTurns: 12 },
+            limits: { maxTurns: 25 },
+          },
+        }
+      }
+
+      throw new Error(`Unexpected fetchJson call: ${url}`)
+    })
+
+    const { container } = await renderIdentityTab()
+
+    const runtime = container.querySelector<HTMLDetailsElement>('[data-testid="identity-section-runtime"]')
+    const commanderMd = container.querySelector<HTMLDetailsElement>('[data-testid="identity-section-commander-md"]')
+    expect(runtime?.open).toBe(false)
+    expect(commanderMd?.open).toBe(true)
   })
 
   it('shows explicit max-turn runtime state and saves runtime settings through the runtime patch route', async () => {

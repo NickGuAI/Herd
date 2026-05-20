@@ -235,10 +235,14 @@ function AutomationCard({
             </div>
           ) : null}
 
-          <div>
-            <p className="section-title">Instruction</p>
-            <p className="mt-1 text-sm text-sumi-gray whitespace-pre-wrap">{automation.instruction}</p>
-          </div>
+          <details className="rounded-lg border border-ink-border bg-washi-white">
+            <summary className="cursor-pointer list-none px-3 py-2">
+              <span className="section-title">Instruction</span>
+            </summary>
+            <p className="border-t border-ink-border px-3 py-2 text-sm text-sumi-gray whitespace-pre-wrap">
+              {automation.instruction}
+            </p>
+          </details>
 
           <div className="flex flex-wrap items-center gap-2 text-xs text-sumi-diluted">
             <span>{automation.agentType}</span>

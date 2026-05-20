@@ -1,15 +1,21 @@
+import {
+  COMMAND_ROOM_ROUTE_METADATA,
+  type CommandRoomRouteMetadata,
+} from '@modules/command-room/route-metadata'
+
 export const MOBILE_SHELL_BOTTOM_PADDING_CLASS =
   'pb-[calc(4rem+env(safe-area-inset-bottom,0px))]'
 
 export function isImmersiveMobileChatRoute(
   pathname: string,
   searchParams: URLSearchParams,
+  metadata: CommandRoomRouteMetadata = COMMAND_ROOM_ROUTE_METADATA,
 ): boolean {
-  const commanderParam = searchParams.get('commander')?.trim() ?? ''
-  const panelParam = searchParams.get('panel')?.trim() ?? ''
+  const commanderParam = searchParams.get(metadata.launch.commanderParam)?.trim() ?? ''
+  const panelParam = searchParams.get(metadata.globalCommander.panelParam)?.trim() ?? ''
 
-  return pathname === '/command-room'
+  return pathname === metadata.launch.path
     && commanderParam.length > 0
-    && commanderParam !== 'global'
+    && commanderParam !== metadata.globalCommander.commanderValue
     && (panelParam.length === 0 || panelParam === 'chat')
 }

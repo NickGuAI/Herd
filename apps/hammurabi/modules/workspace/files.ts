@@ -21,8 +21,11 @@ const TEXT_PREVIEW_LIMIT_BYTES = 256 * 1024
 const IMAGE_PREVIEW_LIMIT_BYTES = 5 * 1024 * 1024
 const FILE_NAME_PATTERN = /^[a-zA-Z0-9._\- ]+$/
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
+const BINARY_DOCUMENT_EXTENSIONS = new Set(['doc', 'docx', 'pages', 'ppt', 'pptx', 'xls', 'xlsx'])
 const MIME_TYPES_BY_EXTENSION: Record<string, string> = {
   css: 'text/css',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   gif: 'image/gif',
   html: 'text/html',
   jpeg: 'image/jpeg',
@@ -30,14 +33,19 @@ const MIME_TYPES_BY_EXTENSION: Record<string, string> = {
   js: 'text/javascript',
   json: 'application/json',
   md: 'text/markdown',
+  pages: 'application/vnd.apple.pages',
   pdf: 'application/pdf',
   png: 'image/png',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   py: 'text/x-python',
   svg: 'image/svg+xml',
   ts: 'text/plain',
   tsx: 'text/plain',
   txt: 'text/plain',
   webp: 'image/webp',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   yml: 'text/yaml',
   yaml: 'text/yaml',
 }
@@ -187,6 +195,30 @@ async function readRemoteWorkspaceFilePreview(
   const mimeType = getMimeType(absolutePath)
   const basename = path.posix.basename(absolutePath)
 
+  if (extension === 'pdf') {
+    return {
+      workspace,
+      path: normalizedRelativePath,
+      name: basename,
+      kind: 'pdf',
+      size: fileSize,
+      mimeType: mimeType ?? 'application/pdf',
+      writable: !workspace.readOnly,
+    }
+  }
+
+  if (BINARY_DOCUMENT_EXTENSIONS.has(extension)) {
+    return {
+      workspace,
+      path: normalizedRelativePath,
+      name: basename,
+      kind: 'binary',
+      size: fileSize,
+      mimeType,
+      writable: !workspace.readOnly,
+    }
+  }
+
   if (IMAGE_EXTENSIONS.has(extension) && fileSize <= IMAGE_PREVIEW_LIMIT_BYTES) {
     const imageBuffer = await readRemoteFileBuffer(absolutePath, runner)
     return {
@@ -289,6 +321,18 @@ export async function readWorkspaceFilePreview(
       kind: 'pdf',
       size: fileStat.size,
       mimeType: mimeType ?? 'application/pdf',
+      writable: !workspace.readOnly,
+    }
+  }
+
+  if (BINARY_DOCUMENT_EXTENSIONS.has(extension)) {
+    return {
+      workspace,
+      path: normalizedRelativePath,
+      name: path.basename(absolutePath),
+      kind: 'binary',
+      size: fileStat.size,
+      mimeType,
       writable: !workspace.readOnly,
     }
   }
@@ -419,6 +463,7 @@ export async function resolveWorkspaceUploadDestination(
   relativePath: string | undefined | null,
 ): Promise<{ absolutePath: string; relativePath: string }> {
   ensureLocalWorkspaceMutations(workspace)
+  requireWritableWorkspace(workspace)
   const { absolutePath } = await resolveWorkspacePath(workspace, relativePath, {
     expectDirectory: true,
   })

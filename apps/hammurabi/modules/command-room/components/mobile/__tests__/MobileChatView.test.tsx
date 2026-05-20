@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react'
+import { createElement, type ReactNode } from 'react'
 import { act } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
@@ -12,21 +12,27 @@ vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
   MobileSessionShell: ({
     sessionName,
     sessionLabel,
+    chatLabel,
+    wsStatus,
     isStreaming,
     theme,
     rootClassName,
     approvals,
     workers,
+    headerAccessory,
     emptyState,
     onBack,
   }: {
     sessionName: string
     sessionLabel: string
+    chatLabel?: string
+    wsStatus?: string | null
     isStreaming?: boolean
     theme?: string
     rootClassName?: string
     approvals?: unknown[]
     workers?: unknown[]
+    headerAccessory?: ReactNode
     emptyState?: unknown
     onBack?: () => void
   }) => createElement(
@@ -35,6 +41,8 @@ vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
       'data-testid': 'mobile-session-shell',
       'data-session-name': sessionName,
       'data-session-label': sessionLabel,
+      'data-chat-label': chatLabel ?? '',
+      'data-ws-status': wsStatus ?? '',
       'data-is-streaming': String(Boolean(isStreaming)),
       'data-theme': theme,
       'data-root-class': rootClassName,
@@ -42,6 +50,7 @@ vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
       'data-worker-count': String(workers?.length ?? 0),
       'data-has-empty-state': String(Boolean(emptyState)),
     },
+    headerAccessory,
     createElement(
       'button',
       {
@@ -207,6 +216,16 @@ describe('MobileChatView', () => {
           liveSession: {
             name: 'commander-cmd-1',
           },
+          sendTarget: {
+            kind: 'conversation',
+            conversationId: 'conv-1',
+            commanderId: 'cmd-1',
+            sessionName: 'conversation-conv-1',
+            transportType: 'stream',
+            agentType: 'claude',
+            queue: { supported: true, reason: null },
+            media: { supported: true, reason: null },
+          },
         }],
         selectedConversationId: 'conv-1',
         theme: 'dark',
@@ -233,6 +252,98 @@ describe('MobileChatView', () => {
 
     expect(html).toContain('data-session-name="conversation-conv-1"')
     expect(html).not.toContain('data-session-name="commander-cmd-1"')
+  })
+
+  it('passes the active conversation label, connected status, and page dots into the shell header', () => {
+    const html = renderToStaticMarkup(
+      createElement(MobileChatView, {
+        commander: {
+          id: 'cmd-1',
+          name: 'einstein',
+          status: 'running',
+          description: 'Primary commander',
+        },
+        workers: [],
+        transcript: [],
+        approvals: [],
+        sessionName: 'conversation-conv-1',
+        composerEnabled: true,
+        composerSendReady: true,
+        canQueueDraft: false,
+        conversations: [
+          {
+            id: 'conv-1',
+            commanderId: 'cmd-1',
+            surface: 'ui',
+            status: 'active',
+            currentTask: null,
+            lastHeartbeat: null,
+            heartbeat: {
+              intervalMs: 300000,
+              messageTemplate: '',
+              lastSentAt: null,
+            },
+            agentType: 'claude',
+            providerContext: null,
+            liveSession: null,
+            createdAt: '2026-05-01T08:00:00.000Z',
+            updatedAt: '2026-05-01T08:05:00.000Z',
+            lastMessageAt: '2026-05-01T08:05:00.000Z',
+            name: 'granite-cliff',
+          },
+          {
+            id: 'conv-2',
+            commanderId: 'cmd-1',
+            surface: 'ui',
+            status: 'active',
+            currentTask: null,
+            lastHeartbeat: null,
+            heartbeat: {
+              intervalMs: 300000,
+              messageTemplate: '',
+              lastSentAt: null,
+            },
+            agentType: 'codex',
+            providerContext: null,
+            liveSession: null,
+            createdAt: '2026-05-01T08:10:00.000Z',
+            updatedAt: '2026-05-01T08:15:00.000Z',
+            lastMessageAt: '2026-05-01T08:15:00.000Z',
+            name: 'chalk-ridge',
+          },
+        ],
+        selectedConversationId: 'conv-1',
+        isStreaming: false,
+        agentType: 'claude',
+        wsStatus: 'connected',
+        theme: 'light',
+        onSetTheme: vi.fn(),
+        queueSnapshot: {
+          currentMessage: null,
+          items: [],
+          totalCount: 0,
+          maxSize: 8,
+        },
+        queueError: null,
+        isQueueMutating: false,
+        onBack: vi.fn(),
+        onOpenTeam: vi.fn(),
+        onOpenWorkspace: vi.fn(),
+        onSelectConversationId: vi.fn(),
+        onAnswer: vi.fn(),
+        onApproveApproval: vi.fn(),
+        onDenyApproval: vi.fn(),
+        onClearQueue: vi.fn(),
+        onMoveQueuedMessage: vi.fn(),
+        onRemoveQueuedMessage: vi.fn(),
+      }),
+    )
+
+    expect(html).toContain('data-session-label="einstein"')
+    expect(html).toContain('data-chat-label="granite-cliff"')
+    expect(html).toContain('data-ws-status="connected"')
+    expect(html).toContain('data-testid="mobile-chat-page-dots"')
+    expect((html.match(/data-testid="mobile-chat-page-dot"/g) ?? [])).toHaveLength(2)
   })
 
   it('forwards the mobile shell back action', () => {

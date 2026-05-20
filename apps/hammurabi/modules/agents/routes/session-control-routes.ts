@@ -7,10 +7,18 @@ import {
   markCodexTurnHealthy,
 } from '../adapters/codex/helpers.js'
 import type { QueuedMessage, QueuedMessageImage, QueuedMessagePriority } from '../message-queue.js'
+import { parseMessageImagesForRequest } from '../message-images.js'
 import type { ProviderCreateOptions } from '../providers/provider-adapter.js'
 import { getProvider } from '../providers/registry.js'
 import { parseCodexApprovalDecision, parseSessionName } from '../session/input.js'
 import { snapshotDeletedResumableStreamSession } from '../session/state.js'
+import {
+  applyWorkspaceContextToText,
+  hasWorkspaceContextPayload,
+  readWorkspaceContextPayload,
+} from '../../workspace/context.js'
+import type { WorkspaceResolverCapability } from '../../workspace/capability.js'
+import { toWorkspaceError } from '../../workspace/resolver.js'
 import type {
   AnySession,
   ClaudePermissionMode,
@@ -76,7 +84,11 @@ interface SessionControlRouteDeps {
   ): { source?: ResolvedResumableSessionSource; error?: { status: number; message: string } }
   retireLiveSessionForResume(sessionName: string, session: StreamSession): void
   schedulePersistedSessionsWrite(): void
-  sendImmediateTextToStreamSession(session: StreamSession, text: string): Promise<ImmediateSendResult>
+  sendImmediateTextToStreamSession(
+    session: StreamSession,
+    text: string,
+    images?: QueuedMessageImage[],
+  ): Promise<ImmediateSendResult>
   queueTextToStreamSession(
     session: StreamSession,
     text: string,
@@ -97,6 +109,7 @@ interface SessionControlRouteDeps {
   clearQueuedMessageRetry(session: StreamSession): void
   resetQueuedMessageRetryDelay(session: StreamSession): void
   scheduleQueuedMessageDrain(session: StreamSession, options?: { force?: boolean }): void
+  getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   applyRestoredQueueState(
     session: StreamSession,
     source: PersistedStreamSession,
@@ -105,24 +118,6 @@ interface SessionControlRouteDeps {
   resumeRestoredQueueDrain(session: StreamSession): void
   teardownProviderSession(session: StreamSession, reason: string): Promise<void>
   initializeAutoRotationState(session: StreamSession): void
-}
-
-const ALLOWED_QUEUED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-const MAX_QUEUED_IMAGE_B64_LEN = Math.ceil(20 * 1024 * 1024 / 3) * 4
-
-function parseQueuedImages(value: unknown): QueuedMessageImage[] {
-  if (!Array.isArray(value)) {
-    return []
-  }
-
-  return value.filter((image): image is QueuedMessageImage => {
-    return image !== null
-      && typeof image === 'object'
-      && typeof image.mediaType === 'string'
-      && ALLOWED_QUEUED_IMAGE_TYPES.has(image.mediaType)
-      && typeof image.data === 'string'
-      && image.data.length <= MAX_QUEUED_IMAGE_B64_LEN
-  }).slice(0, 5)
 }
 
 export function registerSessionControlRoutes(deps: SessionControlRouteDeps): void {
@@ -151,12 +146,29 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
     }
 
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : ''
-    if (text.length === 0) {
+    const workspaceContext = readWorkspaceContextPayload(req.body?.workspaceContext)
+    if (text.length === 0 && !hasWorkspaceContextPayload(workspaceContext)) {
+      res.status(400).json({ error: 'text must be a non-empty string' })
+      return
+    }
+    let messageText: string
+    try {
+      messageText = await applyWorkspaceContextToText({
+        text,
+        resolver: workspaceContext?.targetId ? deps.getWorkspaceResolver?.() : undefined,
+        context: workspaceContext,
+      })
+    } catch (error) {
+      const workspaceError = toWorkspaceError(error)
+      res.status(workspaceError.statusCode).json({ error: workspaceError.message })
+      return
+    }
+    if (messageText.length === 0) {
       res.status(400).json({ error: 'text must be a non-empty string' })
       return
     }
 
-    const result = await deps.sendImmediateTextToStreamSession(session, text)
+    const result = await deps.sendImmediateTextToStreamSession(session, messageText)
     if (!result.ok) {
       const isQueueBackpressure = deps.isQueueBackpressureError(result.error)
       res.status(isQueueBackpressure ? 409 : 503).json({
@@ -188,14 +200,36 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
     }
 
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : ''
-    const images = parseQueuedImages(req.body?.images)
-    if (!text.length && images.length === 0) {
+    const parsedImages = parseMessageImagesForRequest(req.body?.images)
+    if (!parsedImages.ok) {
+      res.status(parsedImages.status).json({ error: parsedImages.error })
+      return
+    }
+    const images = parsedImages.images
+    const workspaceContext = readWorkspaceContextPayload(req.body?.workspaceContext)
+    if (!text.length && images.length === 0 && !hasWorkspaceContextPayload(workspaceContext)) {
+      res.status(400).json({ error: 'text must be a non-empty string or images must be provided' })
+      return
+    }
+    let messageText: string
+    try {
+      messageText = await applyWorkspaceContextToText({
+        text,
+        resolver: workspaceContext?.targetId ? deps.getWorkspaceResolver?.() : undefined,
+        context: workspaceContext,
+      })
+    } catch (error) {
+      const workspaceError = toWorkspaceError(error)
+      res.status(workspaceError.statusCode).json({ error: workspaceError.message })
+      return
+    }
+    if (!messageText.length && images.length === 0) {
       res.status(400).json({ error: 'text must be a non-empty string or images must be provided' })
       return
     }
 
     if (req.query.queue === 'true') {
-      const queued = await deps.queueTextToStreamSession(session, text, images)
+      const queued = await deps.queueTextToStreamSession(session, messageText, images)
       if (!queued.ok) {
         res.status(queued.status).json({ error: queued.error })
         return
@@ -205,12 +239,7 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
       return
     }
 
-    if (!text.length) {
-      res.status(400).json({ error: 'text must be a non-empty string' })
-      return
-    }
-
-    const result = await deps.sendImmediateTextToStreamSession(session, text)
+    const result = await deps.sendImmediateTextToStreamSession(session, messageText, images)
     if (!result.ok) {
       const isQueueBackpressure = deps.isQueueBackpressureError(result.error)
       res.status(isQueueBackpressure ? 409 : 503).json({
@@ -539,6 +568,7 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
         {
           effort: source.effort,
           adaptiveThinking: source.adaptiveThinking,
+          maxThinkingTokens: source.maxThinkingTokens,
           resumeSessionId: sourceResumeId,
           resumedFrom: source.resumedFrom,
           sessionType: source.sessionType,

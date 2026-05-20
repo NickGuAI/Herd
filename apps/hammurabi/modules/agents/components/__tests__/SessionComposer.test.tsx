@@ -182,7 +182,7 @@ describe('SessionComposer', () => {
       ;(queueButton as HTMLButtonElement).click()
     })
 
-    const panel = document.body.querySelector('[data-testid="mobile-queue-panel"]')
+    const panel = document.body.querySelector('[data-testid="queue-panel"]')
     expect(panel).not.toBeNull()
     expect(panel?.textContent).toContain('Investigate the mobile shell gap')
     expect(panel?.textContent).toContain('Clear')
@@ -209,6 +209,81 @@ describe('SessionComposer', () => {
 
     expect(onSend).toHaveBeenCalledWith({ text: 'Ship the mobile redesign', images: undefined })
     expect(onQueue).not.toHaveBeenCalled()
+  })
+
+  it('clears the mobile draft immediately after an async send is accepted', async () => {
+    const onSend = vi.fn(() => Promise.resolve(true))
+
+    renderComposer({
+      variant: 'mobile',
+      isStreaming: false,
+      onSend,
+    })
+    setDraftText('Clear this after tapping send')
+
+    flushSync(() => {
+      findButtonByLabel('Send message').click()
+    })
+
+    const textarea = document.body.querySelector('textarea') as HTMLTextAreaElement | null
+    expect(textarea?.value).toBe('')
+    expect(onSend).toHaveBeenCalledWith({ text: 'Clear this after tapping send', images: undefined })
+  })
+
+  it('keeps the mobile draft when send is rejected synchronously', async () => {
+    const onSend = vi.fn(() => false)
+
+    renderComposer({
+      variant: 'mobile',
+      isStreaming: false,
+      onSend,
+    })
+    setDraftText('Do not clear this')
+
+    flushSync(() => {
+      findButtonByLabel('Send message').click()
+    })
+
+    const textarea = document.body.querySelector('textarea') as HTMLTextAreaElement | null
+    expect(textarea?.value).toBe('Do not clear this')
+    expect(onSend).toHaveBeenCalledWith({ text: 'Do not clear this', images: undefined })
+  })
+
+  it('sends workspace file, directory, and annotation context as structured payload', async () => {
+    const onSend = vi.fn(() => true)
+
+    renderComposer({
+      onSend,
+      contextFilePaths: ['docs/spec.md'],
+      contextDirectoryPaths: ['src'],
+      contextFileAnnotations: [{
+        id: 'annotation-1',
+        path: 'docs/spec.md',
+        body: 'Please tighten this section.',
+        quote: null,
+        range: null,
+      }],
+    })
+    setDraftText('Review this')
+
+    flushSync(() => {
+      findButtonByLabel('Send').click()
+    })
+
+    expect(onSend).toHaveBeenCalledWith({
+      text: 'Review this',
+      images: undefined,
+      context: {
+        filePaths: ['docs/spec.md'],
+        directoryPaths: ['src'],
+        fileAnnotations: [{
+          path: 'docs/spec.md',
+          body: 'Please tighten this section.',
+          quote: null,
+          range: null,
+        }],
+      },
+    })
   })
 
   it('queues from the mobile primary action while streaming without calling send', async () => {
@@ -258,5 +333,65 @@ describe('SessionComposer', () => {
     expect(findButtonByLabel('Skills')).toBeDefined()
     expect(findButtonByLabel('Start voice input')).toBeDefined()
     expect(document.body.textContent).toContain('Queue')
+  })
+
+  it('opens the queue panel from the desktop queue button', async () => {
+    renderComposer({
+      variant: 'desktop',
+      queueSnapshot: {
+        currentMessage: null,
+        items: [{
+          id: 'queued-desktop-1',
+          text: 'Queue from desktop composer',
+          priority: 'normal',
+          queuedAt: '2026-05-15T14:00:00.000Z',
+        }],
+        totalCount: 1,
+        maxSize: 8,
+      },
+    })
+
+    const queueButton = findButtonByLabel('Open queue')
+    expect(queueButton.textContent).toBe('Queue 1/8')
+
+    flushSync(() => {
+      queueButton.click()
+    })
+
+    const panel = document.body.querySelector('[data-testid="queue-panel"]')
+    expect(panel).not.toBeNull()
+    expect(panel?.textContent).toContain('Queue from desktop composer')
+    expect(panel?.textContent).toContain('Press Tab')
+    expect(panel?.textContent).toContain('Clear')
+  })
+
+  it('queues the current draft from the queue panel', async () => {
+    const onQueue = vi.fn(() => true)
+
+    renderComposer({
+      variant: 'desktop',
+      onQueue,
+      queueSnapshot: {
+        currentMessage: null,
+        items: [],
+        totalCount: 0,
+        maxSize: 8,
+      },
+    })
+    setDraftText('Queue from the sheet')
+
+    flushSync(() => {
+      findButtonByLabel('Open queue').click()
+    })
+
+    const queueDraftButton = findButtonByLabel('Queue current draft')
+    expect(queueDraftButton.textContent).toContain('Queue this draft')
+
+    flushSync(() => {
+      queueDraftButton.click()
+    })
+
+    expect(onQueue).toHaveBeenCalledWith({ text: 'Queue from the sheet', images: undefined })
+    expect(document.body.querySelector('[data-testid="queue-panel"]')).toBeNull()
   })
 })

@@ -65,6 +65,7 @@ function buildProvider(id: string, label: string) {
     uiCapabilities: {
       supportsEffort: id === 'claude',
       supportsAdaptiveThinking: id === 'claude',
+      supportsMaxThinkingTokens: id === 'claude',
       supportsSkills: id === 'claude',
       supportsLoginMode: id !== 'gemini',
       forcedTransport: id === 'gemini' ? 'stream' : undefined,
@@ -84,7 +85,6 @@ function buildCommander(overrides: Partial<Record<string, unknown>> = {}) {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp/atlas',
-    persona: 'Primary commander',
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '',

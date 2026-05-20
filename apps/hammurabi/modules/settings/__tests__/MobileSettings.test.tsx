@@ -1,12 +1,15 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
+  useFontScale: vi.fn(),
   useFounderProfile: vi.fn(),
   useMachines: vi.fn(),
+  useMachineDaemonStatus: vi.fn(),
   usePolicySettings: vi.fn(),
   useTelemetrySummary: vi.fn(),
   useTheme: vi.fn(),
@@ -22,12 +25,19 @@ vi.mock('@modules/operators/hooks/useFounderProfile', () => ({
 }))
 
 vi.mock('@/hooks/use-agents', () => ({
+  pairMachineDaemon: vi.fn(),
+  revokeMachineDaemon: vi.fn(),
+  useMachineDaemonStatus: mocks.useMachineDaemonStatus,
   useMachines: mocks.useMachines,
 }))
 
 vi.mock('@/hooks/use-action-policies', () => ({
   usePolicySettings: mocks.usePolicySettings,
   useUpdatePolicySettings: mocks.useUpdatePolicySettings,
+}))
+
+vi.mock('@/hooks/use-font-scale', () => ({
+  useFontScale: mocks.useFontScale,
 }))
 
 vi.mock('@/hooks/use-telemetry', () => ({
@@ -46,11 +56,22 @@ import { MobileSettings } from '../MobileSettings'
 import { MOBILE_SETTINGS_SECTIONS, getMobileSettingsPath } from '../mobile-settings-sections'
 
 function renderMobileSettings(initialEntry = '/command-room/settings'): string {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      mutations: { retry: false },
+      queries: { retry: false },
+    },
+  })
+
   return renderToStaticMarkup(
     createElement(
-      MemoryRouter,
-      { initialEntries: [initialEntry] },
-      createElement(MobileSettings),
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(
+        MemoryRouter,
+        { initialEntries: [initialEntry] },
+        createElement(MobileSettings),
+      ),
     ),
   )
 }
@@ -58,16 +79,30 @@ function renderMobileSettings(initialEntry = '/command-room/settings'): string {
 describe('MobileSettings', () => {
   beforeEach(() => {
     mocks.useAuth.mockReset()
+    mocks.useFontScale.mockReset()
     mocks.useFounderProfile.mockReset()
     mocks.useMachines.mockReset()
+    mocks.useMachineDaemonStatus.mockReset()
     mocks.usePolicySettings.mockReset()
     mocks.useTelemetrySummary.mockReset()
     mocks.useTheme.mockReset()
     mocks.useUpdatePolicySettings.mockReset()
 
     mocks.useAuth.mockReturnValue({ signOut: vi.fn(), user: null })
+    mocks.useFontScale.mockReturnValue({
+      fontScale: 1,
+      setFontScale: vi.fn(),
+      adjustFontScale: vi.fn(),
+      resetFontScale: vi.fn(),
+      minFontScale: 0.8,
+      maxFontScale: 1.6,
+      fontScaleStep: 0.1,
+      isLoading: false,
+      isSaving: false,
+    })
     mocks.useFounderProfile.mockReturnValue({ data: null })
     mocks.useMachines.mockReturnValue({ data: [], isLoading: false, error: null })
+    mocks.useMachineDaemonStatus.mockReturnValue({ data: null, isLoading: false, error: null })
     mocks.usePolicySettings.mockReturnValue({
       data: {
         timeoutMinutes: 15,
@@ -181,9 +216,44 @@ describe('MobileSettings', () => {
           id: 'macmini',
           label: 'Mac Mini',
           host: '100.64.1.1',
+          transport: 'daemon',
           cwd: '/Users/nick/App',
         },
       ],
+    })
+    mocks.useMachineDaemonStatus.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: {
+        machineId: 'macmini',
+        displayLabel: 'Mac Mini',
+        paired: true,
+        connected: true,
+        connectionState: 'connected',
+        connectionLabel: 'connected',
+        selectedTransport: 'daemon',
+        providerAuthReady: true,
+        providerAuthState: 'ready',
+        providerAuthLabel: 'providers ready',
+        launchable: true,
+        launchUnsupportedReason: null,
+        allowedActions: [
+          { id: 'rotate', label: 'Rotate Pairing' },
+          { id: 'revoke', label: 'Revoke' },
+        ],
+        pairedAt: '2026-05-19T00:00:00.000Z',
+        revokedAt: null,
+        connectedAt: '2026-05-19T00:01:00.000Z',
+        lastSeenAt: '2026-05-19T00:01:00.000Z',
+        connectionId: 'conn-1',
+        daemonVersion: '0.1.0',
+        protocolVersion: 1,
+        pid: 123,
+        platform: 'darwin',
+        arch: 'arm64',
+        activeProcesses: 0,
+        providerHealth: {},
+      },
     })
 
     const html = renderMobileSettings('/command-room/settings/machines')
@@ -191,7 +261,124 @@ describe('MobileSettings', () => {
     expect(html).toContain('Machines')
     expect(html).toContain('Mac Mini')
     expect(html).toContain('100.64.1.1')
+    expect(html).toContain('connected')
+    expect(html).toContain('providers ready')
+    expect(html).toContain('Rotate Pairing')
+    expect(html).toContain('Revoke')
     expect(html).not.toContain('Runtime')
+  })
+
+  it('renders machine cards from backend display labels and action DTOs', () => {
+    mocks.useMachines.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: [
+        {
+          id: 'local',
+          label: 'Local (this server)',
+          host: null,
+          transport: 'local',
+        },
+        {
+          id: 'ssh-1',
+          label: 'SSH Mac',
+          host: '100.64.1.1',
+          transport: 'ssh',
+        },
+        {
+          id: 'paired-1',
+          label: 'Paired Mac',
+          host: null,
+          transport: 'daemon',
+        },
+        {
+          id: 'connected-1',
+          label: 'Connected Mac',
+          host: null,
+          transport: 'daemon',
+        },
+        {
+          id: 'missing-auth-1',
+          label: 'Missing Auth Mac',
+          host: null,
+          transport: 'daemon',
+        },
+      ],
+    })
+    mocks.useMachineDaemonStatus.mockImplementation((machineId: string) => ({
+      isLoading: false,
+      error: null,
+      data: {
+        machineId,
+        displayLabel: {
+          'ssh-1': 'SSH Mac',
+          'paired-1': 'Paired Mac',
+          'connected-1': 'Connected Mac',
+          'missing-auth-1': 'Missing Auth Mac',
+        }[machineId] ?? 'Local (this server)',
+        paired: machineId !== 'ssh-1',
+        connected: machineId === 'connected-1' || machineId === 'missing-auth-1',
+        connectionState: {
+          'ssh-1': 'ssh-local',
+          'paired-1': 'paired',
+          'connected-1': 'connected',
+          'missing-auth-1': 'connected',
+        }[machineId] ?? 'local',
+        connectionLabel: {
+          'ssh-1': 'ssh/local',
+          'paired-1': 'paired',
+          'connected-1': 'connected',
+          'missing-auth-1': 'connected',
+        }[machineId] ?? 'local',
+        selectedTransport: machineId === 'ssh-1' ? 'ssh' : 'daemon',
+        providerAuthReady: machineId === 'connected-1',
+        providerAuthState: machineId === 'connected-1'
+          ? 'ready'
+          : machineId === 'ssh-1'
+            ? 'not-checked'
+            : 'missing',
+        providerAuthLabel: machineId === 'connected-1'
+          ? 'providers ready'
+          : machineId === 'ssh-1'
+            ? 'not checked'
+            : 'providers missing',
+        launchable: machineId === 'connected-1',
+        launchUnsupportedReason: machineId === 'connected-1' ? null : 'not launchable',
+        allowedActions: machineId === 'ssh-1'
+          ? [{ id: 'pair', label: 'Pair Daemon' }]
+          : [
+              { id: 'rotate', label: 'Rotate Pairing' },
+              { id: 'revoke', label: 'Revoke' },
+            ],
+        pairedAt: machineId === 'ssh-1' ? null : '2026-05-19T00:00:00.000Z',
+        revokedAt: null,
+        connectedAt: machineId === 'connected-1' || machineId === 'missing-auth-1'
+          ? '2026-05-19T00:01:00.000Z'
+          : null,
+        lastSeenAt: null,
+        connectionId: null,
+        daemonVersion: null,
+        protocolVersion: null,
+        pid: null,
+        platform: null,
+        arch: null,
+        activeProcesses: null,
+        providerHealth: {},
+      },
+    }))
+
+    const html = renderMobileSettings('/command-room/settings/machines')
+
+    expect(html).toContain('Local (this server)')
+    expect(html).toContain('SSH Mac')
+    expect(html).toContain('ssh/local')
+    expect(html).toContain('Paired Mac')
+    expect(html).toContain('paired')
+    expect(html).toContain('Connected Mac')
+    expect(html).toContain('connected')
+    expect(html).toContain('providers ready')
+    expect(html).toContain('Missing Auth Mac')
+    expect(html).toContain('providers missing')
   })
 
   it('renders appearance from the shared theme context', () => {
@@ -208,6 +395,10 @@ describe('MobileSettings', () => {
     expect(html).toContain('Appearance')
     expect(html).toContain('Light')
     expect(html).toContain('Dark')
-    expect(html).toContain('bg-sumi-black')
+    expect(html).toContain('Text size')
+    expect(html).toContain('100%')
+    expect(html).toContain('aria-label="Decrease text size"')
+    expect(html).toContain('aria-label="Increase text size"')
+    expect(html).toContain('bg-[var(--hv-button-primary-bg)]')
   })
 })

@@ -209,13 +209,17 @@ export function HeartbeatMonitor({
   }
 
   return (
-    <section className="card-sumi min-h-[12rem] overflow-hidden flex flex-col">
-      <header className="px-4 py-3 border-b border-ink-border bg-washi-aged/60 flex items-center justify-between gap-3">
+    <details
+      className="card-sumi overflow-hidden"
+      data-testid="identity-section-heartbeat"
+      data-test-id="identity-section-heartbeat"
+    >
+      <summary className="border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-4 py-3 flex cursor-pointer list-none items-center justify-between gap-3">
         <h3 className="section-title">Heartbeat Monitor</h3>
         <span className="text-[11px] uppercase tracking-wide text-sumi-diluted">
           {isRunning ? 'Polling every 30s' : 'Idle'}
         </span>
-      </header>
+      </summary>
 
       <div className="flex-1 overflow-y-auto p-3">
         {!commander && (
@@ -356,6 +360,6 @@ export function HeartbeatMonitor({
             : 'Failed to load heartbeat log'}
         </p>
       )}
-    </section>
+    </details>
   )
 }

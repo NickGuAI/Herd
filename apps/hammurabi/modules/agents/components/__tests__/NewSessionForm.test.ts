@@ -20,6 +20,7 @@ vi.mock('@/hooks/use-providers', async (importOriginal) => {
           uiCapabilities: {
             supportsEffort: true,
             supportsAdaptiveThinking: true,
+            supportsMaxThinkingTokens: true,
             supportsSkills: true,
             supportsLoginMode: true,
             permissionModes: [{ value: 'default', label: 'default', description: 'claude' }],
@@ -32,6 +33,7 @@ vi.mock('@/hooks/use-providers', async (importOriginal) => {
           uiCapabilities: {
             supportsEffort: false,
             supportsAdaptiveThinking: false,
+            supportsMaxThinkingTokens: false,
             supportsSkills: false,
             supportsLoginMode: true,
             permissionModes: [{ value: 'default', label: 'default', description: 'codex' }],
@@ -55,6 +57,8 @@ function renderNewSessionFormHtml(props: Partial<ComponentProps<typeof NewSessio
       setEffort: vi.fn(),
       adaptiveThinking: 'enabled',
       setAdaptiveThinking: vi.fn(),
+      maxThinkingTokens: 128000,
+      setMaxThinkingTokens: vi.fn(),
       agentType: 'claude',
       setAgentType: vi.fn(),
       transportType: 'stream',

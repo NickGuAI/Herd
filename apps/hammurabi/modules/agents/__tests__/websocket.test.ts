@@ -122,6 +122,7 @@ describe('agents websocket', () => {
       const [stdinWrite] = mock.getStdinWrites()
       expect(JSON.parse(stdinWrite.trim())).toEqual({
         type: 'user',
+        subtype: 'queued_message',
         message: {
           role: 'user',
           content: 'Ship issue 921 phase P8',
@@ -153,13 +154,31 @@ describe('agents websocket', () => {
       })) as typeof session.events
 
       const { ws, replay } = await connectWsWithReplay(server.baseUrl, 'ws-replay-tail')
-      const replayFrame = replay as typeof replay & { more?: boolean; events: Array<{ marker: number }> }
+      const replayFrame = replay as typeof replay & {
+        more?: boolean
+        events: Array<{ marker: number }>
+        messages?: Array<{ kind: string; text: string }>
+        projection?: {
+          schemaVersion?: number
+          messages?: Array<{ kind: string; text: string }>
+          replayCursor?: { totalEvents?: number; returnedEvents?: number; more?: boolean }
+        }
+      }
 
       expect(replayFrame.type).toBe('replay')
       expect(replayFrame.more).toBe(true)
       expect(replayFrame.events).toHaveLength(WS_REPLAY_TAIL_LIMIT)
       expect(replayFrame.events[0]?.marker).toBe(26)
       expect(replayFrame.events.at(-1)?.marker).toBe(WS_REPLAY_TAIL_LIMIT + 25)
+      expect(replayFrame.projection).toEqual(expect.objectContaining({
+        schemaVersion: 1,
+        replayCursor: {
+          totalEvents: WS_REPLAY_TAIL_LIMIT + 25,
+          returnedEvents: WS_REPLAY_TAIL_LIMIT,
+          more: true,
+        },
+      }))
+      expect(replayFrame.messages).toEqual(replayFrame.projection?.messages)
 
       ws.close()
     } finally {

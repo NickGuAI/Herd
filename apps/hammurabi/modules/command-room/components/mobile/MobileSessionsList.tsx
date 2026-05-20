@@ -72,14 +72,14 @@ export function MobileSessionsList({
       <div className="px-5 pb-3 pt-4">
         <div className="flex items-end justify-between gap-4">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.18em] text-sumi-diluted">hervald</p>
-            <h1 className="mt-1 font-display text-4xl text-sumi-black">Sessions</h1>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">hervald</p>
+            <h1 className="mt-1 font-display text-4xl text-[color:var(--hv-fg)]">Sessions</h1>
           </div>
         </div>
 
-        <div className="mt-4 flex items-center gap-4 text-[10px] uppercase tracking-[0.14em] text-sumi-diluted">
+        <div className="mt-4 flex items-center gap-4 text-[10px] uppercase tracking-[0.14em] text-[color:var(--hv-fg-subtle)]">
           <span className="inline-flex items-center gap-1.5 text-moss-stone">
-            <StatusDot state="active" size={6} pulse />
+            <StatusDot state="active" size={6} />
             {activeCount} active
           </span>
           {waitingCount > 0 ? (
@@ -88,7 +88,7 @@ export function MobileSessionsList({
               {waitingCount} waiting
             </span>
           ) : null}
-          <span className="ml-auto text-accent-vermillion">{approvals.length} pend</span>
+          <span className="ml-auto text-[color:var(--hv-accent-danger)]">{approvals.length} pend</span>
         </div>
 
         <div className="mt-4 flex gap-2">
@@ -115,7 +115,7 @@ export function MobileSessionsList({
           {visibleCommanders.map((commander) => (
             <div
               key={commander.id}
-              className="overflow-hidden rounded-[3px_16px_3px_16px] border border-ink-border/70 bg-washi-white shadow-[0_4px_12px_rgba(28,28,28,0.04)]"
+              className="overflow-hidden rounded-[3px_16px_3px_16px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] shadow-[var(--hv-shadow-whisper)]"
             >
               <SessionRow
                 commander={commander}
@@ -126,7 +126,7 @@ export function MobileSessionsList({
             </div>
           ))}
           {visibleCommanders.length === 0 ? (
-            <div className="rounded-[3px_16px_3px_16px] border border-dashed border-ink-border/70 bg-washi-white px-4 py-6 text-center text-sm italic text-sumi-diluted">
+            <div className="rounded-[3px_16px_3px_16px] border border-dashed border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-6 text-center text-sm italic text-[color:var(--hv-fg-subtle)]">
               No commanders match this filter.
             </div>
           ) : null}

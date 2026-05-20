@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
@@ -59,14 +58,6 @@ vi.mock('../components/desktop/CenterColumn', () => ({
   ),
 }))
 
-vi.mock('../components/desktop/TeamColumn', () => ({
-  TeamColumn: () => null,
-}))
-
-vi.mock('../components/desktop/WorkspaceModal', () => ({
-  WorkspaceModal: () => null,
-}))
-
 import { CommandRoom } from '../components/CommandRoom'
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -88,7 +79,6 @@ function buildCommander(overrides: Partial<Record<string, unknown>> = {}) {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp/atlas',
-    persona: 'Primary commander',
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '',
@@ -249,7 +239,6 @@ describe('Hervald create commander workflow', () => {
           id: '7568a67d-abc5-458e-b560-bc94eae4e335',
           host: payload.host,
           displayName: payload.displayName ?? payload.host,
-          persona: undefined,
         })
         commanders = [...commanders, createdCommander]
         return createdCommander

@@ -116,8 +116,83 @@ describe('settings routes', () => {
       expect(await response.json()).toEqual({
         settings: {
           theme: 'light',
+          fontScale: 1,
           updatedAt: '2026-05-03T00:00:00.000Z',
         },
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('returns mobile settings section DTOs in the current order', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'hammurabi-settings-route-'))
+    tempDirs.push(dir)
+    const store = new AppSettingsStore({
+      filePath: path.join(dir, 'settings.json'),
+    })
+    const server = await startServer(store)
+
+    try {
+      const response = await fetch(`${server.baseUrl}/api/settings/mobile`, {
+        headers: API_KEY_HEADERS,
+      })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({
+        sections: [
+          {
+            id: 'account',
+            label: 'Account',
+            icon: 'circle-user-round',
+            path: '/command-room/settings/account',
+            fullPagePath: '/api-keys',
+            visible: true,
+            surfaces: ['mobile'],
+          },
+          {
+            id: 'telemetry',
+            label: 'Telemetry',
+            icon: 'radio-tower',
+            path: '/command-room/settings/telemetry',
+            fullPagePath: '/telemetry',
+            visible: true,
+            surfaces: ['mobile'],
+          },
+          {
+            id: 'notifications',
+            label: 'Notifications',
+            icon: 'bell',
+            path: '/command-room/settings/notifications',
+            fullPagePath: '/policies',
+            visible: true,
+            surfaces: ['mobile'],
+          },
+          {
+            id: 'machines',
+            label: 'Machines',
+            icon: 'monitor',
+            path: '/command-room/settings/machines',
+            visible: true,
+            surfaces: ['mobile'],
+          },
+          {
+            id: 'appearance',
+            label: 'Appearance',
+            icon: 'eye',
+            path: '/command-room/settings/appearance',
+            visible: true,
+            surfaces: ['mobile'],
+          },
+          {
+            id: 'about',
+            label: 'About',
+            icon: 'info',
+            path: '/command-room/settings/about',
+            visible: true,
+            surfaces: ['mobile'],
+          },
+        ],
       })
     } finally {
       await server.close()
@@ -147,12 +222,14 @@ describe('settings routes', () => {
       expect(await updateResponse.json()).toEqual({
         settings: {
           theme: 'dark',
+          fontScale: 1,
           updatedAt: '2026-05-03T01:00:00.000Z',
         },
       })
 
       await expect(store.get()).resolves.toEqual({
         theme: 'dark',
+        fontScale: 1,
         updatedAt: '2026-05-03T01:00:00.000Z',
       })
     } finally {
@@ -181,6 +258,71 @@ describe('settings routes', () => {
       expect(response.status).toBe(400)
       expect(await response.json()).toEqual({
         error: 'theme must be "light" or "dark"',
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('updates, rounds, and persists font scale in backend settings', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'hammurabi-settings-route-'))
+    tempDirs.push(dir)
+    const store = new AppSettingsStore({
+      filePath: path.join(dir, 'settings.json'),
+      now: () => new Date('2026-05-03T02:00:00.000Z'),
+    })
+    const server = await startServer(store)
+
+    try {
+      const updateResponse = await fetch(`${server.baseUrl}/api/settings`, {
+        method: 'PATCH',
+        headers: {
+          ...API_KEY_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ fontScale: 1.24 }),
+      })
+
+      expect(updateResponse.status).toBe(200)
+      expect(await updateResponse.json()).toEqual({
+        settings: {
+          theme: 'light',
+          fontScale: 1.2,
+          updatedAt: '2026-05-03T02:00:00.000Z',
+        },
+      })
+
+      await expect(store.get()).resolves.toEqual({
+        theme: 'light',
+        fontScale: 1.2,
+        updatedAt: '2026-05-03T02:00:00.000Z',
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('rejects invalid font scale values', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'hammurabi-settings-route-'))
+    tempDirs.push(dir)
+    const store = new AppSettingsStore({
+      filePath: path.join(dir, 'settings.json'),
+    })
+    const server = await startServer(store)
+
+    try {
+      const response = await fetch(`${server.baseUrl}/api/settings`, {
+        method: 'PATCH',
+        headers: {
+          ...API_KEY_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ fontScale: 1.7 }),
+      })
+
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: 'fontScale must be a number between 0.8 and 1.6',
       })
     } finally {
       await server.close()

@@ -28,6 +28,38 @@ export function useStreamEventProcessor(options?: {
     setIsStreaming(false)
   }, [])
 
+  const hydrateReplayMessages = useCallback((nextMessages: MsgItem[], replayEvents: StreamEvent[]) => {
+    idCounterRef.current = 0
+    resetStreamProcessorState(processorStateRef.current)
+
+    let shadowMessages: MsgItem[] = []
+    const shadowContext: StreamEventProcessorContext = {
+      state: processorStateRef.current,
+      nextId,
+      setMessages: (updater) => {
+        shadowMessages = updater(shadowMessages)
+      },
+      setIsStreaming,
+      capMessages: (items) => items,
+      onWorkspaceMutation,
+    }
+
+    for (const replayEvent of replayEvents) {
+      processStreamEvent(shadowContext, replayEvent, true)
+    }
+
+    const nextCounter = Math.max(
+      idCounterRef.current,
+      ...[...nextMessages, ...shadowMessages].flatMap((message) => [message, ...(message.children ?? [])])
+        .map((message) => /^msg-(\d+)$/.exec(message.id)?.[1])
+        .filter((value): value is string => Boolean(value))
+        .map((value) => Number.parseInt(value, 10))
+        .filter(Number.isFinite),
+    )
+    idCounterRef.current = Number.isFinite(nextCounter) ? nextCounter : idCounterRef.current
+    setMessages(nextMessages)
+  }, [nextId, onWorkspaceMutation])
+
   const markAskAnswered = useCallback((toolId: string) => {
     setMessages((prev) => markAskAnsweredMessages(prev, toolId))
   }, [])
@@ -61,6 +93,7 @@ export function useStreamEventProcessor(options?: {
     messages,
     setMessages,
     processEvent: processEventCallback,
+    hydrateReplayMessages,
     resetMessages,
     isStreaming,
     markAskAnswered,

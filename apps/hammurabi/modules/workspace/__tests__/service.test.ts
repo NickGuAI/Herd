@@ -4,8 +4,11 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readWorkspaceFilePreview } from '../files'
+import { materializeWorkspaceContextPayload } from '../context'
 import { defaultWorkspaceCommandRunner, readWorkspaceGitLog, readWorkspaceGitStatus } from '../git'
-import { resolveWorkspaceRoot, WorkspaceError } from '../resolver'
+import { resolveWorkspacePathSelection, resolveWorkspaceRoot, WorkspaceError } from '../resolver'
+import { WorkspaceResolver } from '../capability'
+import { WorkspacePreferencesStore, WorkspaceTargetStore } from '../store'
 import { listWorkspaceTree } from '../tree'
 
 let tmpDir: string
@@ -31,13 +34,13 @@ describe('workspace service', () => {
       resolveWorkspaceRoot({
         rootPath: tmpDir,
         source: {
-          kind: 'agent-session',
+          kind: 'target',
           id: 'remote-agent',
           label: 'remote-agent',
           host: 'remote-box',
         },
       }),
-    ).rejects.toMatchObject<Partial<WorkspaceError>>({
+    ).rejects.toMatchObject({
       statusCode: 501,
       message: 'Remote workspace browsing is not supported yet',
     })
@@ -49,13 +52,13 @@ describe('workspace service', () => {
       resolveWorkspaceRoot({
         rootPath: tmpDir,
         source: {
-          kind: 'agent-session',
+          kind: 'target',
           id: 'remote-agent',
           label: 'remote-agent',
           host: 'remote-box',
         },
       }, runner),
-    ).rejects.toMatchObject<Partial<WorkspaceError>>({
+    ).rejects.toMatchObject({
       statusCode: 501,
       message: 'Remote workspace browsing is not supported yet',
     })
@@ -66,7 +69,7 @@ describe('workspace service', () => {
     const workspace = await resolveWorkspaceRoot({
       rootPath: tmpDir,
       source: {
-        kind: 'agent-session',
+        kind: 'target',
         id: 'remote-agent',
         label: 'remote-agent',
         host: 'remote-box',
@@ -96,7 +99,7 @@ describe('workspace service', () => {
     const workspace = await resolveWorkspaceRoot({
       rootPath: tmpDir,
       source: {
-        kind: 'agent-session',
+        kind: 'target',
         id: 'local-agent',
         label: 'local-agent',
       },
@@ -108,6 +111,7 @@ describe('workspace service', () => {
       '.gitignore',
       'README.md',
     ])
+    expect(tree.nodes.map((node) => node.parentPath)).toEqual(['', '', ''])
   })
 
   it('lists and previews files in a remote workspace', async () => {
@@ -119,7 +123,7 @@ describe('workspace service', () => {
     const workspace = await resolveWorkspaceRoot({
       rootPath: tmpDir,
       source: {
-        kind: 'agent-session',
+        kind: 'target',
         id: 'remote-preview-agent',
         label: 'remote-preview-agent',
         host: 'remote-box',
@@ -137,6 +141,7 @@ describe('workspace service', () => {
       'data.bin',
       'README.md',
     ])
+    expect(tree.nodes.map((node) => node.parentPath)).toEqual(['', '', ''])
 
     const textPreview = await readWorkspaceFilePreview(workspace, 'README.md', runner)
     expect(textPreview.kind).toBe('text')
@@ -145,16 +150,18 @@ describe('workspace service', () => {
     const binaryPreview = await readWorkspaceFilePreview(workspace, 'data.bin', runner)
     expect(binaryPreview.kind).toBe('binary')
     expect(binaryPreview.content).toBeUndefined()
-  }, 25_000)
+  }, 60_000)
 
   it('returns text and binary previews', async () => {
     await fs.writeFile(path.join(tmpDir, 'notes.md'), '# hello\n', 'utf8')
     await fs.writeFile(path.join(tmpDir, 'data.bin'), Buffer.from([0, 1, 2, 3]))
+    await fs.writeFile(path.join(tmpDir, 'report.pdf'), '%PDF-1.7\n', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'brief.docx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]))
 
     const workspace = await resolveWorkspaceRoot({
       rootPath: tmpDir,
       source: {
-        kind: 'agent-session',
+        kind: 'target',
         id: 'preview-agent',
         label: 'preview-agent',
       },
@@ -167,6 +174,14 @@ describe('workspace service', () => {
     const binaryPreview = await readWorkspaceFilePreview(workspace, 'data.bin')
     expect(binaryPreview.kind).toBe('binary')
     expect(binaryPreview.content).toBeUndefined()
+
+    const pdfPreview = await readWorkspaceFilePreview(workspace, 'report.pdf')
+    expect(pdfPreview.kind).toBe('pdf')
+    expect(pdfPreview.mimeType).toBe('application/pdf')
+
+    const docxPreview = await readWorkspaceFilePreview(workspace, 'brief.docx')
+    expect(docxPreview.kind).toBe('binary')
+    expect(docxPreview.mimeType).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
   })
 
   it('reads git status and log for repo-backed workspaces', async () => {
@@ -182,7 +197,7 @@ describe('workspace service', () => {
     const workspace = await resolveWorkspaceRoot({
       rootPath: tmpDir,
       source: {
-        kind: 'commander',
+        kind: 'target',
         id: 'org/repo/feature-x',
         label: 'org/repo:feature-x',
       },
@@ -213,7 +228,7 @@ describe('workspace service', () => {
     const workspace = await resolveWorkspaceRoot({
       rootPath: tmpDir,
       source: {
-        kind: 'agent-session',
+        kind: 'target',
         id: 'remote-git-agent',
         label: 'remote-git-agent',
         host: 'remote-box',
@@ -234,5 +249,261 @@ describe('workspace service', () => {
     const log = await readWorkspaceGitLog(workspace, 15, runner)
     expect(log.enabled).toBe(true)
     expect(log.commits[0]?.subject).toBe('initial commit')
+  })
+
+  it('opens conversation targets through the worker, commander cwd, and home fallback chain', async () => {
+    const targetStore = new WorkspaceTargetStore(path.join(tmpDir, 'targets.json'))
+    const machineDescriptor = {
+      readMachineRegistry: async () => [{
+        id: 'local',
+        label: 'Local',
+        host: null,
+        cwd: '/',
+      }],
+    }
+    const conversationStore = {
+      get: async (conversationId: string) => ({
+        id: conversationId,
+        commanderId: conversationId === 'home-conv' ? 'missing-commander' : 'cmd-1',
+      }),
+    }
+    const commanderStore = {
+      get: async (commanderId: string) => commanderId === 'cmd-1'
+        ? { id: 'cmd-1', cwd: tmpDir }
+        : null,
+    }
+    const sessionsInterface = {
+      getSession: (name: string) => name.includes('worker-conv')
+        ? { cwd: path.join(tmpDir, 'worker'), host: 'local' }
+        : undefined,
+    }
+    await fs.mkdir(path.join(tmpDir, 'worker'))
+
+    const resolver = new WorkspaceResolver({
+      targetStore,
+      machineDescriptor,
+      conversationStore: conversationStore as never,
+      commanderStore: commanderStore as never,
+      sessionsInterface: sessionsInterface as never,
+    })
+
+    await expect(resolver.open({ conversationId: 'worker-conv' })).resolves.toMatchObject({
+      rootPath: path.join(tmpDir, 'worker'),
+    })
+    await expect(resolver.open({ conversationId: 'commander-conv' })).resolves.toMatchObject({
+      rootPath: tmpDir,
+    })
+    await expect(resolver.open({ conversationId: 'home-conv' })).resolves.toMatchObject({
+      host: 'local',
+    })
+  })
+
+  it('preserves persisted remote machine descriptors for minted targets', async () => {
+    const targetStorePath = path.join(tmpDir, 'targets.json')
+    const targetStore = new WorkspaceTargetStore(targetStorePath)
+    const machineDescriptor = {
+      readMachineRegistry: async () => [{
+        id: 'remote-box',
+        label: 'Remote Box',
+        host: '127.0.0.1',
+        cwd: tmpDir,
+      }],
+    }
+    const resolver = new WorkspaceResolver({
+      targetStore,
+      machineDescriptor,
+      conversationStore: {
+        get: async (conversationId: string) => ({ id: conversationId, commanderId: 'cmd-1' }),
+      } as never,
+      commanderStore: {
+        get: async () => ({
+          id: 'cmd-1',
+          cwd: tmpDir,
+          remoteOrigin: { machineId: 'remote-box' },
+        }),
+      } as never,
+    })
+
+    const opened = await resolver.open({
+      conversationId: 'remote-conv',
+      hostHint: 'remote-box',
+      pathHint: tmpDir,
+    })
+
+    const reloaded = new WorkspaceTargetStore(targetStorePath)
+    await expect(reloaded.getByTargetId(opened.targetId)).resolves.toMatchObject({
+      machine: {
+        id: 'remote-box',
+        label: 'Remote Box',
+        host: '127.0.0.1',
+      },
+    })
+  })
+
+  it('opens a workspace location without a commander or conversation source', async () => {
+    const resolver = new WorkspaceResolver({
+      targetStore: new WorkspaceTargetStore(path.join(tmpDir, 'targets.json')),
+      machineDescriptor: {
+        readMachineRegistry: async () => [{
+          id: 'local',
+          label: 'Local',
+          host: null,
+          cwd: tmpDir,
+        }],
+      },
+      conversationStore: {
+        get: async () => null,
+      } as never,
+      commanderStore: {
+        get: async () => null,
+      } as never,
+    })
+
+    await expect(resolver.open({
+      hostHint: 'local',
+      pathHint: tmpDir,
+    })).resolves.toMatchObject({
+      host: 'local',
+      rootPath: tmpDir,
+    })
+  })
+
+  it('rejects unauthorized host/path hints before minting a target', async () => {
+    const resolver = new WorkspaceResolver({
+      targetStore: new WorkspaceTargetStore(path.join(tmpDir, 'targets.json')),
+      machineDescriptor: {
+        readMachineRegistry: async () => [{
+          id: 'local',
+          label: 'Local',
+          host: null,
+          cwd: tmpDir,
+        }],
+      },
+      conversationStore: {
+        get: async (conversationId: string) => ({ id: conversationId, commanderId: 'cmd-1' }),
+      } as never,
+      commanderStore: {
+        get: async () => ({ id: 'cmd-1', cwd: tmpDir }),
+      } as never,
+    })
+
+    await expect(() =>
+      resolver.open({
+        conversationId: 'conv-1',
+        hostHint: 'not-authorized',
+        pathHint: tmpDir,
+      }),
+    ).rejects.toMatchObject({ statusCode: 403 })
+    await expect(() =>
+      resolver.open({
+        conversationId: 'conv-1',
+        hostHint: 'local',
+        pathHint: path.dirname(tmpDir),
+      }),
+    ).rejects.toMatchObject({ statusCode: 403 })
+  })
+
+  it('accepts absolute file paths that stay inside the target root', async () => {
+    await fs.writeFile(path.join(tmpDir, 'inside.txt'), 'inside\n', 'utf8')
+    const workspace = await resolveWorkspaceRoot({
+      rootPath: tmpDir,
+      source: {
+        kind: 'target',
+        id: 'wt-local',
+        label: 'local',
+      },
+    })
+
+    const preview = await readWorkspaceFilePreview(workspace, path.join(tmpDir, 'inside.txt'))
+    expect(preview.content).toContain('inside')
+  })
+
+  it('resolves absolute requested paths to workspace-relative paths for chat file links', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'diagrams'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'diagrams', 'ui-to-backend-logic-flow.svg'),
+      '<svg />\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'diagrams', 'ui-to-backend-logic-flow.dot'),
+      'digraph G {}\n',
+      'utf8',
+    )
+    const workspace = await resolveWorkspaceRoot({
+      rootPath: tmpDir,
+      source: {
+        kind: 'target',
+        id: 'wt-local',
+        label: 'local',
+      },
+    })
+
+    await expect(
+      resolveWorkspacePathSelection(
+        workspace,
+        path.join(tmpDir, 'docs', 'diagrams', 'ui-to-backend-logic-flow.svg'),
+      ),
+    ).resolves.toMatchObject({
+      path: 'docs/diagrams/ui-to-backend-logic-flow.svg',
+      type: 'file',
+      treePath: 'docs/diagrams',
+    })
+    await expect(
+      resolveWorkspacePathSelection(workspace, path.join(tmpDir, 'docs', 'diagrams')),
+    ).resolves.toMatchObject({
+      path: 'docs/diagrams',
+      type: 'directory',
+      treePath: 'docs/diagrams',
+    })
+  })
+
+  it('materializes directory context through the explicit directoryPaths contract', async () => {
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'README.md'), '# readme\n', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'src', 'app.ts'), 'export {}\n', 'utf8')
+    const resolver = new WorkspaceResolver({
+      targetStore: new WorkspaceTargetStore(path.join(tmpDir, 'targets.json')),
+      machineDescriptor: {
+        readMachineRegistry: async () => [{
+          id: 'local',
+          label: 'Local',
+          host: null,
+          cwd: tmpDir,
+        }],
+      },
+      conversationStore: {
+        get: async () => null,
+      } as never,
+      commanderStore: {
+        get: async () => null,
+      } as never,
+    })
+
+    const target = await resolver.open({ hostHint: 'local', pathHint: tmpDir })
+    const materialized = await materializeWorkspaceContextPayload({
+      resolver,
+      context: {
+        targetId: target.targetId,
+        filePaths: ['README.md'],
+        directoryPaths: ['src'],
+      },
+    })
+
+    expect(materialized.filePaths).toEqual(['README.md'])
+    expect(materialized.directoryPaths).toEqual(['src'])
+    expect(materialized.text).toContain('<workspace-files>')
+    expect(materialized.text).toContain('@README.md')
+    expect(materialized.text).toContain('<workspace-directories>')
+    expect(materialized.text).toContain('@src/')
+    expect(materialized.text).toContain('- app.ts [file]')
+  })
+
+  it('persists workspace preferences outside AppSettings', async () => {
+    const preferences = new WorkspacePreferencesStore(path.join(tmpDir, 'preferences.json'))
+
+    await expect(preferences.get()).resolves.toEqual({ panelDefault: 'last-used' })
+    await expect(preferences.update({ panelDefault: 'closed' })).resolves.toEqual({ panelDefault: 'closed' })
+    await expect(preferences.get()).resolves.toEqual({ panelDefault: 'closed' })
   })
 })

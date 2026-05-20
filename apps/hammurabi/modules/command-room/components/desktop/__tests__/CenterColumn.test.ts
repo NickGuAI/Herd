@@ -16,10 +16,6 @@ vi.mock('../ChatPane', () => ({
   ChatPane: () => createElement('div', null, 'ChatPane'),
 }))
 
-vi.mock('../QueueDock', () => ({
-  QueueDock: () => createElement('div', null, 'QueueDock'),
-}))
-
 vi.mock('@modules/agents/components/SessionComposer', () => ({
   SessionComposer: () => createElement('div', null, 'SessionComposer'),
 }))
@@ -67,7 +63,6 @@ describe('CenterColumn', () => {
 
     expect(html).toContain('TerminalView:worker-pty')
     expect(html).not.toContain('ChatPane')
-    expect(html).not.toContain('QueueDock')
     expect(html).not.toContain('SessionComposer')
   })
 })

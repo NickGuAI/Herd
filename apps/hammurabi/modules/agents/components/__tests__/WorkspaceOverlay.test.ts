@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceSource } from '../../../workspace/use-workspace'
@@ -9,6 +8,7 @@ import type { WorkspaceSource } from '../../../workspace/use-workspace'
 const mocks = vi.hoisted(() => ({
   fetchWorkspaceTree: vi.fn(),
   fetchWorkspaceExpandedTree: vi.fn(),
+  fetchWorkspacePathResolution: vi.fn(),
   useWorkspaceFilePreview: vi.fn(),
   useWorkspaceGitStatus: vi.fn(),
   useWorkspaceGitLog: vi.fn(),
@@ -17,10 +17,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../../workspace/use-workspace', () => ({
   fetchWorkspaceTree: mocks.fetchWorkspaceTree,
   fetchWorkspaceExpandedTree: mocks.fetchWorkspaceExpandedTree,
-  getWorkspaceSourceKey: (source: WorkspaceSource) =>
-    source.kind === 'agent-session'
-      ? `agent:${source.sessionName}`
-      : `commander:${source.commanderId}`,
+  fetchWorkspacePathResolution: mocks.fetchWorkspacePathResolution,
+  getWorkspaceSourceKey: (source: WorkspaceSource) => `target:${source.targetId}`,
   useWorkspaceFilePreview: mocks.useWorkspaceFilePreview,
   useWorkspaceGitStatus: mocks.useWorkspaceGitStatus,
   useWorkspaceGitLog: mocks.useWorkspaceGitLog,
@@ -67,8 +65,8 @@ vi.mock('../../../workspace/components/WorkspaceFilePreview', () => ({
 import { WorkspaceOverlay } from '../WorkspaceOverlay'
 
 const SOURCE: WorkspaceSource = {
-  kind: 'agent-session',
-  sessionName: 'alpha-session',
+  kind: 'target',
+  targetId: 'wt-alpha-session',
 }
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -80,8 +78,8 @@ function createWorkspaceTreeResponse(parentPath: string, nodes: Array<{ name: st
   return {
     workspace: {
       source: {
-        kind: 'agent-session' as const,
-        id: 'alpha-session',
+        kind: 'target' as const,
+        id: 'wt-alpha-session',
         label: 'alpha-session',
       },
       rootPath: '/tmp/alpha-session',
@@ -91,7 +89,7 @@ function createWorkspaceTreeResponse(parentPath: string, nodes: Array<{ name: st
       isRemote: false,
     },
     parentPath,
-    nodes,
+    nodes: nodes.map((node) => ({ ...node, parentPath })),
   }
 }
 
@@ -105,6 +103,7 @@ async function flushAsync() {
 async function renderOverlay(
   root: ReturnType<typeof createRoot>,
   onClose: ReturnType<typeof vi.fn>,
+  props: Partial<Pick<ComponentProps<typeof WorkspaceOverlay>, 'requestedPath' | 'requestedPathToken'>> = {},
 ) {
   await act(async () => {
     root.render(
@@ -113,6 +112,7 @@ async function renderOverlay(
         onClose,
         onSelectFile: () => undefined,
         source: SOURCE,
+        ...props,
       }),
     )
     await Promise.resolve()
@@ -161,6 +161,15 @@ describe('WorkspaceOverlay', () => {
         { name: 'index.ts', path: 'src/index.ts', type: 'file' },
       ]),
     )
+    mocks.fetchWorkspacePathResolution.mockImplementation(async (_source, requestedPath: string) => ({
+      workspace: createWorkspaceTreeResponse('', []).workspace,
+      requestedPath,
+      path: requestedPath,
+      type: requestedPath.endsWith('/src') || requestedPath === 'src' ? 'directory' : 'file',
+      treePath: requestedPath.endsWith('/src') || requestedPath === 'src'
+        ? requestedPath
+        : requestedPath.split('/').slice(0, -1).join('/'),
+    }))
     mocks.useWorkspaceFilePreview.mockImplementation((_source, selectedPath) => ({
       data: selectedPath
         ? {
@@ -213,6 +222,7 @@ describe('WorkspaceOverlay', () => {
   afterEach(() => {
     mocks.fetchWorkspaceTree.mockReset()
     mocks.fetchWorkspaceExpandedTree.mockReset()
+    mocks.fetchWorkspacePathResolution.mockReset()
     mocks.useWorkspaceFilePreview.mockReset()
     mocks.useWorkspaceGitStatus.mockReset()
     mocks.useWorkspaceGitLog.mockReset()
@@ -262,6 +272,29 @@ describe('WorkspaceOverlay', () => {
 
     await dispatchEventAndFlush(overlay, new MouseEvent('mousedown', { bubbles: true }))
     expect(onClose).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  })
+
+  it('previews a requested workspace path when the overlay opens from chat', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const onClose = vi.fn()
+
+    await renderOverlay(root, onClose, {
+      requestedPath: 'src/index.ts',
+      requestedPathToken: 1,
+    })
+
+    await waitForCondition(
+      () => document.body.textContent?.includes('Previewing src/index.ts') ?? false,
+      'expected requested workspace path preview',
+    )
+    expect(document.body.textContent).toContain('Tree selection: src/index.ts')
 
     await act(async () => {
       root.unmount()

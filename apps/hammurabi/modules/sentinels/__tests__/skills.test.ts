@@ -9,6 +9,7 @@ vi.mock('node:fs/promises', () => ({
   access: vi.fn(),
   readFile: vi.fn(),
   readdir: vi.fn(),
+  stat: vi.fn(),
 }))
 
 import * as fs from 'node:fs/promises'
@@ -17,6 +18,7 @@ import { resolveSkill, resolveSkills, stripYamlFrontmatter } from '../skills.js'
 const accessMock = vi.mocked(fs.access)
 const readFileMock = vi.mocked(fs.readFile)
 const readdirMock = vi.mocked(fs.readdir)
+const statMock = vi.mocked(fs.stat)
 
 function createErrno(code: string): NodeJS.ErrnoException {
   const error = new Error(code) as NodeJS.ErrnoException
@@ -32,6 +34,9 @@ describe('sentinel skill resolver', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Default: agent-skills contains general-skills, gehirn-skills, pkos
+    statMock.mockImplementation(async (candidate) => ({
+      isDirectory: () => candidate === '/home/tester/App/agent-skills',
+    }) as never)
     readdirMock.mockResolvedValue([
       dirEntry('general-skills'),
       dirEntry('gehirn-skills'),

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../migrations/write-json-file-atomically.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../migrations/write-json-file-atomically.js')>()
+vi.mock('../../json-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../json-file.js')>()
   return {
     ...actual,
     writeJsonFileAtomically: vi.fn(actual.writeJsonFileAtomically),
@@ -12,7 +12,7 @@ vi.mock('../../../migrations/write-json-file-atomically.js', async (importOrigin
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeJsonFileAtomically } from '../../../migrations/write-json-file-atomically.js'
+import { writeJsonFileAtomically } from '../../json-file.js'
 import { ConversationStore } from '../conversation-store'
 import { buildDefaultCommanderConversationId } from '../store'
 

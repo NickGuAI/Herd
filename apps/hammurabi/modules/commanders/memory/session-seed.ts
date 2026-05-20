@@ -1,6 +1,3 @@
-import {
-  buildCommanderPersonaPromptSection,
-} from '../persona.js'
 import type {
   CommanderCurrentTask,
   CommanderTaskSource,
@@ -16,7 +13,6 @@ import type { PromptTask } from './prompt-task.js'
 export interface CommanderSessionSeedParams {
   commanderId: string
   cwd?: string
-  persona?: string
   currentTask: CommanderCurrentTask | null
   taskSource: CommanderTaskSource | null
   maxTurns: number
@@ -47,13 +43,7 @@ export async function buildCommanderSessionSeedFromResolvedWorkflow(
   params: CommanderSessionSeedParams,
   resolvedWorkflow: ResolvedCommanderWorkflow,
 ): Promise<{ systemPrompt: string; maxTurns?: number }> {
-  const personaSection = buildCommanderPersonaPromptSection(params.persona)
-  const basePrompt = [
-    resolveEffectiveBasePrompt(resolvedWorkflow.workflow).trim(),
-    personaSection,
-  ]
-    .filter((section): section is string => typeof section === 'string' && section.length > 0)
-    .join('\n\n')
+  const basePrompt = resolveEffectiveBasePrompt(resolvedWorkflow.workflow).trim()
   const agent = new CommanderAgent(params.commanderId, params.memoryBasePath)
   const built = await agent.buildTaskPickupSystemPrompt(
     basePrompt,

@@ -9,6 +9,7 @@ import type { MsgItem } from '@modules/agents/messages/model'
 import { CreateConversationPanel } from '@modules/conversation/components/CreateConversationPanel'
 import type { Commander, Worker } from '@modules/command-room/components/desktop/SessionRow'
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
 import { orderMobileConversations } from './orderMobileConversations'
 
 interface MobileChatViewProps {
@@ -38,6 +39,7 @@ interface MobileChatViewProps {
   onBack: () => void
   onOpenTeam: () => void
   onOpenWorkspace: () => void
+  onOpenWorkspaceFile?: (path: string) => void
   onSelectConversationId?: (conversationId: string | null) => void
   onCreateConversation?: (
     agentType: AgentType,
@@ -62,7 +64,11 @@ interface MobileChatViewProps {
   onMoveQueuedMessage: (id: string, offset: number) => void
   onRemoveQueuedMessage: (id: string) => void
   contextFilePaths?: string[]
+  contextDirectoryPaths?: string[]
+  contextFileAnnotations?: WorkspacePendingFileAnnotation[]
   onRemoveContextFilePath?: (filePath: string) => void
+  onRemoveContextDirectoryPath?: (directoryPath: string) => void
+  onRemoveContextFileAnnotation?: (commentId: string) => void
   onClearContextFilePaths?: () => void
   onSend?: (payload: SessionComposerSubmitPayload) => boolean | void | Promise<boolean | void>
   onQueue?: (
@@ -82,10 +88,14 @@ function resolveConversationSessionName(
   activeConversationId: string | null,
   activeSessionName: string,
 ): string {
+  const backendSessionName = conversation.sendTarget?.sessionName?.trim()
+  if (backendSessionName) {
+    return backendSessionName
+  }
   if (conversation.id === activeConversationId && activeSessionName.trim()) {
     return activeSessionName
   }
-  return `conversation-${conversation.id}`
+  return conversation.id
 }
 
 interface PageDotsProps {
@@ -106,7 +116,10 @@ function PageDots({
   }
 
   return (
-    <div className="flex items-center justify-center gap-1.5 px-4 pb-2">
+    <div
+      className="mobile-chat-page-dots flex items-center justify-center gap-1.5"
+      data-testid="mobile-chat-page-dots"
+    >
       {conversations.map((conversation, index) => {
         const active = conversation.id === activeConversationId
         return (
@@ -115,7 +128,7 @@ function PageDots({
             type="button"
             className={cn(
               'h-1.5 w-1.5 rounded-full transition-opacity',
-              theme === 'dark' ? 'bg-white' : 'bg-sumi-black',
+              theme === 'dark' ? 'bg-white' : 'bg-[var(--hv-button-primary-bg)]',
               active ? 'opacity-100' : 'opacity-30',
             )}
             aria-label={`Go to chat ${index + 1}`}
@@ -155,6 +168,7 @@ export function MobileChatView({
   onBack,
   onOpenTeam,
   onOpenWorkspace,
+  onOpenWorkspaceFile,
   onSelectConversationId,
   onCreateConversation,
   onStartConversation,
@@ -172,7 +186,11 @@ export function MobileChatView({
   onMoveQueuedMessage,
   onRemoveQueuedMessage,
   contextFilePaths = [],
+  contextDirectoryPaths = [],
+  contextFileAnnotations = [],
   onRemoveContextFilePath,
+  onRemoveContextDirectoryPath,
+  onRemoveContextFileAnnotation,
   onClearContextFilePaths,
   onSend,
   onQueue,
@@ -194,6 +212,7 @@ export function MobileChatView({
       ? orderMobileConversations(
         conversations.filter((conversation) => (
           conversation.commanderId === commander.id
+          && conversation.displayState?.isVisible !== false
           &&
           conversation.status !== 'archived'
         )),
@@ -366,7 +385,6 @@ export function MobileChatView({
             : onDenyApproval(approval)
         }
         agentAvatarUrl={commander.avatarUrl ?? undefined}
-        agentAccentColor={commander.ui?.accentColor ?? undefined}
         onSend={onSend ?? (() => undefined)}
         onQueue={canQueueDraft ? onQueue : undefined}
         canQueueDraft={canQueueDraft}
@@ -381,13 +399,16 @@ export function MobileChatView({
         isStreaming={isStreaming}
         composerPlaceholder={`Send a message to ${commander.name}…`}
         contextFilePaths={contextFilePaths}
+        contextDirectoryPaths={contextDirectoryPaths}
         onRemoveContextFilePath={onRemoveContextFilePath}
+        onRemoveContextDirectoryPath={onRemoveContextDirectoryPath}
         onClearContextFilePaths={onClearContextFilePaths}
         theme={theme}
         onSetTheme={onSetTheme}
         onBack={onBack}
         onKill={onStopCommander}
         onOpenWorkspace={onOpenWorkspace}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
         workers={workers.map((worker) => ({
           id: worker.id,
           label: worker.name,
@@ -404,7 +425,7 @@ export function MobileChatView({
   if (showCreateConversationPanel || visibleConversations.length === 0) {
     return (
       <MobileSessionShell
-        sessionName={sessionName || `conversation-empty-${commander.id}`}
+        sessionName={sessionName || commander.id}
         sessionLabel={commander.name}
         agentType={agentType}
         commanderId={commander.id}
@@ -420,7 +441,6 @@ export function MobileChatView({
             : onDenyApproval(approval)
         }
         agentAvatarUrl={commander.avatarUrl ?? undefined}
-        agentAccentColor={commander.ui?.accentColor ?? undefined}
         onSend={onSend ?? (() => undefined)}
         canQueueDraft={false}
         queueSnapshot={EMPTY_QUEUE_SNAPSHOT}
@@ -437,7 +457,8 @@ export function MobileChatView({
         onSetTheme={onSetTheme}
         onBack={onBack}
         onKill={onStopCommander}
-        onOpenWorkspace={onOpenWorkspace}
+              onOpenWorkspace={onOpenWorkspace}
+              onOpenWorkspaceFile={onOpenWorkspaceFile}
         workers={workers.map((worker) => ({
           id: worker.id,
           label: worker.name,
@@ -509,7 +530,6 @@ export function MobileChatView({
                     : onDenyApproval(approval)
                 }
                 agentAvatarUrl={commander.avatarUrl ?? undefined}
-                agentAccentColor={commander.ui?.accentColor ?? undefined}
                 onSend={onSend ?? (() => undefined)}
                 onQueue={isActive && canQueueDraft ? onQueue : undefined}
                 canQueueDraft={isActive && canQueueDraft}
@@ -524,13 +544,18 @@ export function MobileChatView({
                 isStreaming={isActive ? isStreaming : false}
                 composerPlaceholder={`Send a message to ${commander.name}…`}
                 contextFilePaths={isActive ? contextFilePaths : []}
+                contextDirectoryPaths={isActive ? contextDirectoryPaths : []}
+                contextFileAnnotations={isActive ? contextFileAnnotations : []}
                 onRemoveContextFilePath={isActive ? onRemoveContextFilePath : undefined}
+                onRemoveContextDirectoryPath={isActive ? onRemoveContextDirectoryPath : undefined}
+                onRemoveContextFileAnnotation={isActive ? onRemoveContextFileAnnotation : undefined}
                 onClearContextFilePaths={isActive ? onClearContextFilePaths : undefined}
                 theme={theme}
                 onSetTheme={onSetTheme}
                 onBack={onBack}
                 onKill={onStopCommander}
                 onOpenWorkspace={onOpenWorkspace}
+                onOpenWorkspaceFile={onOpenWorkspaceFile}
                 workers={workers.map((worker) => ({
                   id: worker.id,
                   label: worker.name,
@@ -547,7 +572,7 @@ export function MobileChatView({
                 onSwapConversationProvider={onSwapConversationProvider}
                 onArchiveConversation={handleArchiveConversation}
                 onRemoveConversation={handleRemoveConversation}
-                belowHeader={isActive
+                headerAccessory={isActive
                   ? (
                     <PageDots
                       conversations={visibleConversations}

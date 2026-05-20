@@ -9,13 +9,11 @@ import type { OrgTree } from '@modules/org/types'
 import { MobileOrgPage } from '../MobileOrgPage'
 
 const mocks = vi.hoisted(() => ({
-  fetchCommanderActiveConversation: vi.fn(async () => null),
+  fetchJson: vi.fn(),
 }))
 
-vi.mock('@modules/conversation/hooks/use-conversations', () => ({
-  ACTIVE_CONVERSATION_FETCH_STALE_MS: 30_000,
-  commanderActiveConversationQueryKey: (commanderId: string) => ['commanders', 'conversations', 'active', commanderId],
-  fetchCommanderActiveConversation: mocks.fetchCommanderActiveConversation,
+vi.mock('@/lib/api', () => ({
+  fetchJson: mocks.fetchJson,
 }))
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -146,8 +144,15 @@ describe('MobileOrgPage', () => {
   beforeEach(() => {
     previousActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true
-    mocks.fetchCommanderActiveConversation.mockReset()
-    mocks.fetchCommanderActiveConversation.mockResolvedValue(null)
+    mocks.fetchJson.mockReset()
+    mocks.fetchJson.mockResolvedValue({
+      target: {
+        routeId: 'command-room.ui',
+        path: '/command-room?commander=cmd-1',
+        commanderId: 'cmd-1',
+        conversationId: null,
+      },
+    })
   })
 
   afterEach(async () => {
@@ -166,7 +171,11 @@ describe('MobileOrgPage', () => {
   it('makes the org page root the mobile scroll container', async () => {
     await renderMobileOrgPage()
 
-    const page = document.body.querySelector<HTMLElement>('[data-testid="mobile-org-page"]')
+    let page: HTMLElement | null = null
+    await vi.waitFor(() => {
+      page = document.body.querySelector<HTMLElement>('[data-testid="mobile-org-page"]')
+      expect(page).not.toBeNull()
+    })
     expect(page).not.toBeNull()
     expect(page?.className).toContain('flex-1')
     expect(page?.className).toContain('min-h-0')
@@ -198,6 +207,9 @@ describe('MobileOrgPage', () => {
   it('opens commander details inside a bottom sheet', async () => {
     await renderMobileOrgPage()
 
+    const tile = document.body.querySelector<HTMLElement>('[data-testid="mobile-org-commander-tile"]')
+    expect(tile?.className).toContain('border-[color:var(--hv-border-soft)]')
+
     await click('[data-testid="mobile-org-commander-toggle"]')
 
     await vi.waitFor(() => {
@@ -209,7 +221,14 @@ describe('MobileOrgPage', () => {
   })
 
   it('navigates from the commander sheet Check On hero', async () => {
-    mocks.fetchCommanderActiveConversation.mockResolvedValue({ id: 'conv-9' })
+    mocks.fetchJson.mockResolvedValue({
+      target: {
+        routeId: 'command-room.ui',
+        path: '/command-room?commander=cmd-1&conversation=conv-9',
+        commanderId: 'cmd-1',
+        conversationId: 'conv-9',
+      },
+    })
 
     await renderMobileOrgPage()
 

@@ -72,11 +72,11 @@ export function StringArrayInput({
   }
 
   return (
-    <section className="rounded-[18px] border border-ink-border bg-washi-aged/40 p-4">
+    <section className="rounded-[18px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="section-title">{label}</p>
-          <p className="mt-2 text-sm leading-relaxed text-sumi-diluted">{description}</p>
+          <p className="mt-2 text-sm leading-relaxed text-[color:var(--hv-fg-subtle)]">{description}</p>
         </div>
         <span className="badge-sumi shrink-0">{values.length} rule{values.length === 1 ? '' : 's'}</span>
       </div>
@@ -98,13 +98,13 @@ export function StringArrayInput({
                   event.preventDefault()
                   commitRow(index, event.currentTarget.value)
                 }}
-                className="w-full rounded-lg border border-ink-border bg-washi-white px-3 py-2 text-sm text-sumi-black focus:outline-none focus:ring-1 focus:ring-sumi-mist disabled:cursor-not-allowed disabled:bg-ink-wash"
+                className="w-full rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-3 py-2 text-sm text-[color:var(--hv-fg)] focus:outline-none focus:ring-1 focus:ring-[color:var(--hv-field-focus-border)] disabled:cursor-not-allowed disabled:bg-[var(--hv-surface-selected)]"
               />
               <button
                 type="button"
                 onClick={() => removeRow(index)}
                 disabled={disabled}
-                className="badge-sumi h-9 w-9 shrink-0 justify-center border-0 text-sumi-diluted transition-colors hover:bg-accent-vermillion/10 hover:text-accent-vermillion disabled:cursor-not-allowed disabled:opacity-60"
+                className="badge-sumi h-9 w-9 shrink-0 justify-center border-0 text-[color:var(--hv-fg-subtle)] transition-colors hover:bg-[var(--hv-accent-danger-wash)] hover:text-[color:var(--hv-accent-danger)] disabled:cursor-not-allowed disabled:opacity-60"
                 aria-label={`Remove ${label} rule ${index + 1}`}
               >
                 <X size={14} />
@@ -113,7 +113,7 @@ export function StringArrayInput({
           ))}
         </div>
       ) : (
-        <div className="mt-4 rounded-lg border border-dashed border-ink-border/80 bg-white/40 px-3 py-4 text-sm text-sumi-mist">
+        <div className="mt-4 rounded-lg border border-dashed border-[color:var(--hv-border-hair)] bg-white/40 px-3 py-4 text-sm text-[color:var(--hv-fg-faint)]">
           {emptyMessage}
         </div>
       )}

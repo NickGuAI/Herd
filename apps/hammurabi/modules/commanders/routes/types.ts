@@ -1,5 +1,7 @@
 import type { AuthUser } from '@gehirn/auth-providers'
-import type { Request, RequestHandler, Response as ExpressResponse, Router } from 'express'
+import type { Request, RequestHandler, Router } from 'express'
+import type { IncomingMessage } from 'node:http'
+import type { Duplex } from 'node:stream'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store.js'
 import type { ProviderSecretsStoreLike } from '../../../server/api-keys/provider-secrets-store.js'
 import type { CommanderSessionsInterface } from '../../agents/routes.js'
@@ -8,11 +10,8 @@ import type { AutomationScheduler } from '../../automations/scheduler.js'
 import type { ChannelSurfaceBindingStore } from '../../channels/surface-binding-store.js'
 import type { CommanderChannelBindingStore } from '../../channels/store.js'
 import type { ProviderSessionContext } from '../../agents/providers/provider-session-context.js'
-import type {
-  CommanderEmailConfigStore,
-  CommanderEmailStateStore,
-} from '../email-config.js'
-import type { EmailPoller, CommanderEmailClient } from '../email-poller.js'
+import type { ActionPolicyGate } from '../../policies/action-policy-gate.js'
+import type { WorkspaceResolverCapability } from '../../workspace/capability.js'
 import type {
   CommanderHeartbeatManager,
   CommanderHeartbeatConfig,
@@ -21,7 +20,6 @@ import type { HeartbeatLog } from '../heartbeat-log.js'
 import type { CommanderSubagentLifecycleEvent, CommanderManager } from '../manager.js'
 import type { Conversation, ConversationStore } from '../conversation-store.js'
 import type { QuestStore } from '../quest-store.js'
-import type { ResolvedWorkspace } from '../../workspace/types.js'
 import type {
   CommanderChannelMeta,
   CommanderCurrentTask,
@@ -53,10 +51,6 @@ export interface CommandersRouterOptions {
   runtimeConfigPath?: string
   questStore?: QuestStore
   questStoreDataDir?: string
-  emailConfigStore?: CommanderEmailConfigStore
-  emailStateStore?: CommanderEmailStateStore
-  emailClient?: CommanderEmailClient
-  emailPoller?: Pick<EmailPoller, 'sendReply'>
   ghTasksFactory?: (repo: string) => Pick<GhTasks, 'readTask'>
   heartbeatLog?: HeartbeatLog
   fetchImpl?: typeof fetch
@@ -65,10 +59,12 @@ export interface CommandersRouterOptions {
     options: GeminiImageGenerationOptions,
   ) => Promise<Buffer>
   sessionsInterface?: CommanderSessionsInterface
+  conversationSessionWebSocket?: (req: IncomingMessage, socket: Duplex, head: Buffer) => void
   automationStore?: AutomationStore
   automationScheduler?: AutomationScheduler
   automationSchedulerInitialized?: Promise<void>
   apiKeyStore?: ApiKeyStoreLike
+  internalToken?: string
   auth0Domain?: string
   auth0Audience?: string
   auth0ClientId?: string
@@ -83,11 +79,14 @@ export interface CommandersRouterOptions {
   channelReplyDispatchers?: Partial<Record<CommanderChannelMeta['provider'], CommanderChannelReplyDispatcher>>
   surfaceBindingStore?: ChannelSurfaceBindingStore
   channelBindingStore?: CommanderChannelBindingStore
+  actionPolicyGate?: ActionPolicyGate
+  getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
 }
 
 export interface CommandersRouterResult {
   router: Router
   conversationRouter: Router
+  handleConversationUpgrade?: (req: IncomingMessage, socket: Duplex, head: Buffer) => void
   dispose: () => void
 }
 
@@ -162,7 +161,7 @@ export interface CommanderConversationRuntimeView {
   providerContext?: ProviderSessionContext
 }
 
-export type CommanderSessionResponseBase = Omit<CommanderSession, 'remoteOrigin'> & CommanderConversationRuntimeView & {
+export type CommanderSessionResponseBase = Omit<CommanderSession, 'remoteOrigin' | 'persona'> & CommanderConversationRuntimeView & {
   name: string
   remoteOrigin?: {
     machineId: string
@@ -171,9 +170,8 @@ export type CommanderSessionResponseBase = Omit<CommanderSession, 'remoteOrigin'
 }
 
 export type CommanderUiPublic = {
-  borderColor?: string
-  accentColor?: string
   speakingTone?: string
+  portraitStyleId?: string
 } | null
 
 export type CommanderSessionResponse = CommanderSessionResponseBase &
@@ -203,9 +201,6 @@ export interface CommanderRoutesContext {
   surfaceBindingStore: ChannelSurfaceBindingStore
   channelBindingStore: CommanderChannelBindingStore
   questStore: QuestStore
-  emailConfigStore: CommanderEmailConfigStore
-  emailStateStore: CommanderEmailStateStore
-  emailReplyService: Pick<EmailPoller, 'sendReply'> | null
   ghTasksFactory: (repo: string) => Pick<GhTasks, 'readTask'>
   heartbeatLog: HeartbeatLog
   sessionsInterface?: CommanderSessionsInterface
@@ -220,16 +215,16 @@ export interface CommanderRoutesContext {
    * `commanders:write` (acts on behalf of a commander). See issue #1223.
    */
   requireWorkerDispatchAccess: RequestHandler
+  getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   heartbeatManager: CommanderHeartbeatManager
   runtimes: Map<string, CommanderRuntime>
   activeCommanderSessions: Map<string, { sessionName: string; startedAt: string }>
+  channelReplyForwarders: Map<string, () => void>
   heartbeatFiredAtByConversation: Map<string, string>
   avatarUpload: { single(fieldname: string): RequestHandler }
   automationStore: AutomationStore
   automationScheduler?: AutomationScheduler
   automationSchedulerInitialized: Promise<void>
-  sendWorkspaceError: (res: ExpressResponse, error: unknown) => void
-  resolveCommanderWorkspace: (rawCommanderId: unknown) => Promise<ResolvedWorkspace>
   getCommanderSessionStats: (commanderId: string) => Promise<CommanderSessionStats>
   onSubagentLifecycleEvent: (
     commanderId: string,

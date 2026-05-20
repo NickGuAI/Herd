@@ -3,6 +3,7 @@ import type { AskQuestion } from '@/types'
 export const MAX_CLIENT_MESSAGES = 500
 export const SUBAGENT_WORKING_LABEL = 'subagent working…'
 export type PlanningAction = 'enter' | 'proposed' | 'decision'
+export type AskInteractionKind = 'ask_user_question' | 'plan_approval'
 
 export interface MsgItem {
   id: string
@@ -21,12 +22,17 @@ export interface MsgItem {
   oldString?: string
   newString?: string
   askQuestions?: AskQuestion[]
+  askInteractionKind?: AskInteractionKind
   askAnswered?: boolean
   askSubmitting?: boolean
   planningAction?: PlanningAction
   planningPlan?: string
   planningApproved?: boolean | null
   planningMessage?: string
+  planApprovalPlan?: string
+  planApprovalApproveLabel?: string
+  planApprovalRejectLabel?: string
+  planApprovalCustomResponseLabel?: string
 }
 
 export function capMessages(msgs: MsgItem[]): MsgItem[] {

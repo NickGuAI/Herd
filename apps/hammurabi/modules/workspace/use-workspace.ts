@@ -1,50 +1,43 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/api'
 import type {
+  WorkspaceContextMaterialization,
+  WorkspaceContextRequest,
+  WorkspaceFileAnnotation,
+  WorkspacePendingFileAnnotation,
   WorkspaceFilePreview,
   WorkspaceGitLog,
   WorkspaceGitStatus,
   WorkspaceMutationResult,
+  WorkspacePathResolution,
   WorkspaceTreeResponse,
 } from './types'
 
 export type WorkspaceSource =
-  | {
-      kind: 'agent-session'
-      sessionName: string
-      readOnly?: boolean
-    }
-  | {
-      kind: 'commander'
-      commanderId: string
-      readOnly?: boolean
-    }
+  {
+    kind: 'target'
+    targetId: string
+    label?: string
+    readOnly?: boolean
+  }
 
 export function getWorkspaceSourceKey(source: WorkspaceSource): string {
-  switch (source.kind) {
-    case 'agent-session':
-      return `agent:${source.sessionName}`
-    case 'commander':
-      return `commander:${source.commanderId}`
-  }
-}
-
-export function getWorkspaceBasePath(source: WorkspaceSource): string {
-  switch (source.kind) {
-    case 'agent-session':
-      return `/api/agents/sessions/${encodeURIComponent(source.sessionName)}/workspace`
-    case 'commander':
-      return `/api/commanders/${encodeURIComponent(source.commanderId)}/workspace`
-  }
+  return `target:${source.targetId}`
 }
 
 function withPathQuery(basePath: string, relativePath?: string, extra?: Record<string, string>): string {
   const params = new URLSearchParams()
+  if (extra?.targetId) {
+    params.set('targetId', extra.targetId)
+  }
   if (relativePath) {
     params.set('path', relativePath)
   }
   if (extra) {
     for (const [key, value] of Object.entries(extra)) {
+      if (key === 'targetId') {
+        continue
+      }
       params.set(key, value)
     }
   }
@@ -52,12 +45,42 @@ function withPathQuery(basePath: string, relativePath?: string, extra?: Record<s
   return query ? `${basePath}?${query}` : basePath
 }
 
+function targetQuery(source: WorkspaceSource): Record<string, string> {
+  return { targetId: source.targetId }
+}
+
+function withTargetQuery(basePath: string, source: WorkspaceSource): string {
+  return withPathQuery(basePath, undefined, targetQuery(source))
+}
+
+export interface WorkspaceOpenResponse {
+  targetId: string
+  label: string
+  host: string
+  rootPath: string
+  isReadOnly: boolean
+}
+
+export async function openWorkspaceTarget(input: {
+  conversationId?: string
+  sessionName?: string
+  commanderId?: string
+  hostHint?: string | null
+  pathHint?: string | null
+}): Promise<WorkspaceOpenResponse> {
+  return fetchJson<WorkspaceOpenResponse>('/api/workspace/open', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
 export async function fetchWorkspaceTree(
   source: WorkspaceSource,
   relativePath = '',
 ): Promise<WorkspaceTreeResponse> {
   return fetchJson<WorkspaceTreeResponse>(
-    withPathQuery(`${getWorkspaceBasePath(source)}/tree`, relativePath),
+    withPathQuery('/api/workspace/tree', relativePath, targetQuery(source)),
   )
 }
 
@@ -66,7 +89,16 @@ export async function fetchWorkspaceExpandedTree(
   relativePath: string,
 ): Promise<WorkspaceTreeResponse> {
   return fetchJson<WorkspaceTreeResponse>(
-    withPathQuery(`${getWorkspaceBasePath(source)}/expand`, relativePath),
+    withPathQuery('/api/workspace/expand', relativePath, targetQuery(source)),
+  )
+}
+
+export async function fetchWorkspacePathResolution(
+  source: WorkspaceSource,
+  requestedPath: string,
+): Promise<WorkspacePathResolution> {
+  return fetchJson<WorkspacePathResolution>(
+    withPathQuery('/api/workspace/resolve-path', requestedPath, targetQuery(source)),
   )
 }
 
@@ -75,12 +107,24 @@ async function fetchWorkspaceFilePreview(
   relativePath: string,
 ): Promise<WorkspaceFilePreview> {
   return fetchJson<WorkspaceFilePreview>(
-    withPathQuery(`${getWorkspaceBasePath(source)}/file`, relativePath),
+    withPathQuery('/api/workspace/file', relativePath, targetQuery(source)),
   )
 }
 
+export async function materializeWorkspaceContext(
+  request: WorkspaceContextRequest,
+): Promise<WorkspaceContextMaterialization> {
+  return fetchJson<WorkspaceContextMaterialization>('/api/workspace/context/materialize', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+}
+
 async function fetchWorkspaceGitStatus(source: WorkspaceSource): Promise<WorkspaceGitStatus> {
-  return fetchJson<WorkspaceGitStatus>(`${getWorkspaceBasePath(source)}/git/status`)
+  return fetchJson<WorkspaceGitStatus>(
+    withPathQuery('/api/workspace/git/status', undefined, targetQuery(source)),
+  )
 }
 
 async function fetchWorkspaceGitLog(
@@ -88,7 +132,8 @@ async function fetchWorkspaceGitLog(
   limit = 15,
 ): Promise<WorkspaceGitLog> {
   return fetchJson<WorkspaceGitLog>(
-    withPathQuery(`${getWorkspaceBasePath(source)}/git/log`, undefined, {
+    withPathQuery('/api/workspace/git/log', undefined, {
+      ...targetQuery(source),
       limit: String(limit),
     }),
   )
@@ -99,7 +144,7 @@ async function putWorkspaceFile(
   relativePath: string,
   content: string,
 ): Promise<WorkspaceMutationResult> {
-  return fetchJson<WorkspaceMutationResult>(`${getWorkspaceBasePath(source)}/file`, {
+  return fetchJson<WorkspaceMutationResult>(withTargetQuery('/api/workspace/file', source), {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path: relativePath, content }),
@@ -111,7 +156,7 @@ async function postWorkspaceMutation(
   suffix: string,
   body: Record<string, string>,
 ): Promise<WorkspaceMutationResult> {
-  return fetchJson<WorkspaceMutationResult>(`${getWorkspaceBasePath(source)}/${suffix}`, {
+  return fetchJson<WorkspaceMutationResult>(withTargetQuery(`/api/workspace/${suffix}`, source), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -123,13 +168,13 @@ async function deleteWorkspacePath(
   relativePath: string,
 ): Promise<WorkspaceMutationResult> {
   return fetchJson<WorkspaceMutationResult>(
-    withPathQuery(`${getWorkspaceBasePath(source)}/path`, relativePath),
+    withPathQuery('/api/workspace/path', relativePath, targetQuery(source)),
     { method: 'DELETE' },
   )
 }
 
 async function postWorkspaceGitInit(source: WorkspaceSource): Promise<{ output: string }> {
-  return fetchJson<{ output: string }>(`${getWorkspaceBasePath(source)}/git/init`, {
+  return fetchJson<{ output: string }>(withTargetQuery('/api/workspace/git/init', source), {
     method: 'POST',
   })
 }
@@ -142,7 +187,7 @@ export async function uploadWorkspaceFiles(
   const formData = new FormData()
   Array.from(files).forEach((file) => formData.append('files', file))
   return fetchJson<{ uploaded: string[]; path: string }>(
-    withPathQuery(`${getWorkspaceBasePath(source)}/upload`, relativePath),
+    withPathQuery('/api/workspace/upload', relativePath, targetQuery(source)),
     {
       method: 'POST',
       body: formData,
@@ -224,4 +269,11 @@ export function useWorkspaceActions(source: WorkspaceSource) {
       return result
     },
   }
+}
+
+export type {
+  WorkspaceContextMaterialization,
+  WorkspaceContextRequest,
+  WorkspaceFileAnnotation,
+  WorkspacePendingFileAnnotation,
 }

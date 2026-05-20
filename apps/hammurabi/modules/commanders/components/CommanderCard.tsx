@@ -4,7 +4,6 @@ import { ClipboardCheck, Clock3, MessageSquare, Pencil, Play, Square, Trash2, Za
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { cn } from '@/lib/utils'
 import { AgentAvatar } from '@modules/components/hervald'
-import { ensureCommanderVisualProfile } from '../commander-visual-profile'
 import type { CommanderAgentType, CommanderSession } from '../hooks/useCommander'
 
 export interface CommanderCardProps {
@@ -43,7 +42,7 @@ const ACTION_CONTROL_CLASSES =
   'btn-ghost !px-3 !py-0 inline-flex h-11 w-full items-center justify-center gap-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60'
 
 const STAT_LINK_CLASSES =
-  'btn-ghost !px-2.5 !py-1.5 inline-flex shrink-0 items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-sumi-gray'
+  'btn-ghost !px-2.5 !py-1.5 inline-flex shrink-0 items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-[color:var(--hv-fg-muted)]'
 
 declare module '../hooks/useCommander' {
   interface CommanderSession {
@@ -90,16 +89,11 @@ export function CommanderCard({
   const questCount = commander.questCount ?? 0
   const scheduleCount = commander.scheduleCount ?? 0
 
-  const visualProfile = ensureCommanderVisualProfile(commander.id, commander.ui ?? null)
-
   const currentTaskTitle = commander.currentTask?.title?.trim()
   const tone = commander.ui?.speakingTone?.trim()
 
   return (
-    <div
-      className="card-sumi border-2 p-4"
-      style={{ borderColor: visualProfile.borderColor }}
-    >
+    <div className="card-sumi border-2 border-[color:var(--hv-border-soft)] p-4">
       {/* Identity, quest/schedule pills, state */}
       <div className="flex flex-wrap items-center gap-2">
         <AgentAvatar
@@ -108,12 +102,12 @@ export function CommanderCard({
             displayName,
             host: commander.host,
             avatarUrl: commander.avatarUrl,
-            ui: visualProfile,
+            ui: commander.ui,
           }}
           size={40}
           active={isRunning}
         />
-        <p className="min-w-0 flex-1 font-mono text-sm text-sumi-black truncate">{displayName}</p>
+        <p className="min-w-0 flex-1 font-mono text-sm text-[color:var(--hv-fg)] truncate">{displayName}</p>
         <Link
           to={`/quests?commander=${commander.id}`}
           className={STAT_LINK_CLASSES}
@@ -134,38 +128,38 @@ export function CommanderCard({
           <span
             className={cn(
               'mr-1.5 inline-block h-1.5 w-1.5 rounded-full',
-              isRunning ? 'bg-accent-moss animate-breathe' : 'bg-sumi-mist',
+              isRunning ? 'bg-[var(--hv-accent-success)] animate-breathe' : 'bg-[var(--hv-fg-faint)]',
             )}
           />
           {commander.state}
         </span>
       </div>
       {tone ? (
-        <p className="mt-2 text-whisper text-sumi-diluted italic leading-snug">{tone}</p>
+        <p className="mt-2 text-whisper text-[color:var(--hv-fg-subtle)] italic leading-snug">{tone}</p>
       ) : null}
 
       {/* Current task */}
       {currentTaskTitle && (
         <div className="mt-3">
-          <p className="text-sm text-sumi-gray truncate">
-            <span className="text-whisper text-sumi-diluted uppercase">Current task: </span>
+          <p className="text-sm text-[color:var(--hv-fg-muted)] truncate">
+            <span className="text-whisper text-[color:var(--hv-fg-subtle)] uppercase">Current task: </span>
             {currentTaskTitle}
           </p>
         </div>
       )}
 
       {/* Pill nav */}
-      <div className="mt-3 flex gap-1 p-1 rounded-full bg-washi-aged/60 border border-ink-border w-fit">
+      <div className="mt-3 flex gap-1 p-1 rounded-full bg-[var(--hv-bg-raised)] border border-[color:var(--hv-border-hair)] w-fit">
         <Link
           to={`/quests?commander=${commander.id}`}
-          className="px-3 py-1 rounded-full text-[10px] uppercase tracking-wide font-medium text-sumi-gray hover:text-sumi-black hover:bg-washi-white transition-all"
+          className="px-3 py-1 rounded-full text-[10px] uppercase tracking-wide font-medium text-[color:var(--hv-fg-muted)] hover:text-[color:var(--hv-fg)] hover:bg-[var(--hv-surface-card)] transition-all"
           onClick={(e) => e.stopPropagation()}
         >
           Quests
         </Link>
         <Link
           to={`/command-room?commander=${commander.id}&panel=automation`}
-          className="px-3 py-1 rounded-full text-[10px] uppercase tracking-wide font-medium text-sumi-gray hover:text-sumi-black hover:bg-washi-white transition-all"
+          className="px-3 py-1 rounded-full text-[10px] uppercase tracking-wide font-medium text-[color:var(--hv-fg-muted)] hover:text-[color:var(--hv-fg)] hover:bg-[var(--hv-surface-card)] transition-all"
           onClick={(e) => e.stopPropagation()}
         >
           Automations
@@ -176,11 +170,11 @@ export function CommanderCard({
       <div className="mt-4 grid grid-cols-2 gap-2">
         {isStopped ? (
           <>
-            <label className={cn(ACTION_CONTROL_CLASSES, 'cursor-pointer text-sumi-diluted')}>
+            <label className={cn(ACTION_CONTROL_CLASSES, 'cursor-pointer text-[color:var(--hv-fg-subtle)]')}>
               <select
                 value={agentType}
                 onChange={(e) => setAgentType(e.target.value)}
-                className="w-full bg-transparent text-center text-sumi-black focus:outline-none"
+                className="w-full bg-transparent text-center text-[color:var(--hv-fg)] focus:outline-none"
               >
                 {providers.map((provider) => (
                   <option key={provider.id} value={provider.id}>
@@ -246,7 +240,7 @@ export function CommanderCard({
             type="button"
             disabled={isDeletePending}
             onClick={() => onDelete(commander.id)}
-            className={cn(ACTION_CONTROL_CLASSES, 'text-accent-vermillion')}
+            className={cn(ACTION_CONTROL_CLASSES, 'text-[color:var(--hv-accent-danger)]')}
           >
             <Trash2 size={12} />
             Delete

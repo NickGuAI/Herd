@@ -9,6 +9,7 @@
 
 import type { Operator } from '../operators/types.js'
 import type { AutomationTrigger } from '../automations/types.js'
+import type { CommandRoomLaunchTarget } from '../command-room/route-metadata.js'
 import type { OrgIdentity } from '../org-identity/types.js'
 
 export type OrgNodeKind = 'operator' | 'commander' | 'automation'
@@ -32,9 +33,8 @@ export interface OrgCommanderCounts {
 }
 
 export interface OrgNodeProfile {
-  borderColor?: string
-  accentColor?: string
   speakingTone?: string
+  portraitStyleId?: string
 }
 
 export interface OrgNode {
@@ -77,4 +77,8 @@ export interface OrgTree {
   archivedCommandersCount: number
   commanders: OrgNode[]
   automations: OrgNode[]
+}
+
+export interface OrgCheckOnTargetResponse {
+  target: CommandRoomLaunchTarget
 }

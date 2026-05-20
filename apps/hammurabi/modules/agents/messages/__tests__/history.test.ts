@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { normalizeCodexEvent } from '../../event-normalizers/codex'
 import type { StreamJsonEvent } from '../../types'
 import { mapStreamEventsToMessages } from '../history'
 import { MAX_CLIENT_MESSAGES } from '../model'
@@ -28,5 +29,116 @@ describe('mapStreamEventsToMessages', () => {
       kind: 'agent',
       text: `message ${messageCount - 1}`,
     })
+  })
+
+  it('renders Claude signed empty thinking through the backend projection contract', () => {
+    const signature = 'A'.repeat(464)
+
+    const messages = mapStreamEventsToMessages([{
+      type: 'assistant',
+      source: { provider: 'claude', backend: 'cli' },
+      message: {
+        id: 'claude-thinking',
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: '', signature }],
+      },
+    }])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'thinking',
+        text: `(reasoning content redacted by Claude · ${signature.length} bytes signed)`,
+      }),
+    ])
+  })
+
+  it('merges Codex completed reasoning into the active thinking row', () => {
+    const started = normalizeCodexEvent('item/started', {
+      item: { id: 'reasoning-1', type: 'reasoning' },
+    })
+    const completed = normalizeCodexEvent('item/completed', {
+      item: {
+        id: 'reasoning-1',
+        type: 'reasoning',
+        summary: ['Final completed reasoning'],
+      },
+    })
+
+    const messages = mapStreamEventsToMessages([
+      started as StreamJsonEvent,
+      completed as StreamJsonEvent,
+    ])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'thinking',
+        text: 'Final completed reasoning',
+      }),
+    ])
+  })
+
+  it('renders Gemini and OpenCode canonical stream events without provider branching', () => {
+    const messages = mapStreamEventsToMessages([
+      {
+        type: 'content_block_start',
+        source: { provider: 'gemini', backend: 'acp' },
+        index: 0,
+        content_block: { type: 'text' },
+      },
+      {
+        type: 'content_block_delta',
+        source: { provider: 'gemini', backend: 'acp' },
+        index: 0,
+        delta: { type: 'text_delta', text: 'Gemini says hi' },
+      },
+      {
+        type: 'content_block_stop',
+        source: { provider: 'gemini', backend: 'acp' },
+        index: 0,
+      },
+      {
+        type: 'content_block_start',
+        source: { provider: 'opencode', backend: 'acp' },
+        index: 1,
+        content_block: { type: 'thinking' },
+      },
+      {
+        type: 'content_block_delta',
+        source: { provider: 'opencode', backend: 'acp' },
+        index: 1,
+        delta: { type: 'thinking_delta', thinking: 'OpenCode thought' },
+      },
+      {
+        type: 'content_block_stop',
+        source: { provider: 'opencode', backend: 'acp' },
+        index: 1,
+      },
+    ])
+
+    expect(messages).toEqual([
+      expect.objectContaining({ kind: 'agent', text: 'Gemini says hi' }),
+      expect.objectContaining({ kind: 'thinking', text: 'OpenCode thought' }),
+    ])
+  })
+
+  it('keeps unknown-provider thinking fallback safe and text-only', () => {
+    const messages = mapStreamEventsToMessages([
+      {
+        type: 'assistant',
+        source: { provider: 'test-provider', backend: 'cli' },
+        message: {
+          id: 'unknown-thinking',
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'visible fallback' },
+            { type: 'thinking', thinking: '' },
+          ],
+        },
+      },
+    ])
+
+    expect(messages).toEqual([
+      expect.objectContaining({ kind: 'thinking', text: 'visible fallback' }),
+    ])
   })
 })

@@ -61,6 +61,11 @@ async function readNamesState(namesPath: string): Promise<CommanderNamesState> {
   }
 }
 
+export async function readCommanderDisplayNames(dataDir: string): Promise<Record<string, string>> {
+  const { names } = await readNamesState(resolveCommanderNamesPath(dataDir))
+  return names
+}
+
 async function writeNamesFile(
   namesPath: string,
   names: Record<string, string>,

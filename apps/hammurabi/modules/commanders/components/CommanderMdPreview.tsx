@@ -7,7 +7,7 @@ export interface CommanderMdPreviewProps {
   host: string
   displayName?: string
   cwd?: string
-  persona?: string
+  identityOperatingStyle?: string
   agentType?: AgentType
   effort?: 'low' | 'medium' | 'high' | 'max'
   heartbeatIntervalMs?: number
@@ -53,7 +53,7 @@ function buildPreviewContent(props: CommanderMdPreviewProps): string {
   const {
     host,
     cwd,
-    persona,
+    identityOperatingStyle,
     agentType,
     effort,
     heartbeatIntervalMs,
@@ -66,22 +66,18 @@ function buildPreviewContent(props: CommanderMdPreviewProps): string {
   const createdPlaceholder = new Date().toISOString()
   const cwdDisplay = cwd && cwd.trim() !== '' ? cwd.trim() : '(none)'
 
-  const personaValue = persona?.trim() ?? ''
+  const identityOperatingStyleValue = identityOperatingStyle?.trim() ?? ''
   const hostValue = host.trim()
 
   const lines: string[] = [
     '---',
     `id: ${toYamlScalar(idPlaceholder)}`,
     `host: ${toYamlScalar(hostValue || undefined)}`,
-    `persona: ${toYamlScalar(personaValue || undefined)}`,
     `created: ${toYamlScalar(createdPlaceholder)}`,
     `cwd: ${toYamlScalar(cwd?.trim() || undefined)}`,
     '---',
     '',
     '# Commander Identity',
-    '',
-    '## Persona',
-    personaValue !== '' ? personaValue : '(none)',
     '',
     '## Hostname',
     hostValue !== '' ? hostValue : '(none)',
@@ -97,6 +93,12 @@ function buildPreviewContent(props: CommanderMdPreviewProps): string {
   }
   if (effort) {
     lines.push(`- Claude effort: ${effort}`)
+  }
+
+  if (identityOperatingStyleValue !== '') {
+    lines.push('')
+    lines.push('## Identity and Operating Style')
+    lines.push(identityOperatingStyleValue)
   }
 
   // Heartbeat section

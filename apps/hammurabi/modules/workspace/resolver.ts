@@ -1,4 +1,5 @@
 import { realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import {
   detectWorkspaceGitRoot,
@@ -6,6 +7,7 @@ import {
 } from './git.js'
 import type {
   ResolvedWorkspace,
+  WorkspacePathResolution,
   WorkspaceMachineDescriptor,
   WorkspaceSourceDescriptor,
 } from './types.js'
@@ -49,6 +51,45 @@ function normalizeRelativePath(input: string | undefined | null): string {
   }
 
   return normalized === '.' ? '' : normalized.replace(/^\/+/, '')
+}
+
+function normalizeWorkspacePathInput(
+  workspace: ResolvedWorkspace,
+  input: string | undefined | null,
+): string {
+  const raw = typeof input === 'string' ? input.trim() : ''
+  if (!raw) {
+    return ''
+  }
+
+  const pathApi = workspace.isRemote ? path.posix : path
+  const expandedRaw = !workspace.isRemote && raw.startsWith('~/')
+    ? path.join(homedir(), raw.slice(2))
+    : raw
+  const candidate = expandedRaw.replaceAll('\\', '/')
+  const isAbsolute = workspace.isRemote
+    ? path.posix.isAbsolute(candidate)
+    : path.isAbsolute(expandedRaw)
+
+  if (!isAbsolute) {
+    const slashPrefixedCandidate = candidate.startsWith('/') ? candidate : `/${candidate}`
+    const slashPrefixedIsAbsolute = workspace.isRemote
+      ? path.posix.isAbsolute(slashPrefixedCandidate)
+      : path.isAbsolute(slashPrefixedCandidate)
+    if (slashPrefixedIsAbsolute) {
+      const normalizedSlashPrefixed = pathApi.normalize(slashPrefixedCandidate)
+      if (isWithinRoot(workspace.rootPath, normalizedSlashPrefixed, workspace.isRemote)) {
+        return pathApi.relative(workspace.rootPath, normalizedSlashPrefixed).split(pathApi.sep).join('/')
+      }
+    }
+    return normalizeRelativePath(expandedRaw)
+  }
+
+  const normalizedAbsolute = pathApi.normalize(candidate)
+  if (!isWithinRoot(workspace.rootPath, normalizedAbsolute, workspace.isRemote)) {
+    throw new WorkspaceError(403, 'Workspace path escapes the workspace root')
+  }
+  return pathApi.relative(workspace.rootPath, normalizedAbsolute).split(pathApi.sep).join('/')
 }
 
 async function ensureDirectoryExists(targetPath: string, message: string): Promise<void> {
@@ -320,7 +361,7 @@ export async function resolveWorkspacePath(
   } = {},
   runner?: WorkspaceCommandRunner,
 ): Promise<{ absolutePath: string; relativePath: string }> {
-  const normalizedRelativePath = normalizeRelativePath(relativePath)
+  const normalizedRelativePath = normalizeWorkspacePathInput(workspace, relativePath)
 
   if (workspace.isRemote) {
     if (!workspace.machine || !runner) {
@@ -362,6 +403,86 @@ export async function resolveWorkspacePath(
   return {
     absolutePath,
     relativePath: normalizedRelativePath,
+  }
+}
+
+async function getWorkspacePathType(
+  workspace: ResolvedWorkspace,
+  absolutePath: string,
+  runner?: WorkspaceCommandRunner,
+): Promise<'file' | 'directory'> {
+  if (workspace.isRemote) {
+    if (!runner) {
+      throw new WorkspaceError(501, 'Remote workspace browsing is not supported yet')
+    }
+    const script = [
+      'target="$1"',
+      `if [ ! -e "$target" ]; then exit ${REMOTE_PATH_NOT_FOUND_EXIT_CODE}; fi`,
+      'if [ -d "$target" ]; then',
+      '  printf "%s\\n" directory',
+      'elif [ -f "$target" ]; then',
+      '  printf "%s\\n" file',
+      'else',
+      '  exit 46',
+      'fi',
+    ].join('\n')
+
+    try {
+      const { stdout } = await runner.exec('bash', ['-lc', script, '--', absolutePath])
+      const type = stdout.trim()
+      if (type === 'file' || type === 'directory') {
+        return type
+      }
+    } catch (error) {
+      if (getCommandExitCode(error) === REMOTE_PATH_NOT_FOUND_EXIT_CODE) {
+        throw new WorkspaceError(404, 'Workspace path not found')
+      }
+      throw new WorkspaceError(
+        500,
+        getCommandErrorMessage(error, 'Failed to classify remote workspace path'),
+      )
+    }
+    throw new WorkspaceError(400, 'Workspace path must be a file or directory')
+  }
+
+  let targetStat
+  try {
+    targetStat = await stat(absolutePath)
+  } catch {
+    throw new WorkspaceError(404, 'Workspace path not found')
+  }
+  if (targetStat.isDirectory()) {
+    return 'directory'
+  }
+  if (targetStat.isFile()) {
+    return 'file'
+  }
+  throw new WorkspaceError(400, 'Workspace path must be a file or directory')
+}
+
+function getWorkspaceTreePath(relativePath: string, type: 'file' | 'directory'): string {
+  if (type === 'directory') {
+    return relativePath
+  }
+  const parentPath = path.posix.dirname(relativePath)
+  return parentPath === '.' ? '' : parentPath
+}
+
+export async function resolveWorkspacePathSelection(
+  workspace: ResolvedWorkspace,
+  requestedPath: string | undefined | null,
+  runner?: WorkspaceCommandRunner,
+): Promise<WorkspacePathResolution> {
+  const requestedPathLabel = typeof requestedPath === 'string' ? requestedPath.trim() : ''
+  const resolved = await resolveWorkspacePath(workspace, requestedPath, {}, runner)
+  const resolvedType = await getWorkspacePathType(workspace, resolved.absolutePath, runner)
+
+  return {
+    workspace,
+    requestedPath: requestedPathLabel,
+    path: resolved.relativePath,
+    type: resolvedType,
+    treePath: getWorkspaceTreePath(resolved.relativePath, resolvedType),
   }
 }
 

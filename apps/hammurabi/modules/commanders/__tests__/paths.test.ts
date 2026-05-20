@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest'
 import path from 'node:path'
 import {
   resolveCommanderDataDir,
-  resolveCommanderEmailConfigPath,
-  resolveCommanderEmailSeenPath,
   resolveCommanderNamesPath,
   resolveCommanderPaths,
   resolveCommanderSessionStorePath,
@@ -42,12 +40,6 @@ describe('commander paths', () => {
     expect(resolveCommanderNamesPath('/tmp/cmdr-data')).toBe(
       path.resolve('/tmp/cmdr-data/names.json'),
     )
-    expect(resolveCommanderEmailConfigPath(TEST_UUID, '/tmp/cmdr-data')).toBe(
-      path.resolve(`/tmp/cmdr-data/${TEST_UUID}/email-config.json`),
-    )
-    expect(resolveCommanderEmailSeenPath(TEST_UUID, '/tmp/cmdr-data')).toBe(
-      path.resolve(`/tmp/cmdr-data/${TEST_UUID}/email-seen.json`),
-    )
   })
 
   it('rejects non-UUID commander IDs', () => {
@@ -62,5 +54,11 @@ describe('commander paths', () => {
   it('does not expose machine-id helpers anymore', async () => {
     const pathsModule = await import('../paths.js')
     expect('resolveCommanderMachineId' in pathsModule).toBe(false)
+  })
+
+  it('does not expose legacy commander email file helpers anymore', async () => {
+    const pathsModule = await import('../paths.js')
+    expect('resolveCommanderEmailConfigPath' in pathsModule).toBe(false)
+    expect('resolveCommanderEmailSeenPath' in pathsModule).toBe(false)
   })
 })

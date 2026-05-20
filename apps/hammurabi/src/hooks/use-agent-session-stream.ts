@@ -30,26 +30,40 @@ export function decodeAgentSessionSocketData(data: unknown): string | null {
 }
 
 export function agentSessionWsUrl(sessionName: string, token: string | null): string {
+  return apiWebSocketUrl(`/api/agents/sessions/${encodeURIComponent(sessionName)}/ws`, token)
+}
+
+export function apiWebSocketUrl(path: string, token: string | null): string {
   const params = new URLSearchParams()
   if (token) {
     params.set('access_token', token)
   }
 
   const query = params.toString()
-  const sessionPath = `/api/agents/sessions/${encodeURIComponent(sessionName)}/ws`
   const suffix = query ? `?${query}` : ''
   const wsBase = getWsBase()
   if (wsBase) {
-    return `${wsBase}${sessionPath}${suffix}`
+    return `${wsBase}${path}${suffix}`
   }
 
   const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${scheme}//${window.location.host}${sessionPath}${suffix}`
+  return `${scheme}//${window.location.host}${path}${suffix}`
 }
 
 interface AgentSessionStreamOptions {
   enabled?: boolean
+  websocketPath?: string
   onQueueUpdate?: (snapshot: SessionQueueSnapshot) => void
+}
+
+function isProjectedMessages(value: unknown): value is MsgItem[] {
+  return Array.isArray(value) && value.every((message) => (
+    message !== null &&
+    typeof message === 'object' &&
+    typeof (message as { id?: unknown }).id === 'string' &&
+    typeof (message as { kind?: unknown }).kind === 'string' &&
+    typeof (message as { text?: unknown }).text === 'string'
+  ))
 }
 
 /**
@@ -80,6 +94,7 @@ export async function postInputViaHttpFallback(
       body: JSON.stringify({
         text: body.text,
         images: body.images && body.images.length > 0 ? body.images : undefined,
+        workspaceContext: body.workspaceContext,
       }),
     })
     return response.ok
@@ -90,10 +105,12 @@ export async function postInputViaHttpFallback(
 
 export function useAgentSessionStream(sessionName?: string, options: AgentSessionStreamOptions = {}) {
   const enabled = options.enabled ?? true
+  const websocketPath = options.websocketPath
   const onQueueUpdate = options.onQueueUpdate
   const {
     messages,
     processEvent,
+    hydrateReplayMessages,
     resetMessages,
     setMessages,
     isStreaming,
@@ -157,7 +174,9 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
         return
       }
 
-      const nextSocket = new WebSocket(agentSessionWsUrl(sessionName, token))
+      const nextSocket = new WebSocket(websocketPath
+        ? apiWebSocketUrl(websocketPath, token)
+        : agentSessionWsUrl(sessionName, token))
       wsRef.current = nextSocket
 
       nextSocket.onopen = () => {
@@ -209,17 +228,29 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
           const raw = JSON.parse(rawText) as {
             type?: string
             events?: StreamEvent[]
+            messages?: unknown
+            projection?: { messages?: unknown }
             queue?: SessionQueueSnapshot
             toolId?: string
           }
           if (raw.type === 'replay' && Array.isArray(raw.events)) {
-            resetMessages()
-            for (const replayEvent of raw.events) {
-              if (replayEvent.type === 'queue_update') {
-                onQueueUpdate?.(normalizeQueueSnapshot(replayEvent.queue))
-                continue
+            if (raw.queue) {
+              onQueueUpdate?.(normalizeQueueSnapshot(raw.queue))
+            }
+            const projectedMessages = isProjectedMessages(raw.projection?.messages)
+              ? raw.projection.messages
+              : (isProjectedMessages(raw.messages) ? raw.messages : null)
+            if (projectedMessages) {
+              hydrateReplayMessages(projectedMessages, raw.events)
+            } else {
+              resetMessages()
+              for (const replayEvent of raw.events) {
+                if (replayEvent.type === 'queue_update') {
+                  onQueueUpdate?.(normalizeQueueSnapshot(replayEvent.queue))
+                  continue
+                }
+                processEvent(replayEvent, true)
               }
-              processEvent(replayEvent, true)
             }
             return
           }
@@ -259,7 +290,7 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [enabled, onQueueUpdate, processEvent, resetMessages, sessionName])
+  }, [enabled, hydrateReplayMessages, onQueueUpdate, processEvent, resetMessages, sessionName, websocketPath])
 
   const pushOptimisticUserMessage = useCallback(
     (text: string, images?: AgentSessionStreamInputImage[]) => {

@@ -55,6 +55,7 @@ export interface TelemetryRouterResult {
   router: Router
   hub: TelemetryHub
   store: TelemetryJsonlStore
+  shutdown: () => void
 }
 
 function parseIntervalMs(value: unknown): number {
@@ -179,12 +180,21 @@ export function createTelemetryRouterWithHub(
   const configuredIntervalMs =
     parseIntervalMs(options.localScan?.intervalMs) ||
     parseIntervalMs(process.env.HAMMURABI_TELEMETRY_SCAN_INTERVAL_MS)
+  let localScanInterval: ReturnType<typeof setInterval> | null = null
   if (localScanner && configuredIntervalMs > 0) {
-    setInterval(() => {
+    localScanInterval = setInterval(() => {
       void localScanner.scan().catch((error) => {
         console.warn('[telemetry] local scan interval failed', error)
       })
     }, configuredIntervalMs)
+  }
+
+  const shutdown = (): void => {
+    if (!localScanInterval) {
+      return
+    }
+    clearInterval(localScanInterval)
+    localScanInterval = null
   }
 
   const router = Router()
@@ -296,5 +306,5 @@ export function createTelemetryRouterWithHub(
     }
   })
 
-  return { router, hub, store }
+  return { router, hub, store, shutdown }
 }

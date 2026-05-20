@@ -6,8 +6,6 @@ Cursor is obsolete. Pair-programming with one chatbot is a dead end; the future 
 
 Hervald owns mission state, worker orchestration, memory, approvals, and the command-room surface. Connectivity is delegated to infrastructure you already trust: SSH, Tailscale, hosted runtimes, and your own reverse proxy. The mission graph and execution rules stay stable even when the underlying transport changes.
 
-The product-facing brand is Hervald. Internal code paths still use the Hammurabi engine names: `apps/hammurabi`, `hammurabi-cli`, `~/.hammurabi`, and `HAMMURABI_*`.
-
 ## Quickstart
 
 The installer is hermetic for the Node toolchain. It needs `git`, `curl`, `tar`, and outbound HTTPS; it installs Node `22.12.0` and pnpm `10.23.0` under `~/.hammurabi/toolchain` without replacing or relying on your system Node.

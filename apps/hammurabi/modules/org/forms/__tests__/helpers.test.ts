@@ -14,6 +14,7 @@ const PROVIDERS = [
       supportsAutomation: true,
       supportsCommanderConversation: true,
       supportsWorkerDispatch: true,
+      supportsMessageImages: true,
     },
   },
   {
@@ -23,6 +24,7 @@ const PROVIDERS = [
       supportsAutomation: true,
       supportsCommanderConversation: true,
       supportsWorkerDispatch: true,
+      supportsMessageImages: true,
     },
   },
   {
@@ -32,6 +34,7 @@ const PROVIDERS = [
       supportsAutomation: true,
       supportsCommanderConversation: true,
       supportsWorkerDispatch: true,
+      supportsMessageImages: true,
     },
   },
   {
@@ -41,6 +44,7 @@ const PROVIDERS = [
       supportsAutomation: true,
       supportsCommanderConversation: true,
       supportsWorkerDispatch: true,
+      supportsMessageImages: true,
     },
   },
 ] as const

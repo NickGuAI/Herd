@@ -1,9 +1,24 @@
+import type { ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
+import { deliverPlanApprovalDecision, type PlanApprovalEvent } from '../../../plan-approval'
 import { createOpenCodeAcpSession } from '../session'
 
-function createRuntime() {
+function createMockProcess(): ChildProcess {
+  const process = Object.assign(new EventEmitter(), {
+    pid: 1234,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(),
+  })
+  return process as unknown as ChildProcess
+}
+
+function createRuntime(process: ChildProcess | null = null) {
   return {
-    process: null,
+    process,
     ensureConnected: vi.fn().mockResolvedValue(undefined),
     sendRequest: vi.fn(),
     sendNotification: vi.fn(),
@@ -50,5 +65,71 @@ describe('createOpenCodeAcpSession', () => {
       reason: 'OpenCode runtime failed to start: spawn opencode ENOENT',
     })
     expect(runtime.sendRequest).not.toHaveBeenCalled()
+  })
+
+  it('routes response-bearing session/update plan approvals through the plan normalizer', async () => {
+    const runtime = createRuntime(createMockProcess())
+    runtime.sendRequest.mockResolvedValue({ sessionId: 'opencode-session-1' })
+    let listener: ((event: { method: string; params?: unknown; requestId?: number | string }) => void) | undefined
+    runtime.addNotificationListener.mockImplementation((_sessionId, callback) => {
+      listener = callback
+      return vi.fn()
+    })
+    const runtimeFactory = vi.fn(() => runtime)
+    const deps = createDeps(runtimeFactory)
+    deps.appendEvent.mockImplementation((session, event) => {
+      session.events.push(event)
+    })
+
+    const session = await createOpenCodeAcpSession(
+      'opencode-plan-session',
+      'default',
+      '',
+      '/tmp/opencode-worker',
+      {},
+      deps as Parameters<typeof createOpenCodeAcpSession>[5],
+    )
+
+    listener?.({
+      method: 'session/update',
+      requestId: 17,
+      params: {
+        sessionId: 'opencode-session-1',
+        update: {
+          type: 'plan',
+          toolCallId: 'opencode-plan-1',
+          status: 'waiting_for_approval',
+          plan: '1. Patch the adapter\n2. Verify the approval response',
+        },
+      },
+    })
+
+    const planEvent = session.events.find((event) => event.type === 'plan_approval') as PlanApprovalEvent | undefined
+    expect(planEvent).toEqual(expect.objectContaining({
+      type: 'plan_approval',
+      toolId: 'opencode-plan-1',
+      providerContext: expect.objectContaining({
+        provider: 'opencode',
+        backend: 'acp',
+        requestId: 17,
+        answerFormat: 'opencode.plan_decision',
+      }),
+    }))
+
+    const result = deliverPlanApprovalDecision(
+      session,
+      planEvent as PlanApprovalEvent,
+      'approve',
+      undefined,
+      vi.fn(() => {
+        throw new Error('OpenCode plan approval should not write to stdin')
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    expect(runtime.sendResponse).toHaveBeenCalledWith(17, {
+      decision: 'approve',
+      approved: true,
+    })
   })
 })

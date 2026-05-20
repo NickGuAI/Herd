@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceSource } from '../../../workspace/use-workspace'
@@ -10,16 +9,15 @@ import { useWorkspaceOverlayTree } from '../workspace-overlay/use-workspace-over
 const mocks = vi.hoisted(() => ({
   fetchWorkspaceTree: vi.fn(),
   fetchWorkspaceExpandedTree: vi.fn(),
+  fetchWorkspacePathResolution: vi.fn(),
   useWorkspaceFilePreview: vi.fn(),
 }))
 
 vi.mock('../../../workspace/use-workspace', () => ({
   fetchWorkspaceTree: mocks.fetchWorkspaceTree,
   fetchWorkspaceExpandedTree: mocks.fetchWorkspaceExpandedTree,
-  getWorkspaceSourceKey: (source: WorkspaceSource) =>
-    source.kind === 'agent-session'
-      ? `agent:${source.sessionName}`
-      : `commander:${source.commanderId}`,
+  fetchWorkspacePathResolution: mocks.fetchWorkspacePathResolution,
+  getWorkspaceSourceKey: (source: WorkspaceSource) => `target:${source.targetId}`,
   useWorkspaceFilePreview: mocks.useWorkspaceFilePreview,
 }))
 
@@ -41,13 +39,13 @@ type Harness = {
 }
 
 const AGENT_SOURCE: WorkspaceSource = {
-  kind: 'agent-session',
-  sessionName: 'alpha-session',
+  kind: 'target',
+  targetId: 'wt-alpha-session',
 }
 
 const COMMANDER_SOURCE: WorkspaceSource = {
-  kind: 'commander',
-  commanderId: 'cmd-7',
+  kind: 'target',
+  targetId: 'wt-cmd-7',
 }
 
 const reactActEnvironment = globalThis as typeof globalThis & {
@@ -62,8 +60,8 @@ function createWorkspaceTreeResponse(
   return {
     workspace: {
       source: {
-        kind: 'agent-session' as const,
-        id: 'alpha-session',
+        kind: 'target' as const,
+        id: 'wt-alpha-session',
         label: 'alpha-session',
       },
       rootPath: '/tmp/workspace',
@@ -73,7 +71,7 @@ function createWorkspaceTreeResponse(
       isRemote: false,
     },
     parentPath,
-    nodes,
+    nodes: nodes.map((node) => ({ ...node, parentPath })),
   }
 }
 
@@ -164,7 +162,7 @@ describe('useWorkspaceOverlayTree', () => {
     previousActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true
     mocks.fetchWorkspaceTree.mockImplementation(async (source: WorkspaceSource, parentPath = '') => {
-      if (source.kind === 'commander') {
+      if (source.targetId === 'wt-cmd-7') {
         return createWorkspaceTreeResponse(parentPath, [
           { name: 'notes', path: 'notes', type: 'directory' },
         ])
@@ -180,6 +178,13 @@ describe('useWorkspaceOverlayTree', () => {
         { name: 'app.ts', path: 'src/app.ts', type: 'file' },
       ]),
     )
+    mocks.fetchWorkspacePathResolution.mockImplementation(async (_source: WorkspaceSource, requestedPath: string) => ({
+      workspace: createWorkspaceTreeResponse('', []).workspace,
+      requestedPath,
+      path: requestedPath,
+      type: requestedPath === 'src' ? 'directory' : 'file',
+      treePath: requestedPath === 'src' ? 'src' : requestedPath.split('/').slice(0, -1).join('/'),
+    }))
     mocks.useWorkspaceFilePreview.mockImplementation((_source: WorkspaceSource, path: string | null, enabled = true) => ({
       data: enabled && path
         ? {
@@ -201,6 +206,7 @@ describe('useWorkspaceOverlayTree', () => {
   afterEach(() => {
     mocks.fetchWorkspaceTree.mockReset()
     mocks.fetchWorkspaceExpandedTree.mockReset()
+    mocks.fetchWorkspacePathResolution.mockReset()
     mocks.useWorkspaceFilePreview.mockReset()
     vi.useRealTimers()
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
@@ -250,7 +256,7 @@ describe('useWorkspaceOverlayTree', () => {
     await runInAct(() => {
       harness.getState().handleAddPath('src/app.ts', 'file')
     })
-    expect(harness.onSelectFile).toHaveBeenCalledWith('src/app.ts')
+    expect(harness.onSelectFile).toHaveBeenCalledWith('src/app.ts', 'file')
     expect(harness.getState().addedPaths.has('src/app.ts')).toBe(true)
 
     await runInAct(() => {
@@ -298,6 +304,45 @@ describe('useWorkspaceOverlayTree', () => {
     expect(harness.getState().selectedPath).toBeNull()
     expect(harness.getState().expandedPaths.size).toBe(0)
     expect(harness.getState().filteredNodesByParent['']?.map((node) => node.name)).toEqual(['notes'])
+
+    await harness.cleanup()
+  })
+
+  it('resolves requested absolute SVG paths to the rendered SVG before expanding parent directories', async () => {
+    mocks.fetchWorkspaceExpandedTree.mockImplementation(async (_source: WorkspaceSource, parentPath: string) =>
+      createWorkspaceTreeResponse(parentPath, [
+        {
+          name: 'ui-to-backend-logic-flow.svg',
+          path: 'apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg',
+          type: 'file',
+        },
+      ]),
+    )
+    mocks.fetchWorkspacePathResolution.mockImplementation(async (_source: WorkspaceSource, requestedPath: string) => ({
+      workspace: createWorkspaceTreeResponse('', []).workspace,
+      requestedPath,
+      path: 'apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg',
+      type: 'file',
+      treePath: 'apps/hammurabi/docs/diagrams',
+    }))
+
+    const harness = await createHarness({
+      requestedPath: '/home/builder/App/apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg',
+      requestedPathToken: 1,
+    })
+
+    await waitForCondition(
+      () => harness.getState().selectedPath === 'apps/hammurabi/docs/diagrams/ui-to-backend-logic-flow.svg',
+      'expected requested absolute path to resolve to workspace-relative rendered SVG',
+    )
+    expect(mocks.fetchWorkspaceExpandedTree).toHaveBeenCalledWith(
+      AGENT_SOURCE,
+      'apps/hammurabi/docs/diagrams',
+    )
+    expect(mocks.fetchWorkspaceExpandedTree).not.toHaveBeenCalledWith(
+      AGENT_SOURCE,
+      'home/builder/App/apps/hammurabi/docs/diagrams',
+    )
 
     await harness.cleanup()
   })

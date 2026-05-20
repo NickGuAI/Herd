@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveHammurabiDataDir } from '../data-dir.js'
-import { writeJsonFileAtomically } from '../../migrations/write-json-file-atomically.js'
+import { writeJsonFileAtomically } from '../json-file.js'
 import type { ChannelProvider, ChannelSurfaceBinding } from './types.js'
 
 export type UpsertChannelSurfaceBindingInput =

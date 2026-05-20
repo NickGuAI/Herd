@@ -31,9 +31,28 @@ function withClaudeSource<T extends StreamJsonEvent>(event: T): T {
 interface PlanningEvent extends StreamJsonEvent {
   type: 'planning'
   action: 'enter' | 'proposed' | 'decision'
+  toolId?: string
   plan?: string
   approved?: boolean
   message?: string
+}
+
+interface PlanApprovalEvent extends StreamJsonEvent {
+  type: 'plan_approval'
+  interactionKind: 'plan_approval'
+  toolId: string
+  toolName: 'ExitPlanMode'
+  plan: string
+  approveLabel: string
+  rejectLabel: string
+  customResponseLabel: string
+  providerContext: {
+    provider: 'claude'
+    backend: 'cli'
+    toolUseId: string
+    toolName: 'ExitPlanMode'
+    answerFormat: 'claude.exit_plan_mode'
+  }
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -96,7 +115,7 @@ function parseToolResultPayload(content: unknown): Record<string, unknown> | nul
   }
 }
 
-function buildPlanningToolUseEvent(block: Record<string, unknown>): PlanningEvent | null {
+function buildPlanningToolUseEvent(block: Record<string, unknown>): PlanningEvent | PlanApprovalEvent | null {
   const name = readTrimmedString(block.name)
   if (name === 'EnterPlanMode') {
     return { type: 'planning', action: 'enter' }
@@ -112,6 +131,27 @@ function buildPlanningToolUseEvent(block: Record<string, unknown>): PlanningEven
     return null
   }
 
+  const toolId = readTrimmedString(block.id)
+  if (toolId) {
+    return {
+      type: 'plan_approval',
+      interactionKind: 'plan_approval',
+      toolId,
+      toolName: 'ExitPlanMode',
+      plan,
+      approveLabel: 'Approve',
+      rejectLabel: 'Reject',
+      customResponseLabel: 'Add response',
+      providerContext: {
+        provider: 'claude',
+        backend: 'cli',
+        toolUseId: toolId,
+        toolName: 'ExitPlanMode',
+        answerFormat: 'claude.exit_plan_mode',
+      },
+    }
+  }
+
   return {
     type: 'planning',
     action: 'proposed',
@@ -122,12 +162,14 @@ function buildPlanningToolUseEvent(block: Record<string, unknown>): PlanningEven
 function buildPlanningToolResultEvent(block: Record<string, unknown>): PlanningEvent | null {
   const payload = parseToolResultPayload(block.content)
   const explicitToolName = readTrimmedString(block.name ?? block.tool_name ?? block.toolUseName)
+  const toolId = readTrimmedString(block.tool_use_id)
 
   const plan = readTrimmedString(payload?.plan)
   if (plan) {
     return {
       type: 'planning',
       action: 'proposed',
+      ...(toolId ? { toolId } : {}),
       plan,
     }
   }
@@ -145,6 +187,7 @@ function buildPlanningToolResultEvent(block: Record<string, unknown>): PlanningE
   return {
     type: 'planning',
     action: 'decision',
+    ...(toolId ? { toolId } : {}),
     ...(approved !== undefined ? { approved } : {}),
     ...(message ? { message } : {}),
   }
@@ -162,6 +205,27 @@ function cloneEventWithContent(
       content,
     },
   }
+}
+
+function normalizeClaudeThinkingBlock(block: Record<string, unknown>): Record<string, unknown> {
+  const rawText =
+    typeof block.thinking === 'string'
+      ? block.thinking
+      : (typeof block.text === 'string' ? block.text : '')
+  const trimmed = rawText.trim()
+  if (trimmed.length > 0) {
+    return { ...block, thinking: trimmed }
+  }
+
+  const signature = typeof block.signature === 'string' ? block.signature : ''
+  if (signature.length > 0) {
+    return {
+      ...block,
+      thinking: `(reasoning content redacted by Claude · ${signature.length} bytes signed)`,
+    }
+  }
+
+  return block
 }
 
 function normalizeAssistantEvent(event: StreamJsonEvent): StreamJsonEvent | StreamJsonEvent[] | null {
@@ -191,7 +255,15 @@ function normalizeAssistantEvent(event: StreamJsonEvent): StreamJsonEvent | Stre
         : null
 
     if (!planningEvent) {
-      passthroughBlocks.push(rawBlock)
+      if (block?.type === 'thinking') {
+        const normalizedBlock = normalizeClaudeThinkingBlock(block)
+        passthroughBlocks.push(normalizedBlock)
+        if (normalizedBlock !== block) {
+          changed = true
+        }
+      } else {
+        passthroughBlocks.push(rawBlock)
+      }
       continue
     }
 

@@ -4,10 +4,12 @@ import {
   ANTHROPIC_MODEL_ENV_KEYS,
   buildCodexAppServerInvocation,
   buildLoginShellCommand,
+  prepareDaemonMachineLaunchEnvironment,
   prepareMachineLaunchEnvironment,
   buildSshArgs,
   scrubEnvironmentVariables,
 } from '../../machines.js'
+import type { MachineDaemonRegistry } from '../../daemon/registry.js'
 import type { MachineConfig } from '../../types.js'
 
 export async function reserveLocalCodexRuntimePort(): Promise<number> {
@@ -49,6 +51,22 @@ export function spawnRemoteCodexRuntime(
   )
   return spawnImpl('ssh', buildSshArgs(machine, remoteCommand, false, undefined, preparedLaunch.sshSendEnvKeys), {
     stdio: ['pipe', 'pipe', 'pipe'],
+    env: preparedLaunch.env,
+  })
+}
+
+export function spawnDaemonCodexRuntime(
+  machine: MachineConfig & { transport: 'daemon' },
+  daemonRegistry: Pick<MachineDaemonRegistry, 'spawnProcess'>,
+): ChildProcess {
+  const preparedLaunch = prepareDaemonMachineLaunchEnvironment(machine)
+  return daemonRegistry.spawnProcess(machine.id, {
+    command: 'sh',
+    args: ['-lc', buildLoginShellCommand(
+      buildCodexAppServerInvocation(),
+      undefined,
+      preparedLaunch.sourcedEnvFile,
+    )],
     env: preparedLaunch.env,
   })
 }

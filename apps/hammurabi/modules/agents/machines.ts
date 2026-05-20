@@ -9,6 +9,10 @@ import {
   getClaudeDisableAdaptiveThinkingEnvValue,
   type ClaudeAdaptiveThinkingMode,
 } from '../claude-adaptive-thinking.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '../claude-max-thinking-tokens.js'
 import type { WorkspaceCommandRunner } from '../workspace/index.js'
 import { WORKSPACE_EXEC_MAX_BUFFER_BYTES } from './constants.js'
 import {
@@ -20,9 +24,11 @@ import type {
   CapturedCommandResult,
   ClaudePermissionMode,
   MachineConfig,
+  MachineDaemonConfig,
   MachineHealthReport,
   MachineToolKey,
   MachineToolStatus,
+  MachineTransportType,
 } from './types.js'
 
 const execFileAsync = promisify(execFile)
@@ -30,6 +36,7 @@ const SSH_CONTROL_DIR = path.join(resolveHammurabiDataDir(), 'ssh-control')
 const SSH_CONTROL_PATH_TEMPLATE = path.join(SSH_CONTROL_DIR, '%C')
 
 export { prepareMachineLaunchEnvironment } from './machine-credentials.js'
+export { prepareDaemonMachineLaunchEnvironment } from './machine-credentials.js'
 
 export const ANTHROPIC_MODEL_ENV_KEYS = [
   'ANTHROPIC_MODEL',
@@ -57,6 +64,39 @@ export interface MachineRegistryStore {
   writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]>
   withWriteLock<T>(operation: () => Promise<T>): Promise<T>
   invalidateMachineRegistryCache(): void
+}
+
+export const LOCAL_MACHINE_ID = 'local'
+export const DEFAULT_LOCAL_MACHINE_LABEL = 'Local (this server)'
+
+export function defaultLocalMachineConfig(): MachineConfig {
+  return {
+    id: LOCAL_MACHINE_ID,
+    label: DEFAULT_LOCAL_MACHINE_LABEL,
+    host: null,
+  }
+}
+
+export function ensureDefaultLocalMachine(
+  machines: readonly MachineConfig[],
+): MachineConfig[] {
+  const defaultLocal = defaultLocalMachineConfig()
+  const existingLocal = machines.find((entry) => entry.id === LOCAL_MACHINE_ID)
+  const localMachine = existingLocal
+    ? {
+        ...defaultLocal,
+        ...existingLocal,
+        id: LOCAL_MACHINE_ID,
+        host: null,
+        label: existingLocal.label || defaultLocal.label,
+        ...(existingLocal.envFile ? { envFile: existingLocal.envFile } : {}),
+      }
+    : defaultLocal
+
+  return [
+    localMachine,
+    ...machines.filter((entry) => entry.id !== LOCAL_MACHINE_ID),
+  ]
 }
 
 export interface TailscaleVerificationResult {
@@ -150,8 +190,74 @@ export function validateMachineConfig(
   const envFile = typeof record.envFile === 'string' && record.envFile.trim().length > 0
     ? record.envFile.trim()
     : undefined
+  const transport = parseMachineTransport(record.transport, {
+    id,
+    host,
+    tailscaleHostname,
+  })
+  const daemon = parseMachineDaemonConfig(record.daemon, id)
 
-  return { id, label, host, tailscaleHostname, user, port, cwd, envFile }
+  return {
+    id,
+    label,
+    host,
+    ...(transport ? { transport } : {}),
+    ...(tailscaleHostname ? { tailscaleHostname } : {}),
+    ...(user ? { user } : {}),
+    ...(port ? { port } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(envFile ? { envFile } : {}),
+    ...(daemon ? { daemon } : {}),
+  }
+}
+
+function parseMachineTransport(
+  value: unknown,
+  context: { id: string; host: string | null; tailscaleHostname?: string },
+): MachineTransportType | undefined {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+  if (value === 'local' || value === 'ssh' || value === 'daemon') {
+    return value
+  }
+  throw new Error(`Invalid machines config: machine "${context.id}" transport must be local, ssh, or daemon`)
+}
+
+function parseMachineDaemonConfig(value: unknown, machineId: string): MachineDaemonConfig | null {
+  if (value === undefined || value === null) {
+    return null
+  }
+  const record = typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : null
+  if (!record) {
+    throw new Error(`Invalid machines config: machine "${machineId}" daemon must be object`)
+  }
+
+  const pairingTokenHash = typeof record.pairingTokenHash === 'string' && record.pairingTokenHash.trim().length > 0
+    ? record.pairingTokenHash.trim()
+    : undefined
+  const pairedAt = typeof record.pairedAt === 'string' && record.pairedAt.trim().length > 0
+    ? record.pairedAt.trim()
+    : undefined
+  const revokedAt = typeof record.revokedAt === 'string' && record.revokedAt.trim().length > 0
+    ? record.revokedAt.trim()
+    : undefined
+  const lastSeenAt = typeof record.lastSeenAt === 'string' && record.lastSeenAt.trim().length > 0
+    ? record.lastSeenAt.trim()
+    : undefined
+  const daemonVersion = typeof record.daemonVersion === 'string' && record.daemonVersion.trim().length > 0
+    ? record.daemonVersion.trim()
+    : undefined
+
+  return {
+    ...(pairingTokenHash ? { pairingTokenHash } : {}),
+    ...(pairedAt ? { pairedAt } : {}),
+    ...(revokedAt ? { revokedAt } : {}),
+    ...(lastSeenAt ? { lastSeenAt } : {}),
+    ...(daemonVersion ? { daemonVersion } : {}),
+  }
 }
 
 export function parseMachineRegistry(raw: unknown): MachineConfig[] {
@@ -176,9 +282,9 @@ export function createMachineRegistryStore(machinesFilePath: string): MachineReg
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
       if (code === 'ENOENT') {
-        cachedMachines = []
+        cachedMachines = ensureDefaultLocalMachine([])
         cachedMachinesMtimeMs = -1
-        return []
+        return cachedMachines
       }
       throw error
     }
@@ -189,11 +295,11 @@ export function createMachineRegistryStore(machinesFilePath: string): MachineReg
 
     const contents = await readFile(machinesFilePath, 'utf8')
     const parsed = JSON.parse(contents) as unknown
-    let machines = parseMachineRegistry(parsed)
+    let machines = ensureDefaultLocalMachine(parseMachineRegistry(parsed))
     const migrated = await migrateMachineEnvFiles(machines)
     if (migrated.changed) {
       await writeMachineRegistry(migrated.machines)
-      machines = migrated.machines
+      machines = ensureDefaultLocalMachine(migrated.machines)
       machinesStats = await stat(machinesFilePath)
     }
     cachedMachines = machines
@@ -207,9 +313,9 @@ export function createMachineRegistryStore(machinesFilePath: string): MachineReg
   }
 
   async function writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]> {
-    let validated = parseMachineRegistry({ machines })
+    let validated = ensureDefaultLocalMachine(parseMachineRegistry({ machines }))
     const migrated = await migrateMachineEnvFiles(validated)
-    validated = migrated.machines
+    validated = ensureDefaultLocalMachine(migrated.machines)
     await mkdir(path.dirname(machinesFilePath), { recursive: true })
     await writeFile(
       machinesFilePath,
@@ -241,6 +347,12 @@ export function isRemoteMachine(
   machine: MachineConfig | undefined,
 ): machine is MachineConfig & { host: string } {
   return Boolean(machine?.host)
+}
+
+export function isDaemonMachine(
+  machine: MachineConfig | undefined,
+): machine is MachineConfig & { transport: 'daemon' } {
+  return machine?.transport === 'daemon'
 }
 
 export function shellEscape(arg: string): string {
@@ -288,18 +400,21 @@ export function buildRemoteCommand(command: string, args: string[], cwd?: string
 export function buildClaudeSpawnEnv(
   env: NodeJS.ProcessEnv,
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
 ): NodeJS.ProcessEnv {
   return {
     ...scrubEnvironmentVariables(env, ['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS]),
     CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking),
+    MAX_THINKING_TOKENS: String(maxThinkingTokens),
   }
 }
 
 export function buildClaudeShellInvocation(
   args: string[],
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
 ): string {
-  const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)}; ${buildUnsetEnvironmentCommand(['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS])};`
+  const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} MAX_THINKING_TOKENS=${maxThinkingTokens}; ${buildUnsetEnvironmentCommand(['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS])};`
   return `${envPrefix} claude ${args.map((arg) => shellEscape(arg)).join(' ')}`
 }
 

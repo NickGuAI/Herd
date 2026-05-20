@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../../migrations/write-json-file-atomically.js', () => ({
+vi.mock('../../../json-file.js', () => ({
   writeJsonFileAtomically: vi.fn(async () => undefined),
 }))
 
-import { writeJsonFileAtomically } from '../../../../migrations/write-json-file-atomically.js'
+import { writeJsonFileAtomically } from '../../../json-file.js'
 import {
   readPersistedSessionsState,
   restorePersistedSessions,

@@ -28,7 +28,6 @@ function buildCommander(): CommanderSession {
     agentType: 'claude',
     effort: 'medium',
     cwd: '/tmp',
-    persona: null,
     heartbeat: {
       intervalMs: 900_000,
       messageTemplate: '[HB {{timestamp}}]',

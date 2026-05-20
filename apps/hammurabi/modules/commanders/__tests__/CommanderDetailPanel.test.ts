@@ -128,4 +128,59 @@ describe('CommanderDetailPanel', () => {
     expect(html).toContain('option value="commander-1"')
     expect(html).toContain('option value="commander-2" selected=""')
   })
+
+  it('renders an edit action when commander editing is available', () => {
+    const html = renderToStaticMarkup(
+      createElement(CommanderDetailPanel, {
+        commander: {
+          id: 'commander-1',
+          host: 'worker-1',
+          displayName: 'Atlas',
+          state: 'idle',
+          created: '2026-04-11T00:00:00.000Z',
+          heartbeat: {
+            intervalMs: 900_000,
+            messageTemplate: 'Check status',
+          },
+          lastHeartbeat: null,
+          taskSource: null,
+          currentTask: null,
+          completedTasks: 0,
+          questCount: 0,
+          scheduleCount: 0,
+          totalCostUsd: 0,
+          effort: 'max',
+        },
+        activeTab: 'quests',
+        onTabChange: vi.fn(),
+        onBack: vi.fn(),
+        commanderOptions: [
+          { id: 'commander-1', label: 'Atlas' },
+        ],
+        onSelectCommander: vi.fn(),
+        onEdit: vi.fn(),
+        crons: [],
+        cronsLoading: false,
+        cronsError: null,
+        addCron: vi.fn(),
+        addCronPending: false,
+        toggleCron: vi.fn(),
+        toggleCronPending: false,
+        toggleCronId: null,
+        updateCron: vi.fn(),
+        updateCronPending: false,
+        updateCronId: null,
+        triggerCron: vi.fn(),
+        triggerCronPending: false,
+        triggerCronId: null,
+        deleteCron: vi.fn(),
+        deleteCronPending: false,
+        deleteCronId: null,
+      }),
+    )
+
+    expect(html).toContain('data-testid="commander-detail-edit-button"')
+    expect(html).toContain('aria-label="Edit commander"')
+    expect(html).toContain('Edit')
+  })
 })

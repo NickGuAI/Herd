@@ -5,7 +5,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
-import { CommanderEmailConfigStore } from '../email-config'
 import { createCommandersRouter, type CommandersRouterOptions } from '../routes'
 import type { CommanderSessionsInterface } from '../../agents/routes'
 import {
@@ -20,9 +19,9 @@ import {
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_HEARTBEAT_MESSAGE,
 } from '../heartbeat'
-import type { CommanderEmailClient, CommanderInboundEmail } from '../email-poller'
 import type { ClaudeEffortLevel } from '../../claude-effort'
-import type { AgentType } from '../../agents/types'
+import type { AgentType, StreamJsonEvent } from '../../agents/types'
+import type { PlanApprovalDecision } from '../../../src/types/hammurabi-events'
 import { COMMANDER_WIZARD_START_MESSAGE } from '../templates/wizard-prompt'
 
 vi.setConfig({ testTimeout: 60_000 })
@@ -71,7 +70,14 @@ interface MockSessionsInterface {
   interface: CommanderSessionsInterface
   createCalls: MockSessionEntry[]
   sendCalls: MockSendCall[]
+  autoResolvePlanApprovalCalls: Array<{
+    name: string
+    toolId: string
+    decision: PlanApprovalDecision
+    message: string
+  }>
   activeSessions: Set<string>
+  setEvents: (sessionName: string, events: StreamJsonEvent[]) => void
   triggerEvent: (sessionName: string, event: unknown) => void
   setUsage: (usage: {
     inputTokens?: number
@@ -80,49 +86,11 @@ interface MockSessionsInterface {
   }) => void
 }
 
-class StubEmailClient implements CommanderEmailClient {
-  readonly getCalls: Array<{ account: string; messageId: string }> = []
-  readonly replyCalls: Array<{
-    account: string
-    messageId: string
-    threadId?: string
-    to: string
-    subject: string
-    body: string
-    from?: string
-  }> = []
-  private readonly message: CommanderInboundEmail
-
-  constructor(message: CommanderInboundEmail) {
-    this.message = message
-  }
-
-  async searchMessages(): Promise<Array<{ id: string }>> {
-    return []
-  }
-
-  async getMessage(account: string, messageId: string): Promise<CommanderInboundEmail> {
-    this.getCalls.push({ account, messageId })
-    return {
-      ...this.message,
-      gmailMessageId: messageId,
-    }
-  }
-
-  async sendReply(input: {
-    account: string
-    messageId: string
-    threadId?: string
-    to: string
-    subject: string
-    body: string
-    from?: string
-  }): Promise<void> {
-    this.replyCalls.push(input)
-  }
-}
-
 const tempDirs: string[] = []
+
+beforeEach(() => {
+  vi.useRealTimers()
+})
 
 function createTestApiKeyStore(): ApiKeyStoreLike {
   const recordsByRawKey = {
@@ -194,6 +162,8 @@ function createMockSessionsInterface(opts: {
     (opts.initialActiveSessions ?? []).map((sessionName) => [sessionName, 'claude']),
   )
   const eventHandlers = new Map<string, Set<(event: unknown) => void>>()
+  const sessionEvents = new Map<string, StreamJsonEvent[]>()
+  const autoResolvePlanApprovalCalls: MockSessionsInterface['autoResolvePlanApprovalCalls'] = []
   const sendResults = [...(opts.sendResults ?? [])]
   const usage = {
     inputTokens: opts.sessionInputTokens ?? 0,
@@ -243,10 +213,15 @@ function createMockSessionsInterface(opts: {
       }
       return activeSessions.has(name)
     },
+    autoResolvePlanApproval(name, toolId, decision, message) {
+      autoResolvePlanApprovalCalls.push({ name, toolId, decision, message })
+      return activeSessions.has(name)
+    },
     deleteSession(name) {
       activeSessions.delete(name)
       activeSessionStates.delete(name)
       agentTypeBySessionName.delete(name)
+      sessionEvents.delete(name)
     },
     getSession(name) {
       if (!activeSessions.has(name)) return undefined
@@ -267,6 +242,7 @@ function createMockSessionsInterface(opts: {
               : undefined)
             : undefined,
         usage: { ...usage },
+        events: sessionEvents.get(name) ?? [],
       } as unknown as ReturnType<CommanderSessionsInterface['getSession']>
     },
     subscribeToEvents(name, handler) {
@@ -282,7 +258,11 @@ function createMockSessionsInterface(opts: {
     interface: mock,
     createCalls,
     sendCalls,
+    autoResolvePlanApprovalCalls,
     activeSessions,
+    setEvents(sessionName, events) {
+      sessionEvents.set(sessionName, events)
+    },
     triggerEvent(sessionName, event) {
       for (const handler of eventHandlers.get(sessionName) ?? []) {
         handler(event)
@@ -541,8 +521,8 @@ describe('commanders routes', () => {
         host: string
         id: string
         ui: {
-          borderColor: string
-          accentColor: string
+          speakingTone?: string
+          portraitStyleId?: string
         }
         heartbeat: {
           intervalMs: number
@@ -553,8 +533,9 @@ describe('commanders routes', () => {
       expect(created.state).toBe('idle')
       expect(created.host).toBe('worker-1')
       expect(created.id).toBeTruthy()
-      expect(created.ui.borderColor).toMatch(/^var\(--hv-accent-/)
-      expect(created.ui.accentColor).toMatch(/^var\(--hv-accent-/)
+      expect(created.ui).not.toHaveProperty('borderColor')
+      expect(created.ui).not.toHaveProperty('accentColor')
+      expect(created.ui.portraitStyleId).toBeTruthy()
       expect(created.heartbeat).toEqual({
         intervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS,
         messageTemplate: DEFAULT_HEARTBEAT_MESSAGE,
@@ -588,10 +569,8 @@ describe('commanders routes', () => {
       const profile = JSON.parse(
         await readFile(join(memoryBasePath, created.id, '.memory', 'profile.json'), 'utf8'),
       ) as Record<string, string>
-      expect(profile).toMatchObject({
-        borderColor: created.ui.borderColor,
-        accentColor: created.ui.accentColor,
-      })
+      expect(profile).not.toHaveProperty('borderColor')
+      expect(profile).not.toHaveProperty('accentColor')
 
       const template = await readFile(join(memoryBasePath, 'COMMANDER.template.md'), 'utf8')
       expect(template).toContain('[COMMANDER_ID]')
@@ -1032,170 +1011,6 @@ describe('commanders routes', () => {
     }
   })
 
-  it('persists commander email config and returns it through the API', async () => {
-    const dir = await createTempDir('hammurabi-commanders-email-config-route-')
-    const storePath = join(dir, 'sessions.json')
-    const emailConfigStore = new CommanderEmailConfigStore(dir)
-    const server = await startServer({
-      sessionStorePath: storePath,
-      emailConfigStore,
-    })
-
-    try {
-      const createResponse = await fetch(`${server.baseUrl}/api/commanders`, {
-        method: 'POST',
-        headers: {
-          ...AUTH_HEADERS,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          host: 'worker-email-config',
-          taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
-        }),
-      })
-      expect(createResponse.status).toBe(201)
-      const created = (await createResponse.json()) as { id: string }
-
-      const putResponse = await fetch(
-        `${server.baseUrl}/api/commanders/${created.id}/email/config`,
-        {
-          method: 'PUT',
-          headers: {
-            ...AUTH_HEADERS,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            account: 'assistant@pioneeringminds.ai',
-            query: 'label:commander',
-            pollIntervalMinutes: 5,
-            replyAccount: 'nickgu@gehirn.ai',
-            enabled: true,
-          }),
-        },
-      )
-
-      expect(putResponse.status).toBe(200)
-      expect(await putResponse.json()).toEqual({
-        config: {
-          account: 'assistant@pioneeringminds.ai',
-          query: 'label:commander',
-          pollIntervalMinutes: 5,
-          replyAccount: 'nickgu@gehirn.ai',
-          enabled: true,
-        },
-      })
-
-      const getResponse = await fetch(
-        `${server.baseUrl}/api/commanders/${created.id}/email/config`,
-        {
-          headers: AUTH_HEADERS,
-        },
-      )
-      expect(getResponse.status).toBe(200)
-      expect(await getResponse.json()).toEqual({
-        config: {
-          account: 'assistant@pioneeringminds.ai',
-          query: 'label:commander',
-          pollIntervalMinutes: 5,
-          replyAccount: 'nickgu@gehirn.ai',
-          enabled: true,
-        },
-      })
-    } finally {
-      await server.close()
-    }
-  })
-
-  it('sends threaded replies through the commander email reply endpoint', async () => {
-    const dir = await createTempDir('hammurabi-commanders-email-reply-route-')
-    const storePath = join(dir, 'sessions.json')
-    const emailConfigStore = new CommanderEmailConfigStore(dir)
-    const mock = createMockSessionsInterface()
-    const emailClient = new StubEmailClient({
-      gmailMessageId: 'mid-1',
-      threadId: 'thread-1',
-      from: '"Nick Gu" <nickgu@gehirn.ai>',
-      to: 'assistant@pioneeringminds.ai',
-      subject: 'Need commander help',
-      body: 'Original message',
-      labels: ['INBOX'],
-      attachments: [],
-      replyTo: 'nickgu@gehirn.ai',
-      receivedAt: '2026-04-03T10:00:00.000Z',
-      references: [],
-    })
-
-    const server = await startServer({
-      sessionStorePath: storePath,
-      sessionsInterface: mock.interface,
-      emailConfigStore,
-      emailClient,
-    })
-
-    try {
-      const createResponse = await fetch(`${server.baseUrl}/api/commanders`, {
-        method: 'POST',
-        headers: {
-          ...AUTH_HEADERS,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          host: 'worker-email-reply',
-          taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
-        }),
-      })
-      expect(createResponse.status).toBe(201)
-      const created = (await createResponse.json()) as { id: string }
-
-      await emailConfigStore.set(created.id, {
-        account: 'assistant@pioneeringminds.ai',
-        query: 'label:commander',
-        pollIntervalMinutes: 5,
-        replyAccount: 'nickgu@gehirn.ai',
-        enabled: true,
-      })
-
-      const response = await fetch(
-        `${server.baseUrl}/api/commanders/${created.id}/email/reply`,
-        {
-          method: 'POST',
-          headers: {
-            ...AUTH_HEADERS,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            messageId: 'mid-1',
-            threadId: 'thread-1',
-            body: 'Commander reply body',
-          }),
-        },
-      )
-
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({
-        accepted: true,
-        account: 'nickgu@gehirn.ai',
-        threadId: 'thread-1',
-        messageId: 'mid-1',
-      })
-      expect(emailClient.getCalls).toEqual([
-        { account: 'assistant@pioneeringminds.ai', messageId: 'mid-1' },
-      ])
-      expect(emailClient.replyCalls).toEqual([
-        {
-          account: 'nickgu@gehirn.ai',
-          messageId: 'mid-1',
-          threadId: 'thread-1',
-          to: 'nickgu@gehirn.ai',
-          subject: 'Re: Need commander help',
-          body: 'Commander reply body',
-        },
-      ])
-    } finally {
-      await server.close()
-    }
-  })
-
   it('updates heartbeat config without starting commander runtime', async () => {
     const dir = await createTempDir('hammurabi-commanders-heartbeat-config-')
     const storePath = join(dir, 'sessions.json')
@@ -1420,6 +1235,8 @@ describe('commanders routes', () => {
         const heartbeatCalls = mock.sendCalls.filter((call) =>
           call.text.includes('[HEARTBEAT QUICK '))
         expect(heartbeatCalls.length).toBeGreaterThanOrEqual(2)
+      }, {
+        timeout: 5_000,
       })
 
       const listResponse = await fetch(`${server.baseUrl}/api/commanders`, {
@@ -1527,6 +1344,176 @@ describe('commanders routes', () => {
     }
   })
 
+  it('auto-resolves expired plan approval on heartbeat instead of sending heartbeat text', async () => {
+    const dir = await createTempDir('hammurabi-commanders-heartbeat-plan-auto-resolve-')
+    const storePath = join(dir, 'sessions.json')
+    const memoryBasePath = join(dir, 'memory')
+    const mock = createMockSessionsInterface()
+
+    const server = await startServer({
+      sessionStorePath: storePath,
+      memoryBasePath,
+      sessionsInterface: mock.interface,
+    })
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/commanders`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          host: 'worker-heartbeat-plan-auto',
+          taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
+        }),
+      })
+      expect(createResponse.status).toBe(201)
+      const created = (await createResponse.json()) as { id: string }
+
+      const startResponse = await fetch(`${server.baseUrl}/api/commanders/${created.id}/start`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+      })
+      expect(startResponse.status).toBe(200)
+
+      await vi.waitFor(() => {
+        expect(mock.sendCalls).toHaveLength(1)
+      })
+
+      const sessionName = mock.createCalls[0]?.name
+      expect(sessionName).toBeTruthy()
+      mock.setEvents(sessionName!, [{
+        type: 'plan_approval',
+        interactionKind: 'plan_approval',
+        toolId: 'plan-exit-1',
+        toolName: 'ExitPlanMode',
+        plan: '1. Patch\n2. Test',
+        expiresAt: '2000-01-01T00:00:00.000Z',
+        defaultDecision: 'reject',
+        providerContext: {
+          provider: 'claude',
+          backend: 'stream-json',
+          toolUseId: 'plan-exit-1',
+          toolName: 'ExitPlanMode',
+          answerFormat: 'claude.exit_plan_mode',
+        },
+      }])
+
+      const triggerResponse = await fetch(
+        `${server.baseUrl}/api/commanders/${created.id}/heartbeat/trigger`,
+        {
+          method: 'POST',
+          headers: AUTH_HEADERS,
+        },
+      )
+      expect(triggerResponse.status).toBe(200)
+
+      await vi.waitFor(() => {
+        expect(mock.autoResolvePlanApprovalCalls).toEqual([{
+          name: sessionName,
+          toolId: 'plan-exit-1',
+          decision: 'reject',
+          message: 'Auto-resolved on heartbeat: reject',
+        }])
+      })
+      expect(mock.sendCalls).toHaveLength(1)
+      expect(mock.sendCalls.some((call) => call.text.includes('[HEARTBEAT'))).toBe(false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('leaves expired plan approval blocked on heartbeat when no default decision is configured', async () => {
+    const dir = await createTempDir('hammurabi-commanders-heartbeat-plan-no-default-')
+    const storePath = join(dir, 'sessions.json')
+    const memoryBasePath = join(dir, 'memory')
+    const mock = createMockSessionsInterface()
+
+    const server = await startServer({
+      sessionStorePath: storePath,
+      memoryBasePath,
+      sessionsInterface: mock.interface,
+    })
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/commanders`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          host: 'worker-heartbeat-plan-wait',
+          taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
+        }),
+      })
+      expect(createResponse.status).toBe(201)
+      const created = (await createResponse.json()) as { id: string }
+
+      const startResponse = await fetch(`${server.baseUrl}/api/commanders/${created.id}/start`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+      })
+      expect(startResponse.status).toBe(200)
+
+      await vi.waitFor(() => {
+        expect(mock.sendCalls).toHaveLength(1)
+      })
+
+      const sessionName = mock.createCalls[0]?.name
+      expect(sessionName).toBeTruthy()
+      mock.setEvents(sessionName!, [{
+        type: 'plan_approval',
+        interactionKind: 'plan_approval',
+        toolId: 'plan-exit-2',
+        toolName: 'ExitPlanMode',
+        plan: '1. Patch\n2. Test',
+        expiresAt: '2000-01-01T00:00:00.000Z',
+        providerContext: {
+          provider: 'claude',
+          backend: 'stream-json',
+          toolUseId: 'plan-exit-2',
+          toolName: 'ExitPlanMode',
+          answerFormat: 'claude.exit_plan_mode',
+        },
+      }])
+
+      const triggerResponse = await fetch(
+        `${server.baseUrl}/api/commanders/${created.id}/heartbeat/trigger`,
+        {
+          method: 'POST',
+          headers: AUTH_HEADERS,
+        },
+      )
+      expect(triggerResponse.status).toBe(200)
+
+      await vi.waitFor(async () => {
+        const heartbeatLogResponse = await fetch(
+          `${server.baseUrl}/api/commanders/${created.id}/heartbeat-log`,
+          { headers: AUTH_HEADERS },
+        )
+        const payload = (await heartbeatLogResponse.json()) as {
+          entries: Array<{ outcome: string; errorMessage?: string }>
+        }
+        expect(payload.entries.some((entry) =>
+          entry.outcome === 'skipped' &&
+          entry.errorMessage === 'Plan approval expired without explicit default decision; heartbeat did not send chat message',
+        )).toBe(true)
+      })
+      expect(mock.autoResolvePlanApprovalCalls).toHaveLength(0)
+      expect(mock.sendCalls).toHaveLength(1)
+    } finally {
+      await server.close()
+    }
+  })
+
   it('writes a heartbeat error entry when commander is not running when heartbeat fires', async () => {
     const dir = await createTempDir('hammurabi-commanders-heartbeat-stop-log-')
     const storePath = join(dir, 'sessions.json')
@@ -1581,29 +1568,9 @@ describe('commanders routes', () => {
       })
       expect(startResponse.status).toBe(200)
 
-      // Wait for startup, then for the periodic heartbeat loop to prove it is active.
-      await vi.waitFor(() => {
-        expect(mock.sendCalls.length).toBeGreaterThanOrEqual(1)
-      })
-      await vi.waitFor(() => {
-        expect(
-          mock.sendCalls.some((call) => call.text.includes('[HEARTBEAT QUICK ')),
-        ).toBe(true)
-      }, { timeout: 2000 })
-      await vi.waitFor(async () => {
-        const heartbeatLogResponse = await fetch(
-          `${server.baseUrl}/api/commanders/${created.id}/heartbeat-log`,
-          { headers: AUTH_HEADERS },
-        )
-        const payload = (await heartbeatLogResponse.json()) as {
-          entries: Array<{ outcome: string }>
-        }
-        expect(
-          payload.entries.some((entry) => entry.outcome === 'ok' || entry.outcome === 'no-quests'),
-        ).toBe(true)
-      }, { timeout: 8000 })
-
-      // Simulate the commander's session being stopped externally (state → stopped)
+      // Simulate the commander's session being stopped externally before the
+      // next periodic tick. The heartbeat loop should record the stopped-state
+      // error without requiring a successful heartbeat first.
       const sessions = await sessionStore.list()
       const session = sessions[0]
       if (session) {
@@ -1809,8 +1776,8 @@ describe('commanders routes', () => {
     }
   })
 
-  it('injects stored persona into the launched commander system prompt', async () => {
-    const dir = await createTempDir('hammurabi-commanders-persona-prompt-')
+  it('uses COMMANDER.md identity section in the launched commander system prompt', async () => {
+    const dir = await createTempDir('hammurabi-commanders-identity-prompt-')
     const storePath = join(dir, 'sessions.json')
     const memoryBasePath = join(dir, 'memory')
     const mock = createMockSessionsInterface()
@@ -1829,8 +1796,8 @@ describe('commanders routes', () => {
           'content-type': 'application/json',
         },
         body: JSON.stringify({
-          host: 'worker-persona-prompt',
-          persona: '  Grumpy pirate who gives terse status updates and owns bug triage.  ',
+          host: 'worker-identity-prompt',
+          identityOperatingStyle: '  Grumpy pirate who gives terse status updates and owns bug triage.  ',
           taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
         }),
       })
@@ -1850,9 +1817,10 @@ describe('commanders routes', () => {
       })
 
       const systemPrompt = mock.createCalls[0]?.systemPrompt ?? ''
-      expect(systemPrompt).toContain('## Persona')
+      expect(systemPrompt).toContain('## Identity and Operating Style')
       expect(systemPrompt).toContain('Grumpy pirate who gives terse status updates and owns bug triage.')
-      expect(systemPrompt.indexOf('## Persona')).toBeGreaterThan(
+      expect(systemPrompt).not.toContain('## Persona')
+      expect(systemPrompt.indexOf('## Identity and Operating Style')).toBeGreaterThan(
         systemPrompt.indexOf('You are Commander, the orchestration agent for GitHub task execution.'),
       )
     } finally {
@@ -4357,7 +4325,7 @@ describe('commanders routes', () => {
       }
     })
 
-    it('exposes read-only workspace tree and file preview routes', async () => {
+    it('does not mount superseded commander workspace routes', async () => {
       const workspaceDir = await createTempDir('hammurabi-commander-workspace-')
       await mkdir(join(workspaceDir, 'quests'), { recursive: true })
       await writeFile(join(workspaceDir, 'brief.md'), 'Commander workspace\n', 'utf8')
@@ -4375,22 +4343,11 @@ describe('commanders routes', () => {
         expect(createResponse.status).toBe(201)
         const created = await createResponse.json()
 
-        const treeResponse = await fetch(
+        const response = await fetch(
           `${server.baseUrl}/api/commanders/${created.id}/workspace/tree`,
           { headers: AUTH_HEADERS },
         )
-        expect(treeResponse.status).toBe(200)
-        const treeBody = await treeResponse.json()
-        expect(treeBody.nodes.map((node: { name: string }) => node.name)).toEqual(['quests', 'brief.md'])
-
-        const fileResponse = await fetch(
-          `${server.baseUrl}/api/commanders/${created.id}/workspace/file?path=brief.md`,
-          { headers: AUTH_HEADERS },
-        )
-        expect(fileResponse.status).toBe(200)
-        const fileBody = await fileResponse.json()
-        expect(fileBody.kind).toBe('text')
-        expect(fileBody.content).toContain('Commander workspace')
+        expect(response.status).toBe(404)
       } finally {
         await server.close()
       }

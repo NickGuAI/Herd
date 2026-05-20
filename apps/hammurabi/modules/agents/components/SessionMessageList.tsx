@@ -18,6 +18,7 @@ export interface SessionMessageListProps {
   emptyLabel?: string
   agentAvatarUrl?: string | null
   agentAccentColor?: string | null
+  onOpenWorkspaceFile?: (path: string) => void
 }
 
 export function SessionMessageList({
@@ -26,10 +27,11 @@ export function SessionMessageList({
   emptyLabel = 'No messages yet.',
   agentAvatarUrl,
   agentAccentColor,
+  onOpenWorkspaceFile,
 }: SessionMessageListProps) {
   if (messages.length === 0) {
     return (
-      <p className="session-message-empty rounded border border-white/10 bg-black/30 px-2 py-1.5 font-mono text-[11px] text-white/60">
+      <p className="session-message-empty rounded border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-sunken)] px-2 py-1.5 font-mono text-[11px] text-[color:var(--hv-fg)]">
         {emptyLabel}
       </p>
     )
@@ -48,11 +50,18 @@ export function SessionMessageList({
           case 'system':
             return <SystemDivider key={message.id} text={message.text} />
           case 'user':
-            return <UserMessage key={message.id} text={message.text} images={message.images} />
+            return (
+              <UserMessage
+                key={message.id}
+                text={message.text}
+                images={message.images}
+                onOpenWorkspaceFile={onOpenWorkspaceFile}
+              />
+            )
           case 'thinking':
             return <ThinkingBlock key={message.id} text={message.text} />
           case 'planning':
-            return <PlanningBlock key={message.id} msg={message} />
+            return <PlanningBlock key={message.id} msg={message} onOpenWorkspaceFile={onOpenWorkspaceFile} />
           case 'agent':
             return (
               <AgentMessage
@@ -60,6 +69,7 @@ export function SessionMessageList({
                 text={message.text}
                 avatarUrl={agentAvatarUrl}
                 accentColor={agentAccentColor}
+                onOpenWorkspaceFile={onOpenWorkspaceFile}
               />
             )
           case 'tool':

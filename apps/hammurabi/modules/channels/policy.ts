@@ -35,6 +35,53 @@ function candidateIds(event: ChannelInboundEvent): string[] {
   ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
 }
 
+function digitsOnly(value: string): string {
+  return value.replace(/\D/gu, '')
+}
+
+function jidLocalPart(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/:\d+@/u, '@')
+  const atIndex = normalized.indexOf('@')
+  return atIndex >= 0 ? normalized.slice(0, atIndex) : normalized
+}
+
+function whatsAppDirectValuesMatch(candidate: string, allowed: string): boolean {
+  const normalizedCandidate = candidate.trim().toLowerCase().replace(/:\d+@/u, '@')
+  const normalizedAllowed = allowed.trim().toLowerCase().replace(/:\d+@/u, '@')
+  if (normalizedCandidate === normalizedAllowed) {
+    return true
+  }
+
+  const candidateDigits = digitsOnly(jidLocalPart(normalizedCandidate))
+  const allowedDigits = digitsOnly(jidLocalPart(normalizedAllowed))
+  if (candidateDigits.length === 0 || allowedDigits.length < 10) {
+    return false
+  }
+  return candidateDigits === allowedDigits || candidateDigits.endsWith(allowedDigits)
+}
+
+function valuesMatch(
+  binding: CommanderChannelBinding,
+  event: ChannelInboundEvent,
+  candidate: string,
+  allowed: string,
+): boolean {
+  if (binding.provider === 'email') {
+    return candidate.trim().toLowerCase() === allowed.trim().toLowerCase()
+  }
+  if (binding.provider === 'whatsapp' && isDirect(event)) {
+    return whatsAppDirectValuesMatch(candidate, allowed)
+  }
+  return candidate === allowed
+}
+
+function isTrustedSelfChat(event: ChannelInboundEvent): boolean {
+  return event.provider === 'whatsapp'
+    && isDirect(event)
+    && event.metadata?.selfAuthored === true
+    && event.metadata?.selfChat === true
+}
+
 export function checkAccountInboundPolicy(
   binding: CommanderChannelBinding,
   event: ChannelInboundEvent,
@@ -55,12 +102,19 @@ export function checkAccountInboundPolicy(
   if (policy === 'disabled') {
     return { allowed: false, reason: direct ? 'dm-disabled' : 'group-disabled' }
   }
+  if (isTrustedSelfChat(event)) {
+    return { allowed: true, reason: 'trusted-self-chat' }
+  }
 
   const allowlist = [
     ...asStringList(direct ? config.dmAllowlist : config.groupAllowlist),
     ...asStringList(config.allowlist),
+    ...asStringList(config.globalAllowlist),
   ]
-  const allowed = candidateIds(event).some((candidate) => allowlist.includes(candidate))
+  const candidates = candidateIds(event)
+  const allowed = candidates.some((candidate) => (
+    allowlist.some((entry) => valuesMatch(binding, event, candidate, entry))
+  ))
   return allowed
     ? { allowed: true, reason: 'allowlist' }
     : { allowed: false, reason: 'allowlist-deny' }

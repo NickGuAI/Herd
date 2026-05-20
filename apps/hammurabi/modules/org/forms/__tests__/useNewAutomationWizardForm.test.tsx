@@ -68,6 +68,7 @@ describe('useNewAutomationWizardForm', () => {
             supportsAutomation: true,
             supportsCommanderConversation: true,
             supportsWorkerDispatch: true,
+            supportsMessageImages: true,
           },
         },
         {
@@ -77,6 +78,7 @@ describe('useNewAutomationWizardForm', () => {
             supportsAutomation: true,
             supportsCommanderConversation: true,
             supportsWorkerDispatch: true,
+            supportsMessageImages: true,
           },
         },
       ],

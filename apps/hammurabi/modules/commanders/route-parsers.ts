@@ -3,7 +3,6 @@ import { parseProviderId } from '../agents/providers/registry.js'
 import { parseOptionalClaudePermissionMode } from '../agents/session/input.js'
 import { parseOptionalClaudeEffort, type ClaudeEffortLevel } from '../claude-effort.js'
 import { DEFAULT_COMMANDER_CONTEXT_MODE } from './store.js'
-import { MAX_PERSONA_LENGTH } from './persona.js'
 import type {
   CommanderContextMode,
   CommanderChannelMeta,
@@ -53,6 +52,7 @@ export interface ParsedChannelMessageInput {
   }
   rawTimestamp: string | number
   rawSourceId: string
+  metadata?: Record<string, unknown>
 }
 
 export function isObject(value: unknown): value is Record<string, unknown> {
@@ -270,26 +270,6 @@ export function parseMessage(raw: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null
 }
 
-export function parseOptionalPersona(
-  raw: unknown,
-): { valid: true; value: string | undefined } | { valid: false } {
-  if (raw === undefined || raw === null) {
-    return { valid: true, value: undefined }
-  }
-  if (typeof raw !== 'string') {
-    return { valid: false }
-  }
-
-  const trimmed = raw.trim()
-  if (trimmed.length === 0) {
-    return { valid: true, value: undefined }
-  }
-  if (trimmed.length > MAX_PERSONA_LENGTH) {
-    return { valid: false }
-  }
-  return { valid: true, value: trimmed }
-}
-
 function parseChannelProvider(raw: unknown): CommanderChannelMeta['provider'] | null {
   if (typeof raw !== 'string') {
     return null
@@ -350,6 +330,17 @@ function parseChannelAudio(raw: unknown): ParsedChannelMessageInput['audio'] | u
   }
 }
 
+function parseOptionalStringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined
+  }
+  const values = raw
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+  return values.length > 0 ? values : undefined
+}
+
 function normalizeChannelHostToken(raw: string): string {
   return raw
     .toLowerCase()
@@ -378,6 +369,10 @@ function buildCommanderSessionKeyFromChannelMeta(
     return `${base}:thread:${meta.threadId}`
   }
   return base
+}
+
+function parseChannelMetadata(raw: unknown): Record<string, unknown> | undefined {
+  return isObject(raw) ? { ...raw } : undefined
 }
 
 export function parseChannelMessageInput(
@@ -432,6 +427,8 @@ export function parseChannelMessageInput(
   const space = parseMessage(raw.space)
   const groupId = parseMessage(raw.groupId)
   const threadId = parseMessage(raw.threadId)
+  const references = parseOptionalStringList(raw.references)
+  const metadata = parseChannelMetadata(raw.metadata)
 
   const chatType = parsedChatType
   const peerId = parsedPeerId
@@ -442,6 +439,7 @@ export function parseChannelMessageInput(
     peerId,
     ...(groupId ? { groupId } : {}),
     ...(threadId ? { threadId } : {}),
+    ...(references ? { references } : {}),
     sessionKey: buildCommanderSessionKeyFromChannelMeta({
       provider,
       accountId,
@@ -471,6 +469,7 @@ export function parseChannelMessageInput(
       lastRoute,
       host: buildChannelCommanderHost(channelMeta),
       ...(audio ? { audio } : {}),
+      ...(metadata ? { metadata } : {}),
       rawTimestamp: typeof raw.rawTimestamp === 'number' || typeof raw.rawTimestamp === 'string'
         ? raw.rawTimestamp
         : new Date().toISOString(),

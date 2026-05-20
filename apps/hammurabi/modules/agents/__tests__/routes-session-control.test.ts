@@ -220,6 +220,54 @@ describe("agents routes", () => {
       }
     })
 
+  it('classifies stream phase as blocked for pending plan approval and thinking after decision result', async () => {
+      const streamMock = createMockChildProcess()
+      mockedSpawn.mockReturnValueOnce(streamMock.cp as never)
+      const server = await startServer()
+
+      try {
+        const createResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'world-plan-blocked-01',
+            mode: 'default',
+            transportType: 'stream',
+            task: 'Need plan approval',
+          }),
+        })
+        expect(createResponse.status).toBe(201)
+
+        streamMock.emitStdout('{"type":"message_start","message":{"id":"m1","role":"assistant"}}\n')
+        streamMock.emitStdout('{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"plan_exit_1","name":"ExitPlanMode","input":{"plan":"1. Patch the normalizer\\n2. Run tests"}}]}}\n')
+
+        const blockedResponse = await fetch(`${server.baseUrl}/api/agents/world`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(blockedResponse.status).toBe(200)
+        const blockedPayload = await blockedResponse.json() as Array<{ phase: string; lastToolUse: string | null }>
+        expect(blockedPayload).toHaveLength(1)
+        expect(blockedPayload[0].phase).toBe('blocked')
+        expect(blockedPayload[0].lastToolUse).toBe('ExitPlanMode')
+
+        streamMock.emitStdout('{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"plan_exit_1","content":"{\\"approved\\":true,\\"message\\":\\"Approved.\\"}"}]}}\n')
+
+        const thinkingResponse = await fetch(`${server.baseUrl}/api/agents/world`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(thinkingResponse.status).toBe(200)
+        const thinkingPayload = await thinkingResponse.json() as Array<{ phase: string; lastToolUse: string | null }>
+        expect(thinkingPayload).toHaveLength(1)
+        expect(thinkingPayload[0].phase).toBe('thinking')
+        expect(thinkingPayload[0].lastToolUse).toBe('ExitPlanMode')
+      } finally {
+        await server.close()
+      }
+    })
+
   it('resolves remote login shells on the target host instead of copying the local SHELL', async () => {
       const registry = await createTempMachinesRegistry({
         machines: [
@@ -467,7 +515,7 @@ describe("agents routes", () => {
         rows: 40,
       }))
       expect(lastHandle()!.write).toHaveBeenCalledWith(
-        'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
+        'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
       )
 
       await server.close()
@@ -511,7 +559,7 @@ describe("agents routes", () => {
           }),
         )
         expect(handle.write).toHaveBeenCalledWith(
-          'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
+          'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
         )
       } finally {
         await server.close()
@@ -538,7 +586,7 @@ describe("agents routes", () => {
 
         expect(response.status).toBe(201)
         expect(lastHandle()!.write).toHaveBeenCalledWith(
-          'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort high\r',
+          'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort high\r',
         )
       } finally {
         await server.close()
@@ -565,7 +613,7 @@ describe("agents routes", () => {
 
         expect(response.status).toBe(201)
         expect(lastHandle()!.write).toHaveBeenCalledWith(
-          'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
+          'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
         )
       } finally {
         await server.close()
@@ -766,7 +814,7 @@ describe("agents routes", () => {
       })
       expect(lastHandle()!.write).toHaveBeenNthCalledWith(
         1,
-        'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=0 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
+        'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
       )
       expect(lastHandle()!.write).toHaveBeenNthCalledWith(
         2,

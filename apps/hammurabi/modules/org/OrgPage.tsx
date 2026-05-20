@@ -7,9 +7,9 @@ import { useCommander } from '@modules/commanders/hooks/useCommander'
 import { ORG_QUERY_KEY } from '@modules/org/hooks/useOrgTree'
 import type { OrgNode, OrgTree } from '@modules/org/types'
 import { CommanderDetailModal } from '@modules/org/components/CommanderDetailModal'
-import { CommanderTileGrid } from '@modules/org/components/CommanderTileGrid'
+import { CommanderProfileCardGrid } from '@modules/org/components/CommanderProfileCardGrid'
 import { GlobalAutomationChip } from '@modules/org/components/GlobalAutomationChip'
-import { OperatorCard } from '@modules/org/components/OperatorCard'
+import { OrgTopRow } from '@modules/org/components/OrgTopRow'
 import { exportOrgCommanderTemplate, restoreOrgCommander } from '@modules/org/hooks/useOrgActions'
 import { useOrgTree } from '@modules/org/hooks/useOrgTree'
 import { useIsMobile } from '@/hooks/use-is-mobile'
@@ -29,18 +29,18 @@ function CommanderCardSkeleton() {
     <article className="card-sumi animate-pulse p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-full bg-sumi-mist/50" />
+          <div className="h-11 w-11 rounded-full bg-[var(--hv-fg-faint)]" />
           <div className="space-y-2">
-            <div className="h-4 w-28 rounded-full bg-sumi-mist/50" />
-            <div className="h-3 w-20 rounded-full bg-sumi-mist/40" />
+            <div className="h-4 w-28 rounded-full bg-[var(--hv-fg-faint)]" />
+            <div className="h-3 w-20 rounded-full bg-[var(--hv-fg-faint)]" />
           </div>
         </div>
-        <div className="h-3 w-14 rounded-full bg-sumi-mist/40" />
+        <div className="h-3 w-14 rounded-full bg-[var(--hv-fg-faint)]" />
       </div>
       <div className="mt-5 space-y-3">
-        <div className="h-3 w-40 rounded-full bg-sumi-mist/40" />
-        <div className="h-3 w-24 rounded-full bg-sumi-mist/30" />
-        <div className="h-3 w-32 rounded-full bg-sumi-mist/30" />
+        <div className="h-3 w-40 rounded-full bg-[var(--hv-fg-faint)]" />
+        <div className="h-3 w-24 rounded-full bg-[var(--hv-fg-faint)]" />
+        <div className="h-3 w-32 rounded-full bg-[var(--hv-fg-faint)]" />
       </div>
     </article>
   )
@@ -170,11 +170,11 @@ export function OrgPage() {
     return (
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-3xl font-medium text-sumi-black">Org</h1>
+          <h1 className="text-3xl font-medium text-[color:var(--hv-fg)]">Org</h1>
           <button
             type="button"
             data-testid="commander-hire-button"
-            className="rounded-full border border-ink-border px-4 py-2 text-sm text-sumi-black"
+            className="rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)]"
           >
             Hire
           </button>
@@ -196,8 +196,8 @@ export function OrgPage() {
           data-testid="org-page-error"
           className="card-sumi flex max-w-md flex-col items-center gap-4 p-8 text-center"
         >
-          <h1 className="text-xl font-medium text-sumi-black">Org</h1>
-          <p className="text-sm text-sumi-diluted">
+          <h1 className="text-xl font-medium text-[color:var(--hv-fg)]">Org</h1>
+          <p className="text-sm text-[color:var(--hv-fg-subtle)]">
             {error instanceof Error ? error.message : 'Unable to load the org chart.'}
           </p>
           <button
@@ -205,7 +205,7 @@ export function OrgPage() {
             onClick={() => {
               void refetch()
             }}
-            className="rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90"
+            className="rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)]"
           >
             Retry
           </button>
@@ -288,52 +288,32 @@ export function OrgPage() {
     />
   ) : (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-6">
-      <div
-        data-testid="org-heading-section"
-        className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
-      >
-        <div>
-          <h1 className="text-3xl font-medium text-sumi-black">
-            {data.orgIdentity?.name ?? 'Organization'}
-          </h1>
-          <p className="mt-1 text-sm text-sumi-diluted">
-            Organization · {data.operator.displayName}
-          </p>
-        </div>
-        <button
-          type="button"
-          data-testid="commander-hire-button"
-          onClick={() => setHireWizardOpen(true)}
-          className="rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90"
-        >
-          Hire
-        </button>
-      </div>
+      <OrgTopRow
+        orgIdentity={data.orgIdentity}
+        operator={data.operator}
+        onHire={() => setHireWizardOpen(true)}
+      />
+
+      <section data-testid="org-global-automation-section">
+        <GlobalAutomationChip activeCount={operatorAutomations.length} />
+      </section>
 
       {data.archivedCommandersCount > 0 ? (
         <button
           type="button"
           data-testid="archived-commanders-toggle"
           onClick={() => setShowArchived((current) => !current)}
-          className="self-start rounded-full border border-ink-border px-4 py-2 text-sm text-sumi-black transition-colors hover:bg-ink-wash"
+          className="self-start rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
         >
           {showArchived ? 'Hide archived' : `View archived (${data.archivedCommandersCount})`}
         </button>
       ) : null}
 
-      <section data-testid="org-founder-section">
-        <OperatorCard operator={data.operator} />
-      </section>
-
-      <section data-testid="org-global-automation-section">
-        <GlobalAutomationChip activeCount={operatorAutomations.length} />
-      </section>
-
       {commanderCards.length === 0 ? (
         <div className="card-sumi flex flex-col items-center gap-4 px-6 py-12 text-center">
           <div className="space-y-2">
-            <p className="text-lg text-sumi-black">Hire your first commander.</p>
-            <p className="max-w-xl text-sm text-sumi-diluted">
+            <p className="text-lg text-[color:var(--hv-fg)]">Hire your first commander.</p>
+            <p className="max-w-xl text-sm text-[color:var(--hv-fg-subtle)]">
               Pick Quick Create for a guided template, Talk to Me to spin up a wizard agent, or Advanced for the full form.
             </p>
           </div>
@@ -341,14 +321,14 @@ export function OrgPage() {
             type="button"
             data-testid="empty-org-hire-button"
             onClick={() => setHireWizardOpen(true)}
-            className="rounded-full bg-sumi-black px-4 py-2 text-sm text-washi-white transition-colors hover:bg-sumi-black/90"
+            className="rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)]"
           >
             Open wizard
           </button>
         </div>
       ) : (
         <section data-testid="org-commander-grid-section" className="space-y-8">
-          <CommanderTileGrid
+          <CommanderProfileCardGrid
             commanders={commanderCards}
             expandedId={expandedCommanderId}
             onSelect={setExpandedCommanderId}

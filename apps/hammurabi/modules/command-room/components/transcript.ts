@@ -1,6 +1,14 @@
+import type { SessionQueueSnapshot } from '@/types'
 import type { MsgItem } from '@modules/agents/messages/model'
 
 export function mapSessionMessagesToTranscript(messages: MsgItem[]): MsgItem[] {
+  return messages
+}
+
+export function appendQueuedMessagesToTranscript(
+  messages: MsgItem[],
+  _queueSnapshot?: SessionQueueSnapshot | null,
+): MsgItem[] {
   return messages
 }
 

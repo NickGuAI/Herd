@@ -105,7 +105,6 @@ describe('conversation-runtime quick wins', () => {
           agentType: 'claude',
           cwd: '/tmp/workspace',
           host: undefined,
-          persona: '',
           currentTask: null,
           taskSource: null,
           maxTurns: 12,
@@ -129,6 +128,7 @@ describe('conversation-runtime quick wins', () => {
       },
       runtimes: new Map(),
       activeCommanderSessions: new Map(),
+      channelReplyForwarders: new Map(),
     } as unknown as CommanderRoutesContext
 
     const started = await startConversationSession(
@@ -196,7 +196,6 @@ describe('conversation-runtime quick wins', () => {
           agentType: 'claude',
           cwd: '/tmp/workspace',
           host: undefined,
-          persona: '',
           currentTask: null,
           taskSource: null,
           maxTurns: 12,
@@ -220,6 +219,7 @@ describe('conversation-runtime quick wins', () => {
       },
       runtimes: new Map(),
       activeCommanderSessions: new Map(),
+      channelReplyForwarders: new Map(),
     } as unknown as CommanderRoutesContext
 
     const started = await startConversationSession(

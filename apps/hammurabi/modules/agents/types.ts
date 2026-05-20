@@ -5,13 +5,15 @@ import type { AuthUser } from '@gehirn/auth-providers'
 import type { Router } from 'express'
 import type { WebSocket } from 'ws'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
-import type { HammurabiEvent } from '../../src/types/hammurabi-events.js'
+import type { HammurabiEvent, PlanApprovalDecision } from '../../src/types/hammurabi-events.js'
 import type { ActionPolicyGate } from '../policies/action-policy-gate.js'
+import type { WorkspaceResolverCapability } from '../workspace/capability.js'
 import type { QueuedMessage, QueuedMessageImage, SessionMessageQueue } from './message-queue.js'
 import type {
   ClaudeAdaptiveThinkingMode,
 } from '../claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../claude-max-thinking-tokens.js'
 import type { QuestStore } from '../commanders/quest-store.js'
 import type { GeminiTurnState } from './event-normalizers/gemini.js'
 import type { OpenCodeTurnState } from './event-normalizers/opencode.js'
@@ -24,6 +26,7 @@ export type ClaudePermissionMode = 'default'
 export type AgentType = ProviderId
 export type SessionType = 'commander' | 'worker' | 'cron' | 'sentinel' | 'automation'
 export type SessionTransportType = 'pty' | 'stream' | 'external'
+export type MachineTransportType = 'local' | 'ssh' | 'daemon'
 export type SessionCreatorKind = 'human' | 'commander' | 'cron' | 'sentinel' | 'automation'
 
 export interface SessionCreator {
@@ -42,6 +45,7 @@ export interface AgentSession {
   agentType?: AgentType
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   model?: string
   cwd?: string
   host?: string
@@ -105,6 +109,7 @@ export interface PtySession {
   agentType: AgentType
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   cwd: string
   host?: string
   task?: string
@@ -209,6 +214,11 @@ export type StreamDispatchResult =
   | { ok: true; delivered: 'queued'; message: QueuedMessage; position: number }
   | { ok: false; retryable: boolean; reason: string }
 
+export interface SessionSendPayload {
+  text: string
+  images?: QueuedMessageImage[]
+}
+
 export interface StreamSessionAdapter {
   dispatchSend(
     session: StreamSession,
@@ -228,6 +238,7 @@ export interface StreamSession {
   agentType: AgentType
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode: ClaudePermissionMode
   cwd: string
   host?: string
@@ -297,6 +308,7 @@ export interface ExternalSession {
   agentType: AgentType
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   machine: string
   cwd: string
   host?: string
@@ -349,6 +361,7 @@ export interface ExitedStreamSessionState {
   model?: string
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode: ClaudePermissionMode
   cwd: string
   host?: string
@@ -373,6 +386,7 @@ export interface StreamSessionCreateOptions {
   model?: string
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   createdAt?: string
   spawnedBy?: string
   spawnedWorkers?: string[]
@@ -381,6 +395,7 @@ export interface StreamSessionCreateOptions {
   creator?: SessionCreator
   conversationId?: string
   currentSkillInvocation?: ActiveSkillInvocation
+  daemonProcess?: PersistedDaemonProcess
 }
 
 export interface CodexSessionCreateOptions {
@@ -430,6 +445,11 @@ export interface OpenCodeSessionCreateOptions {
   currentSkillInvocation?: ActiveSkillInvocation
 }
 
+export interface PersistedDaemonProcess {
+  processId: string
+  mode: 'pipe' | 'pty'
+}
+
 export type AnySession = PtySession | StreamSession | ExternalSession
 
 export interface AgentsRouterOptions {
@@ -449,6 +469,7 @@ export interface AgentsRouterOptions {
   verifyAuth0Token?: (token: string) => Promise<AuthUser>
   internalToken?: string
   getActionPolicyGate?: () => ActionPolicyGate | null
+  getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   commanderSessionStorePath?: string
   questStore?: QuestStore
 }
@@ -542,6 +563,8 @@ export interface CommanderSessionsInterface {
     agentType: AgentType
     model?: string
     effort?: ClaudeEffortLevel
+    adaptiveThinking?: ClaudeAdaptiveThinkingMode
+    maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
     resumeProviderContext?: ProviderSessionContext
     maxTurns?: number
@@ -554,6 +577,8 @@ export interface CommanderSessionsInterface {
     agentType: AgentType
     model?: string
     effort?: ClaudeEffortLevel
+    adaptiveThinking?: ClaudeAdaptiveThinkingMode
+    maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
     resumeProviderContext?: ProviderSessionContext
     maxTurns?: number
@@ -572,12 +597,18 @@ export interface CommanderSessionsInterface {
   }): Promise<DispatchWorkerForCommanderResult>
   sendToSession(
     name: string,
-    text: string,
+    payload: string | SessionSendPayload,
     options?: {
       queue?: boolean
       priority?: 'high' | 'normal' | 'low'
     },
   ): Promise<boolean>
+  autoResolvePlanApproval?(
+    name: string,
+    toolId: string,
+    decision: PlanApprovalDecision,
+    message: string,
+  ): Promise<boolean> | boolean
   deleteSession(name: string): void
   getSession(name: string): StreamSession | undefined
   subscribeToEvents(name: string, handler: (event: StreamJsonEvent) => void): () => void
@@ -588,11 +619,89 @@ export interface MachineConfig {
   id: string
   label: string
   host: string | null
+  transport?: MachineTransportType
   tailscaleHostname?: string
   user?: string
   port?: number
   cwd?: string
   envFile?: string
+  daemon?: MachineDaemonConfig
+}
+
+export interface MachineDaemonConfig {
+  pairingTokenHash?: string
+  pairedAt?: string
+  revokedAt?: string
+  lastSeenAt?: string
+  daemonVersion?: string
+}
+
+export interface MachineDaemonProviderHealth {
+  provider: string
+  installed: boolean
+  authenticated: boolean
+  version: string | null
+  authMethod: string | null
+  detail: string | null
+  checkedAt: string | null
+}
+
+export type MachineDaemonConnectionState =
+  | 'local'
+  | 'ssh-local'
+  | 'not-paired'
+  | 'paired'
+  | 'connected'
+
+export type MachineDaemonProviderAuthState = 'ready' | 'missing' | 'not-checked'
+
+export type MachineDaemonActionId = 'pair' | 'rotate' | 'revoke'
+
+export interface MachineDaemonAction {
+  id: MachineDaemonActionId
+  label: string
+}
+
+export interface MachineDaemonPairCommand {
+  shortCommand: string
+  fullCommand: string
+  disclosureLabel: string
+}
+
+export interface MachineDaemonStatus {
+  machineId: string
+  displayLabel: string
+  paired: boolean
+  connected: boolean
+  connectionState: MachineDaemonConnectionState
+  connectionLabel: string
+  selectedTransport: MachineTransportType
+  providerAuthReady: boolean
+  providerAuthState: MachineDaemonProviderAuthState
+  providerAuthLabel: string
+  launchable: boolean
+  launchUnsupportedReason: string | null
+  allowedActions: MachineDaemonAction[]
+  pairedAt: string | null
+  revokedAt: string | null
+  connectedAt: string | null
+  lastSeenAt: string | null
+  connectionId: string | null
+  daemonVersion: string | null
+  protocolVersion: number | null
+  pid: number | null
+  platform: string | null
+  arch: string | null
+  activeProcesses: number | null
+  providerHealth: Record<string, MachineDaemonProviderHealth>
+}
+
+export interface MachineTransportStatus {
+  type: MachineTransportType
+  connected: boolean
+  providerAuthReady: boolean
+  launchable: boolean
+  reason: string | null
 }
 
 export type MachineToolKey = string
@@ -605,11 +714,12 @@ export interface MachineToolStatus {
 
 export interface MachineHealthReport {
   machineId: string
-  mode: 'local' | 'ssh'
+  mode: MachineTransportType
   ssh: {
     ok: boolean
     destination?: string
   }
+  daemon?: MachineDaemonStatus
   tools: Record<MachineToolKey, MachineToolStatus>
 }
 
@@ -622,6 +732,7 @@ export interface PersistedStreamSession {
   model?: string
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode: ClaudePermissionMode
   cwd: string
   host?: string
@@ -636,6 +747,7 @@ export interface PersistedStreamSession {
   resumedFrom?: string
   sessionState?: 'active' | 'exited'
   hadResult?: boolean
+  daemonProcess?: PersistedDaemonProcess
   queuedMessages?: QueuedMessage[]
   currentQueuedMessage?: QueuedMessage
   pendingDirectSendMessages?: QueuedMessage[]

@@ -21,7 +21,7 @@ export function ApiKeyLandingPage({
     setSubmitError(null)
     setIsSubmitting(true)
     try {
-      const res = await fetch(getFullUrl('/api/services/list'), {
+      const res = await fetch(getFullUrl('/api/modules'), {
         headers: { 'X-Hammurabi-Api-Key': trimmed },
       })
       if (!res.ok) {
@@ -37,12 +37,12 @@ export function ApiKeyLandingPage({
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-washi-aged">
+    <div className="flex items-center justify-center min-h-screen bg-[var(--hv-bg-raised)]">
       <div className="card-sumi max-w-md w-full mx-4 p-12 animate-fade-in">
-        <h1 className="font-display text-display text-sumi-black mb-2 text-center">
+        <h1 className="font-display text-display text-[color:var(--hv-fg)] mb-2 text-center">
           Hervald
         </h1>
-        <p className="text-sm font-body text-sumi-diluted mb-6 text-center">
+        <p className="text-sm font-body text-[color:var(--hv-fg-subtle)] mb-6 text-center">
           Sign in with API key
         </p>
 
@@ -54,13 +54,13 @@ export function ApiKeyLandingPage({
             placeholder="Paste your API key"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            className="w-full px-4 py-3 rounded-lg border border-ink-border bg-washi-white text-sumi-black placeholder:text-sumi-mist focus:outline-none focus:ring-2 focus:ring-sumi-black/10"
+            className="w-full px-4 py-3 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-[color:var(--hv-fg)] placeholder:text-[color:var(--hv-fg-faint)] focus:outline-none focus:ring-2 focus:ring-[color:var(--hv-field-focus-border)]"
             autoComplete="off"
             autoFocus
             disabled={isSubmitting}
           />
           {submitError && (
-            <p className="text-sm text-accent-vermillion" role="alert">
+            <p className="text-sm text-[color:var(--hv-accent-danger)]" role="alert">
               {submitError}
             </p>
           )}
@@ -73,7 +73,7 @@ export function ApiKeyLandingPage({
           </button>
         </form>
 
-        <p className="text-whisper text-sumi-mist mt-8 uppercase text-center">
+        <p className="text-whisper text-[color:var(--hv-fg-faint)] mt-8 uppercase text-center">
           Authenticated access only
         </p>
       </div>

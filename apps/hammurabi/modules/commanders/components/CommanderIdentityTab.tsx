@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -44,6 +44,11 @@ interface CommanderDetailPayload {
 }
 
 const FALLBACK_RUNTIME_CONFIG = createDefaultCommanderRuntimeConfig()
+const FIELD_CLASS =
+  'w-full rounded-lg border border-[color:var(--hv-field-border)] bg-[var(--hv-field-bg)] px-3 py-2 text-[16px] text-[color:var(--hv-fg)] placeholder:text-[color:var(--hv-field-placeholder)] focus:border-[color:var(--hv-field-focus-border)] focus:outline-none md:text-sm'
+const NOTE_CLASS = 'text-whisper text-[color:var(--hv-fg-faint)]'
+const SUBTLE_NOTE_CLASS = 'text-whisper text-[color:var(--hv-fg-subtle)]'
+const SECTION_HEADER_CLASS = 'border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-4 py-3'
 
 async function fetchCommanderDetail(commanderId: string): Promise<CommanderDetailPayload> {
   return fetchJson<CommanderDetailPayload>(`/api/commanders/${encodeURIComponent(commanderId)}`)
@@ -128,10 +133,35 @@ function MetadataField({
   value: string
 }) {
   return (
-    <div className="rounded-lg border border-ink-border bg-washi-white px-3 py-2.5">
-      <p className="text-whisper uppercase tracking-wide text-sumi-diluted">{label}</p>
-      <p className="mt-1 text-sm text-sumi-black break-words">{value}</p>
+    <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-3 py-2.5 text-[color:var(--hv-fg)]">
+      <p className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">{label}</p>
+      <p className="mt-1 break-words text-sm text-[color:var(--hv-fg)]">{value}</p>
     </div>
+  )
+}
+
+function IdentitySection({
+  title,
+  defaultOpen = false,
+  testId,
+  children,
+}: {
+  title: string
+  defaultOpen?: boolean
+  testId: string
+  children: ReactNode
+}) {
+  return (
+    <details
+      className="card-sumi overflow-hidden"
+      open={defaultOpen || undefined}
+      data-testid={testId}
+    >
+      <summary className={`${SECTION_HEADER_CLASS} cursor-pointer list-none`}>
+        <h3 className="section-title">{title}</h3>
+      </summary>
+      {children}
+    </details>
   )
 }
 
@@ -268,10 +298,7 @@ export function CommanderIdentityTab({
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4">
-      <section className="card-sumi overflow-hidden">
-        <header className="px-4 py-3 border-b border-ink-border bg-washi-aged/60">
-          <h3 className="section-title">Runtime Config</h3>
-        </header>
+      <IdentitySection title="Runtime Config" testId="identity-section-runtime">
         <div className="p-4 space-y-4">
           <div className="grid gap-3 md:grid-cols-2">
             <MetadataField
@@ -304,20 +331,20 @@ export function CommanderIdentityTab({
             />
           </div>
           {heartbeatCount != null && (
-            <p className="text-whisper text-sumi-diluted">
+            <p className={SUBTLE_NOTE_CLASS}>
               Heartbeats observed in this runtime: {heartbeatCount}
             </p>
           )}
           {terminalState?.kind === 'max_turns' && (
-            <div className="rounded-lg border border-accent-vermillion/40 bg-accent-vermillion/10 px-3 py-2.5">
-              <p className="text-sm text-accent-vermillion">
+            <div className="rounded-lg border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2.5">
+              <p className="text-sm text-[color:var(--hv-accent-danger)]">
                 Claude hit the max-turn cap at {configuredMaxTurns} turns.
               </p>
-              <p className="mt-1 text-xs text-sumi-diluted">
+              <p className="mt-1 text-xs text-[color:var(--hv-fg-subtle)]">
                 {terminalState.message}
               </p>
               {terminalState.errors?.length ? (
-                <p className="mt-1 text-xs text-sumi-diluted">
+                <p className="mt-1 text-xs text-[color:var(--hv-fg-subtle)]">
                   {terminalState.errors.join(' · ')}
                 </p>
               ) : null}
@@ -334,7 +361,7 @@ export function CommanderIdentityTab({
                   step={1}
                   value={maxTurns}
                   onChange={(event) => setMaxTurns(event.target.value)}
-                  className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+                  className={FIELD_CLASS}
                 />
               </label>
               <label className="block">
@@ -342,7 +369,7 @@ export function CommanderIdentityTab({
                 <select
                   value={runtimeContextMode}
                   onChange={(event) => setRuntimeContextMode(event.target.value as 'thin' | 'fat')}
-                  className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+                  className={FIELD_CLASS}
                 >
                   <option value="thin">thin</option>
                   <option value="fat">fat</option>
@@ -358,11 +385,11 @@ export function CommanderIdentityTab({
                   step={1}
                   value={fatPinInterval}
                   onChange={(event) => setFatPinInterval(event.target.value)}
-                  className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+                  className={FIELD_CLASS}
                 />
               </label>
             )}
-            <p className="text-whisper text-sumi-mist">
+            <p className={NOTE_CLASS}>
               Global default {runtimeConfig.defaults.maxTurns} · limit {runtimeConfig.limits.maxTurns}. Changes apply to the next Claude launch.
             </p>
             <button
@@ -379,18 +406,18 @@ export function CommanderIdentityTab({
               <select
                 value={effort}
                 onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
-                className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover"
+                className={FIELD_CLASS}
               >
                 {CLAUDE_EFFORT_LEVELS.map((level) => (
                   <option key={level} value={level}>{level}</option>
                 ))}
               </select>
             </label>
-            <p className="text-whisper text-sumi-mist">
+            <p className={NOTE_CLASS}>
               Used whenever this commander launches a Claude session. Default is `max`.
             </p>
             {commander.agentType !== 'claude' && (
-              <p className="text-whisper text-sumi-diluted">
+              <p className={SUBTLE_NOTE_CLASS}>
                 Current agent type is `{commander.agentType ?? 'claude'}`. This setting applies the next time the commander runs with Claude.
               </p>
             )}
@@ -403,31 +430,28 @@ export function CommanderIdentityTab({
             </button>
           </form>
           {actionError && (
-            <p className="text-sm text-accent-vermillion">{actionError}</p>
+            <p className="text-sm text-[color:var(--hv-accent-danger)]">{actionError}</p>
           )}
         </div>
-      </section>
+      </IdentitySection>
 
-      <section className="card-sumi overflow-hidden">
-        <header className="px-4 py-3 border-b border-ink-border bg-washi-aged/60">
-          <h3 className="section-title">COMMANDER.md</h3>
-        </header>
+      <IdentitySection title="COMMANDER.md" testId="identity-section-commander-md" defaultOpen>
         <div className="p-4">
           {detailQuery.isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="w-3 h-3 rounded-full bg-sumi-mist animate-breathe" />
+              <div className="h-3 w-3 animate-breathe rounded-full bg-[var(--hv-fg-faint)]" />
             </div>
           ) : workflowMd ? (
-            <div className="prose prose-sm max-w-none text-sumi-gray break-words">
+            <div className="hervald-prose max-w-none break-words">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{workflowMd}</ReactMarkdown>
             </div>
           ) : (
-            <p className="text-sm text-sumi-diluted">
+            <p className="text-sm text-[color:var(--hv-fg-subtle)]">
               No per-commander `COMMANDER.md` has been scaffolded yet.
             </p>
           )}
         </div>
-      </section>
+      </IdentitySection>
 
       <HeartbeatMonitor commander={commander} />
     </div>

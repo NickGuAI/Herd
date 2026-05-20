@@ -31,7 +31,7 @@ export function FormModal({
         {children}
       </div>
       {footer ? (
-        <div className="flex items-center justify-end gap-3 border-t border-ink-border pt-4">
+        <div className="flex items-center justify-end gap-3 border-t border-[color:var(--hv-border-hair)] pt-4">
           {footer}
         </div>
       ) : null}

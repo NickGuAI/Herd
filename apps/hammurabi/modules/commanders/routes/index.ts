@@ -1,7 +1,6 @@
 import { Router } from 'express'
 import { registerChannelRoutes } from './register-channels.js'
 import { registerConversationRoutes } from './register-conversations.js'
-import { registerEmailRoutes } from './register-email.js'
 import { buildCommandersContext } from './context.js'
 import { registerCommandRoomRoutes } from './register-command-room.js'
 import { registerCoreRoutes } from './register-core.js'
@@ -10,7 +9,7 @@ import { registerQuestRoutes } from './register-quests.js'
 import { registerRemoteRoutes } from './register-remote.js'
 import { registerTranscriptRoutes } from './register-transcripts.js'
 import { registerWorkerRoutes } from './register-workers.js'
-import { registerWorkspaceRoutes } from './register-workspace.js'
+import { createConversationWebSocket } from './conversation-websocket.js'
 import type { CommandersRouterOptions, CommandersRouterResult } from './types.js'
 
 export type { CommandersRouterOptions, CommandersRouterResult } from './types.js'
@@ -26,6 +25,9 @@ export function createCommandersRouter(
   const router = Router()
   const conversationRouter = Router()
   const context = buildCommandersContext(options)
+  const handleConversationUpgrade = options.conversationSessionWebSocket
+    ? createConversationWebSocket(context, options.conversationSessionWebSocket)
+    : undefined
   let disposed = false
 
   // Static top-level routes are mounted before the broader commander surface.
@@ -35,8 +37,6 @@ export function createCommandersRouter(
   registerWorkerRoutes(router, context)
   registerConversationRoutes(router, conversationRouter, context)
   registerCoreRoutes(router, context)
-  registerWorkspaceRoutes(router, context)
-  registerEmailRoutes(router, context)
   registerCommandRoomRoutes(router, context)
   registerMemoryRoutes(router, context)
   registerTranscriptRoutes(router, context)
@@ -64,11 +64,15 @@ export function createCommandersRouter(
       }
       runtime.unsubscribeEvents?.()
     }
+    for (const unsubscribe of context.channelReplyForwarders.values()) {
+      unsubscribe()
+    }
 
     context.runtimes.clear()
     context.activeCommanderSessions.clear()
+    context.channelReplyForwarders.clear()
     context.heartbeatFiredAtByConversation.clear()
   }
 
-  return { router, conversationRouter, dispose }
+  return { router, conversationRouter, handleConversationUpgrade, dispose }
 }

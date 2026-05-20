@@ -16,6 +16,7 @@ interface MachineConfigPayload {
   id: string
   label: string
   host: string | null
+  transport?: 'local' | 'ssh' | 'daemon'
   tailscaleHostname?: string
   user?: string
   port?: number
@@ -30,10 +31,19 @@ interface MachineToolStatus {
 
 interface MachineHealthPayload {
   machineId: string
-  mode: 'local' | 'ssh'
+  mode: 'local' | 'ssh' | 'daemon'
   ssh: {
     ok: boolean
     destination?: string
+  }
+  daemon?: {
+    paired?: boolean
+    connected?: boolean
+    providerAuthReady?: boolean
+    launchable?: boolean
+    launchUnsupportedReason?: string | null
+    daemonVersion?: string | null
+    lastSeenAt?: string | null
   }
   tools: Record<string, MachineToolStatus>
 }
@@ -60,6 +70,42 @@ interface MachineAuthStatusPayload {
   providers: Record<string, MachineProviderAuthStatus>
 }
 
+interface MachineDaemonStatusPayload {
+  machineId: string
+  paired: boolean
+  connected: boolean
+  selectedTransport: 'local' | 'ssh' | 'daemon'
+  providerAuthReady: boolean
+  launchable: boolean
+  launchUnsupportedReason: string | null
+  daemonVersion: string | null
+  pairedAt: string | null
+  revokedAt: string | null
+  connectedAt: string | null
+  lastSeenAt: string | null
+  providerHealth: Record<string, MachineDaemonProviderHealth>
+}
+
+interface MachineDaemonProviderHealth {
+  provider: string
+  installed: boolean
+  authenticated: boolean
+  version: string | null
+  authMethod: string | null
+  detail: string | null
+  checkedAt: string | null
+}
+
+interface MachineDaemonPairPayload {
+  pairing: {
+    machineId: string
+    token: string
+    websocketPath: string
+    pairedAt: string
+  }
+  status: MachineDaemonStatusPayload
+}
+
 interface AddOptions {
   id: string
   label: string
@@ -80,6 +126,12 @@ interface BootstrapOptions {
 
 interface AuthStatusOptions {
   machineId: string
+}
+
+interface DaemonPairOptions {
+  machineId: string
+  label?: string
+  cwd?: string
 }
 
 interface AuthSetupOptions {
@@ -197,6 +249,9 @@ function printUsage(stdout: Writable): void {
   stdout.write('  hammurabi machine bootstrap <id> [--tools <provider-a,provider-b>] [--skip-telemetry]\n')
   stdout.write('  hammurabi machine auth-status --machine <id>\n')
   stdout.write('  hammurabi machine auth-setup --machine <id> --provider <provider> [--mode <setup-token|api-key|device-auth>] [--secret <value>]\n')
+  stdout.write('  hammurabi machine daemon-pair --machine <id> [--label <label>] [--cwd <cwd>]\n')
+  stdout.write('  hammurabi machine daemon-status --machine <id>\n')
+  stdout.write('  hammurabi machine daemon-revoke --machine <id>\n')
 }
 
 function parseMachines(payload: unknown): MachineConfigPayload[] {
@@ -219,7 +274,10 @@ function parseMachines(payload: unknown): MachineConfigPayload[] {
     const port = typeof entry.port === 'number' ? entry.port : undefined
     const cwd = typeof entry.cwd === 'string' && entry.cwd.trim().length > 0 ? entry.cwd.trim() : undefined
     if (!id || !label) continue
-    machines.push({ id, label, host, tailscaleHostname, user, port, cwd })
+    const transport = entry.transport === 'local' || entry.transport === 'ssh' || entry.transport === 'daemon'
+      ? entry.transport
+      : undefined
+    machines.push({ id, label, host, transport, tailscaleHostname, user, port, cwd })
   }
   return machines
 }
@@ -230,7 +288,9 @@ function parseHealth(payload: unknown): MachineHealthPayload | null {
   }
 
   const machineId = typeof payload.machineId === 'string' ? payload.machineId.trim() : ''
-  const mode = payload.mode === 'local' ? 'local' : (payload.mode === 'ssh' ? 'ssh' : null)
+  const mode = payload.mode === 'local' || payload.mode === 'ssh' || payload.mode === 'daemon'
+    ? payload.mode
+    : null
   const ssh = isObject(payload.ssh)
     ? {
       ok: payload.ssh.ok === true,
@@ -250,7 +310,29 @@ function parseHealth(payload: unknown): MachineHealthPayload | null {
     machineId,
     mode,
     ssh,
+    daemon: parseDaemonHealth(payload.daemon),
     tools,
+  }
+}
+
+function parseDaemonHealth(value: unknown): MachineHealthPayload['daemon'] {
+  if (!isObject(value)) {
+    return undefined
+  }
+  return {
+    paired: value.paired === true,
+    connected: value.connected === true,
+    providerAuthReady: value.providerAuthReady === true,
+    launchable: value.launchable === true,
+    launchUnsupportedReason: typeof value.launchUnsupportedReason === 'string' && value.launchUnsupportedReason.trim()
+      ? value.launchUnsupportedReason.trim()
+      : null,
+    daemonVersion: typeof value.daemonVersion === 'string' && value.daemonVersion.trim()
+      ? value.daemonVersion.trim()
+      : null,
+    lastSeenAt: typeof value.lastSeenAt === 'string' && value.lastSeenAt.trim()
+      ? value.lastSeenAt.trim()
+      : null,
   }
 }
 
@@ -314,6 +396,19 @@ function printHealth(
 ): void {
   stdout.write(`Machine: ${health.machineId}\n`)
   stdout.write(`Mode: ${health.mode}\n`)
+  if (health.daemon) {
+    stdout.write(`Daemon: ${health.daemon.connected ? 'connected' : 'disconnected'}`)
+    if (health.daemon.daemonVersion) {
+      stdout.write(` (${health.daemon.daemonVersion})`)
+    }
+    stdout.write('\n')
+    stdout.write(`Provider auth: ${health.daemon.providerAuthReady ? 'ready' : 'not ready'}\n`)
+    stdout.write(`Launchable: ${health.daemon.launchable ? 'yes' : 'no'}`)
+    if (health.daemon.launchUnsupportedReason) {
+      stdout.write(` (${health.daemon.launchUnsupportedReason})`)
+    }
+    stdout.write('\n')
+  }
   stdout.write(`SSH: ${health.ssh.ok ? 'ok' : 'failed'}`)
   if (health.ssh.destination) {
     stdout.write(` (${health.ssh.destination})`)
@@ -354,6 +449,56 @@ function printAuthStatus(
     stdout.write('\n')
     stdout.write(`  verification: ${status.verificationCommand}\n`)
     stdout.write(`  env source: ${status.envSourceKey ?? 'missing'}\n`)
+  }
+}
+
+function printDaemonStatus(stdout: Writable, status: MachineDaemonStatusPayload): void {
+  stdout.write(`Machine: ${status.machineId}\n`)
+  stdout.write(`Transport: ${status.selectedTransport}\n`)
+  stdout.write(`Paired: ${status.paired ? 'yes' : 'no'}\n`)
+  stdout.write(`Connected: ${status.connected ? 'yes' : 'no'}`)
+  if (status.daemonVersion) {
+    stdout.write(` (${status.daemonVersion})`)
+  }
+  stdout.write('\n')
+  stdout.write(`Provider auth: ${status.providerAuthReady ? 'ready' : 'not ready'}\n`)
+  stdout.write(`Launchable: ${status.launchable ? 'yes' : 'no'}`)
+  if (status.launchUnsupportedReason) {
+    stdout.write(` (${status.launchUnsupportedReason})`)
+  }
+  stdout.write('\n')
+  if (status.pairedAt) {
+    stdout.write(`Paired at: ${status.pairedAt}\n`)
+  }
+  if (status.revokedAt) {
+    stdout.write(`Revoked at: ${status.revokedAt}\n`)
+  }
+  if (status.connectedAt) {
+    stdout.write(`Connected at: ${status.connectedAt}\n`)
+  }
+  if (status.lastSeenAt) {
+    stdout.write(`Last seen: ${status.lastSeenAt}\n`)
+  }
+
+  const providers = Object.values(status.providerHealth)
+  if (providers.length === 0) {
+    stdout.write('Providers: none reported\n')
+    return
+  }
+
+  stdout.write('Providers:\n')
+  for (const provider of providers) {
+    stdout.write(`- ${provider.provider}: ${provider.installed ? 'installed' : 'missing'}, ${provider.authenticated ? 'authenticated' : 'not authenticated'}`)
+    if (provider.version) {
+      stdout.write(` · ${provider.version}`)
+    }
+    if (provider.authMethod) {
+      stdout.write(` · ${provider.authMethod}`)
+    }
+    if (provider.detail) {
+      stdout.write(` · ${provider.detail}`)
+    }
+    stdout.write('\n')
   }
 }
 
@@ -460,6 +605,51 @@ function parseAuthStatusOptions(args: readonly string[]): AuthStatusOptions | nu
   }
 
   return { machineId }
+}
+
+function parseMachineOnlyOptions(args: readonly string[]): AuthStatusOptions | null {
+  return parseAuthStatusOptions(args)
+}
+
+function parseDaemonPairOptions(args: readonly string[]): DaemonPairOptions | null {
+  let machineId: string | undefined
+  let label: string | undefined
+  let cwd: string | undefined
+
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index]
+    const value = args[index + 1]?.trim()
+    if (!flag || !value) {
+      return null
+    }
+
+    if (flag === '--machine') {
+      machineId = value
+      continue
+    }
+    if (flag === '--label') {
+      label = value
+      continue
+    }
+    if (flag === '--cwd') {
+      cwd = value
+      continue
+    }
+    return null
+  }
+
+  if (!machineId) {
+    return null
+  }
+  if (cwd && !cwd.startsWith('/')) {
+    return null
+  }
+
+  return {
+    machineId,
+    ...(label ? { label } : {}),
+    ...(cwd ? { cwd } : {}),
+  }
 }
 
 function parseAuthSetupOptions(
@@ -898,6 +1088,105 @@ function parseProviderAuthStatus(
   }
 }
 
+function parseDaemonProviderHealth(
+  value: unknown,
+  fallbackProvider: string,
+): MachineDaemonProviderHealth | null {
+  if (!isObject(value)) {
+    return null
+  }
+
+  const provider = typeof value.provider === 'string' && value.provider.trim()
+    ? value.provider.trim()
+    : fallbackProvider
+
+  return {
+    provider,
+    installed: value.installed === true,
+    authenticated: value.authenticated === true,
+    version: typeof value.version === 'string' && value.version.trim() ? value.version.trim() : null,
+    authMethod: typeof value.authMethod === 'string' && value.authMethod.trim() ? value.authMethod.trim() : null,
+    detail: typeof value.detail === 'string' && value.detail.trim() ? value.detail.trim() : null,
+    checkedAt: typeof value.checkedAt === 'string' && value.checkedAt.trim() ? value.checkedAt.trim() : null,
+  }
+}
+
+function parseDaemonProviderHealthMap(value: unknown): Record<string, MachineDaemonProviderHealth> {
+  if (!isObject(value)) {
+    return {}
+  }
+
+  const entries: Array<[string, MachineDaemonProviderHealth]> = []
+  for (const [key, rawProvider] of Object.entries(value)) {
+    const provider = parseDaemonProviderHealth(rawProvider, key)
+    if (provider) {
+      entries.push([key, provider])
+    }
+  }
+  return Object.fromEntries(entries)
+}
+
+function parseMachineDaemonStatus(payload: unknown): MachineDaemonStatusPayload | null {
+  if (!isObject(payload)) {
+    return null
+  }
+
+  const machineId = typeof payload.machineId === 'string' ? payload.machineId.trim() : ''
+  const selectedTransport = payload.selectedTransport === 'local'
+    || payload.selectedTransport === 'ssh'
+    || payload.selectedTransport === 'daemon'
+    ? payload.selectedTransport
+    : null
+  if (!machineId || !selectedTransport) {
+    return null
+  }
+
+  return {
+    machineId,
+    paired: payload.paired === true,
+    connected: payload.connected === true,
+    selectedTransport,
+    providerAuthReady: payload.providerAuthReady === true,
+    launchable: payload.launchable === true,
+    launchUnsupportedReason: typeof payload.launchUnsupportedReason === 'string' && payload.launchUnsupportedReason.trim()
+      ? payload.launchUnsupportedReason.trim()
+      : null,
+    daemonVersion: typeof payload.daemonVersion === 'string' && payload.daemonVersion.trim()
+      ? payload.daemonVersion.trim()
+      : null,
+    pairedAt: typeof payload.pairedAt === 'string' && payload.pairedAt.trim() ? payload.pairedAt.trim() : null,
+    revokedAt: typeof payload.revokedAt === 'string' && payload.revokedAt.trim() ? payload.revokedAt.trim() : null,
+    connectedAt: typeof payload.connectedAt === 'string' && payload.connectedAt.trim() ? payload.connectedAt.trim() : null,
+    lastSeenAt: typeof payload.lastSeenAt === 'string' && payload.lastSeenAt.trim() ? payload.lastSeenAt.trim() : null,
+    providerHealth: parseDaemonProviderHealthMap(payload.providerHealth),
+  }
+}
+
+function parseMachineDaemonPairPayload(payload: unknown): MachineDaemonPairPayload | null {
+  if (!isObject(payload) || !isObject(payload.pairing)) {
+    return null
+  }
+
+  const machineId = typeof payload.pairing.machineId === 'string' ? payload.pairing.machineId.trim() : ''
+  const token = typeof payload.pairing.token === 'string' ? payload.pairing.token.trim() : ''
+  const websocketPath = typeof payload.pairing.websocketPath === 'string' ? payload.pairing.websocketPath.trim() : ''
+  const pairedAt = typeof payload.pairing.pairedAt === 'string' ? payload.pairing.pairedAt.trim() : ''
+  const status = parseMachineDaemonStatus(payload.status)
+  if (!machineId || !token || !websocketPath || !pairedAt || !status) {
+    return null
+  }
+
+  return {
+    pairing: {
+      machineId,
+      token,
+      websocketPath,
+      pairedAt,
+    },
+    status,
+  }
+}
+
 async function fetchMachineAuthStatus(
   config: HammurabiConfig,
   fetchImpl: typeof fetch,
@@ -918,6 +1207,32 @@ async function fetchMachineAuthStatus(
   }
 
   const payload = parseMachineAuthStatus(result.data, providers)
+  if (!payload) {
+    return { ok: true, data: null }
+  }
+
+  return { ok: true, data: payload }
+}
+
+async function fetchMachineDaemonStatus(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  machineId: string,
+): Promise<{ ok: true; data: MachineDaemonStatusPayload } | { ok: true; data: null } | { ok: false; response: Response }> {
+  const result = await fetchJson(
+    fetchImpl,
+    buildApiUrl(config.endpoint, `/api/agents/machines/${encodeURIComponent(machineId)}/daemon/status`),
+    {
+      method: 'GET',
+      headers: buildAuthHeaders(config, false),
+    },
+  )
+
+  if (!result.ok) {
+    return result
+  }
+
+  const payload = parseMachineDaemonStatus(result.data)
   if (!payload) {
     return { ok: true, data: null }
   }
@@ -1092,6 +1407,100 @@ async function runAuthSetup(
   return 0
 }
 
+async function runDaemonPair(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  options: DaemonPairOptions,
+  stdout: Writable,
+  stderr: Writable,
+): Promise<number> {
+  const result = await fetchJson(
+    fetchImpl,
+    buildApiUrl(config.endpoint, `/api/agents/machines/${encodeURIComponent(options.machineId)}/daemon/pair`),
+    {
+      method: 'POST',
+      headers: buildAuthHeaders(config, true),
+      body: JSON.stringify({
+        ...(options.label ? { label: options.label } : {}),
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+      }),
+    },
+  )
+
+  if (!result.ok) {
+    const detail = await readErrorDetail(result.response)
+    stderr.write(detail ? `Request failed (${result.response.status}): ${detail}\n` : `Request failed (${result.response.status}).\n`)
+    return 1
+  }
+
+  const payload = parseMachineDaemonPairPayload(result.data)
+  if (!payload) {
+    stderr.write('Daemon pairing response was empty.\n')
+    return 1
+  }
+
+  stdout.write(`Paired daemon machine: ${payload.pairing.machineId}\n`)
+  stdout.write('Run this command on that machine to connect it:\n')
+  stdout.write(`  hammurabi daemon run --machine ${payload.pairing.machineId} --pairing-token ${payload.pairing.token} --endpoint ${normalizeEndpoint(config.endpoint)}\n`)
+  stdout.write('\n')
+  printDaemonStatus(stdout, payload.status)
+  return 0
+}
+
+async function runDaemonStatus(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  options: AuthStatusOptions,
+  stdout: Writable,
+  stderr: Writable,
+): Promise<number> {
+  const result = await fetchMachineDaemonStatus(config, fetchImpl, options.machineId)
+  if (!result.ok) {
+    const detail = await readErrorDetail(result.response)
+    stderr.write(detail ? `Request failed (${result.response.status}): ${detail}\n` : `Request failed (${result.response.status}).\n`)
+    return 1
+  }
+
+  if (!result.data) {
+    stderr.write('Daemon status response was empty.\n')
+    return 1
+  }
+
+  printDaemonStatus(stdout, result.data)
+  return 0
+}
+
+async function runDaemonRevoke(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  options: AuthStatusOptions,
+  stdout: Writable,
+  stderr: Writable,
+): Promise<number> {
+  const result = await fetchJson(
+    fetchImpl,
+    buildApiUrl(config.endpoint, `/api/agents/machines/${encodeURIComponent(options.machineId)}/daemon/revoke`),
+    {
+      method: 'POST',
+      headers: buildAuthHeaders(config, false),
+    },
+  )
+
+  if (!result.ok) {
+    const detail = await readErrorDetail(result.response)
+    stderr.write(detail ? `Request failed (${result.response.status}): ${detail}\n` : `Request failed (${result.response.status}).\n`)
+    return 1
+  }
+
+  const rawStatus = isObject(result.data) ? result.data.status : null
+  const status = parseMachineDaemonStatus(rawStatus)
+  stdout.write(`Revoked daemon pairing: ${options.machineId}\n`)
+  if (status) {
+    printDaemonStatus(stdout, status)
+  }
+  return 0
+}
+
 async function runBootstrap(
   config: HammurabiConfig,
   fetchImpl: typeof fetch,
@@ -1222,7 +1631,18 @@ export async function runMachinesCli(
   const runCommand = dependencies.runCommand ?? defaultRunCommand
 
   const command = args[0]
-  if (!command || !['list', 'add', 'check', 'remove', 'bootstrap', 'auth-status', 'auth-setup'].includes(command)) {
+  if (!command || ![
+    'list',
+    'add',
+    'check',
+    'remove',
+    'bootstrap',
+    'auth-status',
+    'auth-setup',
+    'daemon-pair',
+    'daemon-status',
+    'daemon-revoke',
+  ].includes(command)) {
     printUsage(stdout)
     return 1
   }
@@ -1301,6 +1721,33 @@ export async function runMachinesCli(
       return 1
     }
     return runAuthSetup(config, fetchImpl, options, providers, stdout, stderr)
+  }
+
+  if (command === 'daemon-pair') {
+    const options = parseDaemonPairOptions(args.slice(1))
+    if (!options) {
+      printUsage(stdout)
+      return 1
+    }
+    return runDaemonPair(config, fetchImpl, options, stdout, stderr)
+  }
+
+  if (command === 'daemon-status') {
+    const options = parseMachineOnlyOptions(args.slice(1))
+    if (!options) {
+      printUsage(stdout)
+      return 1
+    }
+    return runDaemonStatus(config, fetchImpl, options, stdout, stderr)
+  }
+
+  if (command === 'daemon-revoke') {
+    const options = parseMachineOnlyOptions(args.slice(1))
+    if (!options) {
+      printUsage(stdout)
+      return 1
+    }
+    return runDaemonRevoke(config, fetchImpl, options, stdout, stderr)
   }
 
   const options = parseBootstrapOptions(args.slice(1), config, providers)

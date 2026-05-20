@@ -3,7 +3,7 @@
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SessionMessageList } from '../SessionMessageList'
 import type { MsgItem } from '../session-messages'
 
@@ -50,6 +50,38 @@ describe('SessionMessageList thinking blocks', () => {
     })
     expect(container.textContent).toContain(THINKING_TEXT)
     expect(chevron.getAttribute('class')).toContain('rotate-90')
+
+    flushSync(() => {
+      root.unmount()
+    })
+    container.remove()
+  })
+})
+
+describe('SessionMessageList queued transcript turns', () => {
+  it('renders a processed queued user turn exactly once from the message projection', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+
+    const messages: MsgItem[] = [
+      {
+        id: 'queued-user-1',
+        kind: 'user',
+        text: 'processed queued follow-up',
+      },
+      {
+        id: 'agent-1',
+        kind: 'agent',
+        text: 'I received the follow-up.',
+      },
+    ]
+
+    flushSync(() => {
+      root.render(createElement(SessionMessageList, { messages, onAnswer: () => undefined }))
+    })
+
+    expect(container.textContent?.match(/processed queued follow-up/g) ?? []).toHaveLength(1)
 
     flushSync(() => {
       root.unmount()
@@ -130,6 +162,68 @@ describe('SessionMessageList planning blocks', () => {
       proposedToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(container.textContent).toContain('Capture the event')
+
+    flushSync(() => {
+      root.unmount()
+    })
+    container.remove()
+  })
+
+  it('renders plan approval asks and submits provider decisions', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const onAnswer = vi.fn()
+
+    const messages: MsgItem[] = [
+      {
+        id: 'plan-approval',
+        kind: 'ask',
+        text: '',
+        toolId: 'plan-exit',
+        toolName: 'ExitPlanMode',
+        askInteractionKind: 'plan_approval',
+        askAnswered: false,
+        planApprovalPlan: '1. Inspect stream handling\n2. Patch replay',
+        planApprovalApproveLabel: 'Approve',
+        planApprovalRejectLabel: 'Reject',
+        planApprovalCustomResponseLabel: 'Add response',
+      },
+    ]
+
+    flushSync(() => {
+      root.render(createElement(SessionMessageList, { messages, onAnswer }))
+    })
+
+    expect(container.textContent).toContain('Plan Approval')
+    expect(container.textContent).toContain('Inspect stream handling')
+
+    const textarea = container.querySelector('textarea')
+    if (!textarea) {
+      throw new Error('expected plan response textarea')
+    }
+    const textareaValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )?.set
+    flushSync(() => {
+      textareaValueSetter?.call(textarea, 'Ship this plan.')
+      textarea.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    })
+
+    const approveButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Approve'))
+    if (!approveButton) {
+      throw new Error('expected approve button')
+    }
+    flushSync(() => {
+      approveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(onAnswer).toHaveBeenCalledWith('plan-exit', {
+      decision: ['approve'],
+      message: ['Ship this plan.'],
+    })
 
     flushSync(() => {
       root.unmount()

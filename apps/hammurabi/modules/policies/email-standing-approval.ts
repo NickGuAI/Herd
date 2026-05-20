@@ -1,7 +1,7 @@
 import { asTrimmedString, uniqueStrings } from './shared.js'
+import { DEFAULT_STANDING_APPROVAL_EXPIRY_DAYS } from './settings-defaults.js'
 
 export const SEND_EMAIL_ACTION_ID = 'send-email'
-export const DEFAULT_STANDING_APPROVAL_EXPIRY_DAYS = 30
 
 const DEFAULT_STANDING_APPROVAL_REASON = 'Added via action policy update'
 const PERMANENT_STANDING_APPROVAL_REASONS = new Map<string, string>([

@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import type { WorkspaceTreeNode } from '../types'
 import {
   fetchWorkspaceExpandedTree,
+  fetchWorkspacePathResolution,
   fetchWorkspaceTree,
   getWorkspaceSourceKey,
   useWorkspaceActions,
@@ -11,17 +12,13 @@ import {
   useWorkspaceGitLog,
   useWorkspaceGitStatus,
   type WorkspaceSource,
+  type WorkspacePendingFileAnnotation,
 } from '../use-workspace'
 import { WorkspaceFilePreview } from './WorkspaceFilePreview'
+import { WorkspaceFilePreviewModal } from './WorkspaceFilePreviewModal'
 import { WorkspaceGitPanel } from './WorkspaceGitPanel'
 import { WorkspaceToolbar } from './WorkspaceToolbar'
 import { WorkspaceTree } from './WorkspaceTree'
-
-function getParentPath(relativePath: string): string {
-  const segments = relativePath.split('/').filter(Boolean)
-  segments.pop()
-  return segments.join('/')
-}
 
 function joinWorkspacePath(parentPath: string, name: string): string {
   return parentPath ? `${parentPath}/${name}` : name
@@ -45,20 +42,30 @@ function findNode(
   return null
 }
 
+function isHiddenWorkspaceNode(node: WorkspaceTreeNode): boolean {
+  return node.name.startsWith('.')
+}
+
 export function WorkspacePanel({
   source,
   position = 'embedded',
   variant = 'light',
   onClose,
   onInsertPath,
+  onAddAnnotationContext,
   refreshToken = 0,
+  requestedPath,
+  requestedPathToken = 0,
 }: {
   source: WorkspaceSource
   position?: 'side' | 'compact' | 'embedded'
   variant?: 'light' | 'dark'
   onClose?: () => void
-  onInsertPath?: (path: string) => void
+  onInsertPath?: (path: string, type: WorkspaceTreeNode['type']) => void
+  onAddAnnotationContext?: (annotation: WorkspacePendingFileAnnotation) => void
   refreshToken?: number
+  requestedPath?: string | null
+  requestedPathToken?: number
 }) {
   const sourceKey = getWorkspaceSourceKey(source)
   const actions = useWorkspaceActions(source)
@@ -69,29 +76,51 @@ export function WorkspacePanel({
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
   const [addedPaths, setAddedPaths] = useState<Set<string>>(new Set())
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [previewModalPath, setPreviewModalPath] = useState<string | null>(null)
+  const [showHiddenEntries, setShowHiddenEntries] = useState(false)
   const [busyLabel, setBusyLabel] = useState<string | null>(null)
   const [panelError, setPanelError] = useState<string | null>(null)
   const [draftContent, setDraftContent] = useState('')
   const [isInitializingGit, setIsInitializingGit] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const addFeedbackTimersRef = useRef<number[]>([])
+  const requestedSelectionRef = useRef<{ path: string; token: number } | null>(null)
 
-  const previewQuery = useWorkspaceFilePreview(
-    source,
-    selectedPath && findNode(nodesByParent, selectedPath)?.type === 'file' ? selectedPath : null,
-    isOpen && activeTab === 'files',
-  )
   const gitStatusQuery = useWorkspaceGitStatus(source, isOpen && activeTab === 'changes')
   const gitLogQuery = useWorkspaceGitLog(source, isOpen && activeTab === 'changes')
 
+  const modalOpen = position === 'side' && Boolean(previewModalPath)
+  const visibleNodesByParent = useMemo(() => {
+    if (showHiddenEntries) {
+      return nodesByParent
+    }
+
+    return Object.fromEntries(
+      Object.entries(nodesByParent).map(([parentPath, nodes]) => [
+        parentPath,
+        nodes.filter((node) => !isHiddenWorkspaceNode(node)),
+      ]),
+    )
+  }, [nodesByParent, showHiddenEntries])
   const selectedNode = useMemo(() => findNode(nodesByParent, selectedPath), [nodesByParent, selectedPath])
+  const previewPath = modalOpen ? previewModalPath : selectedPath
+  const previewNode = useMemo(() => findNode(nodesByParent, previewPath), [nodesByParent, previewPath])
+  const selectedPreviewPath = previewPath && previewNode?.type === 'file'
+    ? previewPath
+    : null
+  const previewQuery = useWorkspaceFilePreview(
+    source,
+    selectedPreviewPath,
+    isOpen && activeTab === 'files',
+  )
+  const refetchPreview = previewQuery.refetch
   const currentDirectoryPath = useMemo(() => {
     if (!selectedNode) {
       return ''
     }
     return selectedNode.type === 'directory'
       ? selectedNode.path
-      : getParentPath(selectedNode.path)
+      : selectedNode.parentPath
   }, [selectedNode])
 
   const clearAddFeedbackTimers = useCallback(() => {
@@ -107,6 +136,9 @@ export function WorkspacePanel({
     setLoadingPaths(new Set())
     setAddedPaths(new Set())
     setSelectedPath(null)
+    setPreviewModalPath(null)
+    setShowHiddenEntries(false)
+    requestedSelectionRef.current = null
     setDraftContent('')
     setPanelError(null)
     setActiveTab('files')
@@ -149,7 +181,7 @@ export function WorkspacePanel({
     await Promise.all([...pathsToRefresh].map((path) => loadDirectory(path, path !== '')))
     const refreshTasks: Array<Promise<unknown>> = []
     if (selectedPath && selectedNode?.type === 'file') {
-      refreshTasks.push(previewQuery.refetch())
+      refreshTasks.push(refetchPreview())
     }
     if (activeTab === 'changes') {
       refreshTasks.push(gitStatusQuery.refetch(), gitLogQuery.refetch())
@@ -174,6 +206,72 @@ export function WorkspacePanel({
     }
     void refreshWorkspace()
   }, [refreshToken])
+
+  useEffect(() => {
+    const rawRequestedPath = requestedPath?.trim()
+    if (!rawRequestedPath) {
+      return
+    }
+    let cancelled = false
+
+    setActiveTab('files')
+    setIsOpen(true)
+    setPanelError(null)
+    setPreviewModalPath(null)
+
+    void (async () => {
+      try {
+        const resolvedPath = await fetchWorkspacePathResolution(source, rawRequestedPath)
+        if (cancelled) {
+          return
+        }
+        setSelectedPath(resolvedPath.path)
+        requestedSelectionRef.current = {
+          path: resolvedPath.path,
+          token: requestedPathToken,
+        }
+        if (resolvedPath.treePath && !nodesByParent[resolvedPath.treePath]) {
+          void loadDirectory(resolvedPath.treePath, true)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPanelError(error instanceof Error ? error.message : 'Failed to open workspace path')
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [requestedPath, requestedPathToken])
+
+  useEffect(() => {
+    const requestedSelection = requestedSelectionRef.current
+    if (
+      !requestedSelection
+      || requestedSelection.path !== selectedPath
+      || requestedSelection.token !== requestedPathToken
+    ) {
+      return
+    }
+
+    if (!selectedNode) {
+      return
+    }
+
+    if (selectedNode.type === 'directory') {
+      setPreviewModalPath(null)
+      setExpandedPaths((prev) => new Set(prev).add(selectedNode.path))
+      if (!nodesByParent[selectedNode.path]) {
+        void loadDirectory(selectedNode.path, true)
+      }
+      return
+    }
+
+    if (position === 'side') {
+      setPreviewModalPath(selectedNode.path)
+    }
+  }, [nodesByParent, position, requestedPathToken, selectedNode, selectedPath])
 
   async function runBusyTask(label: string, task: () => Promise<void>): Promise<void> {
     setBusyLabel(label)
@@ -203,6 +301,18 @@ export function WorkspacePanel({
       await loadDirectory(relativePath, true)
     }
   }
+
+  const handleSelectPath = useCallback((path: string) => {
+    setSelectedPath(path)
+    const node = findNode(nodesByParent, path)
+    if (position === 'side') {
+      if (node?.type === 'directory') {
+        setPreviewModalPath(null)
+      } else if (node?.type === 'file') {
+        setPreviewModalPath(path)
+      }
+    }
+  }, [nodesByParent, position])
 
   function promptForName(label: string): string | null {
     if (typeof window === 'undefined') {
@@ -257,7 +367,7 @@ export function WorkspacePanel({
       return
     }
     await runBusyTask('Renaming…', async () => {
-      const nextPath = joinWorkspacePath(getParentPath(selectedNode.path), nextName)
+      const nextPath = joinWorkspacePath(selectedNode.parentPath, nextName)
       await actions.renamePath(selectedNode.path, nextPath)
       setSelectedPath(nextPath)
       await refreshWorkspace()
@@ -310,8 +420,7 @@ export function WorkspacePanel({
     }
 
     const node = knownType ? { type: knownType } : findNode(nodesByParent, path)
-    const nextPath = node?.type === 'directory' ? `${path}/` : path
-    onInsertPath(nextPath)
+    onInsertPath(path, node?.type ?? 'file')
     setAddedPaths((prev) => new Set(prev).add(path))
 
     const timerId = window.setTimeout(() => {
@@ -327,41 +436,81 @@ export function WorkspacePanel({
   const compactHeader = (
     <button
       type="button"
+      data-testid="workspace-compact-header"
+      data-test-id="workspace-compact-header"
       onClick={() => setIsOpen((prev) => !prev)}
       className="flex w-full items-center gap-2 px-4 py-2.5 text-left"
     >
-      <FolderOpen size={14} className="text-sumi-diluted" />
-      <span className="flex-1 truncate font-mono text-xs text-sumi-gray">
+      <FolderOpen size={14} className="text-[color:var(--hv-fg-subtle)]" />
+      <span className="flex-1 truncate font-mono text-xs text-[color:var(--hv-fg-muted)]">
         Workspace
       </span>
-      <span className="text-whisper text-sumi-mist">
+      <span className="text-whisper text-[color:var(--hv-fg-faint)]">
         {isOpen ? 'Hide' : 'Show'}
       </span>
     </button>
   )
 
+  const previewError = previewQuery.error instanceof Error ? previewQuery.error.message : null
+
+  useEffect(() => {
+    if (!previewModalPath) {
+      return
+    }
+    void refetchPreview()
+  }, [previewModalPath, refetchPreview])
+
+  const previewModal = (
+    <WorkspaceFilePreviewModal
+      open={modalOpen}
+      selectedPath={previewModalPath}
+      preview={previewQuery.data ?? null}
+      draftContent={draftContent}
+      loading={previewQuery.isLoading || previewQuery.isFetching}
+      refreshing={previewQuery.isFetching}
+      error={previewError}
+      readOnly={Boolean(source.readOnly)}
+      saving={busyLabel === 'Saving file…'}
+      onClose={() => setPreviewModalPath(null)}
+      onRefresh={() => void refetchPreview()}
+      onInsertPath={onInsertPath ? handleAddPath : undefined}
+      onAddAnnotationContext={onAddAnnotationContext}
+      onDraftChange={setDraftContent}
+      onSave={() => void handleSave()}
+    />
+  )
+
   const panelBody = (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-ink-border bg-washi-aged/60 px-3 py-2.5">
+    <div
+      data-testid="workspace-panel-body"
+      data-test-id="workspace-panel-body"
+      className="flex h-full min-h-0 flex-col overflow-hidden"
+    >
+      <div
+        data-testid="workspace-panel-header"
+        data-test-id="workspace-panel-header"
+        className="flex items-center justify-between gap-3 border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2.5"
+      >
         <div className="min-w-0">
-          <p className="font-mono text-xs uppercase tracking-wide text-sumi-diluted">
+          <p className="font-mono text-xs uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">
             Workspace
-          </p>
-          <p className="truncate text-sm text-sumi-black">
-            {sourceKey}
           </p>
         </div>
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className={cn('rounded-md px-2 py-1 text-xs transition-colors', activeTab === 'files' ? 'bg-sumi-black text-washi-aged' : 'hover:bg-ink-wash text-sumi-diluted')}
+            data-testid="workspace-files-tab"
+            data-test-id="workspace-files-tab"
+            className={cn('rounded-md px-2 py-1 text-xs transition-colors', activeTab === 'files' ? 'bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]' : 'hover:bg-[var(--hv-surface-hover)] text-[color:var(--hv-fg-subtle)]')}
             onClick={() => setActiveTab('files')}
           >
             Files
           </button>
           <button
             type="button"
-            className={cn('rounded-md px-2 py-1 text-xs transition-colors', activeTab === 'changes' ? 'bg-sumi-black text-washi-aged' : 'hover:bg-ink-wash text-sumi-diluted')}
+            data-testid="workspace-changes-tab"
+            data-test-id="workspace-changes-tab"
+            className={cn('rounded-md px-2 py-1 text-xs transition-colors', activeTab === 'changes' ? 'bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]' : 'hover:bg-[var(--hv-surface-hover)] text-[color:var(--hv-fg-subtle)]')}
             onClick={() => setActiveTab('changes')}
           >
             <span className="inline-flex items-center gap-1">
@@ -369,8 +518,30 @@ export function WorkspacePanel({
               Changes
             </span>
           </button>
+          <button
+            type="button"
+            data-testid="workspace-hidden-toggle"
+            data-test-id="workspace-hidden-toggle"
+            aria-pressed={showHiddenEntries}
+            className={cn(
+              'rounded-md px-2 py-1 text-xs transition-colors',
+              showHiddenEntries
+                ? 'bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]'
+                : 'hover:bg-[var(--hv-surface-hover)] text-[color:var(--hv-fg-subtle)]',
+            )}
+            onClick={() => setShowHiddenEntries((current) => !current)}
+          >
+            {showHiddenEntries ? 'Hide hidden' : 'Show hidden'}
+          </button>
           {onClose && (
-            <button type="button" className="rounded-md p-1.5 hover:bg-ink-wash" onClick={onClose} aria-label="Close workspace">
+            <button
+              type="button"
+              data-testid="workspace-close-button"
+              data-test-id="workspace-close-button"
+              className="rounded-md p-1.5 hover:bg-[var(--hv-surface-hover)]"
+              onClick={onClose}
+              aria-label="Close workspace"
+            >
               <X size={13} />
             </button>
           )}
@@ -378,7 +549,7 @@ export function WorkspacePanel({
       </div>
 
       {panelError && (
-        <div className="border-b border-accent-vermillion/20 bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
+        <div className="border-b border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-danger)]">
           {panelError}
         </div>
       )}
@@ -403,46 +574,58 @@ export function WorkspacePanel({
             className="hidden"
             onChange={(event) => void handleUpload(event.target.files)}
           />
-          <div className={cn('grid flex-1 min-h-0 gap-3 p-3', position === 'embedded' ? 'xl:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]' : 'grid-cols-1')}>
-            <div className="min-h-0 overflow-auto rounded-lg border border-ink-border bg-washi-white">
-              {nodesByParent[''] ? (
+          <div
+            className={cn(
+              'flex-1 min-h-0 p-3',
+              position === 'embedded' && 'grid gap-3 xl:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]',
+            )}
+          >
+            <div
+              className={cn(
+                'min-h-0 overflow-auto rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]',
+                'h-full',
+              )}
+            >
+              {visibleNodesByParent[''] ? (
                 <div className="p-2">
                   <WorkspaceTree
-                    nodesByParent={nodesByParent}
+                    nodesByParent={visibleNodesByParent}
                     expandedPaths={expandedPaths}
                     loadingPaths={loadingPaths}
                     addedPaths={addedPaths}
                     selectedPath={selectedPath}
-                    onSelectPath={setSelectedPath}
+                    onSelectPath={handleSelectPath}
                     onToggleDirectory={(path) => void handleToggleDirectory(path)}
                     onAddPath={onInsertPath ? handleAddPath : undefined}
                     variant={variant}
                   />
                 </div>
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-sumi-diluted">
+                <div className="flex h-full items-center justify-center text-sm text-[color:var(--hv-fg-subtle)]">
                   <Loader2 size={16} className="mr-2 animate-spin" />
                   Loading workspace…
                 </div>
               )}
             </div>
-            <div className="min-h-0">
-              <WorkspaceFilePreview
-                selectedPath={selectedPath}
-                preview={previewQuery.data ?? null}
-                draftContent={draftContent}
-                loading={previewQuery.isLoading || previewQuery.isFetching}
-                error={previewQuery.error instanceof Error ? previewQuery.error.message : null}
-                readOnly={Boolean(source.readOnly)}
-                saving={busyLabel === 'Saving file…'}
-                onDraftChange={setDraftContent}
-                onSave={() => void handleSave()}
-                onRename={() => void handleRename()}
-                onDelete={() => void handleDelete()}
-                onInsertPath={onInsertPath ? handleAddPath : undefined}
-                variant={variant}
-              />
-            </div>
+            {position !== 'side' && (
+              <div className="min-h-0">
+                <WorkspaceFilePreview
+                  selectedPath={selectedPath}
+                  preview={previewQuery.data ?? null}
+                  draftContent={draftContent}
+                  loading={previewQuery.isLoading || previewQuery.isFetching}
+                  error={previewError}
+                  readOnly={Boolean(source.readOnly)}
+                  saving={busyLabel === 'Saving file…'}
+                  onDraftChange={setDraftContent}
+                  onSave={() => void handleSave()}
+                  onRename={() => void handleRename()}
+                  onDelete={() => void handleDelete()}
+                  onInsertPath={onInsertPath ? handleAddPath : undefined}
+                  variant={variant}
+                />
+              </div>
+            )}
           </div>
         </>
       ) : (
@@ -467,23 +650,39 @@ export function WorkspacePanel({
 
   if (position === 'compact') {
     return (
-      <div className="border-b border-ink-border bg-washi-aged">
-        {compactHeader}
-        {isOpen && <div className="h-[32rem] max-h-[70vh]">{panelBody}</div>}
-      </div>
+      <>
+        <div className="border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)]">
+          {compactHeader}
+          {isOpen && (
+            <div
+              data-testid="workspace-compact-panel"
+              data-test-id="workspace-compact-panel"
+              className="h-[32rem] max-h-[70vh]"
+            >
+              {panelBody}
+            </div>
+          )}
+        </div>
+        {previewModal}
+      </>
     )
   }
 
   return (
-    <div
-      className={cn(
-        position === 'side'
-          ? 'w-80 border-l'
-          : 'h-full min-h-[28rem] rounded-xl border',
-        'border-ink-border bg-washi-aged',
-      )}
-    >
-      {panelBody}
-    </div>
+    <>
+      <div
+        data-testid="workspace-panel"
+        data-test-id="workspace-panel"
+        className={cn(
+          position === 'side'
+            ? 'flex h-full min-h-0 w-full flex-col'
+            : 'h-full min-h-[28rem] rounded-xl border',
+          'border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)]',
+        )}
+      >
+        {panelBody}
+      </div>
+      {previewModal}
+    </>
   )
 }

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   defaultMachineCredentialsKeyPath,
   migrateMachineEnvFiles,
+  prepareDaemonMachineLaunchEnvironment,
   prepareMachineLaunchEnvironment,
   updateMachineEnvEntries,
 } from '../machine-credentials'
@@ -322,6 +323,47 @@ describe('agents/machine-credentials', () => {
     expect(prepared.env.UNRELATED_KEY).toBeUndefined()
     // Remote bootstrap should shell-source the path on the remote host.
     expect(prepared.sourcedEnvFile).toBe(sharedPath)
+  })
+
+  it('prepares daemon launch envs without inheriting the Hammurabi server process env', async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'hammurabi-daemon-env-'))
+    createdDirectories.push(tempDir)
+
+    const daemonEnvPath = path.join(tempDir, 'daemon.env')
+    await writeFile(daemonEnvPath, 'OPENAI_API_KEY=ec2-decoy\n', 'utf8')
+
+    const machine = createMachine({
+      host: null,
+      transport: 'daemon',
+      envFile: daemonEnvPath,
+    })
+
+    const prepared = prepareDaemonMachineLaunchEnvironment(machine)
+
+    expect(prepared.env.OPENAI_API_KEY).toBeUndefined()
+    expect(prepared.env.HOME).toBeUndefined()
+    expect(prepared.env.PATH).toBeUndefined()
+    expect(prepared.sourcedEnvFile).toBe(daemonEnvPath)
+    expect(prepared.sshSendEnvKeys).toEqual([])
+  })
+
+  it('decrypts only explicit encrypted daemon env entries', async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), 'hammurabi-daemon-encrypted-env-'))
+    createdDirectories.push(tempDir)
+    previousDataDir = process.env.HAMMURABI_DATA_DIR
+    process.env.HAMMURABI_DATA_DIR = path.join(tempDir, '.hammurabi')
+
+    const envFilePath = path.join(tempDir, 'daemon.env')
+    await writeFile(envFilePath, 'OPENAI_API_KEY=sk-daemon\n', 'utf8')
+
+    const migrated = await migrateMachineEnvFiles([
+      createMachine({ host: null, transport: 'daemon', envFile: envFilePath }),
+    ])
+
+    const prepared = prepareDaemonMachineLaunchEnvironment(migrated.machines[0])
+    expect(prepared.env).toEqual({ OPENAI_API_KEY: 'sk-daemon' })
+    expect(prepared.sourcedEnvFile).toBeUndefined()
+    expect(prepared.sshSendEnvKeys).toEqual([])
   })
 
   it('preserves empty-value entries through encrypted re-write (KEY= round-trips)', async () => {

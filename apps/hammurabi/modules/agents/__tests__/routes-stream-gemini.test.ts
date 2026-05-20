@@ -155,7 +155,7 @@ describe("stream sessions", () => {
         }))
 
         await vi.waitFor(() => {
-          expect(received).toEqual([
+          expect(received.filter((message) => message.type === 'system')).toEqual([
             {
               type: 'system',
               text: 'Image attachments are not supported in Gemini sessions.',

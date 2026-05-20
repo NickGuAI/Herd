@@ -1,5 +1,5 @@
 import type { RequestHandler } from 'express'
-import { bearerTokenFromHeader } from '@gehirn/auth-providers'
+import { bearerTokenFromHeader, type AuthUser } from '@gehirn/auth-providers'
 import { authorizeApiKeyRequest, type ApiKeyAuthOptions } from './auth.js'
 import {
   authorizeAuth0Request,
@@ -11,10 +11,34 @@ import {
 
 export interface CombinedAuthOptions extends ApiKeyAuthOptions, Auth0Options {
   requiredApiKeyScopes?: readonly string[]
+  /**
+   * Browser/Auth0 permissions may be coarser than API-key scopes. When omitted,
+   * Auth0 keeps the legacy behavior and uses requiredApiKeyScopes.
+   */
+  requiredAuth0Permissions?: readonly string[]
+  auth0PermissionMode?: 'all' | 'any'
   unconfiguredApiKeyMessage?: string
   optional?: boolean
   /** Server-generated token accepted via `x-hammurabi-internal-token` header. */
   internalToken?: string
+}
+
+function auth0UserHasCombinedPermissions(
+  user: AuthUser,
+  options: CombinedAuthOptions,
+): boolean {
+  const requiredPermissions = options.requiredAuth0Permissions ?? options.requiredApiKeyScopes
+  if (!requiredPermissions || requiredPermissions.length === 0) {
+    return true
+  }
+
+  if (options.auth0PermissionMode === 'any') {
+    return requiredPermissions.some((permission) =>
+      auth0UserHasRequiredPermissions(user, [permission]),
+    )
+  }
+
+  return auth0UserHasRequiredPermissions(user, requiredPermissions)
 }
 
 export function combinedAuth(options: CombinedAuthOptions = {}): RequestHandler {
@@ -47,12 +71,7 @@ export function combinedAuth(options: CombinedAuthOptions = {}): RequestHandler 
     if (bearerToken) {
       auth0AttemptResult = await authorizeAuth0Request(req, options, verifyAuth0Token)
       if (auth0AttemptResult.ok) {
-        if (
-          !auth0UserHasRequiredPermissions(
-            auth0AttemptResult.user,
-            options.requiredApiKeyScopes,
-          )
-        ) {
+        if (!auth0UserHasCombinedPermissions(auth0AttemptResult.user, options)) {
           if (options.optional) {
             next()
             return

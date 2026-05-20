@@ -8,6 +8,7 @@ import {
   useWorkspaceGitStatus,
   type WorkspaceSource,
 } from '../../workspace/use-workspace'
+import type { WorkspaceTreeNode } from '../../workspace/types'
 import { PreviewPopup } from './workspace-overlay/PreviewPopup'
 import { useWorkspaceOverlayTree } from './workspace-overlay/use-workspace-overlay-tree'
 import { WorkspaceChangesTab } from './workspace-overlay/WorkspaceChangesTab'
@@ -17,8 +18,10 @@ import { WorkspaceLogTab } from './workspace-overlay/WorkspaceLogTab'
 export interface WorkspaceOverlayProps {
   open: boolean
   onClose: () => void
-  onSelectFile: (filePath: string) => void
+  onSelectFile: (filePath: string, type: WorkspaceTreeNode['type']) => void
   source: WorkspaceSource
+  requestedPath?: string | null
+  requestedPathToken?: number
 }
 
 type OverlayTab = 'files' | 'changes' | 'log'
@@ -34,6 +37,8 @@ export function WorkspaceOverlay({
   onClose,
   onSelectFile,
   source,
+  requestedPath,
+  requestedPathToken = 0,
 }: WorkspaceOverlayProps) {
   const sourceKey = getWorkspaceSourceKey(source)
   const [activeTab, setActiveTab] = useState<OverlayTab>('files')
@@ -58,6 +63,8 @@ export function WorkspaceOverlay({
     query,
     filesTabActive: activeTab === 'files',
     onSelectFile,
+    requestedPath,
+    requestedPathToken,
   })
 
   const gitStatusQuery = useWorkspaceGitStatus(source, open && activeTab === 'changes')
@@ -93,7 +100,7 @@ export function WorkspaceOverlay({
         title="Workspace"
         position="bottom-sheet"
         contentClassName={cn(
-          'flex w-full flex-col overflow-hidden bg-washi-white',
+          'flex w-full flex-col overflow-hidden bg-[var(--hv-surface-card)]',
           'max-h-[85dvh] rounded-t-2xl md:max-w-2xl md:rounded-xl',
         )}
       >
@@ -101,31 +108,31 @@ export function WorkspaceOverlay({
             <div className="h-1 w-8 rounded-full bg-ink-border" />
           </div>
 
-          <div className="border-b border-ink-border px-4 pb-3 pt-2">
+          <div className="border-b border-[color:var(--hv-border-hair)] px-4 pb-3 pt-2">
             <div className="mb-3 flex items-center gap-2">
-              <FolderOpen size={14} className="shrink-0 text-sumi-diluted" />
-              <span className="flex-1 truncate font-mono text-xs text-sumi-gray">
+              <FolderOpen size={14} className="shrink-0 text-[color:var(--hv-fg-subtle)]" />
+              <span className="flex-1 truncate font-mono text-xs text-[color:var(--hv-fg-muted)]">
                 Workspace
               </span>
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-lg p-1.5 transition-colors hover:bg-ink-wash"
+                className="rounded-lg p-1.5 transition-colors hover:bg-[var(--hv-surface-hover)]"
                 aria-label="Close workspace"
               >
-                <X size={14} className="text-sumi-diluted" />
+                <X size={14} className="text-[color:var(--hv-fg-subtle)]" />
               </button>
             </div>
             <div className="relative">
               <Search
                 size={14}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-sumi-mist"
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--hv-fg-faint)]"
               />
               <input
                 ref={searchRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="w-full rounded-lg border border-ink-border bg-washi-aged py-2 pl-8 pr-3 text-[16px] focus:border-ink-border-hover focus:outline-none md:text-sm"
+                className="w-full rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] py-2 pl-8 pr-3 text-[16px] focus:border-[color:var(--hv-border-soft)] focus:outline-none md:text-sm"
                 placeholder="Search files..."
                 aria-label="Search workspace files"
               />
@@ -138,8 +145,8 @@ export function WorkspaceOverlay({
                   className={cn(
                     'rounded-md px-2.5 py-1 text-xs transition-colors',
                     activeTab === tab.key
-                      ? 'bg-sumi-black text-washi-aged'
-                      : 'text-sumi-diluted hover:bg-ink-wash',
+                      ? 'bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]'
+                      : 'text-[color:var(--hv-fg-subtle)] hover:bg-[var(--hv-surface-hover)]',
                   )}
                   onClick={() => setActiveTab(tab.key)}
                 >

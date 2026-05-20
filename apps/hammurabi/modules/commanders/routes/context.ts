@@ -1,11 +1,12 @@
 import { access, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import multer from 'multer'
-import { type Request, type RequestHandler, type Response as ExpressResponse } from 'express'
+import { type Request, type RequestHandler } from 'express'
 import { ProviderSecretsStore } from '../../../server/api-keys/provider-secrets-store.js'
 import { generateGeminiImage } from '../../../server/image-generation/gemini-client.js'
 import { combinedAuth } from '../../../server/middleware/combined-auth.js'
 import { authUserHasRequiredPermissions } from '../../../server/middleware/auth0.js'
+import { findExpiredPendingPlanApproval } from '../../agents/plan-approval.js'
 import type { CommanderSessionsInterface } from '../../agents/routes.js'
 import { AutomationStore } from '../../automations/store.js'
 import {
@@ -15,11 +16,6 @@ import {
 import { CommanderChannelBindingStore } from '../../channels/store.js'
 import { resolveModuleDataDir } from '../../data-dir.js'
 import {
-  resolveWorkspaceRoot,
-  toWorkspaceError,
-  WorkspaceError,
-} from '../../workspace/index.js'
-import {
   buildFatHeartbeatMessage as appendHeartbeatChecklist,
   chooseHeartbeatMode,
   resolveFatPinInterval,
@@ -27,16 +23,11 @@ import {
 import {
   profileForApiResponse,
   readCommanderUiProfile,
-  resolveCommanderAvatarPath,
+  resolveCommanderAvatarUrl,
 } from '../commander-profile.js'
 import {
   migrateLegacyCommanderConfig,
 } from '../config-migration.js'
-import {
-  CommanderEmailConfigStore,
-  CommanderEmailStateStore,
-} from '../email-config.js'
-import { EmailPoller } from '../email-poller.js'
 import { dispatchChannelReply } from '../channel-dispatchers.js'
 import {
   CommanderHeartbeatManager,
@@ -563,9 +554,10 @@ export async function toCommanderSessionResponse(
 }> {
   const normalizedAgentType = resolveCommanderAgentType(session)
   const runtimeView = await resolveCommanderRuntimeViewForCommander(session.id, conversationStore)
+  const { persona: _legacyPersona, ...publicSession } = session
   const base = session.remoteOrigin
     ? {
-        ...session,
+        ...publicSession,
         ...runtimeView,
         heartbeat: { ...session.heartbeat },
         name: session.host,
@@ -576,7 +568,7 @@ export async function toCommanderSessionResponse(
         },
       }
     : {
-        ...session,
+        ...publicSession,
         ...runtimeView,
         heartbeat: { ...session.heartbeat },
         name: session.host,
@@ -727,9 +719,6 @@ export function buildCommandersContext(
     ?? new CommanderChannelBindingStore(path.join(surfaceBindingDataRoot, 'channels.json'))
   const sessionStore = options.sessionStore
     ?? new CommanderSessionStore(options.sessionStorePath, { runtimeConfig })
-  const emailStoresDataDir = parseMessage(options.memoryBasePath)
-    ?? parseMessage(options.heartbeatBasePath)
-    ?? commanderDataDir
   const questStore = options.questStore ?? (
     options.questStoreDataDir
       ? new QuestStore(options.questStoreDataDir)
@@ -740,47 +729,11 @@ export function buildCommandersContext(
   const automationStore = options.automationStore ?? new AutomationStore({
     commanderDataDir,
   })
-  const emailConfigStore = options.emailConfigStore ?? new CommanderEmailConfigStore(emailStoresDataDir)
-  const emailStateStore = options.emailStateStore ?? new CommanderEmailStateStore(emailStoresDataDir)
   const ghTasksFactory = options.ghTasksFactory ?? ((repo: string) => new GhTasks({ repo }))
   const automationScheduler = options.automationScheduler
   const automationSchedulerInitialized = automationScheduler
     ? (options.automationSchedulerInitialized ?? Promise.resolve())
     : Promise.resolve()
-  const sendWorkspaceError = (res: ExpressResponse, error: unknown): void => {
-    const workspaceError = toWorkspaceError(error)
-    res.status(workspaceError.statusCode).json({ error: workspaceError.message })
-  }
-
-  async function resolveCommanderWorkspace(rawCommanderId: unknown) {
-    const commanderId = parseSessionId(rawCommanderId)
-    if (!commanderId) {
-      throw new WorkspaceError(400, 'Invalid commander id')
-    }
-
-    const session = await sessionStore.get(commanderId)
-    if (!session) {
-      throw new WorkspaceError(404, `Commander "${commanderId}" not found`)
-    }
-
-    return resolveWorkspaceRoot({
-      rootPath: session.cwd,
-      source: {
-        kind: 'commander',
-        id: session.id,
-        label: session.host,
-        host: session.remoteOrigin?.machineId,
-        readOnly: true,
-        repo: session.taskSource
-          ? {
-              owner: session.taskSource.owner,
-              repo: session.taskSource.repo,
-            }
-          : undefined,
-      },
-    })
-  }
-
   const getCommanderSessionStats = async (commanderId: string): Promise<CommanderSessionStats> => {
     await automationSchedulerInitialized
     const [quests, automations] = await Promise.all([
@@ -810,22 +763,11 @@ export function buildCommandersContext(
   )
   const runtimes = new Map<string, CommanderRuntime>()
   const activeCommanderSessions = new Map<string, { sessionName: string; startedAt: string }>()
+  const channelReplyForwarders = new Map<string, () => void>()
   const heartbeatFiredAtByConversation = new Map<string, string>()
-  const emailReplyService = options.emailPoller ?? (
-    sessionsInterface
-      ? new EmailPoller({
-          sessionStore,
-          configStore: emailConfigStore,
-          stateStore: emailStateStore,
-          sessionsInterface,
-          ...(options.emailClient ? { emailClient: options.emailClient } : {}),
-          now,
-        })
-      : null
-  )
-
   const requireReadAccess = combinedAuth({
     apiKeyStore: options.apiKeyStore,
+    internalToken: options.internalToken,
     requiredApiKeyScopes: ['agents:read'],
     domain: options.auth0Domain,
     audience: options.auth0Audience,
@@ -835,6 +777,7 @@ export function buildCommandersContext(
 
   const requireWriteAccess = combinedAuth({
     apiKeyStore: options.apiKeyStore,
+    internalToken: options.internalToken,
     requiredApiKeyScopes: ['agents:write'],
     domain: options.auth0Domain,
     audience: options.auth0Audience,
@@ -844,6 +787,7 @@ export function buildCommandersContext(
 
   const requireWorkerDispatchAccess = combinedAuth({
     apiKeyStore: options.apiKeyStore,
+    internalToken: options.internalToken,
     requiredApiKeyScopes: ['agents:write', 'commanders:write'],
     domain: options.auth0Domain,
     audience: options.auth0Audience,
@@ -1043,6 +987,72 @@ export function buildCommandersContext(
         id: conversationId,
       })
       const activeAgentSession = sessionsInterface.getSession(sessionName)
+      const timestampMs = Date.parse(timestamp)
+      const expiredPlanApproval = activeAgentSession
+        ? findExpiredPendingPlanApproval(
+          activeAgentSession,
+          Number.isFinite(timestampMs) ? timestampMs : now().getTime(),
+        )
+        : null
+      if (expiredPlanApproval) {
+        const decision = expiredPlanApproval.defaultDecision
+        if (!decision) {
+          await appendHeartbeatLog(
+            {
+              firedAt: timestamp,
+              ...taskSnapshot,
+              outcome: 'skipped',
+              errorMessage: 'Plan approval expired without explicit default decision; heartbeat did not send chat message',
+            },
+            'plan-approval-no-default',
+          )
+          return true
+        }
+
+        if (!sessionsInterface.autoResolvePlanApproval) {
+          await appendHeartbeatLog(
+            {
+              firedAt: timestamp,
+              ...taskSnapshot,
+              outcome: 'error',
+              errorMessage: 'sessionsInterface does not support plan approval auto-resolution',
+            },
+            'plan-approval-auto-resolve-unavailable',
+          )
+          return 'retryable'
+        }
+
+        const message = `Auto-resolved on heartbeat: ${decision}`
+        const resolved = await sessionsInterface.autoResolvePlanApproval(
+          sessionName,
+          expiredPlanApproval.toolId,
+          decision,
+          message,
+        )
+        if (!resolved) {
+          await appendHeartbeatLog(
+            {
+              firedAt: timestamp,
+              ...taskSnapshot,
+              outcome: 'error',
+              errorMessage: 'Plan approval auto-resolution failed',
+            },
+            'plan-approval-auto-resolve-failed',
+          )
+          return 'retryable'
+        }
+
+        const outcome = taskSnapshot.questCount > 0 ? 'ok' : 'no-quests'
+        await appendHeartbeatLog(
+          {
+            firedAt: timestamp,
+            ...taskSnapshot,
+            outcome,
+          },
+          'plan-approval-auto-resolved',
+        )
+        return true
+      }
       const runtime = runtimes.get(commanderId)
       const heartbeatModeRuntime = {
         heartbeatCount: conversation.heartbeatTickCount,
@@ -1370,6 +1380,7 @@ export function buildCommandersContext(
         },
         message: input.message,
         surfaceBindingStore,
+        actionPolicyGate: options.actionPolicyGate,
       })
     } catch (error) {
       const details = error instanceof Error ? parseMessage(error.message) : null
@@ -1407,11 +1418,10 @@ export function buildCommandersContext(
     }
   > => {
     const profile = await readCommanderUiProfile(commanderId, commanderBasePath)
-    const avatarPath = await resolveCommanderAvatarPath(commanderId, commanderBasePath, profile)
     return {
       ...payload,
       ui: profileForApiResponse(commanderId, profile),
-      avatarUrl: avatarPath ? `/api/commanders/${encodeURIComponent(commanderId)}/avatar` : null,
+      avatarUrl: await resolveCommanderAvatarUrl(commanderId, commanderBasePath, profile),
     }
   }
 
@@ -1430,9 +1440,6 @@ export function buildCommandersContext(
     surfaceBindingStore,
     channelBindingStore,
     questStore,
-    emailConfigStore,
-    emailStateStore,
-    emailReplyService,
     ghTasksFactory,
     heartbeatLog,
     sessionsInterface,
@@ -1441,16 +1448,16 @@ export function buildCommandersContext(
     requireConversationCreateAccess,
     requireChannelIngestAccess,
     requireWorkerDispatchAccess,
+    getWorkspaceResolver: options.getWorkspaceResolver,
     heartbeatManager,
     runtimes,
     activeCommanderSessions,
+    channelReplyForwarders,
     heartbeatFiredAtByConversation,
     avatarUpload,
     automationStore,
     automationScheduler,
     automationSchedulerInitialized,
-    sendWorkspaceError,
-    resolveCommanderWorkspace,
     getCommanderSessionStats,
     onSubagentLifecycleEvent,
     authorizeRemoteSync,

@@ -1,0 +1,98 @@
+.hv-magic-bento {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--hv-space-3);
+  align-items: stretch;
+  width: 100%;
+}
+
+.hv-magic-bento-card {
+  --bento-span: 12;
+  --bento-x: 50%;
+  --bento-y: 50%;
+  --bento-spotlight: 0;
+  --bento-rotate-x: 0deg;
+  --bento-rotate-y: 0deg;
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--hv-space-4);
+  color: var(--hv-fg);
+  background:
+    radial-gradient(
+      circle at var(--bento-x) var(--bento-y),
+      var(--hv-surface-hover) 0%,
+      var(--hv-ink-wash-02) 42%,
+      transparent 72%
+    ),
+    linear-gradient(145deg, var(--hv-surface-card) 0%, var(--hv-bg-raised) 100%);
+  border: 1px solid var(--hv-border-soft);
+  border-radius: var(--hv-radius-carved-md);
+  box-shadow: var(--hv-shadow-rest);
+  transform:
+    perspective(920px)
+    rotateX(var(--bento-rotate-x))
+    rotateY(var(--bento-rotate-y))
+    translateZ(0);
+  transform-style: preserve-3d;
+  transition:
+    border-color var(--hv-duration-fast) var(--hv-ease-gentle),
+    box-shadow var(--hv-duration-fast) var(--hv-ease-gentle),
+    transform var(--hv-duration-fast) var(--hv-ease-gentle);
+}
+
+.hv-magic-bento-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      280px circle at var(--bento-x) var(--bento-y),
+      var(--hv-ink-wash-03) 0%,
+      var(--hv-ink-wash-02) 36%,
+      transparent 68%
+    );
+  opacity: var(--bento-spotlight);
+  transition: opacity var(--hv-duration-fast) var(--hv-ease-gentle);
+}
+
+.hv-magic-bento-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.hv-magic-bento-card:hover {
+  border-color: var(--hv-border-firm);
+  box-shadow: var(--hv-shadow-lift);
+}
+
+.hv-magic-bento-card:focus-within {
+  border-color: var(--hv-border-firm);
+  box-shadow: var(--hv-shadow-float);
+}
+
+@media (min-width: 768px) {
+  .hv-magic-bento {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: var(--hv-space-4);
+  }
+
+  .hv-magic-bento-card {
+    grid-column: span var(--bento-span);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hv-magic-bento-card {
+    transform: none;
+    transition: none;
+  }
+
+  .hv-magic-bento-card::after {
+    transition: none;
+  }
+}

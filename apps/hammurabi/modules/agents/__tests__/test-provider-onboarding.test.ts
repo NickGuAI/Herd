@@ -29,7 +29,7 @@ const testFileDir = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(testFileDir, '../../..')
 const adaptersRoot = path.join(appRoot, 'modules', 'agents', 'adapters')
 const testProviderDir = path.join(adaptersRoot, TEST_PROVIDER_ID)
-const generatorScriptPath = path.join(appRoot, 'scripts', 'generate-provider-registry.mjs')
+const generatorScriptPath = path.join(appRoot, 'modules', 'agents', 'providers', 'generate-registry.mjs')
 const generatedRegistryLoadersPath = path.join(
   appRoot,
   'modules',
@@ -310,10 +310,12 @@ export const testFooProvider = registerProvider({
     supportsAutomation: true,
     supportsCommanderConversation: true,
     supportsWorkerDispatch: true,
+    supportsMessageImages: true,
   },
   uiCapabilities: {
     supportsEffort: false,
     supportsAdaptiveThinking: false,
+    supportsMaxThinkingTokens: false,
     supportsSkills: false,
     supportsLoginMode: false,
     forcedTransport: 'stream',

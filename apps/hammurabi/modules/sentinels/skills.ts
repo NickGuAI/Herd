@@ -1,21 +1,14 @@
-import { access, readFile, readdir } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
+import { discoverAgentSkillPackageDirs } from '../skills/skill-roots.js'
 
 const SKILL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/
 
-const AGENT_SKILLS_DIR = path.join(homedir(), 'App', 'agent-skills')
 const CLAUDE_SKILLS_DIR = path.join(homedir(), '.claude', 'skills')
 
 async function discoverAgentSkillPaths(): Promise<string[]> {
-  try {
-    const entries = await readdir(AGENT_SKILLS_DIR, { withFileTypes: true })
-    return entries
-      .filter((e) => e.isDirectory())
-      .map((e) => path.join(AGENT_SKILLS_DIR, e.name))
-  } catch {
-    return []
-  }
+  return discoverAgentSkillPackageDirs()
 }
 
 async function getSkillSearchPaths(commanderSkillsDir?: string): Promise<string[]> {

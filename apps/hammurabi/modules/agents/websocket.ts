@@ -2,18 +2,32 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer } from 'ws'
 import { SESSION_NAME_PATTERN } from './constants.js'
+import { projectSessionReplay } from './messages/projection.js'
+import { readCodexThreadId } from './providers/provider-session-context.js'
 import {
-  readClaudeSessionId,
-  readCodexThreadId,
-} from './providers/provider-session-context.js'
+  MESSAGE_IMAGE_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  parseMessageImagesForRequest,
+} from './message-images.js'
+import {
+  applyWorkspaceContextToText,
+  readWorkspaceContextPayload,
+} from '../workspace/context.js'
+import type { WorkspaceResolverCapability } from '../workspace/capability.js'
+import { toWorkspaceError } from '../workspace/resolver.js'
+import {
+  buildToolAnswerPayload,
+  deliverPlanApprovalDecision,
+  findPlanApprovalEvent,
+  firstToolAnswerValue,
+  parsePlanApprovalDecision,
+  type ToolAnswerMap,
+} from './plan-approval.js'
 import { attachWebSocketKeepAlive } from './session/helpers.js'
 import type {
   AnySession,
   ExternalSession,
-  MachineConfig,
   StreamJsonEvent,
   StreamSession,
-  StreamSessionCreateOptions,
 } from './types.js'
 
 export const WS_REPLAY_TAIL_LIMIT = 200
@@ -27,19 +41,11 @@ export interface AgentsWebSocketContext {
   sendImmediateTextToStreamSession(
     session: StreamSession,
     text: string,
+    images?: { mediaType: string; data: string }[],
   ): Promise<{ ok: true } | { ok: false; error: string }>
+  getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   writeToStdin(session: StreamSession, data: string): boolean
   appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void
-  readMachineRegistry(): Promise<MachineConfig[]>
-  createStreamSession(
-    sessionName: string,
-    mode: StreamSession['mode'],
-    task: string,
-    cwd: string | undefined,
-    machine: MachineConfig | undefined,
-    agentType?: StreamSession['agentType'],
-    options?: StreamSessionCreateOptions,
-  ): StreamSession
   schedulePersistedSessionsWrite(): void
 }
 
@@ -60,10 +66,18 @@ function extractSessionNameFromUrl(url: URL): string | null {
   return SESSION_NAME_PATTERN.test(decoded) ? decoded : null
 }
 
+function hasLatestSystemEvent(session: StreamSession, text: string): boolean {
+  const latest = session.events.at(-1)
+  return latest?.type === 'system' && latest.text === text
+}
+
 export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void
 } {
-  const wss = new WebSocketServer({ noServer: true })
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: MESSAGE_IMAGE_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  })
   const {
     sessions,
     verifyWsAuth,
@@ -71,10 +85,9 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
     getQueueUpdatePayload,
     broadcastStreamEvent,
     sendImmediateTextToStreamSession,
+    getWorkspaceResolver,
     writeToStdin,
     appendStreamEvent,
-    readMachineRegistry,
-    createStreamSession,
     schedulePersistedSessionsWrite,
   } = ctx
 
@@ -109,12 +122,23 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
           // directly rather than re-accumulating from individual deltas.
           if (session.events.length > 0) {
             const replayEvents = session.events.slice(-WS_REPLAY_TAIL_LIMIT)
+            const replayMore = session.events.length > WS_REPLAY_TAIL_LIMIT
+            const queue = session.kind === 'stream' ? getQueueUpdatePayload(session).queue : undefined
+            const projection = projectSessionReplay({
+              events: replayEvents,
+              totalEvents: session.events.length,
+              more: replayMore,
+              ...(session.kind === 'stream' ? { usage: session.usage } : {}),
+              ...(queue ? { queue } : {}),
+            })
             ws.send(JSON.stringify({
               type: 'replay',
               events: replayEvents,
-              more: session.events.length > WS_REPLAY_TAIL_LIMIT,
+              messages: projection.messages,
+              projection,
+              more: replayMore,
               ...(session.kind === 'stream'
-                ? { usage: session.usage, queue: getQueueUpdatePayload(session).queue }
+                ? { usage: session.usage, queue }
                 : {}),
             }))
           }
@@ -144,217 +168,99 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
                 type: string
                 text?: string
                 images?: { mediaType: string; data: string }[]
+                workspaceContext?: unknown
                 toolId?: string
                 answers?: Record<string, string[]>
               }
 
               if (msg.type === 'input') {
-                const inputText = typeof msg.text === 'string' ? msg.text.trim() : ''
-
-                // Validate attached images: allowed MIME types, max 20 MB each (≈26.67 MB base64), max 5 total
-                const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-                const MAX_B64_LEN = Math.ceil(20 * 1024 * 1024 / 3) * 4
-                const rawImages = Array.isArray(msg.images) ? msg.images : []
-                const validImages = rawImages.filter(
-                  (img) =>
-                    img !== null &&
-                    typeof img === 'object' &&
-                    typeof img.mediaType === 'string' &&
-                    ALLOWED_IMAGE_TYPES.has(img.mediaType) &&
-                    typeof img.data === 'string' &&
-                    img.data.length <= MAX_B64_LEN,
-                ).slice(0, 5)
-
-                if (rawImages.length > 0 && validImages.length === 0) {
+                const rawInputText = typeof msg.text === 'string' ? msg.text.trim() : ''
+                const workspaceContext = readWorkspaceContextPayload(msg.workspaceContext)
+                let inputText: string
+                try {
+                  inputText = await applyWorkspaceContextToText({
+                    text: rawInputText,
+                    resolver: workspaceContext?.targetId ? getWorkspaceResolver?.() : undefined,
+                    context: workspaceContext,
+                  })
+                } catch (error) {
+                  const workspaceError = toWorkspaceError(error)
                   const errEvent: StreamJsonEvent = {
                     type: 'system',
-                    text: 'Image rejected: unsupported type, too large (max 20 MB each), or limit exceeded.',
+                    text: workspaceError.message,
                   }
                   broadcastStreamEvent(liveSession, errEvent)
+                  return
                 }
+                const parsedImages = parseMessageImagesForRequest(msg.images)
+
+                if (!parsedImages.ok) {
+                  const errEvent: StreamJsonEvent = {
+                    type: 'system',
+                    text: `Image rejected: ${parsedImages.error}`,
+                  }
+                  broadcastStreamEvent(liveSession, errEvent)
+                  return
+                }
+                const validImages = parsedImages.images
 
                 if (inputText || validImages.length > 0) {
-                  if (liveSession.agentType === 'gemini') {
-                    if (rawImages.length > 0) {
-                      const imageEvent: StreamJsonEvent = {
-                        type: 'system',
-                        text: inputText
-                          ? 'Image attachments are not supported in Gemini sessions. Sending text only.'
-                          : 'Image attachments are not supported in Gemini sessions.',
-                      }
-                      broadcastStreamEvent(liveSession, imageEvent)
-                    }
-
-                    if (inputText) {
-                      const immediateResult = await sendImmediateTextToStreamSession(liveSession, inputText)
-                      if (!immediateResult.ok) {
-                        const errEvent: StreamJsonEvent = {
-                          type: 'system',
-                          text: immediateResult.error,
-                        }
-                        broadcastStreamEvent(liveSession, errEvent)
-                      }
-                    }
-                    return
-                  }
-
-                  if (validImages.length === 0) {
-                    const immediateResult = await sendImmediateTextToStreamSession(liveSession, inputText)
-                    if (!immediateResult.ok) {
+                  const immediateResult = await sendImmediateTextToStreamSession(
+                    liveSession,
+                    inputText,
+                    validImages,
+                  )
+                  if (!immediateResult.ok) {
+                    if (!hasLatestSystemEvent(liveSession, immediateResult.error)) {
                       const errEvent: StreamJsonEvent = {
                         type: 'system',
                         text: immediateResult.error,
                       }
                       broadcastStreamEvent(liveSession, errEvent)
                     }
-                    return
-                  }
-
-                  // For codex sessions, use the sidecar transport and only
-                  // record the user event after Codex accepts the turn.
-                  const resumeThreadId = readCodexThreadId(liveSession)
-                  if (resumeThreadId) {
-                    if (!inputText) {
-                      const errEvent: StreamJsonEvent = {
-                        type: 'system',
-                        text: 'Image-only messages are not supported in Codex sessions. Please include text with your image.',
-                      }
-                      broadcastStreamEvent(liveSession, errEvent)
-                    } else {
-                      console.warn(`[agents] Codex session ${sessionName}: ignoring ${validImages.length} image(s) — not yet supported`)
-                      const immediateResult = await sendImmediateTextToStreamSession(liveSession, inputText)
-                      if (!immediateResult.ok) {
-                        const errEvent: StreamJsonEvent = {
-                          type: 'system',
-                          text: immediateResult.error,
-                        }
-                        broadcastStreamEvent(liveSession, errEvent)
-                      }
-                    }
-                  } else {
-                    // Clear completed state on new input so the RPG world-state poller
-                    // immediately sees the session as active again. Command-room sessions
-                    // are intentionally one-shot and must remain in completed state.
-                    if (
-                      liveSession.lastTurnCompleted &&
-                      liveSession.sessionType !== 'cron' &&
-                      liveSession.sessionType !== 'automation'
-                    ) {
-                      liveSession.lastTurnCompleted = false
-                      liveSession.completedTurnAt = undefined
-                    }
-
-                    // Build content: array with text+image blocks when images present, plain string otherwise
-                    const content = validImages.length > 0
-                      ? [
-                          ...(inputText ? [{ type: 'text', text: inputText }] : []),
-                          ...validImages.map((img) => ({
-                            type: 'image',
-                            source: { type: 'base64', media_type: img.mediaType, data: img.data },
-                          })),
-                        ]
-                      : inputText
-
-                    // Persist user message in session events for replay on reconnect
-                    // only after stdin accepts the write to avoid phantom history
-                    const userEvent: StreamJsonEvent = {
-                      type: 'user',
-                      message: { role: 'user', content },
-                    } as unknown as StreamJsonEvent
-
-                    const userMsg = JSON.stringify({
-                      type: 'user',
-                      message: { role: 'user', content },
-                    })
-                    const wrote = writeToStdin(liveSession, userMsg + '\n')
-                    if (wrote) {
-                      appendStreamEvent(liveSession, userEvent)
-                      broadcastStreamEvent(liveSession, userEvent)
-                    } else if (!liveSession.process.stdin?.writable && readClaudeSessionId(liveSession)) {
-                      // Process exited after its last turn — respawn with --resume
-                      // and relay the pending user message once the new process is ready.
-                      const resumeId = readClaudeSessionId(liveSession)!
-                      const pendingInput = userMsg + '\n'
-                      void readMachineRegistry()
-                        .then((machines) => {
-                          const machine = liveSession.host
-                            ? machines.find((candidate) => candidate.id === liveSession.host)
-                            : undefined
-                          const newSession = createStreamSession(
-                            sessionName,
-                            liveSession.mode,
-                            '',
-                            liveSession.cwd,
-                            machine,
-                            'claude',
-                            {
-                              effort: liveSession.effort,
-                              adaptiveThinking: liveSession.adaptiveThinking,
-                              model: liveSession.model,
-                              systemPrompt: liveSession.systemPrompt,
-                              maxTurns: liveSession.maxTurns,
-                              resumeSessionId: resumeId,
-                              creator: liveSession.creator,
-                              sessionType: liveSession.sessionType,
-                              spawnedBy: liveSession.spawnedBy,
-                              spawnedWorkers: liveSession.spawnedWorkers,
-                              resumedFrom: liveSession.resumedFrom,
-                            },
-                          )
-                          newSession.events = liveSession.events.slice()
-                          newSession.usage = { ...liveSession.usage }
-                          newSession.conversationEntryCount = liveSession.conversationEntryCount
-                          newSession.autoRotatePending = liveSession.autoRotatePending
-                          // Transfer connected WebSocket clients before swapping the
-                          // map entry so broadcasts from the new process reach them.
-                          for (const client of liveSession.clients) {
-                            newSession.clients.add(client)
-                          }
-                          liveSession.clients.clear()
-                          sessions.set(sessionName, newSession)
-                          schedulePersistedSessionsWrite()
-                          const systemEvent: StreamJsonEvent = {
-                            type: 'system',
-                            text: 'Session resumed — replaying your command...',
-                          }
-                          appendStreamEvent(newSession, systemEvent)
-                          broadcastStreamEvent(newSession, systemEvent)
-                          // Write the pending input once the new process signals
-                          // readiness via its first stdout chunk (message_start).
-                          newSession.process.stdout?.once('data', () => {
-                            setTimeout(() => {
-                              if (writeToStdin(newSession, pendingInput)) {
-                                appendStreamEvent(newSession, userEvent)
-                                broadcastStreamEvent(newSession, userEvent)
-                              }
-                            }, 500)
-                          })
-                        })
-                        .catch(() => {})
-                    }
                   }
                 } // end if (inputText || validImages.length > 0)
               } else if (msg.type === 'tool_answer' && msg.toolId && msg.answers && !readCodexThreadId(liveSession)) {
-                // Serialize string[] values to comma-separated strings
-                // per the AskUserQuestion contract (answers: Record<string, string>)
-                const serialized: Record<string, string> = {}
-                for (const [key, val] of Object.entries(msg.answers)) {
-                  serialized[key] = Array.isArray(val) ? val.join(', ') : String(val)
+                const planApproval = findPlanApprovalEvent(liveSession, msg.toolId)
+                if (planApproval) {
+                  const answers = msg.answers as ToolAnswerMap
+                  const decision = parsePlanApprovalDecision(firstToolAnswerValue(answers, ['decision', 'approved']))
+                  if (!decision) {
+                    ws.send(JSON.stringify({ type: 'tool_answer_error', toolId: msg.toolId }))
+                    return
+                  }
+                  const message = firstToolAnswerValue(answers, ['message', 'response', 'customResponse'])
+                  const result = deliverPlanApprovalDecision(
+                    liveSession,
+                    planApproval,
+                    decision,
+                    message,
+                    writeToStdin,
+                  )
+                  if (!result.ok) {
+                    ws.send(JSON.stringify({ type: 'tool_answer_error', toolId: msg.toolId }))
+                    return
+                  }
+
+                  appendStreamEvent(liveSession, result.payload)
+                  broadcastStreamEvent(liveSession, result.payload)
+                  schedulePersistedSessionsWrite()
+                  ws.send(JSON.stringify({ type: 'tool_answer_ack', toolId: msg.toolId }))
+                  return
                 }
-                const toolResultPayload = {
-                  type: 'user' as const,
-                  message: {
-                    role: 'user' as const,
-                    content: [{
-                      type: 'tool_result',
-                      tool_use_id: msg.toolId,
-                      content: JSON.stringify({ answers: serialized, annotations: {} }),
-                    }],
-                  },
+
+                const toolResultPayload = buildToolAnswerPayload(
+                  liveSession,
+                  msg.toolId,
+                  msg.answers as ToolAnswerMap,
+                )
+                if (!toolResultPayload) {
+                  ws.send(JSON.stringify({ type: 'tool_answer_error', toolId: msg.toolId }))
+                  return
                 }
                 // Persist tool answer in session events for replay on reconnect
-                appendStreamEvent(liveSession, toolResultPayload as unknown as StreamJsonEvent)
-                broadcastStreamEvent(liveSession, toolResultPayload as unknown as StreamJsonEvent)
+                appendStreamEvent(liveSession, toolResultPayload)
+                broadcastStreamEvent(liveSession, toolResultPayload)
 
                 const ok = writeToStdin(liveSession, JSON.stringify(toolResultPayload) + '\n')
                 if (ok) {

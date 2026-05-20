@@ -84,43 +84,29 @@ describe('workspace mobile preview fixes', () => {
       />,
     )
 
-    const desktopBody = Array.from(document.body.querySelectorAll('div')).find((element) =>
-      element.classList.contains('min-h-0')
-      && element.classList.contains('flex-1')
-      && element.classList.contains('p-3'),
-    )
-    const mobileBody = Array.from(document.body.querySelectorAll('div')).find((element) =>
-      element.classList.contains('min-h-0')
-      && element.classList.contains('flex-1')
-      && element.classList.contains('p-2'),
-    )
+    const desktopBody = document.body.querySelector('[data-testid="workspace-preview-desktop-body"]')
+    const mobileBody = document.body.querySelector('[data-testid="workspace-preview-mobile-body"]')
 
+    expect(desktopBody?.classList.contains('min-h-0')).toBe(true)
+    expect(desktopBody?.classList.contains('flex-1')).toBe(true)
+    expect(desktopBody?.classList.contains('p-3')).toBe(true)
     expect(desktopBody?.classList.contains('flex')).toBe(true)
     expect(desktopBody?.classList.contains('flex-col')).toBe(true)
+    expect(mobileBody?.classList.contains('min-h-0')).toBe(true)
+    expect(mobileBody?.classList.contains('flex-1')).toBe(true)
+    expect(mobileBody?.classList.contains('p-2')).toBe(true)
     expect(mobileBody?.classList.contains('flex')).toBe(true)
     expect(mobileBody?.classList.contains('flex-col')).toBe(true)
   })
 
-  it.each([
-    [
-      'agent-session',
-      {
-        kind: 'agent-session',
-        id: 'session-1',
-        label: 'session-1',
-      } as WorkspaceSourceDescriptor,
-      '/api/agents/sessions/session-1/workspace/raw?path=docs%2Freport.pdf&access_token=token-123',
-    ],
-    [
-      'commander',
-      {
-        kind: 'commander',
-        id: 'cmd-1',
-        label: 'Commander 1',
-      } as WorkspaceSourceDescriptor,
-      '/api/commanders/cmd-1/workspace/raw?path=docs%2Freport.pdf&access_token=token-123',
-    ],
-  ])('renders PDF previews inline for %s workspaces', async (_kind, source, expectedUrl) => {
+  it('renders PDF previews inline for target workspaces', async () => {
+    const source: WorkspaceSourceDescriptor = {
+      kind: 'target',
+      id: 'wt-1',
+      label: 'local:/tmp/workspace',
+    }
+    const expectedUrl = '/api/workspace/raw?path=docs%2Freport.pdf&access_token=token-123&targetId=wt-1'
+
     await renderNode(
       <WorkspaceFilePreview
         selectedPath="docs/report.pdf"
@@ -146,4 +132,5 @@ describe('workspace mobile preview fixes', () => {
     expect(embed?.getAttribute('src')).toBe(expectedUrl)
     expect(link?.getAttribute('href')).toBe(expectedUrl)
   })
+
 })

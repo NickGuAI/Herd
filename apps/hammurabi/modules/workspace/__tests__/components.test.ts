@@ -2,12 +2,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { WorkspaceGitPanel } from '../components/WorkspaceGitPanel'
-import { buildWorkspacePdfPreviewUrl } from '../components/WorkspaceFilePreview'
+import { buildWorkspaceRawUrl } from '../components/WorkspaceFilePreview'
 import { WorkspaceTree } from '../components/WorkspaceTree'
 
 const workspace = {
   source: {
-    kind: 'agent-session' as const,
+    kind: 'target' as const,
     id: 'session-1',
     label: 'session-1',
   },
@@ -56,19 +56,28 @@ describe('workspace components', () => {
     expect(html).toContain('Git is not initialized for this workspace')
   })
 
-  it('builds a tokenized PDF preview URL for agent-session workspaces', () => {
+  it('builds a tokenized raw URL for target workspaces', () => {
     expect(
-      buildWorkspacePdfPreviewUrl('session-1', 'docs/report.pdf', 'token-123'),
+      buildWorkspaceRawUrl({
+        kind: 'target',
+        id: 'wt-1',
+        label: 'local:/tmp/workspace',
+      }, 'docs/report.pdf', 'token-123'),
     ).toBe(
-      '/api/agents/sessions/session-1/workspace/raw?path=docs%2Freport.pdf&access_token=token-123',
+      '/api/workspace/raw?path=docs%2Freport.pdf&access_token=token-123&targetId=wt-1',
     )
   })
 
-  it('omits the PDF preview token query parameter when no token is available', () => {
+  it('omits the raw token query parameter when no token is available', () => {
     expect(
-      buildWorkspacePdfPreviewUrl('session-1', 'docs/report.pdf'),
+      buildWorkspaceRawUrl({
+        kind: 'target',
+        id: 'wt-1',
+        label: 'local:/tmp/workspace',
+      }, 'docs/report.pdf'),
     ).toBe(
-      '/api/agents/sessions/session-1/workspace/raw?path=docs%2Freport.pdf',
+      '/api/workspace/raw?path=docs%2Freport.pdf&targetId=wt-1',
     )
   })
+
 })

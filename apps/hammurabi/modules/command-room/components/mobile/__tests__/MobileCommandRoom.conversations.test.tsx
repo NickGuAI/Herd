@@ -16,6 +16,17 @@ import { MobileCommandRoom } from '../MobileCommandRoom'
 
 const approvalDecisionSpy = vi.fn(async () => undefined)
 
+vi.mock('@/hooks/use-providers', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-providers')>('@/hooks/use-providers')
+  const { testProviderRegistry } = await vi.importActual<
+    typeof import('../../../../agents/__tests__/provider-registry-fixture')
+  >('../../../../agents/__tests__/provider-registry-fixture')
+  return {
+    ...actual,
+    useProviderRegistry: () => ({ data: testProviderRegistry }),
+  }
+})
+
 vi.mock('@/hooks/use-approvals', async () => {
   const actual = await vi.importActual<typeof import('@/hooks/use-approvals')>('@/hooks/use-approvals')
   return {
@@ -31,18 +42,18 @@ vi.mock('@/hooks/use-is-mobile', () => ({
 vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
   MobileSessionShell: ({
     conversation,
-    belowHeader,
+    headerAccessory,
     emptyState,
   }: {
     conversation?: { id: string } | null
-    belowHeader?: ReactNode
+    headerAccessory?: ReactNode
     emptyState?: ReactNode
   }) => (
     <div
       data-testid="mobile-session-shell"
       data-conversation-id={conversation?.id ?? ''}
     >
-      {belowHeader}
+      {headerAccessory}
       {emptyState}
     </div>
   ),
