@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -17,12 +17,22 @@ afterEach(async () => {
 describe('commander package registry and install', () => {
   it('loads the bundled starter workforce from inspectable package directories', async () => {
     const packages = await listCommanderPackages()
+    const publicStarterSkillRoot = join(
+      process.cwd(),
+      'public',
+      'repo-root',
+      'agent-skills',
+      'hervald-starter',
+    )
 
     expect(packages.map((pkg) => pkg.id).sort()).toEqual([...STARTER_COMMANDER_PACKAGE_IDS].sort())
     for (const pkg of packages) {
       expect(pkg.commanderMd).not.toMatch(/NickGuAI|\/home\/builder\/PKMS|private PKMS/u)
       expect(pkg.skills.length).toBeGreaterThan(0)
       expect(pkg.examples.length).toBeGreaterThan(0)
+      for (const skill of pkg.skills) {
+        await expect(access(join(publicStarterSkillRoot, skill.id, 'SKILL.md'))).resolves.toBeUndefined()
+      }
     }
   })
 

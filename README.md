@@ -34,7 +34,9 @@ Open the Marketplace page or complete first-run onboarding to install the
 starter workforce. Packages are inspectable on disk under
 `apps/hammurabi/modules/commanders/packages/bundled/`; each package contains
 `COMMANDER.md`, `skills.manifest.json`, `memory-seed.md`, `onboarding.md`, and
-examples.
+examples. The required starter skill dependencies ship in
+`agent-skills/hervald-starter/` so a fresh public checkout has the workflows the
+bundled commanders advertise.
 
 ### EC2
 
