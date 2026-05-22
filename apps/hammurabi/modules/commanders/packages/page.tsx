@@ -120,7 +120,7 @@ function PackageCard({
         {pkg.installState.installed && pkg.installState.commanderId ? (
           <Link
             className="hv-marketplace-button hv-marketplace-button-ghost"
-            to={`/org?commander=${encodeURIComponent(pkg.installState.commanderId)}`}
+            to={`/command-room?commander=${encodeURIComponent(pkg.installState.commanderId)}`}
           >
             Open Commander
           </Link>
@@ -165,6 +165,7 @@ export default function CommanderPackagesPage() {
     <main className="hv-marketplace-page" data-testid="commander-marketplace-page">
       <style>{`
         .hv-marketplace-page {
+          box-sizing: border-box;
           min-height: calc(100vh - 52px);
           background: var(--hv-bg-raised);
           color: var(--hv-fg);
@@ -347,6 +348,22 @@ export default function CommanderPackagesPage() {
           .hv-marketplace-header {
             align-items: stretch;
             flex-direction: column;
+          }
+        }
+        @media (max-width: 767px) {
+          .hv-marketplace-page {
+            min-height: 100%;
+            padding: 18px 16px calc(7rem + env(safe-area-inset-bottom, 0px));
+          }
+          .hv-marketplace-card {
+            scroll-margin-bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+          }
+          .hv-marketplace-card footer {
+            align-items: stretch;
+            flex-direction: column;
+          }
+          .hv-marketplace-button {
+            text-align: center;
           }
         }
       `}</style>

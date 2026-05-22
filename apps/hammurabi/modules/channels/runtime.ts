@@ -55,9 +55,11 @@ export function createChannelsRuntime(context: ModuleRuntimeContext): ModuleRout
   })
 
   capabilities.provide('channels.ingest', 'channels', channels)
-  void runtimeManager.startAll().catch((error) => {
-    console.error('[channels] Failed to start channel runtimes:', error)
-  })
+  if (options.initializeChannelRuntimes !== false) {
+    void runtimeManager.startAll().catch((error) => {
+      console.error('[channels] Failed to start channel runtimes:', error)
+    })
+  }
 
   return {
     name: 'channels',

@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { access, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { sanitizeUiProfile } from '../commander-profile.js'
@@ -40,10 +40,46 @@ interface RawSkillEntry {
   purpose?: unknown
 }
 
-const bundledPackagesRoot = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  'bundled',
-)
+const modulePackagesDir = path.dirname(fileURLToPath(import.meta.url))
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths)]
+}
+
+function bundledPackagesRootCandidates(): string[] {
+  const candidates = [
+    path.join(modulePackagesDir, 'bundled'),
+  ]
+  const distServerSegment = `${path.sep}dist-server${path.sep}`
+  const distServerIndex = modulePackagesDir.lastIndexOf(distServerSegment)
+  if (distServerIndex >= 0) {
+    candidates.push(
+      path.join(
+        modulePackagesDir.slice(0, distServerIndex),
+        'modules',
+        'commanders',
+        'packages',
+        'bundled',
+      ),
+    )
+  }
+  candidates.push(path.join(process.cwd(), 'modules', 'commanders', 'packages', 'bundled'))
+  return uniquePaths(candidates)
+}
+
+export async function resolveBundledPackagesRoot(
+  candidates: string[] = bundledPackagesRootCandidates(),
+): Promise<string> {
+  for (const candidate of candidates) {
+    try {
+      await access(candidate)
+      return candidate
+    } catch {
+      // Try the next known runtime location.
+    }
+  }
+  throw new Error(`Commander bundled packages root not found: ${candidates.join(', ')}`)
+}
 
 export const STARTER_COMMANDER_PACKAGE_IDS = [
   'engineering-manager',
@@ -101,14 +137,15 @@ async function readExamples(packageDir: string): Promise<CommanderPackageExample
 
 export async function loadCommanderPackage(
   packageId: string,
-  root: string = bundledPackagesRoot,
+  root?: string,
 ): Promise<CommanderPackageDefinition | null> {
   const safeId = packageId.trim()
   if (!/^[a-z0-9][a-z0-9-]*$/u.test(safeId)) {
     return null
   }
 
-  const packageDir = path.join(root, safeId)
+  const packagesRoot = root ?? await resolveBundledPackagesRoot()
+  const packageDir = path.join(packagesRoot, safeId)
   try {
     const manifest = await readJson<RawPackageManifest>(path.join(packageDir, 'package.json'))
     const skillsManifest = await readJson<RawSkillsManifest>(path.join(packageDir, 'skills.manifest.json'))
@@ -149,13 +186,14 @@ export async function loadCommanderPackage(
 }
 
 export async function listCommanderPackages(
-  root: string = bundledPackagesRoot,
+  root?: string,
 ): Promise<CommanderPackageDefinition[]> {
-  const entries = await readdir(root, { withFileTypes: true })
+  const packagesRoot = root ?? await resolveBundledPackagesRoot()
+  const entries = await readdir(packagesRoot, { withFileTypes: true })
   const packages = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory())
-      .map((entry) => loadCommanderPackage(entry.name, root)),
+      .map((entry) => loadCommanderPackage(entry.name, packagesRoot)),
   )
   return packages
     .filter((definition): definition is CommanderPackageDefinition => Boolean(definition))

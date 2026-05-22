@@ -384,7 +384,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
   const conversationStore = new ConversationStore(commanderDataDir)
   const runtimeConfig = loadCommanderRuntimeConfig()
   const prunerConfig = {
-    enabled: runtimeConfig.agents?.pruner?.enabled ?? DEFAULT_AGENT_PRUNER_ENABLED,
+    enabled: options.enableSessionPruner ?? runtimeConfig.agents?.pruner?.enabled ?? DEFAULT_AGENT_PRUNER_ENABLED,
     sweepIntervalMs: runtimeConfig.agents?.pruner?.sweepIntervalMs ?? DEFAULT_AGENT_PRUNER_SWEEP_INTERVAL_MS,
     staleSessionTtlMs: runtimeConfig.agents?.pruner?.staleSessionTtlMs ?? DEFAULT_AGENT_PRUNER_STALE_SESSION_TTL_MS,
     exitedSessionTtlMs: runtimeConfig.agents?.pruner?.exitedSessionTtlMs ?? DEFAULT_AGENT_PRUNER_EXITED_SESSION_TTL_MS,

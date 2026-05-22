@@ -166,6 +166,20 @@ function buildProvider(id: string, label: string) {
       permissionModes: [{ value: 'default', label: 'default', description: label }],
     },
     availableModels: [],
+    supportedTransports: ['stream', 'pty'],
+    defaults: {
+      transportType: 'stream',
+      permissionMode: 'default',
+      model: null,
+      ...(id === 'claude'
+        ? {
+            effort: 'max',
+            adaptiveThinking: 'disabled',
+            maxThinkingTokens: 128000,
+          }
+        : {}),
+    },
+    disabledReason: null,
   }
 }
 
@@ -457,6 +471,90 @@ describe('CommandRoom chat-row Start (one-click resume)', () => {
     expect(fetchNextPage).toHaveBeenCalledTimes(1)
   })
 
+  it('waits for backend websocketReady before opening a selected conversation websocket', async () => {
+    const conversation = buildIdleConversation({
+      id: 'conv-starting',
+      status: 'active',
+      runtimeState: 'starting',
+      websocketReady: false,
+      liveSession: {
+        name: 'commander-cmd-1-conversation-conv-starting',
+        created: '2026-05-01T08:00:00.000Z',
+        lastActivityAt: '2026-05-01T08:00:00.000Z',
+        pid: 0,
+        transportType: 'stream',
+        processAlive: true,
+        hadResult: false,
+        status: 'running',
+        agentType: 'claude',
+      },
+      sendTarget: {
+        kind: 'conversation',
+        conversationId: 'conv-starting',
+        commanderId: 'cmd-1',
+        sessionName: 'commander-cmd-1-conversation-conv-starting',
+        transportType: 'stream',
+        agentType: 'claude',
+        queue: { supported: false, reason: 'Conversation is starting' },
+        media: { supported: false, reason: 'Conversation is starting' },
+      },
+      allowedActions: {
+        send: false,
+        queue: false,
+        media: false,
+        start: false,
+        pause: true,
+        resume: false,
+        archive: true,
+        delete: true,
+        updateProvider: false,
+      },
+      displayState: {
+        status: 'active',
+        runtimeState: 'starting',
+        websocketReady: false,
+        runtimeError: null,
+        isVisible: true,
+        isDefaultConversation: false,
+        hasLiveSession: true,
+        isSendable: false,
+        isQueueable: false,
+        isMediaSendable: false,
+        label: 'Starting chat',
+        disabledReasons: {
+          send: 'Conversation is starting',
+          queue: 'Conversation is starting',
+          media: 'Conversation is starting',
+          start: 'Conversation is already starting',
+          pause: null,
+          resume: 'Conversation is already starting',
+          archive: null,
+          delete: null,
+          updateProvider: 'Conversation is starting',
+        },
+      },
+    })
+    mocks.useConversations.mockImplementation((_, selectedConversationId: string | null) => ({
+      conversations: [conversation],
+      selectedConversation: selectedConversationId === conversation.id ? conversation : null,
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    }))
+
+    await renderAt('/command-room?commander=cmd-1&conversation=conv-starting')
+
+    await vi.waitFor(() => expect(mocks.useAgentSessionStream).toHaveBeenCalled())
+    expect(mocks.useAgentSessionStream).toHaveBeenLastCalledWith(
+      undefined,
+      expect.objectContaining({
+        enabled: false,
+        websocketPath: undefined,
+      }),
+    )
+  })
+
   it('shows the provider picker and creates with the explicitly chosen provider from the New Chat row action', async () => {
     const conversations = [buildIdleConversation({ id: 'conv-existing', agentType: 'claude' })]
     createMutateAsync.mockImplementation(async (input: { commanderId: string, agentType?: string }) => {
@@ -487,6 +585,15 @@ describe('CommandRoom chat-row Start (one-click resume)', () => {
     })
 
     expect(document.body.querySelector('[data-testid="start-conversation-panel"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="create-chat-reasoning-settings"]')).not.toBeNull()
+    expect(document.body.textContent ?? '').toContain('Effort')
+    expect(document.body.textContent ?? '').toContain('max')
+    expect(document.body.textContent ?? '').toContain('Adaptive')
+    expect(document.body.textContent ?? '').toContain('disabled')
+    expect(document.body.textContent ?? '').toContain('Max tokens')
+    expect(
+      document.body.querySelector<HTMLInputElement>('[data-testid="create-chat-max-thinking-tokens-input"]')?.value,
+    ).toBe('128000')
     expect(createMutateAsync).not.toHaveBeenCalled()
 
     const providerSelect = document.body.querySelector(

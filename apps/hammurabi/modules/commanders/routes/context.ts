@@ -6,6 +6,7 @@ import { ProviderSecretsStore } from '../../../server/api-keys/provider-secrets-
 import { generateGeminiImage } from '../../../server/image-generation/gemini-client.js'
 import { combinedAuth } from '../../../server/middleware/combined-auth.js'
 import { authUserHasRequiredPermissions } from '../../../server/middleware/auth0.js'
+import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
 import { findExpiredPendingPlanApproval } from '../../agents/plan-approval.js'
 import type { CommanderSessionsInterface } from '../../agents/routes.js'
 import { AutomationStore } from '../../automations/store.js'
@@ -1124,6 +1125,11 @@ export function buildCommandersContext(
         } else {
           heartbeatMessage = renderedMessage
         }
+      }
+
+      const heartbeatAgentType = activeAgentSession?.agentType ?? session.agentType
+      if (heartbeatAgentType === 'claude') {
+        heartbeatMessage = appendClaudeReasoningPolicy(heartbeatMessage)
       }
 
       const sent = await sendQueuedInternalUserMessage(runtime, sessionsInterface, sessionName, heartbeatMessage, {

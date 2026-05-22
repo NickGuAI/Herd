@@ -1,3 +1,5 @@
+import { getFullUrl } from './api-base'
+
 const DEFAULT_SIGN_IN_PATH = '/org'
 const HEALTH_ENDPOINT = '/api/health'
 const CACHE_BYPASS_PARAM = '__hammurabi_auth_reload'
@@ -20,6 +22,10 @@ interface BuildGuardDependencies {
   window?: BuildGuardWindow
   clientBuildVersion?: string | null
   now?: () => number
+}
+
+interface HealthCheckDependencies {
+  fetchImpl?: typeof fetch
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -72,6 +78,21 @@ function buildCacheBypassUrl(win: BuildGuardWindow, now: () => number): string {
   return url.toString()
 }
 
+async function fetchHealth(fetchImpl: typeof fetch): Promise<Response | null> {
+  try {
+    return await fetchImpl(getFullUrl(HEALTH_ENDPOINT), { cache: 'no-store' })
+  } catch {
+    return null
+  }
+}
+
+export async function isAuthGatewayHealthy(
+  dependencies: HealthCheckDependencies = {},
+): Promise<boolean> {
+  const response = await fetchHealth(dependencies.fetchImpl ?? fetch)
+  return Boolean(response?.ok)
+}
+
 export function resolveAuthReturnTo(win: BuildGuardWindow = browserWindow()): string {
   const pendingReturnTo = readPendingReturnTo(win.sessionStorage)
   if (pendingReturnTo) {
@@ -96,12 +117,21 @@ export async function ensureFreshAuthClientBeforeRedirect(
   const normalizedClientBuildVersion = clientBuildVersion?.trim() ?? ''
 
   try {
-    const response = await fetchImpl(HEALTH_ENDPOINT, { cache: 'no-store' })
+    const response = await fetchHealth(fetchImpl)
+    if (response === null) {
+      return true
+    }
     if (!response.ok) {
+      return false
+    }
+
+    let serverBuildVersion: string | null = null
+    try {
+      serverBuildVersion = readServerVersion(await response.json())
+    } catch {
       return true
     }
 
-    const serverBuildVersion = readServerVersion(await response.json())
     if (
       serverBuildVersion &&
       normalizedClientBuildVersion.length > 0 &&
@@ -112,7 +142,7 @@ export async function ensureFreshAuthClientBeforeRedirect(
       return false
     }
   } catch {
-    return true
+    return false
   }
 
   return true

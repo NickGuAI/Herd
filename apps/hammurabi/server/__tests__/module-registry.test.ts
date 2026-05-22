@@ -87,7 +87,9 @@ async function startRegistryServer(
 
   const { modules } = createModules({
     apiKeyStore: createTestApiKeyStore(),
+    initializeAgentSessionRuntimes: false,
     initializeAutomationScheduler: false,
+    initializeChannelRuntimes: false,
     maxAgentSessions: 1,
   })
   for (const module of modules) {
@@ -157,7 +159,9 @@ describe('createModules', () => {
   it('exposes declared runtime capabilities and the loader-backed module graph', () => {
     const { capabilities, moduleGraph, modules } = createModules({
       apiKeyStore: createTestApiKeyStore(),
+      initializeAgentSessionRuntimes: false,
       initializeAutomationScheduler: false,
+      initializeChannelRuntimes: false,
       maxAgentSessions: 1,
     })
 

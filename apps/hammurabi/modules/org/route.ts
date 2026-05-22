@@ -27,7 +27,10 @@ import { mergeIdentityOperatingStyleIntoCommanderWorkflow } from '../commanders/
 import { defaultOperatorStorePath, OperatorStore } from '../operators/store.js'
 import { FOUNDER_OPERATOR_NOT_FOUND_ERROR } from '../operators/constants.js'
 import type { Operator } from '../operators/types.js'
-import { createFounderBootstrapCandidate } from '../operators/founder-bootstrap.js'
+import {
+  createFounderBootstrapCandidate,
+  resolveFounderAvatarBackfillUrl,
+} from '../operators/founder-bootstrap.js'
 import {
   DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
   FOUNDER_SETUP_COMPLETED_PATH,
@@ -235,6 +238,26 @@ function buildFounderIdFromEmail(email: string): string {
   return `founder-${digest.slice(0, 12)}`
 }
 
+async function backfillFounderAvatarFromUser(
+  store: FounderWriteStore,
+  founder: Operator,
+  user: AuthUser | undefined,
+): Promise<Operator> {
+  if (founder.avatarUrl?.trim()) {
+    return founder
+  }
+
+  const avatarUrl = resolveFounderAvatarBackfillUrl(founder, user)
+  if (!avatarUrl) {
+    return founder
+  }
+
+  return store.saveFounder({
+    ...founder,
+    avatarUrl,
+  })
+}
+
 function createDiskBackedOperatorStore(): DiskBackedOperatorStore {
   const filePath = defaultOperatorStorePath()
   const store = new OperatorStore(filePath)
@@ -250,7 +273,7 @@ function createDiskBackedOperatorStore(): DiskBackedOperatorStore {
     async getFounderForUser(user) {
       const founder = await store.getFounder()
       if (founder) {
-        return founder
+        return backfillFounderAvatarFromUser(store, founder, user)
       }
 
       const bootstrapCandidate = createFounderBootstrapCandidate(user)
@@ -262,7 +285,7 @@ function createDiskBackedOperatorStore(): DiskBackedOperatorStore {
         bootstrapFounderPromise = (async () => {
           const existing = await store.getFounder()
           if (existing) {
-            return existing
+            return backfillFounderAvatarFromUser(store, existing, user)
           }
 
           return store.saveFounder(bootstrapCandidate)

@@ -131,6 +131,13 @@ vi.mock('@modules/agents/queue-state', () => ({
 }), { virtual: true })
 
 vi.mock('@modules/workspace/use-workspace', () => ({
+  fetchWorkspacePathResolution: vi.fn(async (_source: unknown, requestedPath: string) => ({
+    workspace: {},
+    requestedPath,
+    path: requestedPath,
+    type: 'file',
+    treePath: '',
+  })),
   getWorkspaceSourceKey: () => 'workspace:none',
   materializeWorkspaceContext: vi.fn(async () => ({ text: '', filePaths: [], directoryPaths: [], fileAnnotations: [] })),
   fetchWorkspaceTree: vi.fn(async () => ({ nodes: [], parentPath: '' })),

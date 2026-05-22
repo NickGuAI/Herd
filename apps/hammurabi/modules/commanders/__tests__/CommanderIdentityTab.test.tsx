@@ -187,6 +187,9 @@ describe('CommanderIdentityTab', () => {
       maxTurns: number
       contextMode: 'thin' | 'fat'
       contextConfig: { fatPinInterval?: number }
+      effort: 'low' | 'medium' | 'high' | 'max'
+      adaptiveThinking: 'enabled' | 'disabled'
+      maxThinkingTokens: number
     }> = []
 
     mocks.fetchJson.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -218,6 +221,9 @@ describe('CommanderIdentityTab', () => {
           maxTurns: number
           contextMode: 'thin' | 'fat'
           contextConfig: { fatPinInterval?: number }
+          effort: 'low' | 'medium' | 'high' | 'max'
+          adaptiveThinking: 'enabled' | 'disabled'
+          maxThinkingTokens: number
         })
         return {}
       }
@@ -229,7 +235,7 @@ describe('CommanderIdentityTab', () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain('Claude hit the max-turn cap at 9 turns.')
-      expect(document.body.textContent).toContain('Global default 12 · limit 25')
+      expect(document.body.textContent).toContain('Global default 12 turns · limit 25')
     })
 
     const maxTurnsInput = document.body.querySelector<HTMLInputElement>('input[type="number"][max="25"]')
@@ -260,6 +266,9 @@ describe('CommanderIdentityTab', () => {
           contextConfig: {
             fatPinInterval: 2,
           },
+          effort: 'medium',
+          adaptiveThinking: 'disabled',
+          maxThinkingTokens: 128000,
         },
       ])
     })

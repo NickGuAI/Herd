@@ -77,7 +77,7 @@ describe('provider registry router', () => {
         transportType: 'stream',
         permissionMode: 'default',
         model: 'claude-sonnet-4-6',
-        effort: 'high',
+        effort: 'max',
         adaptiveThinking: 'disabled',
         maxThinkingTokens: 128000,
       }),

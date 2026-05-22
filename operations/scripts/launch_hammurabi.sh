@@ -78,28 +78,33 @@ if [ "$MODE" = "dev" ] && [ "$SESSION_NAME_EXPLICIT" -eq 0 ]; then
     SESSION_NAME="server-hammurabi-dev"
 fi
 
-RUN_SCRIPT="start"
+RUN_COMMAND="pnpm run start"
 RUN_LABEL="production"
 NODE_ENV_VALUE="production"
 if [ "$MODE" = "dev" ]; then
-    RUN_SCRIPT="dev"
+    RUN_COMMAND="pnpm run dev"
     RUN_LABEL="dev"
     NODE_ENV_VALUE="development"
 fi
 
+CANDIDATE_PORT=$((PORT + 1000))
+CANDIDATE_SESSION_NAME="${SESSION_NAME}-candidate-$$"
+
 port_listener_pids() {
+    local probe_port="${1:-$PORT}"
     if command -v lsof &>/dev/null; then
-        lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true
+        lsof -tiTCP:"$probe_port" -sTCP:LISTEN 2>/dev/null || true
     elif command -v ss &>/dev/null; then
-        ss -tlnp "sport = :$PORT" 2>/dev/null | grep -oP 'pid=\K\d+' | sort -u || true
+        ss -tlnp "sport = :$probe_port" 2>/dev/null | grep -oP 'pid=\K\d+' | sort -u || true
     fi
 }
 
 is_port_listening() {
+    local probe_port="${1:-$PORT}"
     if command -v lsof &>/dev/null; then
-        lsof -tiTCP:"$PORT" -sTCP:LISTEN &>/dev/null
+        lsof -tiTCP:"$probe_port" -sTCP:LISTEN &>/dev/null
     elif command -v ss &>/dev/null; then
-        ss -tlnp "sport = :$PORT" 2>/dev/null | grep -q ":${PORT} "
+        ss -tlnp "sport = :$probe_port" 2>/dev/null | grep -q ":${probe_port} "
     else
         return 1
     fi
@@ -111,11 +116,11 @@ cleanup_old_session_and_port() {
 
     # Kill actual process(es) listening on the port, not just tmux metadata.
     local _port_pids
-    _port_pids="$(port_listener_pids)"
+    _port_pids="$(port_listener_pids "$PORT")"
     if [ -n "$_port_pids" ]; then
         echo "$_port_pids" | xargs -r kill -TERM 2>/dev/null || true
         sleep 1
-        _port_pids="$(port_listener_pids)"
+        _port_pids="$(port_listener_pids "$PORT")"
         if [ -n "$_port_pids" ]; then
             echo "$_port_pids" | xargs -r kill -9 2>/dev/null || true
         fi
@@ -124,10 +129,12 @@ cleanup_old_session_and_port() {
 }
 
 wait_for_service_health() {
-    local health_url="http://127.0.0.1:${PORT}/api/health"
+    local health_port="${1:-$PORT}"
+    local health_session="${2:-$SESSION_NAME}"
+    local health_url="http://127.0.0.1:${health_port}/api/health"
     HEALTH_READY=false
 
-    echo -n -e "${YELLOW}Waiting for Hammurabi health"
+    echo -n -e "${YELLOW}Waiting for Hammurabi health on port ${health_port}"
     for i in {1..60}; do
         echo -n "."
         sleep 1
@@ -135,11 +142,32 @@ wait_for_service_health() {
             HEALTH_READY=true
             break
         fi
-        if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+        if ! tmux has-session -t "$health_session" 2>/dev/null; then
             break
         fi
     done
     echo -e "${NC}"
+}
+
+launch_tmux_service() {
+    local target_session="$1"
+    local target_port="$2"
+    local target_background_runtimes="${3:-1}"
+
+    tmux new-session -d -s "$target_session" -c "$APP_DIR" \
+        "echo \"Build: $LAUNCH_COMMIT ($LAUNCH_BRANCH) @ $LAUNCH_TIME\" && \
+         set -a && source .env && set +a && \
+         while true; do \
+           set -o pipefail; \
+           NODE_ENV=$NODE_ENV_VALUE PORT=$target_port HAMMURABI_BACKGROUND_RUNTIMES=$target_background_runtimes LAUNCH_COMMIT=$LAUNCH_COMMIT $RUN_COMMAND 2>&1 | tee -a \"$LAUNCH_LOG_FILE\"; \
+           EXIT_CODE=\${PIPESTATUS[0]}; \
+           if [ \"\$EXIT_CODE\" -eq 0 ]; then \
+             echo \"[INFO] \$(date -u +%Y-%m-%dT%H:%M:%SZ) Server exited cleanly (\$EXIT_CODE) - restarting in 5s\" | tee -a \"$LAUNCH_LOG_FILE\"; \
+           else \
+             echo \"[CRASH] \$(date -u +%Y-%m-%dT%H:%M:%SZ) Server exited (\$EXIT_CODE) - restarting in 5s\" | tee -a \"$LAUNCH_LOG_FILE\"; \
+           fi; \
+           sleep 5; \
+         done"
 }
 
 init_launch_log "hammurabi" "$APP_DIR"
@@ -227,13 +255,31 @@ else
     echo -e "${GREEN}${CHECKMARK} Build complete${NC}"
 fi
 
-# Kill existing session and the real listener process only after the candidate is ready.
-echo "[INFO] $(date -u +%Y-%m-%dT%H:%M:%SZ) Candidate ready; stopping existing listener on port $PORT for handoff" >> "$LAUNCH_LOG_FILE"
+if [ "$MODE" = "prod" ]; then
+    echo -n -e "${YELLOW}Checking candidate port $CANDIDATE_PORT...${NC}"
+    if is_port_listening "$CANDIDATE_PORT"; then
+        echo -e " ${RED}${CROSS} Candidate port $CANDIDATE_PORT is already in use. Aborting without touching live listener.${NC}"
+        exit 1
+    fi
+    echo -e " ${GREEN}${CHECKMARK} (free)${NC}"
+
+    echo -e "${GREEN}Launching Hammurabi background-disabled candidate on port $CANDIDATE_PORT before touching live listener...${NC}"
+    launch_tmux_service "$CANDIDATE_SESSION_NAME" "$CANDIDATE_PORT" "0"
+    wait_for_service_health "$CANDIDATE_PORT" "$CANDIDATE_SESSION_NAME"
+    if ! $HEALTH_READY; then
+        tmux kill-session -t "$CANDIDATE_SESSION_NAME" 2>/dev/null || true
+        echo -e "${RED}${CROSS} Candidate did not pass /api/health. Existing listener was left untouched.${NC}"
+        exit 1
+    fi
+    echo "[INFO] $(date -u +%Y-%m-%dT%H:%M:%SZ) Background-disabled candidate passed /api/health on port $CANDIDATE_PORT; stopping existing listener on port $PORT for handoff" >> "$LAUNCH_LOG_FILE"
+else
+    echo "[INFO] $(date -u +%Y-%m-%dT%H:%M:%SZ) Dev mode selected; stopping existing listener on port $PORT for handoff" >> "$LAUNCH_LOG_FILE"
+fi
 cleanup_old_session_and_port
 
 # Verify port is free
 echo -n -e "${YELLOW}Checking port $PORT...${NC}"
-if is_port_listening; then
+if is_port_listening "$PORT"; then
     echo -e " ${RED}${CROSS} Port $PORT still in use after cleanup. Aborting.${NC}"
     exit 1
 fi
@@ -244,23 +290,11 @@ echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}Launching Hammurabi (${RUN_LABEL})...${NC}"
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-tmux new-session -d -s "$SESSION_NAME" -c "$APP_DIR" \
-    "echo \"Build: $LAUNCH_COMMIT ($LAUNCH_BRANCH) @ $LAUNCH_TIME\" && \
-     set -a && source .env && set +a && \
-     while true; do \
-       set -o pipefail; \
-       NODE_ENV=$NODE_ENV_VALUE PORT=$PORT LAUNCH_COMMIT=$LAUNCH_COMMIT pnpm run $RUN_SCRIPT 2>&1 | tee -a \"$LAUNCH_LOG_FILE\"; \
-       EXIT_CODE=\${PIPESTATUS[0]}; \
-       if [ \"\$EXIT_CODE\" -eq 0 ]; then \
-         echo \"[INFO] \$(date -u +%Y-%m-%dT%H:%M:%SZ) Server exited cleanly (\$EXIT_CODE) - restarting in 5s\" | tee -a \"$LAUNCH_LOG_FILE\"; \
-       else \
-         echo \"[CRASH] \$(date -u +%Y-%m-%dT%H:%M:%SZ) Server exited (\$EXIT_CODE) - restarting in 5s\" | tee -a \"$LAUNCH_LOG_FILE\"; \
-       fi; \
-       sleep 5; \
-     done"
+launch_tmux_service "$SESSION_NAME" "$PORT" "1"
 
 # Wait for health after the new listener starts.
-wait_for_service_health
+wait_for_service_health "$PORT" "$SESSION_NAME"
+tmux kill-session -t "$CANDIDATE_SESSION_NAME" 2>/dev/null || true
 
 # Report status
 echo -n -e "${YELLOW}Hammurabi health /api/health...${NC}"

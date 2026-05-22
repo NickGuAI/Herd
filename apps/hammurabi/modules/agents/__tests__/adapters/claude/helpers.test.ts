@@ -75,7 +75,7 @@ describe('agents/adapters/claude/helpers', () => {
     )
 
     expect(buildClaudePtyCommand('default')).toBe(
-      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort high`,
+      `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort max`,
     )
     expect(buildClaudePtyCommand('default', 'medium')).toBe(
       `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && ${UNSET_CLAUDE_CHILD_ENV} && claude --effort medium`,

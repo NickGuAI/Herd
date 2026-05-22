@@ -21,7 +21,10 @@ import type {
   CommanderCronTask,
   CommanderSession,
 } from '@modules/commanders/hooks/useCommander'
-import { CreateConversationPanel } from '@modules/conversation/components/CreateConversationPanel'
+import {
+  CreateConversationPanel,
+  type CreateConversationReasoningConfig,
+} from '@modules/conversation/components/CreateConversationPanel'
 import { ChatPane } from './ChatPane'
 import type { ChatSession } from './SessionsColumn'
 import { SubAgentChip, type Worker } from './SubAgentChip'
@@ -91,7 +94,11 @@ export interface CenterColumnProps {
   onOpenWorkspace?: () => void
   onOpenWorkspaceFile?: (path: string) => void
   globalAutomationPanel?: ReactNode
-  onCreateChat?: (agentType: AgentType, model: string | null) => void | Promise<void>
+  onCreateChat?: (
+    agentType: AgentType,
+    model: string | null,
+    reasoningConfig: CreateConversationReasoningConfig,
+  ) => void | Promise<void>
   createChatPending?: boolean
   defaultCreateAgentType?: AgentType
   availableAgentTypes?: AgentType[]

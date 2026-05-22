@@ -107,6 +107,63 @@ describe('auth build guard', () => {
     expect(win.location.assign).not.toHaveBeenCalled()
   })
 
+  it('blocks Auth0 redirect while gateway health is unavailable', async () => {
+    const win = createWindow('/command-room?commander=gaia')
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('Bad Gateway', { status: 502 }),
+    )
+
+    const isFresh = await ensureFreshAuthClientBeforeRedirect(
+      '/command-room?commander=gaia',
+      {
+        fetchImpl,
+        window: win,
+        clientBuildVersion: 'client-sha',
+      },
+    )
+
+    expect(isFresh).toBe(false)
+    expect(win.sessionStorage.setItem).not.toHaveBeenCalled()
+    expect(win.location.assign).not.toHaveBeenCalled()
+  })
+
+  it('allows Auth0 redirect when the health probe is unreachable', async () => {
+    const win = createWindow('/command-room?commander=gaia')
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('Failed to fetch'))
+
+    const isFresh = await ensureFreshAuthClientBeforeRedirect(
+      '/command-room?commander=gaia',
+      {
+        fetchImpl,
+        window: win,
+        clientBuildVersion: 'client-sha',
+      },
+    )
+
+    expect(isFresh).toBe(true)
+    expect(win.sessionStorage.setItem).not.toHaveBeenCalled()
+    expect(win.location.assign).not.toHaveBeenCalled()
+  })
+
+  it('allows Auth0 redirect when gateway is healthy but build payload is malformed', async () => {
+    const win = createWindow('/command-room?commander=gaia')
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('ok', { status: 200 }),
+    )
+
+    const isFresh = await ensureFreshAuthClientBeforeRedirect(
+      '/command-room?commander=gaia',
+      {
+        fetchImpl,
+        window: win,
+        clientBuildVersion: 'client-sha',
+      },
+    )
+
+    expect(isFresh).toBe(true)
+    expect(win.location.assign).not.toHaveBeenCalled()
+  })
+
   it('uses pending return state instead of the cache-bypass URL after reload', () => {
     const win = createWindow('/command-room?commander=gaia&__hammurabi_auth_reload=1234')
     win.sessionStorage.setItem(PENDING_AUTH_RETURN_TO_KEY, '/command-room?commander=gaia')

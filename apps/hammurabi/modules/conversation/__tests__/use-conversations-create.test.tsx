@@ -128,7 +128,14 @@ describe('useCreateConversation', () => {
 
     let result: ConversationRecord | undefined
     await act(async () => {
-      result = await latestMutation?.mutateAsync({ commanderId })
+      result = await latestMutation?.mutateAsync({
+        commanderId,
+        agentType: 'claude',
+        model: null,
+        effort: 'max',
+        adaptiveThinking: 'disabled',
+        maxThinkingTokens: 128000,
+      })
     })
 
     expect(mocks.fetchJson).toHaveBeenCalledWith(
@@ -140,6 +147,11 @@ describe('useCreateConversation', () => {
         },
         body: JSON.stringify({
           surface: 'ui',
+          agentType: 'claude',
+          model: null,
+          effort: 'max',
+          adaptiveThinking: 'disabled',
+          maxThinkingTokens: 128000,
         }),
       },
     )

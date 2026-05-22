@@ -29,7 +29,7 @@ warn() { printf "${YELLOW}!${NC} %s\n" "$*"; }
 fail() { printf "${RED}✗${NC} %s\n" "$*" >&2; exit 1; }
 
 prompt_available() {
-  [[ -r /dev/tty && -w /dev/tty ]]
+  : 2>/dev/null <>/dev/tty
 }
 
 prompt_line() {

@@ -308,6 +308,93 @@ describe('org route', () => {
     }
   })
 
+  it('backfills a missing founder avatar from the authenticated human on org read', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
+    tempDirs.push(dataDir)
+    process.env.HAMMURABI_DATA_DIR = dataDir
+
+    const server = await startServer(dataDir)
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/org`, {
+        method: 'POST',
+        headers: {
+          ...API_KEY_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          displayName: 'Gehirn Inc.',
+          founder: {
+            displayName: 'Nick Gu',
+            email: 'nick.gu@example.com',
+          },
+        }),
+      })
+
+      expect(createResponse.status).toBe(201)
+      expect((await createResponse.json()).operator.avatarUrl).toBeNull()
+
+      const readResponse = await fetch(`${server.baseUrl}/api/org`, {
+        headers: AUTH0_HEADERS,
+      })
+
+      expect(readResponse.status).toBe(200)
+      const payload = await readResponse.json()
+      expect(payload.operator).toMatchObject({
+        displayName: 'Nick Gu',
+        avatarUrl: 'https://example.com/nick.png',
+      })
+
+      const persisted = JSON.parse(await readFile(join(dataDir, 'operators.json'), 'utf8')) as Record<string, unknown>
+      expect(persisted.avatarUrl).toBe('https://example.com/nick.png')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('does not backfill a missing founder avatar from a non-founder org reader', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
+    tempDirs.push(dataDir)
+    process.env.HAMMURABI_DATA_DIR = dataDir
+
+    const server = await startServer(dataDir)
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/org`, {
+        method: 'POST',
+        headers: {
+          ...API_KEY_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          displayName: 'Gehirn Inc.',
+          founder: {
+            displayName: 'Nick Gu',
+            email: 'nick@example.com',
+          },
+        }),
+      })
+
+      expect(createResponse.status).toBe(201)
+
+      const readResponse = await fetch(`${server.baseUrl}/api/org`, {
+        headers: AUTH0_HEADERS,
+      })
+
+      expect(readResponse.status).toBe(200)
+      const payload = await readResponse.json()
+      expect(payload.operator).toMatchObject({
+        displayName: 'Nick Gu',
+        avatarUrl: null,
+      })
+
+      const persisted = JSON.parse(await readFile(join(dataDir, 'operators.json'), 'utf8')) as Record<string, unknown>
+      expect(persisted.avatarUrl).toBeNull()
+    } finally {
+      await server.close()
+    }
+  })
+
   it('creates the founder and org identity via POST /api/org for bootstrap API-key sessions', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-org-route-'))
     tempDirs.push(dataDir)

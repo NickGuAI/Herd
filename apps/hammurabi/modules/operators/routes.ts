@@ -6,7 +6,10 @@ import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import { resolveHammurabiDataDir } from '../data-dir.js'
-import { createFounderBootstrapCandidate } from './founder-bootstrap.js'
+import {
+  createFounderBootstrapCandidate,
+  resolveFounderAvatarBackfillUrl,
+} from './founder-bootstrap.js'
 import {
   mimeTypeForAvatarFile,
   readOperatorUiProfile,
@@ -75,7 +78,19 @@ async function getFounderForUser(
 ) {
   const founder = await store.getFounder()
   if (founder) {
-    return founder
+    if (founder.avatarUrl?.trim()) {
+      return founder
+    }
+
+    const avatarUrl = resolveFounderAvatarBackfillUrl(founder, user)
+    if (!avatarUrl) {
+      return founder
+    }
+
+    return store.saveFounder({
+      ...founder,
+      avatarUrl,
+    })
   }
 
   const bootstrapCandidate = createFounderBootstrapCandidate(user)

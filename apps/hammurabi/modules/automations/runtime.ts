@@ -58,18 +58,20 @@ export function createAutomationsRuntime(context: ModuleRuntimeContext): ModuleR
   const commanderDataDir = capabilities.consume('commanders.data-dir', 'automations')
   const commanderStore = capabilities.consume('commanders.store', 'automations')
 
-  automationScheduler.registerInternalSchedule(
-    'commander-transcript-maintenance',
-    process.env.COMMANDER_TRANSCRIPT_MAINTENANCE_CRON?.trim() || COMMANDER_TRANSCRIPT_MAINTENANCE_CRON,
-    async () => {
-      const commanderIds = (await commanderStore.list()).map((session) => session.id)
-      for (const commanderId of commanderIds) {
-        await maintainCommanderTranscriptIndex(commanderId, { basePath: commanderDataDir }).catch((error) => {
-          console.error(`[commanders] Failed transcript maintenance for ${commanderId}:`, error)
-        })
-      }
-    },
-  )
+  if (options.initializeAutomationScheduler !== false) {
+    automationScheduler.registerInternalSchedule(
+      'commander-transcript-maintenance',
+      process.env.COMMANDER_TRANSCRIPT_MAINTENANCE_CRON?.trim() || COMMANDER_TRANSCRIPT_MAINTENANCE_CRON,
+      async () => {
+        const commanderIds = (await commanderStore.list()).map((session) => session.id)
+        for (const commanderId of commanderIds) {
+          await maintainCommanderTranscriptIndex(commanderId, { basePath: commanderDataDir }).catch((error) => {
+            console.error(`[commanders] Failed transcript maintenance for ${commanderId}:`, error)
+          })
+        }
+      },
+    )
+  }
 
   const automations = createAutomationsRouter({
     apiKeyStore: options.apiKeyStore,

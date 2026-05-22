@@ -102,6 +102,7 @@ import {
   type ConversationAction,
   type ConversationRecord,
 } from '@modules/conversation/hooks/use-conversations'
+import type { CreateConversationReasoningConfig } from '@modules/conversation/components/CreateConversationPanel'
 import { CreateCommanderWizard } from '@modules/commanders/components/CreateCommanderWizard'
 import { SessionsColumn } from './desktop/SessionsColumn'
 import type { ChatSession } from './desktop/SessionsColumn'
@@ -113,6 +114,7 @@ import { CommanderIdentityTab } from '@modules/commanders/components/CommanderId
 import { QuestBoard } from '@modules/commanders/components/QuestBoard'
 import { WorkspacePanel } from '@modules/workspace/components/WorkspacePanel'
 import {
+  fetchWorkspacePathResolution,
   getWorkspaceSourceKey,
   openWorkspaceTarget,
   type WorkspacePendingFileAnnotation,
@@ -369,8 +371,12 @@ function conversationDisabledReason(
   return conversation?.displayState?.disabledReasons[action] ?? fallback
 }
 
+function conversationWebSocketReady(conversation: ConversationRecord | null | undefined): boolean {
+  return conversation?.websocketReady === true || conversation?.displayState?.websocketReady === true
+}
+
 function mapConversationLiveSession(conversation: ConversationRecord | null): ChatSession | null {
-  if (!conversation?.liveSession || !conversation.sendTarget) {
+  if (!conversationWebSocketReady(conversation) || !conversation?.liveSession || !conversation.sendTarget) {
     return null
   }
 
@@ -605,9 +611,10 @@ export function CommandRoom() {
   const activeStandaloneSession = selectedStandaloneSession
   const activeConversationSession = selectedConversationSession
   const activeChatSession = activeStandaloneSession ?? activeConversationSession
+  const selectedConversationWebSocketReady = conversationWebSocketReady(selectedConversation)
   const streamSessionName = activeStandaloneSession?.id
     ?? (!conversationSelectionSettling ? selectedConversationSession?.name : undefined)
-  const streamWebSocketPath = activeStandaloneSession || !selectedConversation
+  const streamWebSocketPath = activeStandaloneSession || !selectedConversationWebSocketReady || !selectedConversation
     ? undefined
     : `/api/conversations/${encodeURIComponent(selectedConversation.id)}/ws`
   const composerSessionName = selectedConversation
@@ -646,7 +653,7 @@ export function CommandRoom() {
     : Boolean(
         selectedConversation
         && selectedConversationSession
-        && selectedConversation.displayState?.hasLiveSession === true
+        && selectedConversationWebSocketReady
         && selectedConversation.sendTarget?.transportType !== 'pty',
       )
   const canQueueDraft = activeStandaloneSession
@@ -919,36 +926,68 @@ export function CommandRoom() {
 
     handleActiveTabChange('chat')
     setWorkspaceOpenPreference(true)
-    setWorkspaceRequestedPath({
-      path: trimmedPath,
-      token: Date.now(),
-    })
 
-    if (workspaceTarget?.targetId) {
-      return
-    }
+    let target = workspaceTarget
+    if (!target?.targetId) {
+      const standaloneSessionName = activeStandaloneSession?.id ?? null
+      const fallbackCommanderId = !isGlobalScope && selectedCommanderId ? selectedCommanderId : null
+      if (!selectedConversationId && !standaloneSessionName && !fallbackCommanderId) {
+        setWorkspaceRequestedPath({
+          path: trimmedPath,
+          token: Date.now(),
+        })
+        return
+      }
 
-    const standaloneSessionName = activeStandaloneSession?.id ?? null
-    const fallbackCommanderId = !isGlobalScope && selectedCommanderId ? selectedCommanderId : null
-    if (!selectedConversationId && !standaloneSessionName && !fallbackCommanderId) {
-      return
+      try {
+        const openedTarget = await openWorkspaceTarget(
+          selectedConversationId
+            ? { conversationId: selectedConversationId }
+            : standaloneSessionName
+              ? { sessionName: standaloneSessionName }
+              : { commanderId: fallbackCommanderId! },
+        )
+        target = {
+          targetId: openedTarget.targetId,
+          label: openedTarget.label,
+          readOnly: openedTarget.isReadOnly,
+        }
+        setWorkspaceTarget(target)
+      } catch {
+        setWorkspaceTarget(null)
+        setWorkspaceRequestedPath({
+          path: trimmedPath,
+          token: Date.now(),
+        })
+        return
+      }
     }
 
     try {
-      const target = await openWorkspaceTarget(
-        selectedConversationId
-          ? { conversationId: selectedConversationId }
-          : standaloneSessionName
-            ? { sessionName: standaloneSessionName }
-            : { commanderId: fallbackCommanderId! },
-      )
-      setWorkspaceTarget({
+      const resolvedPath = await fetchWorkspacePathResolution({
+        kind: 'target',
         targetId: target.targetId,
         label: target.label,
-        readOnly: target.isReadOnly,
+        readOnly: target.readOnly,
+      }, trimmedPath)
+      const resolvedTarget = resolvedPath.targetId
+        ? {
+            targetId: resolvedPath.targetId,
+            label: resolvedPath.targetLabel ?? target.label,
+            readOnly: resolvedPath.targetReadOnly ?? target.readOnly,
+          }
+        : target
+      setWorkspaceTarget(resolvedTarget)
+      setWorkspaceRequestedPath({
+        path: resolvedPath.path,
+        token: Date.now(),
       })
+      return
     } catch {
-      setWorkspaceTarget(null)
+      setWorkspaceRequestedPath({
+        path: trimmedPath,
+        token: Date.now(),
+      })
     }
   }, [
     activeStandaloneSession?.id,
@@ -957,7 +996,7 @@ export function CommandRoom() {
     selectedCommanderId,
     selectedConversationId,
     setWorkspaceOpenPreference,
-    workspaceTarget?.targetId,
+    workspaceTarget,
   ])
 
   const handleRemoveContextFilePath = useCallback((filePath: string) => {
@@ -1649,6 +1688,7 @@ export function CommandRoom() {
     commanderId: string,
     agentType?: AgentType,
     model?: string | null,
+    reasoningConfig: CreateConversationReasoningConfig = {},
   ) => {
     setSessionActionError(null)
 
@@ -1658,6 +1698,13 @@ export function CommandRoom() {
         surface: 'ui',
         ...(agentType ? { agentType } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(reasoningConfig.effort !== undefined ? { effort: reasoningConfig.effort } : {}),
+        ...(reasoningConfig.adaptiveThinking !== undefined
+          ? { adaptiveThinking: reasoningConfig.adaptiveThinking }
+          : {}),
+        ...(reasoningConfig.maxThinkingTokens !== undefined
+          ? { maxThinkingTokens: reasoningConfig.maxThinkingTokens }
+          : {}),
       })
       // Per issue 1362 contract: creation is the explicit user action and never
       // auto-starts. We select the new (idle) conversation so the user sees
@@ -2137,8 +2184,8 @@ export function CommandRoom() {
               )
             : undefined}
           onCreateChat={!isGlobalScope && selectedCommanderId
-            ? (agentType: AgentType, model: string | null) => {
-                void handleCreateChatForCommander(selectedCommanderId, agentType, model)
+            ? (agentType: AgentType, model: string | null, reasoningConfig: CreateConversationReasoningConfig) => {
+                void handleCreateChatForCommander(selectedCommanderId, agentType, model, reasoningConfig)
               }
             : undefined}
           createChatPending={createConversation.isPending}

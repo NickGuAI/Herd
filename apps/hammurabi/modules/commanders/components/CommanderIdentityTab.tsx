@@ -2,12 +2,22 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { fetchJson, fetchVoid } from '@/lib/api'
+import { fetchJson } from '@/lib/api'
+import {
+  CLAUDE_ADAPTIVE_THINKING_MODES,
+  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  type ClaudeAdaptiveThinkingMode,
+} from '../../claude-adaptive-thinking.js'
 import {
   CLAUDE_EFFORT_LEVELS,
   DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '../../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  MAX_CLAUDE_MAX_THINKING_TOKENS,
+  MIN_CLAUDE_MAX_THINKING_TOKENS,
+} from '../../claude-max-thinking-tokens.js'
 import type { CommanderSession } from '../hooks/useCommander'
 import {
   createDefaultCommanderRuntimeConfig,
@@ -54,19 +64,6 @@ async function fetchCommanderDetail(commanderId: string): Promise<CommanderDetai
   return fetchJson<CommanderDetailPayload>(`/api/commanders/${encodeURIComponent(commanderId)}`)
 }
 
-async function updateCommanderEffort(
-  commanderId: string,
-  effort: ClaudeEffortLevel,
-): Promise<void> {
-  await fetchVoid(`/api/commanders/${encodeURIComponent(commanderId)}/profile`, {
-    method: 'PATCH',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ effort }),
-  })
-}
-
 async function updateCommanderRuntime(
   commanderId: string,
   input: {
@@ -75,6 +72,9 @@ async function updateCommanderRuntime(
     contextConfig: {
       fatPinInterval?: number
     }
+    effort: ClaudeEffortLevel
+    adaptiveThinking: ClaudeAdaptiveThinkingMode
+    maxThinkingTokens: number
   },
 ): Promise<void> {
   await fetchJson(`/api/commanders/${encodeURIComponent(commanderId)}/runtime`, {
@@ -174,6 +174,12 @@ export function CommanderIdentityTab({
   const [effort, setEffort] = useState<ClaudeEffortLevel>(
     commander.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
   )
+  const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
+    commander.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  )
+  const [maxThinkingTokens, setMaxThinkingTokens] = useState(String(
+    commander.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  ))
   const [maxTurns, setMaxTurns] = useState(String(commander.maxTurns ?? FALLBACK_RUNTIME_CONFIG.defaults.maxTurns))
   const [runtimeContextMode, setRuntimeContextMode] = useState<'thin' | 'fat'>(commander.contextMode ?? 'fat')
   const [fatPinInterval, setFatPinInterval] = useState('')
@@ -185,16 +191,6 @@ export function CommanderIdentityTab({
     staleTime: 30_000,
   })
 
-  const updateEffortMutation = useMutation({
-    mutationFn: async (nextEffort: ClaudeEffortLevel) => updateCommanderEffort(commander.id, nextEffort),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['commanders', 'sessions'] }),
-        queryClient.invalidateQueries({ queryKey: ['commanders', 'detail', commander.id] }),
-      ])
-    },
-  })
-
   const updateRuntimeMutation = useMutation({
     mutationFn: async (input: {
       maxTurns: number
@@ -202,6 +198,9 @@ export function CommanderIdentityTab({
       contextConfig: {
         fatPinInterval?: number
       }
+      effort: ClaudeEffortLevel
+      adaptiveThinking: ClaudeAdaptiveThinkingMode
+      maxThinkingTokens: number
     }) => updateCommanderRuntime(commander.id, input),
     onSuccess: async () => {
       await Promise.all([
@@ -213,6 +212,8 @@ export function CommanderIdentityTab({
 
   useEffect(() => {
     setEffort(commander.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL)
+    setAdaptiveThinking(commander.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
+    setMaxThinkingTokens(String(commander.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS))
     setMaxTurns(String(
       commander.maxTurns
       ?? detailQuery.data?.runtimeConfig?.defaults.maxTurns
@@ -227,23 +228,15 @@ export function CommanderIdentityTab({
     setActionError(null)
   }, [
     commander.contextMode,
+    commander.adaptiveThinking,
     commander.effort,
     commander.id,
+    commander.maxThinkingTokens,
     commander.maxTurns,
     detailQuery.data?.contextConfig?.fatPinInterval,
     detailQuery.data?.contextMode,
     detailQuery.data?.runtimeConfig?.defaults.maxTurns,
   ])
-
-  async function handleSaveEffort(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault()
-    setActionError(null)
-    try {
-      await updateEffortMutation.mutateAsync(effort)
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to update commander effort.')
-    }
-  }
 
   async function handleSaveRuntime(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -270,6 +263,18 @@ export function CommanderIdentityTab({
       return
     }
 
+    const parsedMaxThinkingTokens = Number.parseInt(maxThinkingTokens.trim(), 10)
+    if (
+      !Number.isFinite(parsedMaxThinkingTokens)
+      || parsedMaxThinkingTokens < MIN_CLAUDE_MAX_THINKING_TOKENS
+      || parsedMaxThinkingTokens > MAX_CLAUDE_MAX_THINKING_TOKENS
+    ) {
+      setActionError(
+        `Max thinking tokens must be an integer between ${MIN_CLAUDE_MAX_THINKING_TOKENS} and ${MAX_CLAUDE_MAX_THINKING_TOKENS}.`,
+      )
+      return
+    }
+
     setActionError(null)
     try {
       await updateRuntimeMutation.mutateAsync({
@@ -278,6 +283,9 @@ export function CommanderIdentityTab({
         contextConfig: runtimeContextMode === 'fat' && parsedFatPinInterval !== undefined
           ? { fatPinInterval: parsedFatPinInterval }
           : {},
+        effort,
+        adaptiveThinking,
+        maxThinkingTokens: parsedMaxThinkingTokens,
       })
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to update commander runtime.')
@@ -389,44 +397,60 @@ export function CommanderIdentityTab({
                 />
               </label>
             )}
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="block">
+                <span className="section-title block mb-2">Claude effort</span>
+                <select
+                  value={effort}
+                  onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
+                  className={FIELD_CLASS}
+                >
+                  {CLAUDE_EFFORT_LEVELS.map((level) => (
+                    <option key={level} value={level}>{level}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="section-title block mb-2">Adaptive thinking</span>
+                <select
+                  value={adaptiveThinking}
+                  onChange={(event) => setAdaptiveThinking(event.target.value as ClaudeAdaptiveThinkingMode)}
+                  className={FIELD_CLASS}
+                >
+                  {CLAUDE_ADAPTIVE_THINKING_MODES.map((mode) => (
+                    <option key={mode} value={mode}>{mode}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="section-title block mb-2">Max thinking tokens</span>
+                <input
+                  type="number"
+                  min={MIN_CLAUDE_MAX_THINKING_TOKENS}
+                  max={MAX_CLAUDE_MAX_THINKING_TOKENS}
+                  step={1}
+                  value={maxThinkingTokens}
+                  onChange={(event) => setMaxThinkingTokens(event.target.value)}
+                  className={FIELD_CLASS}
+                />
+              </label>
+            </div>
             <p className={NOTE_CLASS}>
-              Global default {runtimeConfig.defaults.maxTurns} · limit {runtimeConfig.limits.maxTurns}. Changes apply to the next Claude launch.
+              Global default {runtimeConfig.defaults.maxTurns} turns · limit {runtimeConfig.limits.maxTurns}.
+              Claude defaults are effort `{DEFAULT_CLAUDE_EFFORT_LEVEL}`, adaptive thinking `{DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE}`,
+              and {DEFAULT_CLAUDE_MAX_THINKING_TOKENS} thinking tokens. Changes apply to the next Claude launch.
             </p>
+            {commander.agentType !== 'claude' && (
+              <p className={SUBTLE_NOTE_CLASS}>
+                Current agent type is `{commander.agentType ?? 'claude'}`. Claude reasoning settings apply when the commander runs with Claude.
+              </p>
+            )}
             <button
               type="submit"
               disabled={updateRuntimeMutation.isPending}
               className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {updateRuntimeMutation.isPending ? 'Saving...' : 'Save runtime'}
-            </button>
-          </form>
-          <form className="space-y-3" onSubmit={(event) => void handleSaveEffort(event)}>
-            <label className="block">
-              <span className="section-title block mb-2">Claude effort</span>
-              <select
-                value={effort}
-                onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
-                className={FIELD_CLASS}
-              >
-                {CLAUDE_EFFORT_LEVELS.map((level) => (
-                  <option key={level} value={level}>{level}</option>
-                ))}
-              </select>
-            </label>
-            <p className={NOTE_CLASS}>
-              Used whenever this commander launches a Claude session. Default is `{DEFAULT_CLAUDE_EFFORT_LEVEL}`.
-            </p>
-            {commander.agentType !== 'claude' && (
-              <p className={SUBTLE_NOTE_CLASS}>
-                Current agent type is `{commander.agentType ?? 'claude'}`. This setting applies the next time the commander runs with Claude.
-              </p>
-            )}
-            <button
-              type="submit"
-              disabled={updateEffortMutation.isPending}
-              className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {updateEffortMutation.isPending ? 'Saving...' : 'Save effort'}
             </button>
           </form>
           {actionError && (

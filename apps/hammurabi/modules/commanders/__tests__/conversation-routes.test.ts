@@ -17,6 +17,7 @@ import type { AgentType, SessionSendPayload } from '../../agents/types'
 import type { QueuedMessageImage } from '../../agents/message-queue'
 import { MAX_MESSAGE_IMAGE_COUNT } from '../../agents/message-images'
 import { buildConversationSessionName } from '../routes/conversation-runtime'
+import { resetConversationRuntimeOverlays } from '../routes/conversation-runtime-state'
 import { CommanderChannelBindingStore, CommanderChannelBindingConflictError } from '../../channels/store'
 import {
   buildDefaultCommanderConversationId,
@@ -116,6 +117,7 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
+  resetConversationRuntimeOverlays()
   resetTranscriptStoreRoot()
   await Promise.all(
     tempDirs.splice(0).map((directory) =>
@@ -1668,6 +1670,168 @@ describe('conversation routes', () => {
         agentType: 'claude',
       }))
     } finally {
+      await server.close()
+    }
+  })
+
+  it('reports starting conversations until provider bootstrap is websocket-ready', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-starting-state-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const createCommanderSession = sessions.iface.createCommanderSession.bind(sessions.iface)
+    let releaseCreate: (() => void) | null = null
+    let createStarted = false
+    sessions.iface.createCommanderSession = vi.fn(async (params) => {
+      createStarted = true
+      await new Promise<void>((resolve) => {
+        releaseCreate = resolve
+      })
+      return createCommanderSession(params)
+    }) as CommanderSessionsInterface['createCommanderSession']
+
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })).status).toBe(201)
+
+      const startPromise = startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })
+      await vi.waitFor(() => expect(createStarted).toBe(true))
+      const startResponse = await startPromise
+      expect(startResponse.status).toBe(202)
+      expect(await startResponse.json()).toEqual({
+        conversation: expect.objectContaining({
+          id: CONVERSATION_A,
+          status: 'idle',
+          runtimeState: 'starting',
+          websocketReady: false,
+          liveSession: null,
+          allowedActions: expect.objectContaining({
+            start: false,
+            pause: true,
+            resume: false,
+            send: false,
+          }),
+          displayState: expect.objectContaining({
+            runtimeState: 'starting',
+            websocketReady: false,
+            hasLiveSession: false,
+          }),
+        }),
+      })
+
+      const startingDetailResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(startingDetailResponse.status).toBe(200)
+      expect(await startingDetailResponse.json()).toEqual(expect.objectContaining({
+        id: CONVERSATION_A,
+        runtimeState: 'starting',
+        websocketReady: false,
+      }))
+
+      releaseCreate?.()
+
+      await vi.waitFor(async () => {
+        const detailResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+          headers: READ_ONLY_AUTH_HEADERS,
+        })
+        expect(detailResponse.status).toBe(200)
+        expect(await detailResponse.json()).toEqual(expect.objectContaining({
+          id: CONVERSATION_A,
+          status: 'active',
+          runtimeState: 'active',
+          websocketReady: true,
+          liveSession: expect.objectContaining({
+            name: expect.stringContaining(`-conversation-${CONVERSATION_A}`),
+          }),
+          displayState: expect.objectContaining({
+            runtimeState: 'active',
+            websocketReady: true,
+            hasLiveSession: true,
+          }),
+        }))
+      })
+    } finally {
+      releaseCreate?.()
+      sessions.dispose()
+      await server.close()
+    }
+  })
+
+  it('cancels a starting conversation deterministically when paused before bootstrap completes', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-start-cancel-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const createCommanderSession = sessions.iface.createCommanderSession.bind(sessions.iface)
+    let releaseCreate: (() => void) | null = null
+    let createStarted = false
+    sessions.iface.createCommanderSession = vi.fn(async (params) => {
+      createStarted = true
+      await new Promise<void>((resolve) => {
+        releaseCreate = resolve
+      })
+      return createCommanderSession(params)
+    }) as CommanderSessionsInterface['createCommanderSession']
+
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })).status).toBe(201)
+
+      const startPromise = startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })
+      await vi.waitFor(() => expect(createStarted).toBe(true))
+      expect((await startPromise).status).toBe(202)
+
+      const pauseResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/pause`, {
+        method: 'POST',
+        headers: FULL_AUTH_HEADERS,
+      })
+      expect(pauseResponse.status).toBe(202)
+      expect(await pauseResponse.json()).toEqual(expect.objectContaining({
+        id: CONVERSATION_A,
+        runtimeState: 'starting',
+        websocketReady: false,
+      }))
+
+      releaseCreate?.()
+
+      await vi.waitFor(async () => {
+        const detailResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+          headers: READ_ONLY_AUTH_HEADERS,
+        })
+        expect(detailResponse.status).toBe(200)
+        expect(await detailResponse.json()).toEqual(expect.objectContaining({
+          id: CONVERSATION_A,
+          status: 'idle',
+          runtimeState: 'idle',
+          websocketReady: false,
+          liveSession: null,
+        }))
+      })
+      expect(sessions.activeSessions.size).toBe(0)
+    } finally {
+      releaseCreate?.()
+      sessions.dispose()
       await server.close()
     }
   })

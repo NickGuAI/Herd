@@ -8,7 +8,7 @@
   "summary": "Handles meeting prep, scheduling support, daily assistance, inbox/doc triage, and lightweight follow-through.",
   "description": "A general support commander for everyday coordination, preparation, reminders, and administrative work.",
   "agentType": "claude",
-  "effort": "high",
+  "effort": "max",
   "contextMode": "thin",
   "uiProfile": {
     "speakingTone": "Calm executive assistant",

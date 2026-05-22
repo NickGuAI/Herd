@@ -1,4 +1,7 @@
 import { createReadStream } from 'node:fs'
+import { realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import path from 'node:path'
 import { Router, type Request, type Response } from 'express'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import type { Auth0TokenVerifier } from '../../server/middleware/auth0.js'
@@ -24,6 +27,10 @@ import {
 } from './index.js'
 import type { WorkspaceCommandRunner } from './git.js'
 import type { WorkspaceResolverCapability } from './capability.js'
+import type {
+  ResolvedWorkspaceTarget,
+  WorkspacePathResolution,
+} from './types.js'
 import { WorkspacePreferencesStore } from './store.js'
 import {
   materializeWorkspaceContextPayload,
@@ -114,6 +121,83 @@ function readRequiredBodyString(body: unknown, key: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function expandLocalAbsoluteWorkspaceReference(requestedPath: string): string | null {
+  const trimmedPath = requestedPath.trim()
+  if (!trimmedPath) {
+    return null
+  }
+  if (trimmedPath.startsWith('~/')) {
+    return path.join(homedir(), trimmedPath.slice(2))
+  }
+  if (path.isAbsolute(trimmedPath)) {
+    return trimmedPath
+  }
+  return null
+}
+
+function isWorkspaceRootEscape(error: unknown): error is WorkspaceError {
+  return error instanceof WorkspaceError
+    && error.statusCode === 403
+    && error.message === 'Workspace path escapes the workspace root'
+}
+
+async function resolveExternalLocalWorkspaceReference(
+  options: WorkspaceRouterOptions,
+  resolved: ResolvedWorkspaceTarget,
+  requestedPath: string,
+): Promise<WorkspacePathResolution | null> {
+  if (resolved.workspace.isRemote) {
+    return null
+  }
+
+  const absolutePath = expandLocalAbsoluteWorkspaceReference(requestedPath)
+  if (!absolutePath) {
+    return null
+  }
+
+  let resolvedAbsolutePath: string
+  try {
+    resolvedAbsolutePath = await realpath(absolutePath)
+  } catch {
+    throw new WorkspaceError(404, 'Workspace path not found')
+  }
+
+  let targetStat
+  try {
+    targetStat = await stat(resolvedAbsolutePath)
+  } catch {
+    throw new WorkspaceError(404, 'Workspace path not found')
+  }
+
+  if (!targetStat.isFile() && !targetStat.isDirectory()) {
+    throw new WorkspaceError(400, 'Workspace path must be a file or directory')
+  }
+
+  const targetRootPath = targetStat.isDirectory()
+    ? resolvedAbsolutePath
+    : path.dirname(resolvedAbsolutePath)
+  const target = await options.resolver.open({
+    authorizationConversationId: resolved.target.conversationId,
+    authorizationSessionName: resolved.target.sessionName,
+    authorizationCommanderId: resolved.target.commanderId,
+    hostHint: resolved.target.host,
+    pathHint: targetRootPath,
+  })
+  const retargeted = await options.resolver.resolveTarget(target.targetId)
+  const selection = await resolveWorkspacePathSelection(
+    retargeted.workspace,
+    resolvedAbsolutePath,
+    retargeted.commandRunner,
+  )
+
+  return {
+    ...selection,
+    targetId: target.targetId,
+    targetLabel: target.label,
+    targetReadOnly: target.readOnly,
+  }
 }
 
 async function readRemoteRawFile(
@@ -216,11 +300,23 @@ export function createWorkspaceRouter(options: WorkspaceRouterOptions): Router {
   router.get('/resolve-path', requireReadAccess, async (req, res) => {
     try {
       const resolved = await options.resolver.resolveTarget(readTargetId(req.query))
-      res.json(await resolveWorkspacePathSelection(
-        resolved.workspace,
-        readRequiredPath(req.query),
-        resolved.commandRunner,
-      ))
+      const requestedPath = readRequiredPath(req.query)
+      try {
+        res.json(await resolveWorkspacePathSelection(
+          resolved.workspace,
+          requestedPath,
+          resolved.commandRunner,
+        ))
+      } catch (error) {
+        const retargetedSelection = isWorkspaceRootEscape(error)
+          ? await resolveExternalLocalWorkspaceReference(options, resolved, requestedPath)
+          : null
+        if (retargetedSelection) {
+          res.json(retargetedSelection)
+          return
+        }
+        throw error
+      }
     } catch (error) {
       sendWorkspaceError(res, error)
     }

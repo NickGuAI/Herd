@@ -18,6 +18,10 @@ const AUTH0_HEADERS = {
   authorization: 'Bearer founder-token',
 }
 
+const TEAMMATE_AUTH0_HEADERS = {
+  authorization: 'Bearer teammate-token',
+}
+
 interface RunningServer {
   baseUrl: string
   close: () => Promise<void>
@@ -84,6 +88,26 @@ function verifyFounderToken(token: string): Promise<AuthUser> {
       picture: 'https://example.com/nick.png',
     },
   })
+}
+
+function verifyFounderOrTeammateToken(token: string): Promise<AuthUser> {
+  if (token === 'founder-token') {
+    return verifyFounderToken(token)
+  }
+
+  if (token === 'teammate-token') {
+    return Promise.resolve({
+      id: 'auth0|teammate-user',
+      email: 'teammate@example.com',
+      metadata: {
+        permissions: ['commanders:read'],
+        name: 'Team Mate',
+        picture: 'https://example.com/teammate.png',
+      },
+    })
+  }
+
+  throw new Error('Unauthorized')
 }
 
 async function startServer(options: {
@@ -182,6 +206,39 @@ describe('operators routes', () => {
         email: 'nick@example.com',
         avatarUrl: 'https://example.com/nick.png',
       })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('backfills an existing founder avatar only for the founder identity', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-operators-route-'))
+    tempDirs.push(dir)
+    const dataDir = join(dir, '.hammurabi')
+    const store = new OperatorStore(join(dataDir, 'operators.json'))
+    await store.saveFounder(createFounder({ avatarUrl: null }))
+    const server = await startServer({
+      store,
+      dataDir,
+      verifyAuth0Token: verifyFounderOrTeammateToken,
+    })
+
+    try {
+      const teammateResponse = await fetch(`${server.baseUrl}/api/operators/founder`, {
+        headers: TEAMMATE_AUTH0_HEADERS,
+      })
+
+      expect(teammateResponse.status).toBe(200)
+      expect((await teammateResponse.json()).avatarUrl).toBeNull()
+      expect((await store.getFounder())?.avatarUrl).toBeNull()
+
+      const founderResponse = await fetch(`${server.baseUrl}/api/operators/founder`, {
+        headers: AUTH0_HEADERS,
+      })
+
+      expect(founderResponse.status).toBe(200)
+      expect((await founderResponse.json()).avatarUrl).toBe('https://example.com/nick.png')
+      expect((await store.getFounder())?.avatarUrl).toBe('https://example.com/nick.png')
     } finally {
       await server.close()
     }

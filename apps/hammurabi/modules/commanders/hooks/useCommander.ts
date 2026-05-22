@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJson, fetchVoid } from '../../../src/lib/api'
 import type { AgentType } from '@/types'
+import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type { CommanderPortraitStyleId } from '../portrait-styles'
 
 export const COMMANDERS_QUERY_KEY = ['commanders', 'sessions'] as const
@@ -47,6 +49,8 @@ export interface CommanderSession {
   agentType?: CommanderAgentType
   model?: string | null
   effort?: ClaudeEffortLevel
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   cwd?: string
   maxTurns?: number
   contextMode?: CommanderContextMode

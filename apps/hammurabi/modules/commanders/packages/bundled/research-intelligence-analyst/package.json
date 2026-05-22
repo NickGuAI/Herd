@@ -8,7 +8,7 @@
   "summary": "Runs web research, knowledge search, AI-for-science synthesis, report generation, and domain distillation.",
   "description": "A research commander for converting broad questions into sourced synthesis, reusable knowledge, and polished reports.",
   "agentType": "claude",
-  "effort": "high",
+  "effort": "max",
   "contextMode": "thin",
   "uiProfile": {
     "speakingTone": "Socratic research analyst",

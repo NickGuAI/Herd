@@ -141,7 +141,8 @@ describe('conversation-runtime quick wins', () => {
     expect(sessionsInterface.deleteSession).not.toHaveBeenCalled()
     expect(sessionsInterface.createCommanderSession).not.toHaveBeenCalled()
     expect(sessionsInterface.sendToSession).not.toHaveBeenCalled()
-    expect(liveSession.systemPrompt).toBe('fresh commander prompt')
+    expect(liveSession.systemPrompt).toContain('fresh commander prompt')
+    expect(liveSession.systemPrompt).toContain('## Claude Code Reasoning Policy')
     expect(liveSession.maxTurns).toBe(12)
     expect(started.sent).toBe(true)
     expect(started.conversation.status).toBe('active')
@@ -232,6 +233,7 @@ describe('conversation-runtime quick wins', () => {
     expect(sessionsInterface.createCommanderSession).toHaveBeenCalledWith(expect.objectContaining({
       agentType: 'codex',
       model: 'gpt-5.5',
+      systemPrompt: 'fresh commander prompt',
       resumeProviderContext: {
         providerId: 'codex',
         threadId: 'codex-thread-1',
@@ -262,12 +264,12 @@ describe('conversation-runtime quick wins', () => {
     const createdLiveSession = buildLiveSession(
       `commander-${commanderId}-conversation-${currentConversation.id}`,
       {
-        effort: 'high',
+        effort: 'max',
         adaptiveThinking: 'disabled',
         maxThinkingTokens: 128000,
         providerContext: {
           providerId: 'claude',
-          effort: 'high',
+          effort: 'max',
           adaptiveThinking: 'disabled',
           maxThinkingTokens: 128000,
         },
@@ -322,9 +324,10 @@ describe('conversation-runtime quick wins', () => {
 
     expect(sessionsInterface.createCommanderSession).toHaveBeenCalledWith(expect.objectContaining({
       agentType: 'claude',
-      effort: 'high',
+      effort: 'max',
       adaptiveThinking: 'disabled',
       maxThinkingTokens: 128000,
+      systemPrompt: expect.stringContaining('## Claude Code Reasoning Policy'),
     }))
   })
 
@@ -341,6 +344,7 @@ describe('conversation-runtime quick wins', () => {
       providerContext: {
         providerId: 'claude',
         sessionId: 'claude-session-explicit',
+        effort: 'high',
         adaptiveThinking: 'enabled',
         maxThinkingTokens: 64000,
       },
@@ -420,6 +424,7 @@ describe('conversation-runtime quick wins', () => {
       effort: 'high',
       adaptiveThinking: 'enabled',
       maxThinkingTokens: 64000,
+      systemPrompt: expect.stringContaining('## Claude Code Reasoning Policy'),
       resumeProviderContext: expect.objectContaining({
         sessionId: 'claude-session-explicit',
       }),

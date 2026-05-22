@@ -4,11 +4,13 @@ import type { Response } from 'express'
 import { parseMessageImagesForRequest } from '../../agents/message-images.js'
 import { sanitizeTranscriptFileKey } from '../../agents/session/persistence.js'
 import {
+  parseClaudeEffort,
   parseClaudeAdaptiveThinking,
   parseClaudeMaxThinkingTokens,
 } from '../../agents/session/input.js'
 import { deleteSessionTranscript } from '../../agents/transcript-store.js'
-import { parseProviderId } from '../../agents/providers/registry.js'
+import { getProvider, parseProviderId } from '../../agents/providers/registry.js'
+import { createProviderContextForAgentType } from '../../agents/providers/provider-session-context.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
 import {
   applyWorkspaceContextToText,
@@ -43,6 +45,15 @@ import {
   buildConversationSessionName,
 } from './conversation-runtime.js'
 import { buildConversationSummaryDTO } from './conversation-read-model.js'
+import {
+  beginConversationBootstrap,
+  completeConversationBootstrap,
+  conversationBootstrapCancelRequested,
+  failConversationBootstrap,
+  getConversationBootstrapCancelStatus,
+  getConversationRuntimeOverlay,
+  requestConversationBootstrapCancel,
+} from './conversation-runtime-state.js'
 import type { CommanderRoutesContext } from './types.js'
 
 type ConversationStatusAction = 'pause' | 'resume' | 'archive'
@@ -50,6 +61,7 @@ type ConversationStatusAction = 'pause' | 'resume' | 'archive'
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 10
 const MAX_CONVERSATION_MESSAGES_LIMIT = 50
+const CONVERSATION_BOOTSTRAP_FAST_PATH_MS = 25
 
 function parseConversationId(raw: unknown): string | null {
   return typeof raw === 'string' && CONVERSATION_ID_PATTERN.test(raw.trim())
@@ -199,6 +211,125 @@ function withLiveSession(
   return buildConversationSummaryDTO(context, conversation, canonicalOrder)
 }
 
+type ConversationBootstrapResult =
+  | {
+    ok: true
+    conversation: Conversation
+  }
+  | {
+    ok: false
+    error: string
+  }
+
+interface ConversationBootstrapLaunch {
+  generation: number
+  completion: Promise<ConversationBootstrapResult>
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function wait(ms: number): Promise<null> {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(null), ms)
+  })
+}
+
+async function awaitBootstrapFastPath(
+  completion: Promise<ConversationBootstrapResult>,
+): Promise<ConversationBootstrapResult | null> {
+  return Promise.race([
+    completion,
+    wait(CONVERSATION_BOOTSTRAP_FAST_PATH_MS),
+  ])
+}
+
+function launchConversationBootstrap(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  operation: 'start' | 'resume',
+  spawnOptions?: ConversationSpawnOptions,
+): ConversationBootstrapLaunch {
+  const overlay = beginConversationBootstrap(
+    conversation.id,
+    operation,
+    context.now().toISOString(),
+  )
+  const generation = overlay.generation
+  const completion = (async (): Promise<ConversationBootstrapResult> => {
+    try {
+      const started = await startConversationSession(
+        context,
+        conversation.commanderId,
+        {
+          ...conversation,
+          status: 'idle',
+        },
+        null,
+        spawnOptions,
+      )
+      if (!started.sent) {
+        failConversationBootstrap(
+          conversation.id,
+          generation,
+          'Conversation session could not be started',
+          context.now().toISOString(),
+        )
+        return { ok: false, error: 'Conversation session could not be started' }
+      }
+
+      if (conversationBootstrapCancelRequested(conversation.id, generation)) {
+        const cancelStatus = getConversationBootstrapCancelStatus(conversation.id, generation) ?? 'idle'
+        const stopped = await stopConversationSession(context, started.conversation, cancelStatus)
+        completeConversationBootstrap(conversation.id, generation)
+        return {
+          ok: true,
+          conversation: stopped ?? started.conversation,
+        }
+      }
+
+      completeConversationBootstrap(conversation.id, generation)
+      const refreshed = await context.conversationStore.get(conversation.id)
+      return {
+        ok: true,
+        conversation: refreshed ?? started.conversation,
+      }
+    } catch (error) {
+      const detail = errorMessage(error)
+      try {
+        if (getLiveConversationSession(context, conversation)) {
+          await stopConversationSession(context, conversation, 'idle')
+        } else {
+          await context.conversationStore.update(conversation.id, (current) => (
+            current.status === 'archived'
+              ? current
+              : {
+                  ...current,
+                  status: 'idle',
+                }
+          ))
+          await updateCommanderDerivedState(context, conversation.commanderId)
+        }
+      } catch (cleanupError) {
+        console.warn(
+          `[conversations] Failed to clean up bootstrap failure for "${conversation.id}":`,
+          cleanupError,
+        )
+      }
+      failConversationBootstrap(
+        conversation.id,
+        generation,
+        detail,
+        context.now().toISOString(),
+      )
+      return { ok: false, error: detail }
+    }
+  })()
+
+  return { generation, completion }
+}
+
 function conversationStatusPriority(status: Conversation['status']): number {
   switch (status) {
     case 'active':
@@ -247,6 +378,7 @@ async function archiveConversation(
   context: CommanderRoutesContext,
   conversation: Conversation,
 ): Promise<Conversation> {
+  requestConversationBootstrapCancel(conversation.id, context.now().toISOString(), 'archived')
   const updated = getLiveConversationSession(context, conversation)
     ? await stopConversationSession(context, conversation, 'archived')
     : await (async () => {
@@ -426,6 +558,52 @@ export function registerConversationRoutes(
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
       return
     }
+    const selectedProvider = getProvider(selectedAgentType)
+
+    const parsedEffort = parseClaudeEffort(req.body?.effort)
+    if (req.body?.effort !== undefined && parsedEffort === null) {
+      res.status(400).json({ error: 'Invalid effort. Expected one of: low, medium, high, max' })
+      return
+    }
+    if (req.body?.effort !== undefined && !selectedProvider?.uiCapabilities.supportsEffort) {
+      res.status(400).json({ error: `Provider "${selectedAgentType}" does not support effort` })
+      return
+    }
+    const effort = parsedEffort ?? undefined
+
+    const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(req.body?.adaptiveThinking)
+    if (req.body?.adaptiveThinking !== undefined && parsedAdaptiveThinking === null) {
+      res.status(400).json({ error: 'Invalid adaptiveThinking. Expected one of: enabled, disabled' })
+      return
+    }
+    if (req.body?.adaptiveThinking !== undefined && !selectedProvider?.uiCapabilities.supportsAdaptiveThinking) {
+      res.status(400).json({ error: `Provider "${selectedAgentType}" does not support adaptiveThinking` })
+      return
+    }
+    const adaptiveThinking = parsedAdaptiveThinking ?? undefined
+
+    const parsedMaxThinkingTokens = parseClaudeMaxThinkingTokens(req.body?.maxThinkingTokens)
+    if (req.body?.maxThinkingTokens !== undefined && parsedMaxThinkingTokens === null) {
+      res.status(400).json({ error: 'Invalid maxThinkingTokens. Expected integer 1024..256000' })
+      return
+    }
+    if (req.body?.maxThinkingTokens !== undefined && !selectedProvider?.uiCapabilities.supportsMaxThinkingTokens) {
+      res.status(400).json({ error: `Provider "${selectedAgentType}" does not support maxThinkingTokens` })
+      return
+    }
+    const maxThinkingTokens = parsedMaxThinkingTokens ?? undefined
+
+    const providerContext = (
+      effort !== undefined ||
+      adaptiveThinking !== undefined ||
+      maxThinkingTokens !== undefined
+    )
+      ? createProviderContextForAgentType(selectedAgentType, {
+          effort,
+          adaptiveThinking,
+          maxThinkingTokens,
+        })
+      : undefined
 
     const nowIso = context.now().toISOString()
     const created = await context.conversationStore.create({
@@ -433,8 +611,13 @@ export function registerConversationRoutes(
       commanderId: commander.id,
       surface,
       ...(channelMeta ? { channelMeta } : {}),
-      ...(requestedAgentType || requestedModel.value !== undefined ? { agentType: selectedAgentType } : {}),
+      ...(
+        requestedAgentType || requestedModel.value !== undefined || providerContext
+          ? { agentType: selectedAgentType }
+          : {}
+      ),
       ...(requestedModel.value !== undefined ? { model: requestedModel.value } : {}),
+      ...(providerContext ? { providerContext } : {}),
       status: 'idle',
       currentTask: null,
       lastHeartbeat: null,
@@ -534,7 +717,11 @@ export function registerConversationRoutes(
     }
     if (
       (requestedAgentType !== undefined || requestedModel.value !== undefined)
-      && (conversation.status === 'active' || getLiveConversationSession(context, conversation))
+      && (
+        conversation.status === 'active'
+        || getLiveConversationSession(context, conversation)
+        || getConversationRuntimeOverlay(conversation.id)?.state === 'starting'
+      )
     ) {
       res.status(409).json({
         error: `Conversation "${conversation.id}" is active; stop it before changing provider or model`,
@@ -635,12 +822,11 @@ export function registerConversationRoutes(
 
     const body = isObject(req.body) ? req.body : {}
     if (
-      Object.prototype.hasOwnProperty.call(body, 'effort') ||
       Object.prototype.hasOwnProperty.call(body, 'cwd') ||
       Object.prototype.hasOwnProperty.call(body, 'host')
     ) {
       res.status(400).json({
-        error: 'effort, cwd, and host are configured on the commander; remove from body',
+        error: 'cwd and host are configured on the commander; remove from body',
       })
       return
     }
@@ -666,6 +852,13 @@ export function registerConversationRoutes(
       }
     }
 
+    const parsedEffort = parseClaudeEffort(body.effort)
+    if (body.effort !== undefined && parsedEffort === null) {
+      res.status(400).json({ error: 'Invalid effort. Expected one of: low, medium, high, max' })
+      return
+    }
+    const effort = parsedEffort ?? undefined
+
     const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(body.adaptiveThinking)
     if (body.adaptiveThinking !== undefined && parsedAdaptiveThinking === null) {
       res.status(400).json({ error: 'Invalid adaptiveThinking. Expected one of: enabled, disabled' })
@@ -686,6 +879,12 @@ export function registerConversationRoutes(
         res.status(404).json({ error: `Conversation "${conversationId}" not found` })
         return
       }
+      if (getConversationRuntimeOverlay(conversation.id)?.state === 'starting') {
+        res.status(202).json({
+          conversation: withLiveSession(context, conversation),
+        })
+        return
+      }
       if (conversation.status !== 'idle') {
         res.status(409).json({ error: `Conversation "${conversationId}" is not idle` })
         return
@@ -693,6 +892,19 @@ export function registerConversationRoutes(
 
       const commander = await context.sessionStore.get(conversation.commanderId)
       const agentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? 'claude'
+      const provider = getProvider(agentType)
+      if (effort !== undefined && !provider?.uiCapabilities.supportsEffort) {
+        res.status(400).json({ error: `Provider "${agentType}" does not support effort` })
+        return
+      }
+      if (adaptiveThinking !== undefined && !provider?.uiCapabilities.supportsAdaptiveThinking) {
+        res.status(400).json({ error: `Provider "${agentType}" does not support adaptiveThinking` })
+        return
+      }
+      if (maxThinkingTokens !== undefined && !provider?.uiCapabilities.supportsMaxThinkingTokens) {
+        res.status(400).json({ error: `Provider "${agentType}" does not support maxThinkingTokens` })
+        return
+      }
       if (!requestedAgentType) {
         const modelValidation = validateModelForAgentType(agentType, requestedModel.value ?? null)
         if (!modelValidation.ok) {
@@ -704,31 +916,30 @@ export function registerConversationRoutes(
       const spawnOptions: ConversationSpawnOptions = {
         ...(requestedAgentType ? { agentType: requestedAgentType } : {}),
         ...(requestedModel.value !== undefined ? { model: requestedModel.value } : {}),
+        ...(effort !== undefined ? { effort } : {}),
         ...(adaptiveThinking !== undefined ? { adaptiveThinking } : {}),
         ...(maxThinkingTokens !== undefined ? { maxThinkingTokens } : {}),
       }
-      const started = await startConversationSession(
-        context,
-        conversation.commanderId,
-        conversation,
-        null,
-        spawnOptions,
-      )
-      if (!started.sent) {
-        res.status(503).json({ error: 'Conversation session could not be started' })
+
+      const launch = launchConversationBootstrap(context, conversation, 'start', spawnOptions)
+      const fastResult = await awaitBootstrapFastPath(launch.completion)
+      if (!fastResult) {
+        const latest = await context.conversationStore.get(conversation.id)
+        res.status(202).json({
+          conversation: withLiveSession(context, latest ?? conversation),
+        })
+        return
+      }
+      if (!fastResult.ok) {
+        res.status(503).json({ error: fastResult.error })
         return
       }
 
-      const updated = await context.conversationStore.update(conversation.id, (current) => ({
-        ...current,
-        status: 'active',
-      }))
       res.status(200).json({
-        conversation: withLiveSession(context, updated ?? started.conversation),
+        conversation: withLiveSession(context, fastResult.conversation),
       })
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      res.status(503).json({ error: detail })
+      res.status(503).json({ error: errorMessage(error) })
     }
   })
 
@@ -760,6 +971,10 @@ export function registerConversationRoutes(
     }
     if (conversation.status === 'archived') {
       res.status(409).json({ error: `Conversation "${conversationId}" is archived` })
+      return
+    }
+    if (getConversationRuntimeOverlay(conversation.id)?.state === 'starting') {
+      res.status(409).json({ error: `Conversation "${conversationId}" is starting` })
       return
     }
 
@@ -822,6 +1037,10 @@ export function registerConversationRoutes(
           })
           return
         }
+        if (requestConversationBootstrapCancel(conversation.id, context.now().toISOString(), 'idle')) {
+          res.status(202).json(withLiveSession(context, conversation))
+          return
+        }
         const updated = await stopConversationSession(context, conversation, 'idle')
         res.json(withLiveSession(context, updated ?? conversation))
         return
@@ -829,6 +1048,11 @@ export function registerConversationRoutes(
 
       if (action === 'archive') {
         res.json(withLiveSession(context, await archiveConversation(context, conversation)))
+        return
+      }
+
+      if (getConversationRuntimeOverlay(conversation.id)?.state === 'starting') {
+        res.status(202).json(withLiveSession(context, conversation))
         return
       }
 
@@ -856,17 +1080,19 @@ export function registerConversationRoutes(
         return
       }
 
-      const resumed = await startConversationSession(context, conversation.commanderId, {
-        ...conversation,
-        status: 'idle',
-      })
-      if (!resumed.sent) {
-        res.status(503).json({ error: 'Conversation session could not be resumed' })
+      const launch = launchConversationBootstrap(context, conversation, 'resume')
+      const fastResult = await awaitBootstrapFastPath(launch.completion)
+      if (!fastResult) {
+        const latest = await context.conversationStore.get(conversation.id)
+        res.status(202).json(withLiveSession(context, latest ?? conversation))
+        return
+      }
+      if (!fastResult.ok) {
+        res.status(503).json({ error: fastResult.error })
         return
       }
 
-      const refreshed = await context.conversationStore.get(conversation.id)
-      res.json(withLiveSession(context, refreshed ?? resumed.conversation))
+      res.json(withLiveSession(context, fastResult.conversation))
     }
 
   conversationRouter.post('/:convId/pause', context.requireWorkerDispatchAccess, handleStatusAction('pause'))
@@ -887,6 +1113,7 @@ export function registerConversationRoutes(
     }
 
     if (req.query.hard === 'true') {
+      requestConversationBootstrapCancel(conversation.id, context.now().toISOString(), 'archived')
       const archived = getLiveConversationSession(context, conversation)
         ? await stopConversationSession(context, conversation, 'archived')
         : conversation

@@ -9,6 +9,7 @@ import type { AgentType, SessionQueueSnapshot } from '@/types'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import type { CommanderAgentType, CommanderSession } from '@modules/commanders/hooks/useCommander'
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type { CreateConversationReasoningConfig } from '@modules/conversation/components/CreateConversationPanel'
 import type { MsgItem } from '@modules/agents/messages/model'
 import type { WorkspaceSource } from '@modules/workspace/use-workspace'
 import type { Commander, Worker } from '@modules/command-room/components/desktop/SessionRow'
@@ -96,6 +97,7 @@ interface HarnessProps {
     commanderId: string,
     agentType: AgentType,
     model: string | null,
+    reasoningConfig: CreateConversationReasoningConfig,
   ) => Promise<ConversationRecord | null> | ConversationRecord | null
   onStartConversation?: (conversationId: string) => void | Promise<void>
   onConversationSelected?: (
@@ -211,8 +213,8 @@ function renderHarness({
           onQueue={vi.fn()}
           onSend={vi.fn()}
           workspaceSource={null as WorkspaceSource | null}
-          onCreateConversation={async (commanderId, agentType, model) => {
-            const created = await onCreateConversation(commanderId, agentType, model)
+          onCreateConversation={async (commanderId, agentType, model, reasoningConfig) => {
+            const created = await onCreateConversation(commanderId, agentType, model, reasoningConfig)
             if (created) {
               setConversationState((current) => [...current, created])
             }
@@ -543,7 +545,7 @@ describe('MobileCommandRoom conversation mode', () => {
     })
     await flushTimers()
 
-    expect(onCreateConversation).toHaveBeenCalledWith('cmd-1', 'codex', 'gpt-5.5')
+    expect(onCreateConversation).toHaveBeenCalledWith('cmd-1', 'codex', 'gpt-5.5', {})
     // Per #1362 contract: never auto-start. The user must explicitly tap Start
     // chat in the session shell after creation.
     expect(onStartConversation).not.toHaveBeenCalled()

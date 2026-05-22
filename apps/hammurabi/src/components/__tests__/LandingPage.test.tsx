@@ -88,4 +88,27 @@ describe('LandingPage', () => {
       appState: { returnTo: '/command-room?commander=gaia' },
     })
   })
+
+  it('does not leave the app for Auth0 sign-in while gateway health is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Bad Gateway', { status: 502 })))
+
+    await renderLanding('/command-room?commander=gaia')
+    await clickSignIn()
+
+    expect(mocks.loginWithRedirect).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Hammurabi is reconnecting')
+  })
+
+  it('allows Auth0 sign-in when the health probe is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    }))
+
+    await renderLanding('/command-room?commander=gaia')
+    await clickSignIn()
+
+    expect(mocks.loginWithRedirect).toHaveBeenCalledWith({
+      appState: { returnTo: '/command-room?commander=gaia' },
+    })
+  })
 })

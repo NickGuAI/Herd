@@ -4,10 +4,16 @@ import { cn } from '@/lib/utils'
 import type { AgentType, SessionTransportType } from '@/types'
 import {
   CLAUDE_ADAPTIVE_THINKING_MODES,
+  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   type ClaudeAdaptiveThinkingMode,
 } from '../../../claude-adaptive-thinking.js'
-import { CLAUDE_EFFORT_LEVELS, type ClaudeEffortLevel } from '../../../claude-effort.js'
 import {
+  CLAUDE_EFFORT_LEVELS,
+  DEFAULT_CLAUDE_EFFORT_LEVEL,
+  type ClaudeEffortLevel,
+} from '../../../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   MAX_CLAUDE_MAX_THINKING_TOKENS,
   MIN_CLAUDE_MAX_THINKING_TOKENS,
   type ClaudeMaxThinkingTokens,
@@ -44,9 +50,9 @@ export function AgentControlsSection({
 }: AgentControlsSectionProps) {
   const currentProvider = providers.find((provider) => provider.id === agentType) ?? null
   const providerDefaults = currentProvider?.defaults
-  const defaultEffort = providerDefaults?.effort ?? 'high'
-  const defaultAdaptiveThinking = providerDefaults?.adaptiveThinking ?? 'disabled'
-  const defaultMaxThinkingTokens = providerDefaults?.maxThinkingTokens ?? 128000
+  const defaultEffort = providerDefaults?.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
+  const defaultAdaptiveThinking = providerDefaults?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE
+  const defaultMaxThinkingTokens = providerDefaults?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
   const sessionTypeOptions = currentProvider?.uiCapabilities.forcedTransport === 'stream'
     ? [{ value: 'stream', label: 'Stream', description: 'ACP chat UI, supports resume' }]
     : [

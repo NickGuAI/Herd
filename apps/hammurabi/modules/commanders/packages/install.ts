@@ -21,6 +21,8 @@ import type {
   CommanderPackageInstallState,
 } from './types.js'
 
+const packageInstallLocks = new Map<string, Promise<void>>()
+
 export interface CommanderPackageInstallOptions {
   sessionStore: Pick<CommanderSessionStore, 'list' | 'create' | 'delete'>
   conversationStore?: Pick<ConversationStore, 'listByCommander' | 'getActiveChatForCommander' | 'ensureDefaultConversation' | 'delete'>
@@ -68,6 +70,30 @@ function buildUniqueDisplayName(
     candidate = `${displayName} ${suffix}`
   }
   return candidate
+}
+
+function packageInstallLockKey(definition: CommanderPackageDefinition, commanderDataDir: string): string {
+  return `${path.resolve(commanderDataDir)}\0${definition.id}`
+}
+
+function withPackageInstallLock<T>(
+  definition: CommanderPackageDefinition,
+  commanderDataDir: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const lockKey = packageInstallLockKey(definition, commanderDataDir)
+  const previous = packageInstallLocks.get(lockKey) ?? Promise.resolve()
+  const run = previous.then(operation, operation)
+  const guarded = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  packageInstallLocks.set(lockKey, guarded)
+  return run.finally(() => {
+    if (packageInstallLocks.get(lockKey) === guarded) {
+      packageInstallLocks.delete(lockKey)
+    }
+  })
 }
 
 export async function getCommanderPackageInstallState(
@@ -120,6 +146,15 @@ async function writeInstalledPackageSnapshot(
 }
 
 export async function installCommanderPackage(
+  definition: CommanderPackageDefinition,
+  options: CommanderPackageInstallOptions,
+): Promise<{ created: boolean; commander: CommanderSession; displayName: string }> {
+  return withPackageInstallLock(definition, options.commanderDataDir, () =>
+    installCommanderPackageLocked(definition, options),
+  )
+}
+
+async function installCommanderPackageLocked(
   definition: CommanderPackageDefinition,
   options: CommanderPackageInstallOptions,
 ): Promise<{ created: boolean; commander: CommanderSession; displayName: string }> {

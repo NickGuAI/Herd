@@ -37,6 +37,8 @@ export interface ResolvedWorkspace extends WorkspaceSummary {
 export interface WorkspaceTargetDescriptor {
   targetId: string
   conversationId?: string
+  sessionName?: string
+  commanderId?: string
   label: string
   host: string
   rootPath: string
@@ -81,6 +83,9 @@ export interface WorkspacePathResolution {
   path: string
   type: WorkspaceTreeNode['type']
   treePath: string
+  targetId?: string
+  targetLabel?: string
+  targetReadOnly?: boolean
   preferredFrom?: string
   preferredReason?: 'graphviz-source'
 }

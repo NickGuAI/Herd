@@ -68,6 +68,7 @@ async function startWorkspaceServer(
 describe('workspace routes', () => {
   let server: Awaited<ReturnType<typeof startWorkspaceServer>> | null = null
   let workspaceDir: string | null = null
+  let externalDir: string | null = null
 
   afterEach(async () => {
     await server?.close()
@@ -75,6 +76,10 @@ describe('workspace routes', () => {
     if (workspaceDir) {
       await rm(workspaceDir, { recursive: true, force: true })
       workspaceDir = null
+    }
+    if (externalDir) {
+      await rm(externalDir, { recursive: true, force: true })
+      externalDir = null
     }
   })
 
@@ -199,6 +204,97 @@ describe('workspace routes', () => {
     expect(saveResponse.status).toBe(200)
     await expect(saveResponse.json()).resolves.toMatchObject({ path: 'README.md' })
     await expect(readFile(join(workspaceDir, 'README.md'), 'utf8')).resolves.toBe('Saved through target\n')
+  })
+
+  it('retargets absolute chat file links that live outside the active workspace root', async () => {
+    workspaceDir = await mkdtemp(join(tmpdir(), 'hammurabi-workspace-route-'))
+    externalDir = await mkdtemp(join(tmpdir(), 'hammurabi-workspace-external-'))
+    const externalFilePath = join(externalDir, 'final_report.md')
+    await writeFile(join(workspaceDir, 'README.md'), 'Current workspace\n', 'utf8')
+    await writeFile(externalFilePath, '# External report\n', 'utf8')
+
+    const workspace = await resolveWorkspaceRoot({
+      rootPath: workspaceDir,
+      source: {
+        kind: 'target',
+        id: 'wt-test',
+        label: 'local',
+      },
+    })
+    const externalWorkspace = await resolveWorkspaceRoot({
+      rootPath: externalDir,
+      source: {
+        kind: 'target',
+        id: 'wt-external',
+        label: `local:${externalDir}`,
+      },
+    })
+    const resolver: WorkspaceResolverCapability = {
+      open: async (input) => {
+        expect(input.hostHint).toBe('local')
+        expect(input.pathHint).toBe(externalDir)
+        expect(input.conversationId).toBeUndefined()
+        expect(input.authorizationConversationId).toBe('conversation-scope')
+        return {
+          targetId: 'wt-external',
+          label: `local:${externalDir}`,
+          host: 'local',
+          rootPath: externalDir!,
+          readOnly: false,
+        }
+      },
+      resolveTarget: async (targetId) => {
+        if (targetId === 'wt-external') {
+          return {
+            target: {
+              targetId,
+              label: `local:${externalDir}`,
+              host: 'local',
+              rootPath: externalDir!,
+              readOnly: false,
+            },
+            workspace: externalWorkspace,
+            host: 'local',
+            rootPath: externalWorkspace.rootPath,
+            readOnly: false,
+          }
+        }
+
+        expect(targetId).toBe('wt-test')
+        return {
+          target: {
+            targetId,
+            label: 'local',
+            conversationId: 'conversation-scope',
+            host: 'local',
+            rootPath: workspaceDir!,
+            readOnly: false,
+          },
+          workspace,
+          host: 'local',
+          rootPath: workspace.rootPath,
+          readOnly: false,
+        }
+      },
+    }
+    server = await startWorkspaceServer(resolver)
+
+    const resolvedPathResponse = await fetch(
+      `${server.baseUrl}/api/workspace/resolve-path?targetId=wt-test&path=${
+        encodeURIComponent(externalFilePath)
+      }`,
+      { headers: AUTH_HEADERS },
+    )
+
+    expect(resolvedPathResponse.status).toBe(200)
+    await expect(resolvedPathResponse.json()).resolves.toMatchObject({
+      targetId: 'wt-external',
+      targetLabel: `local:${externalDir}`,
+      targetReadOnly: false,
+      path: 'final_report.md',
+      type: 'file',
+      treePath: '',
+    })
   })
 
   it('rejects raw host/rootPath reads', async () => {

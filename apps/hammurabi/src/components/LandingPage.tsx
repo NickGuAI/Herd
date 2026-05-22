@@ -14,6 +14,7 @@ export function LandingPage({ onApiKeySubmit }: LandingPageProps) {
   const [showApiKey, setShowApiKey] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [signInError, setSignInError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   async function handleApiKeySubmit(e: React.FormEvent) {
@@ -105,11 +106,14 @@ export function LandingPage({ onApiKeySubmit }: LandingPageProps) {
 
         <button
           onClick={() => {
+            setSignInError(null)
             const returnTo = resolveAuthReturnTo()
             void ensureFreshAuthClientBeforeRedirect(returnTo).then((isFresh) => {
               if (isFresh) {
                 void loginWithRedirect({ appState: { returnTo } })
+                return
               }
+              setSignInError('Hammurabi is reconnecting. Try sign-in again after the gateway is healthy.')
             })
           }}
           disabled={isLoading}
@@ -117,6 +121,12 @@ export function LandingPage({ onApiKeySubmit }: LandingPageProps) {
         >
           {isLoading ? 'Loading...' : 'Sign in'}
         </button>
+
+        {signInError ? (
+          <p className="mt-4 text-sm leading-relaxed text-[color:var(--hv-accent-danger)]" role="status">
+            {signInError}
+          </p>
+        ) : null}
 
         {onApiKeySubmit && (
           <button

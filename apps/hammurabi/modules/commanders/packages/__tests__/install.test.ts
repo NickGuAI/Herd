@@ -6,7 +6,12 @@ import { ConversationStore } from '../../conversation-store'
 import { resolveCommanderPaths } from '../../paths'
 import { CommanderSessionStore } from '../../store'
 import { installCommanderPackage } from '../install'
-import { STARTER_COMMANDER_PACKAGE_IDS, listCommanderPackages, loadCommanderPackage } from '../registry'
+import {
+  STARTER_COMMANDER_PACKAGE_IDS,
+  listCommanderPackages,
+  loadCommanderPackage,
+  resolveBundledPackagesRoot,
+} from '../registry'
 
 const tempDirs: string[] = []
 
@@ -15,6 +20,15 @@ afterEach(async () => {
 })
 
 describe('commander package registry and install', () => {
+  it('falls back to the source bundled package root when built assets are not emitted', async () => {
+    const sourceRoot = join(process.cwd(), 'modules', 'commanders', 'packages', 'bundled')
+
+    await expect(resolveBundledPackagesRoot([
+      join(tmpdir(), 'missing-dist-server-bundled-assets'),
+      sourceRoot,
+    ])).resolves.toBe(sourceRoot)
+  })
+
   it('loads the bundled starter workforce from inspectable package directories', async () => {
     const packages = await listCommanderPackages()
     const publicStarterSkillRoot = join(
@@ -68,5 +82,38 @@ describe('commander package registry and install', () => {
     await expect(readFile(join(commanderRoot, '.package', 'package.json'), 'utf8')).resolves.toContain('"id": "engineering-manager"')
     await expect(readFile(join(commanderRoot, 'COMMANDER.md'), 'utf8')).resolves.toContain('Asina is an engineering manager commander')
     await expect(readFile(join(memoryRoot, 'profile.json'), 'utf8')).resolves.toContain('Precise engineering commander')
+  })
+
+  it('serializes concurrent installs so one package creates one commander', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-package-concurrent-install-'))
+    tempDirs.push(dataDir)
+    const commanderDataDir = join(dataDir, 'commander')
+    const sessionStore = new CommanderSessionStore(join(commanderDataDir, 'sessions.json'))
+    const conversationStore = new ConversationStore(commanderDataDir)
+    const definition = await loadCommanderPackage('engineering-manager')
+    expect(definition).not.toBeNull()
+
+    const results = await Promise.all([
+      installCommanderPackage(definition!, {
+        sessionStore,
+        conversationStore,
+        commanderDataDir,
+        now: () => new Date('2026-05-20T00:00:00.000Z'),
+      }),
+      installCommanderPackage(definition!, {
+        sessionStore,
+        conversationStore,
+        commanderDataDir,
+        now: () => new Date('2026-05-20T00:00:01.000Z'),
+      }),
+    ])
+
+    expect(results.filter((result) => result.created)).toHaveLength(1)
+    expect(new Set(results.map((result) => result.commander.id)).size).toBe(1)
+
+    const sessions = await sessionStore.list()
+    const installed = sessions.filter((session) => session.templateId === 'engineering-manager')
+    expect(installed).toHaveLength(1)
+    expect(await conversationStore.listByCommander(installed[0].id)).toHaveLength(1)
   })
 })

@@ -31,6 +31,9 @@ export interface WorkspaceResolverCapability {
     conversationId?: string | null
     sessionName?: string | null
     commanderId?: string | null
+    authorizationConversationId?: string | null
+    authorizationSessionName?: string | null
+    authorizationCommanderId?: string | null
     hostHint?: string | null
     pathHint?: string | null
   }): Promise<WorkspaceTargetDescriptor>
@@ -159,13 +162,15 @@ export class WorkspaceResolver implements WorkspaceResolverCapability {
     conversationId?: string | null
     sessionName?: string | null
     commanderId?: string | null
+    authorizationConversationId?: string | null
+    authorizationSessionName?: string | null
+    authorizationCommanderId?: string | null
     hostHint?: string | null
     pathHint?: string | null
   }): Promise<WorkspaceTargetDescriptor> {
     const sourceKey = this.resolveSourceKey(input)
-    const conversationId = typeof input.conversationId === 'string'
-      ? input.conversationId.trim()
-      : ''
+    const sourceContext = this.resolveSourceContext(input)
+    const authorizationConversationId = this.resolveAuthorizationConversationId(input)
 
     const existing = await this.targetStore.getByKey(sourceKey)
     if (existing && !input.hostHint && !input.pathHint) {
@@ -175,10 +180,12 @@ export class WorkspaceResolver implements WorkspaceResolverCapability {
     const fallback = await this.resolveFallbackTarget(input)
     const host = normalizeHost(input.hostHint ?? fallback.host)
     const rootPath = this.resolveOpenRootPath(input.pathHint, fallback.rootPath)
-    const authorized = await this.hostRegistry.authorize(conversationId || null, host, rootPath)
+    const authorized = await this.hostRegistry.authorize(authorizationConversationId || null, host, rootPath)
     const target: WorkspaceTargetDescriptor = {
       targetId: existing?.targetId ?? createTargetId(),
-      ...(conversationId ? { conversationId } : {}),
+      ...(sourceContext.conversationId ? { conversationId: sourceContext.conversationId } : {}),
+      ...(sourceContext.sessionName ? { sessionName: sourceContext.sessionName } : {}),
+      ...(sourceContext.commanderId ? { commanderId: sourceContext.commanderId } : {}),
       label: `${host}:${rootPath}`,
       host,
       rootPath,
@@ -254,6 +261,57 @@ export class WorkspaceResolver implements WorkspaceResolverCapability {
       return `location:${normalizeHost(hostHint)}:${pathHint || '.'}`
     }
     throw new WorkspaceError(400, 'conversationId, sessionName, commanderId, or workspace location is required')
+  }
+
+  private resolveSourceContext(input: {
+    conversationId?: string | null
+    sessionName?: string | null
+    commanderId?: string | null
+  }): {
+    conversationId: string
+    sessionName: string
+    commanderId: string
+  } {
+    return {
+      conversationId: typeof input.conversationId === 'string' ? input.conversationId.trim() : '',
+      sessionName: typeof input.sessionName === 'string' ? input.sessionName.trim() : '',
+      commanderId: typeof input.commanderId === 'string' ? input.commanderId.trim() : '',
+    }
+  }
+
+  private resolveAuthorizationConversationId(input: {
+    conversationId?: string | null
+    sessionName?: string | null
+    authorizationConversationId?: string | null
+    authorizationSessionName?: string | null
+    authorizationCommanderId?: string | null
+  }): string {
+    const explicitConversationId = typeof input.authorizationConversationId === 'string'
+      ? input.authorizationConversationId.trim()
+      : ''
+    if (explicitConversationId) {
+      return explicitConversationId
+    }
+
+    const sourceConversationId = typeof input.conversationId === 'string'
+      ? input.conversationId.trim()
+      : ''
+    if (sourceConversationId) {
+      return sourceConversationId
+    }
+
+    const authorizationSessionName = typeof input.authorizationSessionName === 'string'
+      ? input.authorizationSessionName.trim()
+      : ''
+    const sourceSessionName = typeof input.sessionName === 'string'
+      ? input.sessionName.trim()
+      : ''
+    const sessionName = authorizationSessionName || sourceSessionName
+    if (sessionName) {
+      return this.options.sessionsInterface?.getSession(sessionName)?.conversationId?.trim() ?? ''
+    }
+
+    return ''
   }
 
   private async resolveFallbackTarget(input: {

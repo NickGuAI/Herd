@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../../claude-effort'
 import {
   getFallbackAgent,
   getForcedTransportType,
@@ -60,7 +61,7 @@ describe('useNewSessionConstraints helpers', () => {
     expect(getForcedTransportType(providers, 'gemini', 'pty')).toBe('stream')
     expect(getForcedTransportType(providers, 'claude', 'pty')).toBeNull()
 
-    expect(getNormalizedEffort(providers, 'gemini', 'medium')).toBe('high')
+    expect(getNormalizedEffort(providers, 'gemini', 'medium')).toBe(DEFAULT_CLAUDE_EFFORT_LEVEL)
     expect(getNormalizedEffort(providers, 'claude', 'high')).toBeNull()
 
     expect(getNormalizedAdaptiveThinking(providers, 'codex', 'enabled')).toBe('disabled')

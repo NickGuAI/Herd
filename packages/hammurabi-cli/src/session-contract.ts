@@ -23,6 +23,7 @@ export interface ProviderContext {
   threadId?: string
   effort?: string
   adaptiveThinking?: string
+  maxThinkingTokens?: number
 }
 
 export interface Conversation {

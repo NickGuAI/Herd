@@ -87,7 +87,7 @@ describe('agents/session/state', () => {
     )
   })
 
-  it('defaults restored Claude sessions to high effort with adaptive thinking disabled', () => {
+  it('defaults restored Claude sessions to max effort with adaptive thinking disabled', () => {
     expect(parsePersistedStreamSessionEntry({
       name: 'claude-defaults',
       agentType: 'claude',
@@ -99,13 +99,13 @@ describe('agents/session/state', () => {
         sessionId: 'claude-session-1',
       },
     })).toEqual(expect.objectContaining({
-      effort: 'high',
+      effort: 'max',
       adaptiveThinking: 'disabled',
       maxThinkingTokens: 128000,
       providerContext: expect.objectContaining({
         providerId: 'claude',
         sessionId: 'claude-session-1',
-        effort: 'high',
+        effort: 'max',
         adaptiveThinking: 'disabled',
         maxThinkingTokens: 128000,
       }),

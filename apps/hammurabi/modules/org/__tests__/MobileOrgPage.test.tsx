@@ -195,6 +195,16 @@ describe('MobileOrgPage', () => {
     expect(document.body.querySelector('h1')?.textContent).toBe('Pioneering Minds AI')
   })
 
+  it('renders the founder profile image when the org read model includes an avatar URL', async () => {
+    const tree = createOrgTree()
+    tree.operator.avatarUrl = 'https://example.com/nick.png'
+
+    await renderMobileOrgPage(tree)
+
+    const image = document.body.querySelector<HTMLImageElement>('[data-testid="agent-avatar"] img[alt="Nick Gu"]')
+    expect(image?.src).toBe('https://example.com/nick.png')
+  })
+
   it('falls back to Organization when the org identity name is missing', async () => {
     const tree = createOrgTree()
     tree.orgIdentity = null

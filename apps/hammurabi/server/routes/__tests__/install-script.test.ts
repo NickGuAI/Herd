@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
 import express from 'express'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { buildDefaultCandidatePaths, createInstallScriptRouter } from '../install-script'
 
 interface RunningServer {
@@ -11,6 +13,7 @@ interface RunningServer {
 }
 
 const testDirectories: string[] = []
+const execFileAsync = promisify(execFile)
 
 async function createTestDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'hammurabi-install-script-'))
@@ -65,6 +68,26 @@ async function startServer(
         })
       })
     },
+  }
+}
+
+function extractShellFunction(source: string, name: string): string {
+  const start = source.indexOf(`${name}() {`)
+  expect(start, `expected ${name} in install.sh`).toBeGreaterThanOrEqual(0)
+
+  const rest = source.slice(start)
+  const end = rest.search(/\n}\n\n/)
+  expect(end, `expected end of ${name} in install.sh`).toBeGreaterThanOrEqual(0)
+
+  return rest.slice(0, end + 3)
+}
+
+async function commandExists(command: string): Promise<boolean> {
+  try {
+    await execFileAsync('sh', ['-c', `command -v ${command} >/dev/null 2>&1`])
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -131,5 +154,29 @@ describe('install script route', () => {
     expect(await response.text()).toBe('Failed to read install.sh')
 
     await server.close()
+  })
+})
+
+describe('installer prompt helpers', () => {
+  it('treats shells without a controlling tty as non-interactive', async () => {
+    if (!(await commandExists('setsid'))) {
+      return
+    }
+
+    const scriptContents = await readFile(new URL('../../../install.sh', import.meta.url), 'utf8')
+    const promptAvailable = extractShellFunction(scriptContents, 'prompt_available')
+    const checkScript = [
+      'set -euo pipefail',
+      promptAvailable,
+      'if prompt_available; then',
+      '  printf available',
+      'else',
+      '  printf unavailable',
+      'fi',
+    ].join('\n')
+
+    const { stdout } = await execFileAsync('setsid', ['bash', '-c', checkScript])
+
+    expect(stdout).toBe('unavailable')
   })
 })

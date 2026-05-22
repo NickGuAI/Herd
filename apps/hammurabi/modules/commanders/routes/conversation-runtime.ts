@@ -19,6 +19,7 @@ import { sanitizeProviderContextForPersistence } from '../../agents/providers/pr
 import { asClaudeProviderContext } from '../../agents/providers/provider-session-context.js'
 import { getProvider } from '../../agents/providers/registry.js'
 import { resolveProviderDefaults } from '../../agents/providers/provider-adapter.js'
+import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
 
 export function buildConversationSessionName(conversation: Conversation): string {
   return `commander-${conversation.commanderId}-conversation-${conversation.id}`
@@ -104,6 +105,7 @@ export async function getConversationMessagesPage(
 export interface ConversationSpawnOptions {
   agentType?: AgentType
   model?: string | null
+  effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -163,6 +165,9 @@ async function prepareConversationSession(
   const conversationClaudeContext = conversation.agentType === agentType
     ? asClaudeProviderContext(conversation.providerContext)
     : null
+  const commanderClaudeContext = commander.agentType === agentType
+    ? asClaudeProviderContext(commander.providerContext)
+    : null
   const hasSpawnModel = spawnOptions
     ? Object.prototype.hasOwnProperty.call(spawnOptions, 'model')
     : false
@@ -175,16 +180,24 @@ async function prepareConversationSession(
       ? (commander.model ?? undefined)
       : undefined)
   const effort = provider?.uiCapabilities.supportsEffort
-    ? commander.effort ?? conversationClaudeContext?.effort ?? providerDefaults?.effort
+    ? spawnOptions?.effort
+      ?? conversationClaudeContext?.effort
+      ?? commander.effort
+      ?? commanderClaudeContext?.effort
+      ?? providerDefaults?.effort
     : undefined
   const adaptiveThinking = provider?.uiCapabilities.supportsAdaptiveThinking
     ? spawnOptions?.adaptiveThinking
       ?? conversationClaudeContext?.adaptiveThinking
+      ?? commander.adaptiveThinking
+      ?? commanderClaudeContext?.adaptiveThinking
       ?? providerDefaults?.adaptiveThinking
     : undefined
   const maxThinkingTokens = provider?.uiCapabilities.supportsMaxThinkingTokens
     ? spawnOptions?.maxThinkingTokens
       ?? conversationClaudeContext?.maxThinkingTokens
+      ?? commander.maxThinkingTokens
+      ?? commanderClaudeContext?.maxThinkingTokens
       ?? providerDefaults?.maxThinkingTokens
     : undefined
   const cwd = commander.cwd ?? undefined
@@ -205,6 +218,9 @@ async function prepareConversationSession(
     },
     workflow,
   )
+  const systemPrompt = agentType === 'claude'
+    ? appendClaudeReasoningPolicy(built.systemPrompt)
+    : built.systemPrompt
 
   return {
     commander,
@@ -213,7 +229,7 @@ async function prepareConversationSession(
       name: buildConversationSessionName(conversation),
       commanderId,
       conversationId: conversation.id,
-      systemPrompt: built.systemPrompt,
+      systemPrompt,
       agentType,
       model,
       effort,

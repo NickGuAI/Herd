@@ -8,7 +8,7 @@
   "summary": "Owns issue triage, code investigation, implementation planning, review follow-through, and release reliability.",
   "description": "A product-safe engineering commander for moving software work from vague report to verified delivery without relying on private operator memory.",
   "agentType": "claude",
-  "effort": "high",
+  "effort": "max",
   "contextMode": "thin",
   "uiProfile": {
     "speakingTone": "Precise engineering commander",

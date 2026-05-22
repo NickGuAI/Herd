@@ -58,6 +58,8 @@ process.on('unhandledRejection', (reason) => {
 
 const app = express()
 const port = parseInt(process.env.PORT ?? '20001', 10)
+const backgroundRuntimeMode = process.env.HAMMURABI_BACKGROUND_RUNTIMES?.trim().toLowerCase()
+const backgroundRuntimesEnabled = !['0', 'false', 'no'].includes(backgroundRuntimeMode ?? '')
 const allowedCorsOrigins = parseAllowedCorsOrigins(process.env.HAMMURABI_ALLOWED_ORIGINS)
 const apiKeyStore = new ApiKeyJsonStore()
 const appSettingsStore = new AppSettingsStore()
@@ -81,6 +83,9 @@ const { modules, otelRouter, moduleGraph } = createModules({
   auth0ClientId: process.env.AUTH0_CLIENT_ID,
   maxAgentSessions,
   appSettingsStore,
+  initializeAgentSessionRuntimes: backgroundRuntimesEnabled,
+  initializeAutomationScheduler: backgroundRuntimesEnabled,
+  initializeChannelRuntimes: backgroundRuntimesEnabled,
 })
 
 app.use(
@@ -109,6 +114,7 @@ app.get('/api/health', (_req, res) => {
     status: 'ok',
     uptime: Math.floor((Date.now() - startedAt) / 1000),
     version: buildVersion,
+    backgroundRuntimes: backgroundRuntimesEnabled ? 'enabled' : 'disabled',
     modules: modules.map((m) => m.name),
     memory: {
       rss: memory.rss,

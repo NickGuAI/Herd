@@ -461,6 +461,7 @@ export interface AgentsRouterOptions {
   codexTurnWatchdogTimeoutMs?: number
   sessionStorePath?: string
   autoResumeSessions?: boolean
+  enableSessionPruner?: boolean
   machinesFilePath?: string
   apiKeyStore?: ApiKeyStoreLike
   auth0Domain?: string

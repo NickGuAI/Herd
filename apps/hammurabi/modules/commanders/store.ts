@@ -2,10 +2,20 @@ import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
+  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  normalizeClaudeAdaptiveThinkingMode,
+  type ClaudeAdaptiveThinkingMode,
+} from '../claude-adaptive-thinking.js'
+import {
   DEFAULT_CLAUDE_EFFORT_LEVEL,
   normalizeClaudeEffortLevel,
   type ClaudeEffortLevel,
 } from '../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  normalizeClaudeMaxThinkingTokens,
+  type ClaudeMaxThinkingTokens,
+} from '../claude-max-thinking-tokens.js'
 import { parseProviderId } from '../agents/providers/registry.js'
 import type { ProviderSessionContext } from '../agents/providers/provider-session-context.js'
 import type { AgentType } from '../agents/types.js'
@@ -97,6 +107,8 @@ export interface CommanderSession {
   agentType?: AgentType
   model?: string | null
   effort?: ClaudeEffortLevel
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   providerContext?: ProviderSessionContext
   cwd?: string
   heartbeat: CommanderHeartbeatConfig
@@ -375,7 +387,19 @@ function parseCommanderSession(
     ? null
     : (typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model.trim() : undefined)
   const effort = normalizeClaudeEffortLevel(raw.effort, DEFAULT_CLAUDE_EFFORT_LEVEL)
-  const providerContext = parseCanonicalProviderContext(raw.providerContext, { effort }) ?? undefined
+  const adaptiveThinking = normalizeClaudeAdaptiveThinkingMode(
+    raw.adaptiveThinking,
+    DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  )
+  const maxThinkingTokens = normalizeClaudeMaxThinkingTokens(
+    raw.maxThinkingTokens,
+    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  )
+  const providerContext = parseCanonicalProviderContext(raw.providerContext, {
+    effort,
+    adaptiveThinking,
+    maxThinkingTokens,
+  }) ?? undefined
   const cwd = typeof raw.cwd === 'string' && raw.cwd.trim().length > 0
     ? raw.cwd.trim()
     : undefined
@@ -414,6 +438,8 @@ function parseCommanderSession(
     agentType,
     ...(model !== undefined ? { model } : {}),
     effort,
+    adaptiveThinking,
+    maxThinkingTokens,
     ...(providerContext ? { providerContext } : {}),
     cwd,
     heartbeat,

@@ -36,8 +36,12 @@ export interface ModuleRegistryOptions {
   /** Max concurrent agent sessions (default 10). Set via HAMMURABI_MAX_AGENT_SESSIONS. */
   maxAgentSessions?: number
   appSettingsStore?: AppSettingsStore
+  /** Disable agent session recovery and pruner loops for preflight candidates. */
+  initializeAgentSessionRuntimes?: boolean
   /** Disable background scheduler boot in route-level tests that only need registry wiring. */
   initializeAutomationScheduler?: boolean
+  /** Disable channel adapter runtimes when a process is only a preflight/API candidate. */
+  initializeChannelRuntimes?: boolean
 }
 
 export interface ModuleRuntimeContext {

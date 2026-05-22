@@ -193,6 +193,49 @@ async function createConversation(baseUrl: string, commanderId: string): Promise
 }
 
 describe('registerConversationRoutes', () => {
+  it('persists explicit Claude reasoning controls on conversation creation', async () => {
+    const dir = await createTempDir('hammurabi-register-conversations-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_ID)
+
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: createRejectingSessionsInterface('not used'),
+    })
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/commanders/${COMMANDER_ID}/conversations`, {
+        method: 'POST',
+        headers: {
+          ...FULL_AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: CONVERSATION_ID,
+          surface: 'ui',
+          agentType: 'claude',
+          effort: 'max',
+          adaptiveThinking: 'disabled',
+          maxThinkingTokens: 128000,
+        }),
+      })
+
+      expect(createResponse.status).toBe(201)
+      expect(await createResponse.json()).toMatchObject({
+        id: CONVERSATION_ID,
+        agentType: 'claude',
+        providerContext: {
+          providerId: 'claude',
+          effort: 'max',
+          adaptiveThinking: 'disabled',
+          maxThinkingTokens: 128000,
+        },
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
   it('returns 503 without a providerSpawnFailed misdiagnosis when session creation rejects', async () => {
     const dir = await createTempDir('hammurabi-register-conversations-')
     const storePath = join(dir, 'sessions.json')

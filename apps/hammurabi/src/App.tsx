@@ -14,7 +14,7 @@ import {
   setUnauthorizedHandler,
 } from '@/lib/api'
 import { isCapacitorNative } from '@/lib/api-base'
-import { resolveAuthReturnTo } from '@/lib/auth-build-guard'
+import { isAuthGatewayHealthy, resolveAuthReturnTo } from '@/lib/auth-build-guard'
 import { ThemeProvider } from '@/lib/theme-context'
 import { useFontScale } from '@/hooks/use-font-scale'
 
@@ -71,6 +71,7 @@ function FontScaleRoot() {
 function AuthTokenBridge() {
   const { getAccessTokenSilently, isAuthenticated, loginWithRedirect } = useAuth0()
   const authRecoveryInFlightRef = useRef(false)
+  const [authRecoveryUnavailable, setAuthRecoveryUnavailable] = useState(false)
 
   const recoverAuthSession = useCallback(() => {
     if (!isAuthenticated || authRecoveryInFlightRef.current) {
@@ -78,15 +79,29 @@ function AuthTokenBridge() {
     }
 
     authRecoveryInFlightRef.current = true
-    const returnTo = resolveAuthReturnTo()
-    void loginWithRedirect({ appState: { returnTo } })
+    setAuthRecoveryUnavailable(false)
+
+    void (async () => {
+      const gatewayHealthy = await isAuthGatewayHealthy()
+      if (!gatewayHealthy) {
+        setAuthRecoveryUnavailable(true)
+        authRecoveryInFlightRef.current = false
+        return
+      }
+
+      const returnTo = resolveAuthReturnTo()
+      await loginWithRedirect({ appState: { returnTo } })
+    })()
       .catch(() => {
         authRecoveryInFlightRef.current = false
+        setAuthRecoveryUnavailable(true)
       })
   }, [isAuthenticated, loginWithRedirect])
 
   useEffect(() => {
     if (!isAuthenticated) {
+      authRecoveryInFlightRef.current = false
+      setAuthRecoveryUnavailable(false)
       setAccessTokenResolver(null)
       setUnauthorizedHandler(null)
       setAuthMode('anonymous')
@@ -117,7 +132,52 @@ function AuthTokenBridge() {
     }
   }, [getAccessTokenSilently, isAuthenticated, recoverAuthSession])
 
-  return null
+  if (!isAuthenticated || !authRecoveryUnavailable) {
+    return null
+  }
+
+  return (
+    <div
+      role="status"
+      data-testid="auth-recovery-unavailable"
+      className="font-body"
+      style={{
+        position: 'fixed',
+        left: '50%',
+        bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))',
+        zIndex: 10000,
+        transform: 'translateX(-50%)',
+        width: 'min(92vw, 460px)',
+        border: '1px solid var(--hv-border-firm)',
+        borderRadius: 'var(--hv-radius-carved)',
+        background: 'var(--hv-bg)',
+        boxShadow: 'var(--hv-shadow-block)',
+        color: 'var(--hv-fg)',
+        padding: '12px 14px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <p style={{ margin: 0, flex: 1, fontSize: 13, lineHeight: 1.45 }}>
+          Hammurabi is reconnecting. Sign-in recovery will resume after the gateway is healthy.
+        </p>
+        <button
+          type="button"
+          onClick={recoverAuthSession}
+          style={{
+            border: '1px solid var(--hv-border-firm)',
+            borderRadius: 'var(--hv-radius-carved-sm)',
+            background: 'var(--hv-button-primary-bg)',
+            color: 'var(--hv-button-primary-fg)',
+            cursor: 'pointer',
+            fontSize: 12,
+            padding: '7px 10px',
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  )
 }
 
 function AuthGuard({

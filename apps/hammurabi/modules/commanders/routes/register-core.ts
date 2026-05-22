@@ -6,7 +6,15 @@ import {
   buildCommanderPortraitPrompt,
   extractCommanderMdExcerpt,
 } from '../../../server/image-generation/sumi-portrait-prompt.js'
+import { DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE } from '../../claude-adaptive-thinking.js'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
+import { DEFAULT_CLAUDE_MAX_THINKING_TOKENS } from '../../claude-max-thinking-tokens.js'
+import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
+import {
+  parseClaudeAdaptiveThinking,
+  parseClaudeEffort,
+  parseClaudeMaxThinkingTokens,
+} from '../../agents/session/input.js'
 import {
   mimeTypeForAvatarFile,
   readCommanderUiProfile,
@@ -1863,6 +1871,9 @@ export function registerCoreRoutes(
         },
         workflow,
       )
+      const systemPrompt = selectedAgentType === 'claude'
+        ? appendClaudeReasoningPolicy(built.systemPrompt)
+        : built.systemPrompt
 
       if (!context.sessionsInterface) {
         throw new Error('sessionsInterface not configured — agents router bridge missing')
@@ -1874,7 +1885,7 @@ export function registerCoreRoutes(
         name: sessionName,
         commanderId,
         conversationId: activeConversation?.id ?? defaultConversation.id,
-        systemPrompt: built.systemPrompt,
+        systemPrompt,
         agentType: selectedAgentType,
         model: started.model ?? undefined,
         effort: selectedAgentType === 'claude'
@@ -2330,10 +2341,34 @@ export function registerCoreRoutes(
       return
     }
 
+    const effortProvided = req.body?.effort !== undefined
+    const parsedEffort = parseClaudeEffort(req.body?.effort)
+    if (effortProvided && parsedEffort === null) {
+      res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
+      return
+    }
+
+    const adaptiveThinkingProvided = req.body?.adaptiveThinking !== undefined
+    const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(req.body?.adaptiveThinking)
+    if (adaptiveThinkingProvided && parsedAdaptiveThinking === null) {
+      res.status(400).json({ error: 'adaptiveThinking must be one of: enabled, disabled' })
+      return
+    }
+
+    const maxThinkingTokensProvided = req.body?.maxThinkingTokens !== undefined
+    const parsedMaxThinkingTokens = parseClaudeMaxThinkingTokens(req.body?.maxThinkingTokens)
+    if (maxThinkingTokensProvided && parsedMaxThinkingTokens === null) {
+      res.status(400).json({ error: 'maxThinkingTokens must be an integer between 1024 and 256000' })
+      return
+    }
+
     if (
       parsedMaxTurns.value === undefined
       && parsedContextMode.value === undefined
       && parsedContextConfig.value === undefined
+      && !effortProvided
+      && !adaptiveThinkingProvided
+      && !maxThinkingTokensProvided
     ) {
       res.status(400).json({ error: 'At least one runtime field must be provided' })
       return
@@ -2351,6 +2386,13 @@ export function registerCoreRoutes(
         ...current,
         ...(parsedMaxTurns.value !== undefined ? { maxTurns: parsedMaxTurns.value } : {}),
         ...(parsedContextMode.value !== undefined ? { contextMode: parsedContextMode.value } : {}),
+        ...(effortProvided ? { effort: parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL } : {}),
+        ...(adaptiveThinkingProvided
+          ? { adaptiveThinking: parsedAdaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE }
+          : {}),
+        ...(maxThinkingTokensProvided
+          ? { maxThinkingTokens: parsedMaxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS }
+          : {}),
         ...(
           nextContextMode === 'thin' || parsedContextConfig.value !== undefined
             ? { contextConfig: nextContextConfig }
@@ -2376,6 +2418,9 @@ export function registerCoreRoutes(
       maxTurns: updated.maxTurns,
       contextMode: updated.contextMode,
       contextConfig: updated.contextConfig ?? null,
+      effort: updated.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      adaptiveThinking: updated.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+      maxThinkingTokens: updated.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     })
   })
 

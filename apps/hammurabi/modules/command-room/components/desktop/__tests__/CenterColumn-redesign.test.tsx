@@ -223,7 +223,11 @@ describe('CenterColumn redesign', () => {
       button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(onCreateChat).toHaveBeenCalledTimes(1)
-    expect(onCreateChat).toHaveBeenCalledWith('claude', null)
+    expect(onCreateChat).toHaveBeenCalledWith('claude', null, {
+      effort: 'max',
+      adaptiveThinking: 'disabled',
+      maxThinkingTokens: 128000,
+    })
   })
 
   it('shows the composer workspace shortcut when onOpenWorkspace is provided', async () => {

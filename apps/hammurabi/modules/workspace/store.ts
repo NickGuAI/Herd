@@ -56,6 +56,12 @@ function parseTarget(value: unknown): WorkspaceTargetDescriptor | null {
     ...(typeof value.conversationId === 'string' && value.conversationId.trim()
       ? { conversationId: value.conversationId.trim() }
       : {}),
+    ...(typeof value.sessionName === 'string' && value.sessionName.trim()
+      ? { sessionName: value.sessionName.trim() }
+      : {}),
+    ...(typeof value.commanderId === 'string' && value.commanderId.trim()
+      ? { commanderId: value.commanderId.trim() }
+      : {}),
     label,
     host,
     rootPath,
@@ -66,6 +72,14 @@ function parseTarget(value: unknown): WorkspaceTargetDescriptor | null {
 
 function keyConversationId(key: string): string | undefined {
   return key.startsWith('conversation:') ? key.slice('conversation:'.length) : undefined
+}
+
+function keySessionName(key: string): string | undefined {
+  return key.startsWith('session:') ? key.slice('session:'.length) : undefined
+}
+
+function keyCommanderId(key: string): string | undefined {
+  return key.startsWith('commander:') ? key.slice('commander:'.length) : undefined
 }
 
 function parseTargets(raw: unknown): Record<string, WorkspaceTargetDescriptor> {
@@ -82,9 +96,13 @@ function parseTargets(raw: unknown): Record<string, WorkspaceTargetDescriptor> {
     const parsed = parseTarget(value)
     if (parsed) {
       const conversationId = parsed.conversationId ?? keyConversationId(key)
+      const sessionName = parsed.sessionName ?? keySessionName(key)
+      const commanderId = parsed.commanderId ?? keyCommanderId(key)
       targets[key] = {
         ...parsed,
         ...(conversationId ? { conversationId } : {}),
+        ...(sessionName ? { sessionName } : {}),
+        ...(commanderId ? { commanderId } : {}),
       }
     }
   }

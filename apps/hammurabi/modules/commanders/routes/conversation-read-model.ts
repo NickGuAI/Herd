@@ -8,6 +8,10 @@ import {
   buildConversationSessionName,
   getLiveConversationSession,
 } from './conversation-runtime.js'
+import {
+  getConversationRuntimeOverlay,
+  type ConversationRuntimeState,
+} from './conversation-runtime-state.js'
 
 type ConversationAction =
   | 'send'
@@ -37,11 +41,17 @@ interface LiveConversationSessionLike {
  * consume instead of parsing session names or raw live-session process fields.
  */
 export interface ConversationSummaryDTO extends Conversation {
+  runtimeState: ConversationRuntimeState
+  websocketReady: boolean
+  runtimeError: string | null
   isDefaultConversation: boolean
   liveSession: AgentSession | null
   canonicalOrder: number
   displayState: {
     status: Conversation['status']
+    runtimeState: ConversationRuntimeState
+    websocketReady: boolean
+    runtimeError: string | null
     isVisible: boolean
     isDefaultConversation: boolean
     hasLiveSession: boolean
@@ -129,21 +139,41 @@ export function buildConversationSummaryDTO(
   const hasLiveSession = Boolean(liveSession)
   const isDefaultConversation = conversation.id === buildDefaultCommanderConversationId(conversation.commanderId)
   const sessionName = buildConversationSessionName(conversation)
-  const hasActiveStream = conversation.status === 'active' && transportType === 'stream'
   const isArchived = conversation.status === 'archived'
-  const canStartOrResume = conversation.status === 'idle' && !hasLiveSession
+  const runtimeOverlay = getConversationRuntimeOverlay(conversation.id)
+  const runtimeState: ConversationRuntimeState = isArchived
+    ? 'archived'
+    : runtimeOverlay?.state === 'starting'
+      ? 'starting'
+      : runtimeOverlay?.state === 'failed'
+        ? 'failed'
+        : conversation.status === 'active' && hasLiveSession
+          ? 'active'
+          : 'idle'
+  const websocketReady = runtimeState === 'active' && hasLiveSession
+  const hasActiveStream = websocketReady && transportType === 'stream'
+  const canStartOrResume = (
+    (conversation.status === 'idle' || runtimeState === 'failed')
+    && runtimeState !== 'starting'
+    && !hasLiveSession
+  )
 
   const noActiveStreamReason = 'Conversation image transport requires an active stream session'
   const canSendMedia = hasActiveStream && providerSupportsMessageImages(liveSession)
-  const sendReason = isArchived
-    ? 'Conversation is archived'
-    : hasActiveStream
-      ? null
-      : conversation.status !== 'active'
-        ? 'Conversation must be active before sending'
-        : transportType === null
-          ? 'Conversation has no live session'
-          : 'Conversation live session is not stream-sendable'
+  let sendReason: string | null = null
+  if (isArchived) {
+    sendReason = 'Conversation is archived'
+  } else if (runtimeState === 'starting') {
+    sendReason = 'Conversation is starting'
+  } else if (runtimeState === 'failed') {
+    sendReason = 'Conversation start failed'
+  } else if (!hasActiveStream) {
+    sendReason = conversation.status !== 'active'
+      ? 'Conversation must be active before sending'
+      : transportType === null
+        ? 'Conversation has no live session'
+        : 'Conversation live session is not stream-sendable'
+  }
   const queueReason = hasActiveStream ? null : sendReason
   const mediaReason = canSendMedia
     ? null
@@ -156,11 +186,11 @@ export function buildConversationSummaryDTO(
     queue: hasActiveStream,
     media: canSendMedia,
     start: canStartOrResume,
-    pause: conversation.status === 'active' && !isArchived,
+    pause: (runtimeState === 'starting' || conversation.status === 'active') && !isArchived,
     resume: canStartOrResume,
     archive: true,
     delete: true,
-    updateProvider: conversation.status === 'idle' && !hasLiveSession,
+    updateProvider: conversation.status === 'idle' && runtimeState !== 'starting' && !hasLiveSession,
   }
   const disabledReasons: ConversationDisabledReasons = {
     send: allowedActions.send ? null : sendReason,
@@ -170,9 +200,11 @@ export function buildConversationSummaryDTO(
       ? null
       : isArchived
         ? 'Archived conversations cannot be started'
-        : hasLiveSession
-          ? 'Conversation already has a live session'
-          : 'Conversation is not idle',
+        : runtimeState === 'starting'
+          ? 'Conversation is already starting'
+          : hasLiveSession
+            ? 'Conversation already has a live session'
+            : 'Conversation is not idle',
     pause: allowedActions.pause
       ? null
       : isArchived
@@ -182,18 +214,22 @@ export function buildConversationSummaryDTO(
       ? null
       : isArchived
         ? 'Archived conversations cannot be resumed'
-        : hasLiveSession
-          ? 'Conversation already has a live session'
-          : 'Conversation is not idle',
+        : runtimeState === 'starting'
+          ? 'Conversation is already starting'
+          : hasLiveSession
+            ? 'Conversation already has a live session'
+            : 'Conversation is not idle',
     archive: null,
     delete: null,
     updateProvider: allowedActions.updateProvider
       ? null
       : isArchived
         ? 'Archived conversations cannot change provider'
-        : hasLiveSession || conversation.status === 'active'
-          ? 'Stop the conversation before changing provider or model'
-          : 'Conversation provider cannot be updated in the current state',
+        : runtimeState === 'starting'
+          ? 'Conversation is starting'
+          : hasLiveSession || conversation.status === 'active'
+            ? 'Stop the conversation before changing provider or model'
+            : 'Conversation provider cannot be updated in the current state',
   }
 
   const queueSupport = {
@@ -207,11 +243,17 @@ export function buildConversationSummaryDTO(
 
   return {
     ...conversation,
+    runtimeState,
+    websocketReady,
+    runtimeError: runtimeOverlay?.error ?? null,
     isDefaultConversation,
     liveSession: serializeLiveSession(liveSession),
     canonicalOrder,
     displayState: {
       status: conversation.status,
+      runtimeState,
+      websocketReady,
+      runtimeError: runtimeOverlay?.error ?? null,
       isVisible: conversation.status !== 'archived',
       isDefaultConversation,
       hasLiveSession,

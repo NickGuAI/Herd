@@ -958,6 +958,9 @@ describe('commanders routes', () => {
         maxTurns: DEFAULT_COMMANDER_MAX_TURNS,
         contextMode: 'thin',
         contextConfig: null,
+        effort: 'max',
+        adaptiveThinking: 'disabled',
+        maxThinkingTokens: 128000,
       })
 
       const persisted = JSON.parse(await readFile(storePath, 'utf8')) as {
@@ -1129,6 +1132,8 @@ describe('commanders routes', () => {
         expect(mock.sendCalls.length).toBeGreaterThanOrEqual(2)
       })
       expect(mock.sendCalls.some((call) => call.text.includes('[HEARTBEAT QUICK '))).toBe(true)
+      const heartbeatCall = mock.sendCalls.find((call) => call.text.includes('[HEARTBEAT QUICK '))
+      expect(heartbeatCall?.text).toContain('## Claude Code Reasoning Policy')
 
       await vi.waitFor(async () => {
         const listResponse = await fetch(`${server.baseUrl}/api/commanders`, {
@@ -2349,13 +2354,12 @@ describe('commanders routes', () => {
     }
   })
 
-  it('rejects commander-owned spawn fields when starting a conversation', async () => {
+  it('rejects commander-owned cwd and host fields when starting a conversation', async () => {
     const server = await startServer()
     const conversationId = '33333333-3333-4333-8333-333333333333'
 
     try {
       for (const body of [
-        { effort: 'low' },
         { cwd: '/tmp/other-workspace' },
         { host: 'other-host' },
       ]) {
@@ -2370,7 +2374,7 @@ describe('commanders routes', () => {
         const payload = (await response.json()) as { error?: string }
 
         expect(response.status).toBe(400)
-        expect(payload.error).toContain('effort, cwd, and host are configured on the commander')
+        expect(payload.error).toContain('cwd and host are configured on the commander')
       }
     } finally {
       await server.close()
@@ -2716,7 +2720,7 @@ describe('commanders routes', () => {
     }
   })
 
-  it('defaults commander Claude effort to high and preserves explicit profile updates', async () => {
+  it('defaults commander Claude effort to max and preserves explicit profile updates', async () => {
     const dir = await createTempDir('hammurabi-commanders-effort-')
     const storePath = join(dir, 'sessions.json')
     const memoryBasePath = join(dir, 'memory')
@@ -2741,7 +2745,7 @@ describe('commanders routes', () => {
       })
       expect(createResponse.status).toBe(201)
       const created = (await createResponse.json()) as { id: string; effort?: string }
-      expect(created.effort).toBe('high')
+      expect(created.effort).toBe('max')
 
       const patchResponse = await fetch(`${server.baseUrl}/api/commanders/${created.id}/profile`, {
         method: 'PATCH',
@@ -2750,7 +2754,7 @@ describe('commanders routes', () => {
           'content-type': 'application/json',
         },
         body: JSON.stringify({
-          effort: 'max',
+          effort: 'high',
         }),
       })
       expect(patchResponse.status).toBe(200)
@@ -2766,13 +2770,14 @@ describe('commanders routes', () => {
 
       expect(mock.createCalls[0]).toEqual(expect.objectContaining({
         agentType: 'claude',
-        effort: 'max',
+        effort: 'high',
+        systemPrompt: expect.stringContaining('## Claude Code Reasoning Policy'),
       }))
 
       const persisted = JSON.parse(await readFile(storePath, 'utf8')) as {
         sessions: Array<{ effort?: string }>
       }
-      expect(persisted.sessions[0]?.effort).toBe('max')
+      expect(persisted.sessions[0]?.effort).toBe('high')
     } finally {
       await server.close()
     }

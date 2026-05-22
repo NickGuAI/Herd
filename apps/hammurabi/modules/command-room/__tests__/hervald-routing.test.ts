@@ -316,6 +316,7 @@ function buildLiveConversation() {
       isVisible: true,
       isDefaultConversation: true,
       hasLiveSession: true,
+      websocketReady: true,
       isSendable: true,
       isQueueable: true,
       isMediaSendable: true,
@@ -363,6 +364,7 @@ function buildLiveConversation() {
       status: 'active',
       processAlive: true,
     },
+    websocketReady: true,
   }
 }
 
@@ -933,13 +935,13 @@ describe('Hervald command-room routing', () => {
     await renderAt('/command-room?commander=commander-1&conversation=conversation-1')
     await flushAsync()
     await vi.waitFor(() => {
-      expect(mocks.useAgentSessionStream).toHaveBeenLastCalledWith(
-        LIVE_CONVERSATION_SESSION_NAME,
-        expect.objectContaining({
-          enabled: true,
-          websocketPath: '/api/conversations/conversation-1/ws',
-        }),
-      )
+      expect(
+        mocks.useAgentSessionStream.mock.calls.some(([sessionName, options]) => (
+          sessionName === LIVE_CONVERSATION_SESSION_NAME
+          && options?.enabled === true
+          && options?.websocketPath === '/api/conversations/conversation-1/ws'
+        )),
+      ).toBe(true)
     })
     await flushAsync()
     mocks.fetchJson.mockClear()

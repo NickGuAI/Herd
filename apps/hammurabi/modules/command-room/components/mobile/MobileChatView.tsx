@@ -6,7 +6,10 @@ import { useProviderRegistry } from '@/hooks/use-providers'
 import { MobileSessionShell } from '@modules/agents/page-shell/MobileSessionShell'
 import type { SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
 import type { MsgItem } from '@modules/agents/messages/model'
-import { CreateConversationPanel } from '@modules/conversation/components/CreateConversationPanel'
+import {
+  CreateConversationPanel,
+  type CreateConversationReasoningConfig,
+} from '@modules/conversation/components/CreateConversationPanel'
 import type { Commander, Worker } from '@modules/command-room/components/desktop/SessionRow'
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
 import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
@@ -44,6 +47,7 @@ interface MobileChatViewProps {
   onCreateConversation?: (
     agentType: AgentType,
     model: string | null,
+    reasoningConfig: CreateConversationReasoningConfig,
   ) => Promise<ConversationRecord | null> | ConversationRecord | null
   onStartConversation?: (conversationId: string) => void | Promise<void>
   onStopConversation?: (conversationId: string) => void | Promise<void>
@@ -338,6 +342,7 @@ export function MobileChatView({
   const handleCreateConversation = useCallback(async (
     nextAgentType: AgentType,
     nextModel: string | null,
+    reasoningConfig: CreateConversationReasoningConfig,
   ) => {
     if (!commander || !onCreateConversation) {
       return
@@ -345,7 +350,7 @@ export function MobileChatView({
 
     setIsCreatingConversation(true)
     try {
-      const created = await onCreateConversation(nextAgentType, nextModel)
+      const created = await onCreateConversation(nextAgentType, nextModel, reasoningConfig)
       if (!created) {
         return
       }
@@ -475,8 +480,8 @@ export function MobileChatView({
           >
             <CreateConversationPanel
               commanderName={commander.name}
-              onCreateChat={(nextAgentType, nextModel) => {
-                void handleCreateConversation(nextAgentType, nextModel)
+              onCreateChat={(nextAgentType, nextModel, reasoningConfig) => {
+                void handleCreateConversation(nextAgentType, nextModel, reasoningConfig)
               }}
               createChatPending={isCreatingConversation}
               defaultAgentType={agentType}

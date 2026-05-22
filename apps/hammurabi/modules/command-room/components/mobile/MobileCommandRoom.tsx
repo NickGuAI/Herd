@@ -23,6 +23,7 @@ import {
   type CommandRoomRouteMetadata,
 } from '@modules/command-room/route-metadata'
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type { CreateConversationReasoningConfig } from '@modules/conversation/components/CreateConversationPanel'
 import type { Commander, Worker } from '@modules/command-room/components/desktop/SessionRow'
 import { MobileApprovalSheet } from '@modules/approvals/MobileApprovalSheet'
 import { MobileChatView } from './MobileChatView'
@@ -102,6 +103,7 @@ export interface MobileCommandRoomProps {
     commanderId: string,
     agentType: AgentType,
     model: string | null,
+    reasoningConfig: CreateConversationReasoningConfig,
   ) => Promise<ConversationRecord | null> | ConversationRecord | null
   requestedNewChatCommanderId?: string | null
   onStartConversation?: (conversationId: string) => void | Promise<void>
@@ -397,7 +399,8 @@ export function MobileCommandRoom({
             onOpenWorkspaceFile={handleOpenWorkspaceFileFromChat}
             onSelectConversationId={handleSelectConversationId}
             onCreateConversation={activeCommander
-              ? (agentType, model) => onCreateConversation?.(activeCommander.id, agentType, model) ?? null
+              ? (agentType, model, reasoningConfig) =>
+                  onCreateConversation?.(activeCommander.id, agentType, model, reasoningConfig) ?? null
               : undefined}
             onStartConversation={onStartConversation}
             onStopConversation={onStopConversation}

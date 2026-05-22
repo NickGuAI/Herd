@@ -54,6 +54,13 @@ import { fetchJson, setAccessTokenResolver, setAuthMode, setUnauthorizedHandler 
 let root: Root | null = null
 let container: HTMLDivElement | null = null
 
+function healthyGatewayResponse() {
+  return new Response(JSON.stringify({ version: 'test' }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 async function renderApp(path: string) {
   window.history.replaceState({}, document.title, path)
   container = document.createElement('div')
@@ -126,17 +133,75 @@ describe('App Auth0 configuration', () => {
     mocks.getAccessTokenSilently.mockRejectedValue(
       Object.assign(new Error('login required'), { error: 'login_required' }),
     )
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn().mockResolvedValue(healthyGatewayResponse())
     vi.stubGlobal('fetch', fetchMock)
 
     await renderApp('/command-room?commander=atlas#chat')
 
     await expect(fetchJson('/api/modules')).rejects.toThrow(/Auth0 session expired/)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', { cache: 'no-store' })
     expect(mocks.loginWithRedirect).toHaveBeenCalledWith({
       appState: { returnTo: '/command-room?commander=atlas#chat' },
     })
+  })
+
+  it('keeps Auth0 recovery inside the app while gateway health is unavailable', async () => {
+    mocks.isAuthenticated = true
+    mocks.getAccessTokenSilently.mockRejectedValue(
+      Object.assign(new Error('login required'), { error: 'login_required' }),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('Bad Gateway', { status: 502 })),
+    )
+
+    await renderApp('/command-room?commander=atlas#chat')
+
+    await expect(fetchJson('/api/modules')).rejects.toThrow(/Auth0 session expired/)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.loginWithRedirect).not.toHaveBeenCalled()
+    expect(document.body.querySelector('[data-testid="auth-recovery-unavailable"]')?.textContent)
+      .toContain('Hammurabi is reconnecting')
+  })
+
+  it('clears unavailable Auth0 recovery state after the auth session ends', async () => {
+    mocks.isAuthenticated = true
+    mocks.getAccessTokenSilently.mockRejectedValue(
+      Object.assign(new Error('login required'), { error: 'login_required' }),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('Bad Gateway', { status: 502 })),
+    )
+
+    await renderApp('/command-room?commander=atlas#chat')
+
+    await expect(fetchJson('/api/modules')).rejects.toThrow(/Auth0 session expired/)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(document.body.querySelector('[data-testid="auth-recovery-unavailable"]')).not.toBeNull()
+
+    mocks.isAuthenticated = false
+    await act(async () => {
+      root?.render(<App />)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(document.body.querySelector('[data-testid="auth-recovery-unavailable"]')).toBeNull()
   })
 
   it('redirects Auth0 users to re-authenticate on API 401 without logging out locally', async () => {
@@ -144,14 +209,22 @@ describe('App Auth0 configuration', () => {
     mocks.getAccessTokenSilently.mockResolvedValue('fresh-token')
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        new Response('{"error":"Unauthorized"}', { status: 401 }),
-      ),
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.endsWith('/api/health')) {
+          return Promise.resolve(healthyGatewayResponse())
+        }
+        return Promise.resolve(new Response('{"error":"Unauthorized"}', { status: 401 }))
+      }),
     )
 
     await renderApp('/settings')
 
     await expect(fetchJson('/api/modules')).rejects.toThrow(/401/)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
 
     expect(mocks.logout).not.toHaveBeenCalled()
     expect(mocks.loginWithRedirect).toHaveBeenCalledWith({

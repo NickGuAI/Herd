@@ -126,6 +126,13 @@ vi.mock('../CenterColumn', () => ({
 }))
 
 vi.mock('@modules/workspace/use-workspace', () => ({
+  fetchWorkspacePathResolution: vi.fn(async (_source: unknown, requestedPath: string) => ({
+    workspace: {},
+    requestedPath,
+    path: requestedPath,
+    type: 'file',
+    treePath: '',
+  })),
   getWorkspaceSourceKey: (source: { targetId?: string }) => `workspace:${source.targetId ?? 'target'}`,
   materializeWorkspaceContext: vi.fn(async () => ({ text: '', filePaths: [], directoryPaths: [], fileAnnotations: [] })),
   openWorkspaceTarget: vi.fn(async (input: { sessionName?: string }) => ({

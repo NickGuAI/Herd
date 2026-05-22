@@ -28,12 +28,18 @@ export interface ConversationRecord extends Omit<ConversationContract, 'currentT
   surface: ConversationSurface
   agentType?: AgentType | null
   model?: string | null
+  providerContext?: ConversationContract['providerContext']
+  runtimeState?: ConversationRuntimeState
+  websocketReady?: boolean
+  runtimeError?: string | null
   liveSession: AgentSession | null
   canonicalOrder?: number
   displayState?: ConversationDisplayState
   sendTarget?: ConversationSendTarget | null
   allowedActions?: ConversationAllowedActions
 }
+
+export type ConversationRuntimeState = 'idle' | 'starting' | 'active' | 'failed' | 'archived'
 
 export type ConversationAction =
   | 'send'
@@ -68,6 +74,9 @@ export interface ConversationSendTarget {
 
 export interface ConversationDisplayState {
   status: ConversationStatus
+  runtimeState?: ConversationRuntimeState
+  websocketReady?: boolean
+  runtimeError?: string | null
   isVisible: boolean
   isDefaultConversation: boolean
   hasLiveSession: boolean
@@ -97,6 +106,9 @@ export interface CreateConversationInput {
   currentTask?: CommanderCurrentTask | null
   agentType?: AgentType
   model?: string | null
+  effort?: ClaudeEffortLevel
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
 
 export interface StartConversationInput {
@@ -298,6 +310,13 @@ async function postCreateConversation(
         ...(input.currentTask !== undefined ? { currentTask: input.currentTask } : {}),
         ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.effort !== undefined ? { effort: input.effort } : {}),
+        ...(input.adaptiveThinking !== undefined
+          ? { adaptiveThinking: input.adaptiveThinking }
+          : {}),
+        ...(input.maxThinkingTokens !== undefined
+          ? { maxThinkingTokens: input.maxThinkingTokens }
+          : {}),
       }),
     },
   )

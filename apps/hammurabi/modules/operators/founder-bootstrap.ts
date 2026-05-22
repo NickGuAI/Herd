@@ -14,7 +14,7 @@ function asNonEmptyString(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
-function isSyntheticAuth0LocalEmail(value: string | null): value is string {
+function isSyntheticAuth0LocalEmail(value: string | null): boolean {
   return value !== null && /^.+@auth0\.local$/.test(value)
 }
 
@@ -45,9 +45,44 @@ export function humanizeFounderDisplayName(value: string): string {
     .join(' ')
 }
 
-function resolveBootstrapAvatarUrl(user: AuthUser): string | null {
+export function resolveFounderBootstrapAvatarUrl(user: AuthUser | undefined): string | null {
+  if (!user) {
+    return null
+  }
+
   return readUserMetadataString(user, 'picture')
     ?? readUserMetadataString(user, 'avatarUrl')
+}
+
+export function isFounderAuthUser(founder: Operator, user: AuthUser | undefined): boolean {
+  if (!user) {
+    return false
+  }
+
+  const founderId = asNonEmptyString(founder.id)
+  const userId = asNonEmptyString(user.id)
+  if (founderId && userId && founderId === userId) {
+    return true
+  }
+
+  const founderEmail = asNonEmptyString(founder.email)?.toLowerCase() ?? null
+  const userEmail = asNonEmptyString(user.email)
+  if (!founderEmail || !userEmail || isSyntheticAuth0LocalEmail(userEmail)) {
+    return false
+  }
+
+  return founderEmail === userEmail.toLowerCase()
+}
+
+export function resolveFounderAvatarBackfillUrl(
+  founder: Operator,
+  user: AuthUser | undefined,
+): string | null {
+  if (founder.avatarUrl?.trim() || !isFounderAuthUser(founder, user)) {
+    return null
+  }
+
+  return resolveFounderBootstrapAvatarUrl(user)
 }
 
 export function createFounderBootstrapCandidate(user: AuthUser | undefined): Operator | null {
@@ -72,7 +107,7 @@ export function createFounderBootstrapCandidate(user: AuthUser | undefined): Ope
     kind: 'founder',
     displayName,
     email,
-    avatarUrl: resolveBootstrapAvatarUrl(user),
+    avatarUrl: resolveFounderBootstrapAvatarUrl(user),
     createdAt: new Date().toISOString(),
   }
 }

@@ -7,11 +7,14 @@ import type {
 
 export function createAgentsRuntime(context: ModuleRuntimeContext): ModuleRouteRegistration {
   const { capabilities, internalToken, options } = context
+  const initializeAgentSessionRuntimes = options.initializeAgentSessionRuntimes !== false
 
   capabilities.provide('agents.provider-registry', 'agents', { listProviders })
 
   const agents = createAgentsRouter({
     apiKeyStore: options.apiKeyStore,
+    autoResumeSessions: initializeAgentSessionRuntimes,
+    enableSessionPruner: initializeAgentSessionRuntimes,
     getActionPolicyGate: () => capabilities.consume('policies.action-gate', 'agents'),
     maxSessions: options.maxAgentSessions,
     internalToken,
