@@ -124,6 +124,11 @@ function appendUserMessageIfDistinct(
   })
 }
 
+function readUserDisplayText(event: StreamEvent): string | null {
+  const displayText = (event as { displayText?: unknown }).displayText
+  return typeof displayText === 'string' ? displayText.trim() : null
+}
+
 function appendPlanningMessage(
   context: StreamEventProcessorContext,
   event: Extract<StreamEvent, { type: 'planning' }>,
@@ -537,11 +542,18 @@ export function processStreamEvent(
       const hasActiveAgentTool = context.state.activeAgentMessageIds.length > 0
       const subtype = typeof event.subtype === 'string' ? event.subtype : undefined
       const shouldRenderUserEnvelope = isReplay || subtype === 'queued_message'
-      if (typeof content === 'string' && content.trim() && shouldRenderUserEnvelope) {
+      const displayText = readUserDisplayText(event)
+      if (
+        typeof content === 'string'
+        && (content.trim() || displayText !== null)
+        && shouldRenderUserEnvelope
+      ) {
         if (hasActiveAgentTool) {
           break
         }
-        appendUserMessageIfDistinct(context, content.trim())
+        appendUserMessageIfDistinct(context, displayText !== null
+          ? (displayText || '[workspace context]')
+          : content.trim())
         break
       }
       if (!Array.isArray(content)) {
@@ -557,10 +569,10 @@ export function processStreamEvent(
           if (hasActiveAgentTool) {
             break
           }
-          let text = '[image]'
+          let text = displayText !== null ? (displayText || '[image]') : '[image]'
           const images: { mediaType: string; data: string }[] = []
           for (const block of content) {
-            if (block.type === 'text' && 'text' in block) {
+            if (displayText === null && block.type === 'text' && 'text' in block) {
               text = (block.text as string).trim() || text
             } else if (block.type === 'image' && 'source' in block) {
               const source = block.source as { media_type?: string; data?: string } | undefined

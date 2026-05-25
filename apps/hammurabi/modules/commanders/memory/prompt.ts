@@ -34,12 +34,44 @@ Mark failed if blocked:
 - One active quest at a time unless explicitly told otherwise.`
 }
 
+function buildGlobalRulesBootstrapSection(): string {
+  return `# Global Rules Bootstrap
+
+The operator's durable global rules live outside the commander prompt. Load them when task scope, ambiguity, workspace routing, or skill selection depends on them.
+
+## Files
+- \`~/.hammurabi/global-rules/USER.md\` — canonical user identity, focus, and ambiguity resolution. This wins over commander-local memory when they conflict.
+- \`~/.hammurabi/global-rules/WORKSPACE.md\` — workspace routing table. Read it before broad filesystem search.
+- \`~/.hammurabi/global-rules/SKILLS_INDEX.md\` — skill routing. Check it before inventing a procedure.
+
+## Rules
+- Discover and read only the files needed for the current task.
+- Use the closest project guide after routing the workspace.
+- Do not paste global rule bodies into memory; reference durable facts only when they matter to future work.`
+}
+
+function buildSharedKnowledgeBootstrapSection(): string {
+  return `# Shared Knowledge Bootstrap
+
+Shared commander knowledge lives on disk and should be discovered through exact reads when needed. These files are not memory payloads and should not be duplicated into commander memory.
+
+## Files
+- \`~/.hammurabi/shared-knowledge/DOCTRINES.md\` — hard operational constraints and safety boundaries.
+- \`~/.hammurabi/shared-knowledge/COMMANDER_GUIDE.md\` — Hammurabi CLI, worker, memory, quest-board, and operational procedures.
+- \`~/.hammurabi/shared-knowledge/LEARNINGS.md\` — curated reusable lessons.
+
+## Rules
+- Read \`DOCTRINES.md\` before changing behavior with operational or safety impact.
+- Read \`COMMANDER_GUIDE.md\` before using unfamiliar Hammurabi commands.
+- Promote only reusable, verified lessons back into shared knowledge.`
+}
+
 function buildCommanderMemoryWorkflowSection(commanderId: string): string {
   const commanderFlag = `--commander ${commanderId}`
   return `# Commander Memory Workflow
 
-Use commander memory actively during every task and heartbeat.
-Read the memory files directly, write durable facts explicitly, and leave cleanup to external cron + skill orchestration.
+Use progressive memory discovery during every task and heartbeat.
+Memory file contents are not injected into the startup prompt. Read the files or search transcripts only when the current task needs prior facts, decisions, paths, or working state.
 
 ## Read
 
@@ -79,7 +111,7 @@ export interface CommanderAgentPromptResult extends BuiltContext {
 
 /**
  * Prompt helper for Commander runtime events.
- * Injects assembled memory context into the system prompt at task pickup.
+ * Builds the bounded Hammurabi bootstrap appended to provider-native prompts.
  */
 export class CommanderAgent {
   private readonly contextBuilder: MemoryContextBuilder
@@ -106,6 +138,8 @@ export class CommanderAgent {
     const base = baseSystemPrompt.trim()
     const promptSections = [
       base,
+      base.includes('Global Rules Bootstrap') ? '' : buildGlobalRulesBootstrapSection(),
+      base.includes('Shared Knowledge Bootstrap') ? '' : buildSharedKnowledgeBootstrapSection(),
       base.includes('Hammurabi Quest Board') ? '' : buildQuestBoardSection(this.commanderId),
       base.includes('Commander Memory Workflow') ? '' : buildCommanderMemoryWorkflowSection(this.commanderId),
       builtContext.systemPromptSection,

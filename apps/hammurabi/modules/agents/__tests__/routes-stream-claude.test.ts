@@ -679,9 +679,15 @@ describe("stream sessions", () => {
         const rotatedScript = String((secondArgs as string[] | undefined)?.[1] ?? '').replace(/'/g, '')
 
         expect(rotatedScript).toContain('You are the rotated commander prompt.')
-        expect(rotatedScript).toContain('Fresh durable fact from reseed path.')
+        expect(rotatedScript).toContain('### Progressive Memory Discovery')
+        expect(rotatedScript).toContain('.memory/MEMORY.md')
+        expect(rotatedScript).not.toContain('Fresh durable fact from reseed path.')
+        expect(rotatedScript).not.toContain('Narrative note.')
         expect(rotatedScript).toContain('#77 Fix auth bug')
         expect(rotatedScript).toContain('--max-turns 9')
+        expect(rotatedScript).toContain('--append-system-prompt-file')
+        expect(rotatedScript).toContain('--exclude-dynamic-system-prompt-sections')
+        expect(rotatedScript).not.toContain('--system-prompt')
         expect(rotatedScript).not.toContain('stale commander prompt')
         expect(rotatedScript).not.toContain('--max-turns 1')
       } finally {

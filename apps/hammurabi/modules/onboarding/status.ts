@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { execFile as execFileCallback } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -18,7 +18,12 @@ import type { Conversation, ConversationStore } from '../commanders/conversation
 import type { CommanderSession, CommanderSessionStore } from '../commanders/store.js'
 import { mergeIdentityOperatingStyleIntoCommanderWorkflow } from '../commanders/templates/workflow.js'
 import { ensureCommanderVisualProfile } from '../commanders/commander-visual-profile.js'
-import { writeCommanderUiProfile } from '../commanders/commander-profile.js'
+import {
+  GAIA_COMMANDER_AVATAR_URL,
+  readCommanderUiProfile,
+  resolveCommanderAvatarUrl,
+  writeCommanderUiProfile,
+} from '../commanders/commander-profile.js'
 import { resolveHammurabiDataDir } from '../data-dir.js'
 import { createFounderBootstrapCandidate } from '../operators/founder-bootstrap.js'
 import type { OperatorStore } from '../operators/store.js'
@@ -56,6 +61,7 @@ const GAIA_HOST = 'gaia'
 const GAIA_DISPLAY_NAME = 'Gaia'
 const GAIA_TEMPLATE_ID = 'gaia-onboarding'
 const GAIA_SPEAKING_TONE = 'Mother-of-all onboarding'
+const ONBOARDING_STATE_FILE = 'onboarding.json'
 const GAIA_IDENTITY = [
   'Gaia is the mother-of-all onboarding commander for Hervald.',
   'She helps the founder complete first-run setup, create and manage commanders,',
@@ -93,6 +99,10 @@ export interface SeedGaiaOptions extends BuildOnboardingStatusOptions {
 export interface SeedStarterWorkforceOptions extends BuildOnboardingStatusOptions {
   sessionStore: Pick<CommanderSessionStore, 'list' | 'create' | 'delete'>
   conversationStore?: Pick<ConversationStore, 'listByCommander' | 'getActiveChatForCommander' | 'ensureDefaultConversation' | 'delete'>
+}
+
+interface OnboardingState {
+  starterWorkforceSkipped?: boolean
 }
 
 function quoteShell(value: string): string {
@@ -150,6 +160,43 @@ async function readLocalEnvValues(env: NodeJS.ProcessEnv): Promise<Record<string
   } catch {
     return {}
   }
+}
+
+function onboardingStatePath(commanderDataDir: string): string {
+  return path.join(commanderDataDir, ONBOARDING_STATE_FILE)
+}
+
+async function readOnboardingState(commanderDataDir: string): Promise<OnboardingState> {
+  try {
+    const parsed = JSON.parse(await readFile(onboardingStatePath(commanderDataDir), 'utf8')) as OnboardingState
+    return {
+      starterWorkforceSkipped: parsed.starterWorkforceSkipped === true,
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {}
+    }
+    throw error
+  }
+}
+
+async function writeOnboardingState(
+  commanderDataDir: string,
+  state: OnboardingState,
+): Promise<void> {
+  await mkdir(commanderDataDir, { recursive: true })
+  await writeFile(onboardingStatePath(commanderDataDir), `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+}
+
+async function setStarterWorkforceSkipped(
+  commanderDataDir: string,
+  skipped: boolean,
+): Promise<void> {
+  const current = await readOnboardingState(commanderDataDir)
+  await writeOnboardingState(commanderDataDir, {
+    ...current,
+    starterWorkforceSkipped: skipped,
+  })
 }
 
 async function buildFounderStatus(
@@ -221,6 +268,14 @@ async function buildGaiaStatus(
   return {
     commanderId: gaia?.id ?? null,
     displayName: GAIA_DISPLAY_NAME,
+    avatarUrl: gaia
+      ? await resolveCommanderAvatarUrl(
+        gaia.id,
+        options.commanderDataDir,
+        await readCommanderUiProfile(gaia.id, options.commanderDataDir),
+        { defaultAvatarUrl: GAIA_COMMANDER_AVATAR_URL },
+      )
+      : GAIA_COMMANDER_AVATAR_URL,
     exists: Boolean(gaia),
     conversationId: gaia ? await getConversationId(options.conversationStore, gaia.id) : null,
     defaultProviderId,
@@ -230,34 +285,40 @@ async function buildGaiaStatus(
 async function buildStarterWorkforceStatus(
   options: Pick<BuildOnboardingStatusOptions, 'sessionStore' | 'commanderDataDir'>,
 ): Promise<StarterWorkforceOnboardingStatus> {
-  const packages = await Promise.all(
-    STARTER_COMMANDER_PACKAGE_IDS.map(async (packageId): Promise<StarterCommanderPackageStatus | null> => {
-      const definition = await loadCommanderPackage(packageId)
-      if (!definition) {
-        return null
-      }
-      const installState = await getCommanderPackageInstallState(definition, {
-        sessionStore: options.sessionStore,
-        commanderDataDir: options.commanderDataDir,
-      })
-      return {
-        packageId: definition.id,
-        displayName: definition.displayName,
-        role: definition.role,
-        summary: definition.summary,
-        installed: installState.installed,
-        commanderId: installState.commanderId,
-      }
-    }),
-  )
+  const [packages, onboardingState] = await Promise.all([
+    Promise.all(
+      STARTER_COMMANDER_PACKAGE_IDS.map(async (packageId): Promise<StarterCommanderPackageStatus | null> => {
+        const definition = await loadCommanderPackage(packageId)
+        if (!definition) {
+          return null
+        }
+        const installState = await getCommanderPackageInstallState(definition, {
+          sessionStore: options.sessionStore,
+          commanderDataDir: options.commanderDataDir,
+        })
+        return {
+          packageId: definition.id,
+          displayName: definition.displayName,
+          role: definition.role,
+          summary: definition.summary,
+          installed: installState.installed,
+          commanderId: installState.commanderId,
+        }
+      }),
+    ),
+    readOnboardingState(options.commanderDataDir),
+  ])
   const visiblePackages = packages.filter((entry): entry is StarterCommanderPackageStatus => Boolean(entry))
   const installedCount = visiblePackages.filter((entry) => entry.installed).length
+  const installedComplete = visiblePackages.length > 0 && installedCount === visiblePackages.length
+  const skipped = !installedComplete && onboardingState.starterWorkforceSkipped === true
 
   return {
     packages: visiblePackages,
     installedCount,
     totalCount: visiblePackages.length,
-    complete: visiblePackages.length > 0 && installedCount === visiblePackages.length,
+    skipped,
+    complete: installedComplete || skipped,
   }
 }
 
@@ -406,7 +467,7 @@ function buildSteps(args: {
     { id: 'instance', label: 'Instance ready', state: stateFor('instance'), summary: 'Local Hervald app and bootstrap admin are available.' },
     { id: 'founder-org', label: 'Founder + organization', state: stateFor('founder-org'), summary: args.founderSetup.setupComplete ? 'Founder profile and organization exist.' : 'Create the first local operator and org identity.' },
     { id: 'gaia', label: 'Gaia commander', state: stateFor('gaia'), summary: args.gaia.exists ? 'Gaia is ready to guide onboarding.' : 'Seed Gaia as the default onboarding commander.' },
-    { id: 'starter-workforce', label: 'Starter workforce', state: stateFor('starter-workforce'), summary: args.starterWorkforce.complete ? 'Starter commanders are installed.' : 'Install the bundled engineering, research, and assistant commanders.' },
+    { id: 'starter-workforce', label: 'Starter workforce', state: stateFor('starter-workforce'), summary: args.starterWorkforce.skipped ? 'Starter commanders were skipped for this install.' : args.starterWorkforce.complete ? 'Starter commanders are installed.' : 'Install the bundled engineering, research, and assistant commanders.' },
     { id: 'providers-machines', label: 'Providers + machines', state: stateFor('providers-machines'), summary: hasProviderReady && hasMachineReady ? 'At least one provider and machine are ready.' : 'Review provider CLI/auth and machine readiness.' },
     { id: 'launch', label: 'Launch', state: stateFor('launch'), summary: 'Open the org page or command room.' },
   ]
@@ -506,6 +567,14 @@ export async function seedStarterWorkforce(
     })
   }
 
+  await setStarterWorkforceSkipped(options.commanderDataDir, false)
+  return buildStarterWorkforceStatus(options)
+}
+
+export async function skipStarterWorkforce(
+  options: BuildOnboardingStatusOptions,
+): Promise<StarterWorkforceOnboardingStatus> {
+  await setStarterWorkforceSkipped(options.commanderDataDir, true)
   return buildStarterWorkforceStatus(options)
 }
 
@@ -538,6 +607,7 @@ export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaO
     mergeIdentityOperatingStyleIntoCommanderWorkflow(created.id, GAIA_IDENTITY, { basePath: options.commanderDataDir }),
     setCommanderDisplayName(options.commanderDataDir, created.id, GAIA_DISPLAY_NAME),
     writeCommanderUiProfile(created.id, options.commanderDataDir, ensureCommanderVisualProfile(created.id, {
+      avatar: GAIA_COMMANDER_AVATAR_URL,
       speakingTone: GAIA_SPEAKING_TONE,
     })),
   ]
@@ -564,6 +634,7 @@ export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaO
   return {
     commanderId: created.id,
     displayName: GAIA_DISPLAY_NAME,
+    avatarUrl: GAIA_COMMANDER_AVATAR_URL,
     exists: true,
     conversationId: conversationId ?? await getConversationId(options.conversationStore, created.id),
     defaultProviderId: created.agentType ?? providers[0]?.id ?? null,

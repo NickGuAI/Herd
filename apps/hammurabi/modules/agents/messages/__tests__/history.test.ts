@@ -52,6 +52,26 @@ describe('mapStreamEventsToMessages', () => {
     ])
   })
 
+  it('projects user display text without leaking provider-bound workspace context', () => {
+    const messages = mapStreamEventsToMessages([{
+      type: 'user',
+      subtype: 'queued_message',
+      displayText: 'Use this context.',
+      message: {
+        role: 'user',
+        content: '<workspace-files>\n@README.md\n</workspace-files>\nUse this context.',
+      },
+    } as StreamJsonEvent])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        text: 'Use this context.',
+      }),
+    ])
+    expect(messages[0]?.text).not.toContain('<workspace-')
+  })
+
   it('merges Codex completed reasoning into the active thinking row', () => {
     const started = normalizeCodexEvent('item/started', {
       item: { id: 'reasoning-1', type: 'reasoning' },

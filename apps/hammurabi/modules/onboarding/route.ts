@@ -11,6 +11,7 @@ import {
   buildOnboardingStatus,
   seedGaiaCommander,
   seedStarterWorkforce,
+  skipStarterWorkforce,
   type OnboardingShellRunner,
 } from './status.js'
 
@@ -133,6 +134,8 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
 
   router.post('/actions/seed-starter-workforce', requireWriteAccess, async (req, res) => {
     const before = await status(req)
+    const installedBefore = before.starterWorkforce.totalCount > 0 &&
+      before.starterWorkforce.installedCount === before.starterWorkforce.totalCount
     const starterWorkforce = await seedStarterWorkforce({
       user: req.user,
       operatorStore: options.operatorStore,
@@ -144,7 +147,25 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
       env: options.env,
       shellRunner: options.shellRunner,
     })
-    res.status(before.starterWorkforce.complete ? 200 : 201).json({
+    res.status(installedBefore ? 200 : 201).json({
+      starterWorkforce,
+      status: await status(req),
+    })
+  })
+
+  router.post('/actions/skip-starter-workforce', requireWriteAccess, async (req, res) => {
+    const starterWorkforce = await skipStarterWorkforce({
+      user: req.user,
+      operatorStore: options.operatorStore,
+      orgIdentityStore,
+      sessionStore: options.sessionStore,
+      conversationStore: options.conversationStore,
+      commanderDataDir: options.commanderDataDir,
+      providers: options.providerRegistry.listProviders(),
+      env: options.env,
+      shellRunner: options.shellRunner,
+    })
+    res.json({
       starterWorkforce,
       status: await status(req),
     })

@@ -2671,6 +2671,125 @@ describe("stream sessions", () => {
       }
     })
 
+  it('normalizes Codex MCP elicitation requests into answerable plan approval blocks', async () => {
+      const sidecar = installMockCodexSidecar()
+      const server = await startServer({
+        codexTurnWatchdogTimeoutMs: 40,
+      })
+
+      try {
+        sidecar.setThreadReadResult({
+          thread: {
+            id: 'thread-1',
+            turns: [
+              {
+                id: 'turn-1',
+                status: 'inProgress',
+              },
+            ],
+          },
+        })
+
+        const createResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'codex-mcp-elicitation',
+            mode: 'default',
+            transportType: 'stream',
+            agentType: 'codex',
+          }),
+        })
+        expect(createResponse.status).toBe(201)
+
+        const ws = await connectWs(server.baseUrl, 'codex-mcp-elicitation')
+        const received: Array<Record<string, unknown>> = []
+        ws.on('message', (data) => {
+          const parsed = JSON.parse(data.toString()) as Record<string, unknown>
+          if (parsed.type !== 'replay') {
+            received.push(parsed)
+          }
+        })
+
+        const sendResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-mcp-elicitation/send`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ text: 'draft the implementation plan' }),
+        })
+        expect(sendResponse.status).toBe(200)
+
+        sidecar.emitServerRequest(912, 'mcpserver/elicitation/request', {
+          threadId: 'thread-1',
+          message: 'Continue with the implementation plan?',
+          requestedSchema: {
+            type: 'object',
+            properties: {
+              response: { type: 'string', title: 'Response' },
+            },
+            required: ['response'],
+          },
+        })
+
+        await vi.waitFor(() => {
+          const planApproval = received.find((event) => event.type === 'plan_approval')
+          expect(planApproval).toEqual(expect.objectContaining({
+            toolId: 'codex-mcp-elicitation-912',
+            toolName: 'Codex MCP Elicitation',
+            plan: expect.stringContaining('Continue with the implementation plan?'),
+            providerContext: expect.objectContaining({
+              provider: 'codex',
+              answerFormat: 'codex.mcp_elicitation',
+              requestId: 912,
+            }),
+          }))
+        })
+
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        expect(received.some(
+          (event) => event.type === 'system'
+            && typeof event.text === 'string'
+            && event.text.includes('Codex turn is stale'),
+        )).toBe(false)
+
+        ws.send(JSON.stringify({
+          type: 'tool_answer',
+          toolId: 'codex-mcp-elicitation-912',
+          answers: {
+            decision: ['approve'],
+            message: ['Continue.'],
+          },
+        }))
+
+        await vi.waitFor(() => {
+          const sidecarResponse = sidecar.getResponseById(912)
+          expect(sidecarResponse?.result).toEqual({
+            action: 'accept',
+            content: {
+              response: 'Continue.',
+            },
+          })
+        })
+
+        await vi.waitFor(() => {
+          const ack = received.find(
+            (event) => event.type === 'tool_answer_ack' && event.toolId === 'codex-mcp-elicitation-912',
+          )
+          expect(ack).toBeDefined()
+        })
+
+        ws.close()
+      } finally {
+        await sidecar.closeServer()
+        await server.close()
+      }
+    })
+
   it('emits diagnostic detail in stale-turn message when watchdog fires after unclassified incoming requests', async () => {
       const sidecar = installMockCodexSidecar()
       const server = await startServer({

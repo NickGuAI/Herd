@@ -13,6 +13,7 @@ import type {
   OnboardingStepId,
   SeedGaiaOnboardingResponse,
   SeedStarterWorkforceOnboardingResponse,
+  SkipStarterWorkforceOnboardingResponse,
 } from '../contracts'
 
 const mocks = vi.hoisted(() => ({
@@ -51,6 +52,7 @@ function onboardingStatus(overrides: Partial<OnboardingStatus> = {}): Onboarding
   const gaia = overrides.gaia ?? {
     commanderId: null,
     displayName: 'Gaia',
+    avatarUrl: '/assets/commanders/gaia-profile.png',
     exists: false,
     conversationId: null,
     defaultProviderId: 'claude',
@@ -109,6 +111,7 @@ function onboardingStatus(overrides: Partial<OnboardingStatus> = {}): Onboarding
     ],
     installedCount: 0,
     totalCount: 3,
+    skipped: false,
     complete: false,
   }
   const currentStepId: OnboardingStepId = overrides.currentStepId ?? (
@@ -339,6 +342,7 @@ describe('FounderOrgSetupPage', () => {
       gaia: {
         commanderId: 'commander-gaia',
         displayName: 'Gaia',
+        avatarUrl: '/assets/commanders/gaia-profile.png',
         exists: true,
         conversationId: 'conversation-gaia',
         defaultProviderId: 'claude',
@@ -357,6 +361,7 @@ describe('FounderOrgSetupPage', () => {
         })),
         installedCount: 3,
         totalCount: 3,
+        skipped: false,
         complete: true,
       },
       launchTarget: '/command-room?commander=commander-gaia',
@@ -420,6 +425,191 @@ describe('FounderOrgSetupPage', () => {
     await vi.waitFor(() => {
       expect(document.body.querySelector('[data-testid="location"]')?.textContent).toBe('/command-room?commander=commander-gaia')
     })
+  })
+
+  it('can skip starter workforce installation and continue to provider and machine readiness', async () => {
+    const completedFounder = setupStatus({
+      setupComplete: true,
+      defaultValues: {
+        orgDisplayName: 'Gehirn Inc.',
+        founderDisplayName: 'Nick Gu',
+        founderEmail: 'nick@example.com',
+      },
+      validationErrors: {},
+      nextRoute: '/org',
+    })
+    const initialStatus = onboardingStatus({
+      currentStepId: 'starter-workforce',
+      founderSetup: completedFounder,
+      gaia: {
+        commanderId: 'commander-gaia',
+        displayName: 'Gaia',
+        avatarUrl: '/assets/commanders/gaia-profile.png',
+        exists: true,
+        conversationId: 'conversation-gaia',
+        defaultProviderId: 'claude',
+      },
+    })
+    const skippedStatus = onboardingStatus({
+      currentStepId: 'launch',
+      founderSetup: completedFounder,
+      gaia: initialStatus.gaia,
+      starterWorkforce: {
+        ...initialStatus.starterWorkforce,
+        skipped: true,
+        complete: true,
+      },
+      launchTarget: '/command-room?commander=commander-gaia',
+    })
+    let statusResponse = initialStatus
+    mocks.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/onboarding/status') {
+        return Promise.resolve(statusResponse)
+      }
+      if (url === '/api/onboarding/actions/skip-starter-workforce') {
+        statusResponse = skippedStatus
+        return Promise.resolve({
+          starterWorkforce: skippedStatus.starterWorkforce,
+          status: skippedStatus,
+        } satisfies SkipStarterWorkforceOnboardingResponse)
+      }
+      return Promise.reject(new Error(`Unexpected fetchJson URL: ${url}`))
+    })
+
+    await renderPage()
+    await vi.waitFor(() => {
+      expect(document.body.querySelector<HTMLButtonElement>('[data-testid="skip-starter-workforce-submit"]')).not.toBeNull()
+    })
+
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('[data-testid="skip-starter-workforce-submit"]')?.click()
+    })
+    await flushReact()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Providers and machines')
+      expect(document.body.querySelector('[data-testid="provider-readiness-section"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="machine-readiness-section"]')).not.toBeNull()
+    })
+    expect(mocks.fetchJson).toHaveBeenCalledWith('/api/onboarding/actions/skip-starter-workforce', expect.objectContaining({
+      method: 'POST',
+    }))
+    expect(mocks.fetchJson.mock.calls.some(([url]) => url === '/api/onboarding/actions/seed-starter-workforce')).toBe(false)
+  })
+
+  it('renders provider readiness separately from machine readiness', async () => {
+    const completedFounder = setupStatus({
+      setupComplete: true,
+      defaultValues: {
+        orgDisplayName: 'Gehirn Inc.',
+        founderDisplayName: 'Nick Gu',
+        founderEmail: 'nick@example.com',
+      },
+      validationErrors: {},
+      nextRoute: '/org',
+    })
+    mocks.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/onboarding/status') {
+        return Promise.resolve(onboardingStatus({
+          currentStepId: 'providers-machines',
+          founderSetup: completedFounder,
+          gaia: {
+            commanderId: 'commander-gaia',
+            displayName: 'Gaia',
+            avatarUrl: '/assets/commanders/gaia-profile.png',
+            exists: true,
+            conversationId: 'conversation-gaia',
+            defaultProviderId: 'claude',
+          },
+          starterWorkforce: {
+            packages: [],
+            installedCount: 3,
+            totalCount: 3,
+            skipped: false,
+            complete: true,
+          },
+        }))
+      }
+      return Promise.reject(new Error(`Unexpected fetchJson URL: ${url}`))
+    })
+
+    await renderPage()
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="provider-readiness-section"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="machine-readiness-section"]')).not.toBeNull()
+    })
+    const providerSection = document.body.querySelector('[data-testid="provider-readiness-section"]')
+    const machineSection = document.body.querySelector('[data-testid="machine-readiness-section"]')
+    expect(providerSection?.textContent).toContain('Provider readiness')
+    expect(providerSection?.querySelector('[data-testid="provider-card-claude"]')).not.toBeNull()
+    expect(providerSection?.querySelector('[data-testid="machine-card-local"]')).toBeNull()
+    expect(machineSection?.textContent).toContain('Machine readiness')
+    expect(machineSection?.querySelector('[data-testid="machine-card-local"]')).not.toBeNull()
+    expect(machineSection?.querySelector('[data-testid="provider-card-claude"]')).toBeNull()
+  })
+
+  it('renders Gaia with the bundled default headshot during onboarding', async () => {
+    mocks.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/onboarding/status') {
+        return Promise.resolve(onboardingStatus({
+          currentStepId: 'gaia',
+          founderSetup: setupStatus({
+            setupComplete: true,
+            defaultValues: {
+              orgDisplayName: 'Gehirn Inc.',
+              founderDisplayName: 'Nick Gu',
+              founderEmail: 'nick@example.com',
+            },
+            validationErrors: {},
+            nextRoute: '/org',
+          }),
+        }))
+      }
+      return Promise.reject(new Error(`Unexpected fetchJson URL: ${url}`))
+    })
+
+    await renderPage()
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector<HTMLImageElement>('[data-testid="gaia-avatar"]')?.getAttribute('src')).toBe('/assets/commanders/gaia-profile.png')
+    })
+  })
+
+  it('starts on the backend-derived next incomplete step after refresh', async () => {
+    mocks.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/onboarding/status') {
+        return Promise.resolve(onboardingStatus({
+          currentStepId: 'starter-workforce',
+          founderSetup: setupStatus({
+            setupComplete: true,
+            defaultValues: {
+              orgDisplayName: 'Gehirn Inc.',
+              founderDisplayName: 'Nick Gu',
+              founderEmail: 'nick@example.com',
+            },
+            validationErrors: {},
+            nextRoute: '/org',
+          }),
+          gaia: {
+            commanderId: 'commander-gaia',
+            displayName: 'Gaia',
+            avatarUrl: '/assets/commanders/gaia-profile.png',
+            exists: true,
+            conversationId: 'conversation-gaia',
+            defaultProviderId: 'claude',
+          },
+        }))
+      }
+      return Promise.reject(new Error(`Unexpected fetchJson URL: ${url}`))
+    })
+
+    await renderPage()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Starter workforce')
+    })
+    expect(document.body.textContent).not.toContain('Founder and organization')
   })
 
   it('shows inline validation errors and blocks invalid submission', async () => {

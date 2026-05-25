@@ -86,7 +86,8 @@ export interface PlanApprovalProviderContext {
   toolUseId: string
   toolName: string
   requestId?: string | number
-  answerFormat: 'claude.exit_plan_mode' | 'opencode.plan_decision'
+  answerFormat: 'claude.exit_plan_mode' | 'opencode.plan_decision' | 'codex.mcp_elicitation'
+  requestedSchema?: unknown
 }
 
 export interface PlanApprovalStreamEvent extends HammurabiEventBase {
@@ -107,6 +108,7 @@ export interface PlanApprovalStreamEvent extends HammurabiEventBase {
 export interface QueueEventMessage {
   id: string
   text: string
+  displayText?: string
   priority: 'high' | 'normal' | 'low'
   queuedAt: string
 }

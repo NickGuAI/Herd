@@ -871,13 +871,13 @@ export function MobileSessionShell({
                       <button
                         type="button"
                         className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-xs text-sumi-black transition-colors hover:bg-ink-wash disabled:cursor-not-allowed disabled:opacity-50"
-                        data-testid="mobile-chat-close-button"
+                        data-testid="mobile-chat-archive-button"
                         onClick={() => {
                           void handleArchive()
                         }}
                         disabled={conversationActionBusy !== null}
                       >
-                        Close
+                        Archive
                       </button>
                     )}
 

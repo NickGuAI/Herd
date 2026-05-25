@@ -7,7 +7,7 @@ import type { PromptTask } from '../memory/prompt-task.js'
 
 vi.setConfig({ testTimeout: 60_000 })
 
-describe('CommanderAgent system prompt injection', () => {
+describe('CommanderAgent system prompt bootstrap', () => {
   let tmpDir: string
   let commanderId: string
   let memoryRoot: string
@@ -27,7 +27,7 @@ describe('CommanderAgent system prompt injection', () => {
     await rm(tmpDir, { recursive: true, force: true })
   })
 
-  it('injects memory context for task pickup', async () => {
+  it('builds startup bootstrap with discovery pointers instead of memory bodies', async () => {
     const issue: PromptTask = {
       number: 77,
       title: 'Fix auth bug',
@@ -44,10 +44,19 @@ describe('CommanderAgent system prompt injection', () => {
       {
         currentTask: issue,
         recentConversation: [{ role: 'user', content: 'Please handle this quickly.' }],
+        mode: 'startup',
       },
     )
 
     expect(taskPickup.systemPrompt).toContain('You are the commander system.')
+    expect(taskPickup.systemPrompt).toContain('# Global Rules Bootstrap')
+    expect(taskPickup.systemPrompt).toContain('~/.hammurabi/global-rules/USER.md')
+    expect(taskPickup.systemPrompt).toContain('~/.hammurabi/global-rules/WORKSPACE.md')
+    expect(taskPickup.systemPrompt).toContain('~/.hammurabi/global-rules/SKILLS_INDEX.md')
+    expect(taskPickup.systemPrompt).toContain('# Shared Knowledge Bootstrap')
+    expect(taskPickup.systemPrompt).toContain('~/.hammurabi/shared-knowledge/DOCTRINES.md')
+    expect(taskPickup.systemPrompt).toContain('~/.hammurabi/shared-knowledge/COMMANDER_GUIDE.md')
+    expect(taskPickup.systemPrompt).toContain('~/.hammurabi/shared-knowledge/LEARNINGS.md')
     expect(taskPickup.systemPrompt).toContain('# Hammurabi Quest Board')
     expect(taskPickup.systemPrompt).toContain(`hammurabi quests list --commander ${commanderId}`)
     expect(taskPickup.systemPrompt).not.toContain('\nhammurabi quests list\n')
@@ -60,13 +69,23 @@ describe('CommanderAgent system prompt injection', () => {
     expect(taskPickup.systemPrompt).toContain(`hammurabi commander transcripts search --commander ${commanderId} "<query>"`)
     expect(taskPickup.systemPrompt).not.toContain(`hammurabi memory find --commander ${commanderId}`)
     expect(taskPickup.systemPrompt).not.toContain(`hammurabi memory compact --commander ${commanderId}`)
-    expect(taskPickup.systemPrompt).toContain('leave cleanup to external cron + skill orchestration')
+    expect(taskPickup.systemPrompt).toContain('Leave memory cleanup/consolidation to the external cron + skill pipeline')
     expect(taskPickup.systemPrompt).toContain('## Commander Memory')
+    expect(taskPickup.systemPrompt).toContain('### Progressive Memory Discovery')
+    expect(taskPickup.systemPrompt).toContain('.memory/MEMORY.md')
+    expect(taskPickup.systemPrompt).toContain('.memory/LONG_TERM_MEM.md')
+    expect(taskPickup.systemPrompt).toContain('.memory/working-memory.md')
+    expect(taskPickup.systemPrompt).not.toContain('Prefer deterministic fixes.')
+    expect(taskPickup.systemPrompt).not.toContain('Please handle this quickly.')
     expect(taskPickup.memorySection).toBe(taskPickup.systemPromptSection)
     expect(taskPickup.memorySection).toContain('## Commander Memory')
+    expect(taskPickup.memorySection).toContain('### Progressive Memory Discovery')
     expect(taskPickup.memorySection).not.toContain('You are the commander system.')
+    expect(taskPickup.memorySection).not.toContain('# Global Rules Bootstrap')
+    expect(taskPickup.memorySection).not.toContain('# Shared Knowledge Bootstrap')
     expect(taskPickup.memorySection).not.toContain('# Hammurabi Quest Board')
     expect(taskPickup.memorySection).not.toContain('# Commander Memory Workflow')
+    expect(taskPickup.memorySection).not.toContain('Prefer deterministic fixes.')
     expect(taskPickup.layersIncluded).toContain(1)
     expect(taskPickup.layersIncluded).toContain(2)
   })

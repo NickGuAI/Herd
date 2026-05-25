@@ -23,6 +23,7 @@ interface MemoryContextCacheKeyParts {
   commanderId: string
   currentTaskId: string
   tokenBudget: number
+  mode: string
   recentConversationKey: string
   memoryMtimeKey: string
 }
@@ -81,6 +82,7 @@ function toCacheKey(parts: MemoryContextCacheKeyParts): string {
     parts.commanderId,
     parts.currentTaskId,
     String(parts.tokenBudget),
+    parts.mode,
     parts.recentConversationKey,
     parts.memoryMtimeKey,
   ].join('::')

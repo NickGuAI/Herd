@@ -158,6 +158,19 @@ describe('install script route', () => {
 })
 
 describe('installer prompt helpers', () => {
+  it('points first boot, receipt fallback, and next steps at browser onboarding', async () => {
+    const scriptContents = await readFile(new URL('../../../install.sh', import.meta.url), 'utf8')
+
+    expect(scriptContents).toContain('local login_url="http://localhost:${port}/welcome"')
+    expect(scriptContents).toContain(
+      'print_receipt_line "URL" "${INSTALL_LOGIN_URL:-http://localhost:${PORT:-$DEFAULT_PORT}/welcome}"',
+    )
+    expect(scriptContents).toContain(
+      'Complete browser onboarding, then create a permanent API key in Settings and rotate or revoke the bootstrap key.',
+    )
+    expect(scriptContents).not.toMatch(/localhost:\$\{[^}]+}\/org/)
+  })
+
   it('treats shells without a controlling tty as non-interactive', async () => {
     if (!(await commandExists('setsid'))) {
       return

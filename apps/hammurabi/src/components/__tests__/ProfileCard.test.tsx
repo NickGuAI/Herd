@@ -119,4 +119,27 @@ describe('ProfileCard', () => {
     expect(document.body.querySelector('.hv-profile-card-name')).toBeNull()
     expect(document.body.querySelector('.hv-profile-card-title')).toBeNull()
   })
+
+  it('renders stale Gaia svg avatar URLs through the regenerated png asset', async () => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    flushSync(() => {
+      root?.render(
+        <ProfileCard
+          avatarUrl="/assets/commanders/gaia-profile.svg"
+          miniAvatarUrl="/assets/commanders/gaia-profile.svg"
+          name="Gaia"
+          title="Commander"
+          handle="@gaia"
+          status="Idle"
+          data-testid="commander-tile"
+        />,
+      )
+    })
+
+    expect(document.body.querySelector<HTMLImageElement>('.hv-profile-card-portrait img')?.getAttribute('src')).toBe('/assets/commanders/gaia-profile.png')
+    expect(document.body.querySelector<HTMLImageElement>('.hv-profile-card-mini-avatar img')?.getAttribute('src')).toBe('/assets/commanders/gaia-profile.png')
+  })
 })

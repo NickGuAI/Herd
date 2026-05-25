@@ -42,6 +42,7 @@ import type {
   CompletedSession,
   ExitedStreamSessionState,
   MachineConfig,
+  PromptAudit,
   StreamSessionAdapter,
   StreamJsonEvent,
   StreamSession,
@@ -101,12 +102,62 @@ function buildUserEvent(
   text: string,
   images?: QueuedMessageImage[],
   subtype?: string,
+  displayText?: string,
 ): StreamJsonEvent {
   return {
     type: 'user',
     ...(subtype ? { subtype } : {}),
+    ...(displayText !== undefined ? { displayText: displayText.trim() } : {}),
     message: { role: 'user', content: buildPromptContent(text, images) },
   } as unknown as StreamJsonEvent
+}
+
+const DEFAULT_CLAUDE_APPEND_PROMPT_MAX_BYTES = 96 * 1024
+
+function estimatePromptTokens(prompt: string): number {
+  return Math.ceil(prompt.length / 4)
+}
+
+function resolveClaudeAppendPromptMaxBytes(env: NodeJS.ProcessEnv): number {
+  const raw = env.HAMMURABI_CLAUDE_APPEND_PROMPT_MAX_BYTES?.trim()
+  if (!raw) {
+    return DEFAULT_CLAUDE_APPEND_PROMPT_MAX_BYTES
+  }
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_CLAUDE_APPEND_PROMPT_MAX_BYTES
+}
+
+function extractPromptSections(prompt: string): string[] {
+  return prompt
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter((line) => /^#{1,3}\s+\S/.test(line))
+    .map((line) => line.replace(/^#{1,3}\s+/, '').trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 80)
+}
+
+export function buildClaudePromptAudit(
+  prompt: string,
+  env: NodeJS.ProcessEnv = process.env,
+): PromptAudit {
+  const byteLength = Buffer.byteLength(prompt, 'utf8')
+  const maxBytes = resolveClaudeAppendPromptMaxBytes(env)
+  if (byteLength > maxBytes) {
+    throw new Error(
+      `Claude append prompt is ${byteLength} bytes, exceeding HAMMURABI_CLAUDE_APPEND_PROMPT_MAX_BYTES=${maxBytes}; memory contents must be discovered progressively instead of injected.`,
+    )
+  }
+  return {
+    transport: 'append-system-prompt-file',
+    source: 'hammurabi-commander-bootstrap',
+    byteLength,
+    tokenEstimate: estimatePromptTokens(prompt),
+    maxBytes,
+    sections: extractPromptSections(prompt),
+  }
 }
 
 export function createClaudeSessionAdapter(
@@ -126,6 +177,7 @@ export function createClaudeSessionAdapter(
         }
         const { message, position } = session.messageQueue.enqueue({
           text,
+          displayText: options?.displayText,
           images: normalizedImages,
           priority: 'normal',
         })
@@ -142,8 +194,9 @@ export function createClaudeSessionAdapter(
       }
 
       deps.resetActiveTurnState(session)
-      deps.appendEvent(session, userEvent)
-      deps.broadcastEvent(session, userEvent)
+      const displayEvent = buildUserEvent(text, normalizedImages, options?.userEventSubtype, options?.displayText)
+      deps.appendEvent(session, displayEvent)
+      deps.broadcastEvent(session, displayEvent)
       return { ok: true, delivered: 'live' }
     },
   }
@@ -173,10 +226,14 @@ export function createClaudeStreamSession(
   const remote = isRemoteMachine(machine)
   const daemon = isDaemonMachine(machine)
   const settingsJson = buildClaudeApprovalSettingsJson()
+  const appendSystemPrompt = options.systemPrompt?.trim()
+  const promptAudit = appendSystemPrompt
+    ? buildClaudePromptAudit(appendSystemPrompt)
+    : undefined
   const args = buildClaudeStreamArgs(
     mode,
     options.resumeSessionId,
-    options.systemPrompt,
+    undefined,
     options.maxTurns,
     effort,
     settingsJson,
@@ -189,7 +246,7 @@ export function createClaudeStreamSession(
   const preparedLaunch = daemon
     ? prepareDaemonMachineLaunchEnvironment(machine)
     : prepareMachineLaunchEnvironment(machine, process.env)
-  const remoteClaude = buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens)
+  const remoteClaude = buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)
   const remoteStreamCmd = buildLoginShellCommand(
     remoteClaude,
     requestedCwd,
@@ -202,6 +259,7 @@ export function createClaudeStreamSession(
     requestedCwd,
     preparedLaunch.sourcedEnvFile,
     process.env.SHELL,
+    appendSystemPrompt,
   )
   // Remote Claude needs the EC2 approval daemon reachable on the remote machine
   // for every PreToolUse hook call. SSH does not propagate spawn env by default,
@@ -277,6 +335,7 @@ export function createClaudeStreamSession(
     createdAt: options.createdAt ?? initializedAt,
     lastEventAt: initializedAt,
     systemPrompt: options.systemPrompt,
+    promptAudit,
     maxTurns: options.maxTurns,
     model: options.model,
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },

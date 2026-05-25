@@ -88,16 +88,19 @@ interface SessionControlRouteDeps {
     session: StreamSession,
     text: string,
     images?: QueuedMessageImage[],
+    displayText?: string,
   ): Promise<ImmediateSendResult>
   queueTextToStreamSession(
     session: StreamSession,
     text: string,
     images?: QueuedMessageImage[],
+    displayText?: string,
   ): Promise<{ ok: true; message: QueuedMessage; position: number } | { ok: false; status: number; error: string }>
   createQueuedMessage(
     text: string,
     priority: QueuedMessagePriority,
     images?: QueuedMessageImage[],
+    displayText?: string,
   ): QueuedMessage
   enqueueQueuedMessage(session: StreamSession, message: QueuedMessage): QueueMutationResult
   getQueueSnapshot(session: StreamSession): SessionQueueSnapshot
@@ -168,7 +171,7 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
       return
     }
 
-    const result = await deps.sendImmediateTextToStreamSession(session, messageText)
+    const result = await deps.sendImmediateTextToStreamSession(session, messageText, undefined, text)
     if (!result.ok) {
       const isQueueBackpressure = deps.isQueueBackpressureError(result.error)
       res.status(isQueueBackpressure ? 409 : 503).json({
@@ -229,7 +232,7 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
     }
 
     if (req.query.queue === 'true') {
-      const queued = await deps.queueTextToStreamSession(session, messageText, images)
+      const queued = await deps.queueTextToStreamSession(session, messageText, images, text)
       if (!queued.ok) {
         res.status(queued.status).json({ error: queued.error })
         return
@@ -239,7 +242,7 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
       return
     }
 
-    const result = await deps.sendImmediateTextToStreamSession(session, messageText, images)
+    const result = await deps.sendImmediateTextToStreamSession(session, messageText, images, text)
     if (!result.ok) {
       const isQueueBackpressure = deps.isQueueBackpressureError(result.error)
       res.status(isQueueBackpressure ? 409 : 503).json({

@@ -99,6 +99,7 @@ interface MockSessionsFixture {
   sendCalls: Array<{
     name: string
     text: string
+    displayText?: string
     images?: QueuedMessageImage[]
     options?: {
       queue?: boolean
@@ -307,13 +308,26 @@ function createMockSessionsInterface(
         ? { text: payload }
         : payload
       const images = normalized.images && normalized.images.length > 0 ? [...normalized.images] : undefined
+      const displayText = normalized.displayText !== undefined ? normalized.displayText.trim() : undefined
       sendCalls.push(options
-        ? { name, text: normalized.text, images, options }
-        : { name, text: normalized.text, images })
+        ? {
+            name,
+            text: normalized.text,
+            ...(displayText !== undefined ? { displayText } : {}),
+            images,
+            options,
+          }
+        : {
+            name,
+            text: normalized.text,
+            ...(displayText !== undefined ? { displayText } : {}),
+            images,
+          })
       const active = activeSessions.get(name)
       if (active) {
         active.events.push({
           type: 'user',
+          ...(displayText !== undefined ? { displayText } : {}),
           message: {
             role: 'user',
             content: images
@@ -993,11 +1007,29 @@ describe('conversation routes', () => {
             name?: string
           } | null
         }
+        messagePage?: {
+          conversationId: string
+          source: string
+          messages: Array<{ kind: string; text: string }>
+        }
       }
       expect(firstMessage.accepted).toBe(true)
       expect(firstMessage.createdSession).toBe(false)
       expect(firstMessage.conversation.liveSession?.name).toContain(`-conversation-${CONVERSATION_A}`)
+      expect(firstMessage.messagePage).toEqual(expect.objectContaining({
+        conversationId: CONVERSATION_A,
+        source: 'live',
+      }))
+      expect(firstMessage.messagePage?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'user',
+            text: 'Plan phase 1 and continue.',
+          }),
+        ]),
+      )
       expect(sessions.createCalls).toHaveLength(1)
+      expect(sessions.sendCalls.at(-1)?.options).toBeUndefined()
 
       const secondMessageResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
         method: 'POST',
@@ -1035,10 +1067,23 @@ describe('conversation routes', () => {
         }),
       })
       expect(workspaceContextResponse.status).toBe(200)
+      const workspaceContextBody = await workspaceContextResponse.json() as {
+        messagePage?: {
+          messages: Array<{ kind: string; text: string }>
+        }
+      }
       expect(sessions.sendCalls.at(-1)?.text).toContain('<workspace-files>')
       expect(sessions.sendCalls.at(-1)?.text).toContain('@README.md')
       expect(sessions.sendCalls.at(-1)?.text).toContain('Explain the workspace heading.')
       expect(sessions.sendCalls.at(-1)?.text).toContain('Use this context.')
+      expect(sessions.sendCalls.at(-1)?.displayText).toBe('Use this context.')
+      const workspaceUserMessages = workspaceContextBody.messagePage?.messages.filter(
+        (entry) => entry.kind === 'user' && entry.text === 'Use this context.',
+      ) ?? []
+      expect(workspaceUserMessages).toHaveLength(1)
+      expect(workspaceContextBody.messagePage?.messages.some((entry) =>
+        entry.kind === 'user' && entry.text.includes('<workspace-'),
+      )).toBe(false)
 
       const missingTargetContextResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
         method: 'POST',

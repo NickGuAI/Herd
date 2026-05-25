@@ -434,7 +434,7 @@ describe('MobileSessionShell', () => {
       expectSemanticMenuButton(findButtonByText('Workspace'))
       expectSemanticMenuButton(document.body.querySelector('[data-testid="mobile-chat-rename-button"]'))
       expect(document.body.querySelector('[data-testid="mobile-chat-provider-menu-button"]')).toBeNull()
-      expectSemanticMenuButton(document.body.querySelector('[data-testid="mobile-chat-close-button"]'))
+      expectSemanticMenuButton(document.body.querySelector('[data-testid="mobile-chat-archive-button"]'))
       expectSemanticMenuButton(findButtonByText('Stop chat'))
 
       const backToOrg = findButtonByText('Back to Org')
@@ -721,7 +721,7 @@ describe('MobileSessionShell', () => {
     expect(onStopConversation).toHaveBeenCalledWith('conv-1')
   })
 
-  it('exposes Rename, Provider / model, Close, and Remove inside the drawer for idle chats', async () => {
+  it('exposes Rename, Provider / model, Archive, and Remove inside the drawer for idle chats', async () => {
     renderShell({
       conversation: buildConversation({ status: 'idle' }),
       onRenameConversation: vi.fn(async () => undefined),
@@ -736,7 +736,7 @@ describe('MobileSessionShell', () => {
 
     expect(document.body.querySelector('[data-testid="mobile-chat-rename-button"]')?.textContent).toContain('Rename')
     expect(document.body.querySelector('[data-testid="mobile-chat-provider-menu-button"]')?.textContent).toContain('Provider / model')
-    expect(document.body.querySelector('[data-testid="mobile-chat-close-button"]')?.textContent).toContain('Close')
+    expect(document.body.querySelector('[data-testid="mobile-chat-archive-button"]')?.textContent).toContain('Archive')
     expect(document.body.querySelector('[data-testid="mobile-chat-remove-button"]')?.textContent).toContain('Remove')
   })
 

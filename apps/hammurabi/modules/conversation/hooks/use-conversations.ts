@@ -143,6 +143,7 @@ interface ConversationMessageResponse {
   accepted: boolean
   createdSession: boolean
   conversation: ConversationRecord
+  messagePage?: ConversationMessagesPage
 }
 
 export interface ConversationMessagesPage {
@@ -155,6 +156,11 @@ export interface ConversationMessagesPage {
   hasMore: boolean
   totalMessages: number
   messages: MsgItem[]
+}
+
+interface ConversationMessagesInfiniteData {
+  pages: ConversationMessagesPage[]
+  pageParams: unknown[]
 }
 
 interface StartConversationResponse {
@@ -214,6 +220,66 @@ export function sortConversations(conversations: readonly ConversationRecord[]):
 
     return left.id.localeCompare(right.id)
   })
+}
+
+function conversationReadinessRank(conversation: ConversationRecord | null | undefined): number {
+  if (!conversation) {
+    return -1
+  }
+  if (
+    conversation.websocketReady === true ||
+    conversation.displayState?.websocketReady === true ||
+    conversation.allowedActions?.send === true
+  ) {
+    return 4
+  }
+  if (conversation.runtimeState === 'active' || conversation.status === 'active') {
+    return 3
+  }
+  if (conversation.runtimeState === 'starting') {
+    return 2
+  }
+  if (conversation.runtimeState === 'failed') {
+    return 1
+  }
+  return 0
+}
+
+function timestampMs(value: string | null | undefined): number {
+  if (!value) {
+    return 0
+  }
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function conversationFreshnessMs(conversation: ConversationRecord): number {
+  return Math.max(
+    timestampMs(conversation.lastMessageAt),
+    timestampMs(conversation.createdAt),
+  )
+}
+
+function selectConversationCandidate(
+  detail: ConversationRecord | null | undefined,
+  list: ConversationRecord | null | undefined,
+): ConversationRecord | null {
+  if (!detail) {
+    return list ?? null
+  }
+  if (!list) {
+    return detail
+  }
+
+  const detailRank = conversationReadinessRank(detail)
+  const listRank = conversationReadinessRank(list)
+  if (listRank > detailRank) {
+    return list
+  }
+  if (detailRank > listRank) {
+    return detail
+  }
+  return conversationFreshnessMs(list) > conversationFreshnessMs(detail) ? list : detail
 }
 
 export function commanderConversationsQueryKey(commanderId: string) {
@@ -403,9 +469,31 @@ export function upsertConversationList(
   return sortConversations([...withoutPrevious, nextConversation])
 }
 
+function updateConversationMessagePageCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  messagePage: ConversationMessagesPage,
+) {
+  queryClient.setQueryData(
+    conversationMessagesQueryKey(messagePage.conversationId),
+    (current: ConversationMessagesInfiniteData | undefined) => ({
+      pages: [
+        messagePage,
+        ...(current?.pages.slice(1) ?? []),
+      ],
+      pageParams: [
+        null,
+        ...(current?.pageParams.slice(1) ?? []),
+      ],
+    }),
+  )
+}
+
 function updateConversationCaches(
   queryClient: ReturnType<typeof useQueryClient>,
   conversation: ConversationRecord,
+  options: {
+    messagePage?: ConversationMessagesPage
+  } = {},
 ) {
   queryClient.setQueryData(
     conversationDetailQueryKey(conversation.id),
@@ -419,9 +507,13 @@ function updateConversationCaches(
   void queryClient.invalidateQueries({
     queryKey: commanderActiveConversationQueryKey(conversation.commanderId),
   })
-  void queryClient.invalidateQueries({
-    queryKey: conversationMessagesQueryKey(conversation.id),
-  })
+  if (options.messagePage) {
+    updateConversationMessagePageCache(queryClient, options.messagePage)
+  } else {
+    void queryClient.invalidateQueries({
+      queryKey: conversationMessagesQueryKey(conversation.id),
+    })
+  }
 }
 
 function removeConversationCaches(
@@ -479,9 +571,9 @@ export function useConversations(
     () => listQuery.data ? sortConversations(listQuery.data) : [],
     [listQuery.data],
   )
-  const selectedConversation = detailQuery.data
-    ?? conversations.find((conversation) => conversation.id === safeSelectedConversationId)
-    ?? null
+  const selectedConversationFromList =
+    conversations.find((conversation) => conversation.id === safeSelectedConversationId) ?? null
+  const selectedConversation = selectConversationCandidate(detailQuery.data, selectedConversationFromList)
 
   return {
     conversations,
@@ -544,8 +636,8 @@ export function useConversationMessage() {
 
   return useMutation({
     mutationFn: postConversationMessage,
-    onSuccess: ({ conversation }) => {
-      updateConversationCaches(queryClient, conversation)
+    onSuccess: ({ conversation, messagePage }) => {
+      updateConversationCaches(queryClient, conversation, { messagePage })
     },
   })
 }

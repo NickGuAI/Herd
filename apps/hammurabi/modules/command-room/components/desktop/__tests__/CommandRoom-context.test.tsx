@@ -419,6 +419,10 @@ describe('CommandRoom context file wiring', () => {
     })
 
     await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    })
+
+    await act(async () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))
       await Promise.resolve()
     })

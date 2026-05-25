@@ -137,6 +137,9 @@ function parseQueuedMessage(value: unknown): QueuedMessage | null {
 
   const id = typeof message.id === 'string' ? message.id.trim() : ''
   const text = typeof message.text === 'string' ? message.text : ''
+  const displayText = typeof message.displayText === 'string'
+    ? message.displayText.trim()
+    : undefined
   const priority = message.priority === 'high' || message.priority === 'low'
     ? message.priority
     : (message.priority === 'normal' ? 'normal' : null)
@@ -165,6 +168,7 @@ function parseQueuedMessage(value: unknown): QueuedMessage | null {
   return {
     id,
     text,
+    ...(displayText !== undefined ? { displayText } : {}),
     images: images.length > 0 ? images : undefined,
     priority,
     queuedAt,

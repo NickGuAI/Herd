@@ -1,5 +1,9 @@
 import { aggregateCommanderWorldAgentSource } from '../agents/session/state.js'
 import type { Automation } from '../automations/types.js'
+import {
+  DEFAULT_COMMANDER_AVATAR_URL,
+  GAIA_COMMANDER_AVATAR_URL,
+} from '../commanders/commander-profile.js'
 import { FOUNDER_OPERATOR_NOT_FOUND_ERROR } from '../operators/constants.js'
 import type { Operator } from '../operators/types.js'
 import type {
@@ -155,11 +159,15 @@ export async function buildOrgTree({
       conversations = []
     }
 
-    const [quests, avatarUrl, profile] = await Promise.all([
+    const [quests, rawAvatarUrl, profile] = await Promise.all([
       questStore.list(commander.id),
       profileStore.getAvatarUrl(commander.id),
       profileStore.getProfile(commander.id),
     ])
+    const avatarUrl = commander.templateId === 'gaia-onboarding'
+      && rawAvatarUrl === DEFAULT_COMMANDER_AVATAR_URL
+      ? GAIA_COMMANDER_AVATAR_URL
+      : rawAvatarUrl
 
     const worldAgentSource = aggregateCommanderWorldAgentSource(conversations)
     const questsInFlight = countQuestsInFlight(quests)

@@ -25,10 +25,10 @@ export function normalizeQueueSnapshot(snapshot?: SessionQueueSnapshot | null): 
 }
 
 export function formatQueuePreview(
-  value: string | Pick<QueuedMessage, 'text' | 'images'>,
+  value: string | Pick<QueuedMessage, 'text' | 'displayText' | 'images'>,
   maxLength = 96,
 ): string {
-  const text = typeof value === 'string' ? value : value.text
+  const text = typeof value === 'string' ? value : (value.displayText ?? value.text)
   const imageCount = typeof value === 'string' ? 0 : (value.images?.length ?? 0)
   const normalized = text.replace(/\s+/g, ' ').trim()
   const imageLabel = imageCount > 0

@@ -42,10 +42,12 @@ export interface AgentsWebSocketContext {
     session: StreamSession,
     text: string,
     images?: { mediaType: string; data: string }[],
+    displayText?: string,
   ): Promise<{ ok: true } | { ok: false; error: string }>
   getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   writeToStdin(session: StreamSession, data: string): boolean
   appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void
+  scheduleTurnWatchdog?: (session: StreamSession) => void
   schedulePersistedSessionsWrite(): void
 }
 
@@ -88,6 +90,7 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
     getWorkspaceResolver,
     writeToStdin,
     appendStreamEvent,
+    scheduleTurnWatchdog,
     schedulePersistedSessionsWrite,
   } = ctx
 
@@ -209,6 +212,7 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
                     liveSession,
                     inputText,
                     validImages,
+                    rawInputText,
                   )
                   if (!immediateResult.ok) {
                     if (!hasLatestSystemEvent(liveSession, immediateResult.error)) {
@@ -220,7 +224,7 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
                     }
                   }
                 } // end if (inputText || validImages.length > 0)
-              } else if (msg.type === 'tool_answer' && msg.toolId && msg.answers && !readCodexThreadId(liveSession)) {
+              } else if (msg.type === 'tool_answer' && msg.toolId && msg.answers) {
                 const planApproval = findPlanApprovalEvent(liveSession, msg.toolId)
                 if (planApproval) {
                   const answers = msg.answers as ToolAnswerMap
@@ -244,8 +248,16 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
 
                   appendStreamEvent(liveSession, result.payload)
                   broadcastStreamEvent(liveSession, result.payload)
+                  if (readCodexThreadId(liveSession) && !liveSession.lastTurnCompleted) {
+                    scheduleTurnWatchdog?.(liveSession)
+                  }
                   schedulePersistedSessionsWrite()
                   ws.send(JSON.stringify({ type: 'tool_answer_ack', toolId: msg.toolId }))
+                  return
+                }
+
+                if (readCodexThreadId(liveSession)) {
+                  ws.send(JSON.stringify({ type: 'tool_answer_error', toolId: msg.toolId }))
                   return
                 }
 

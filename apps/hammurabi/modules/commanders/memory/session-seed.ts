@@ -50,6 +50,7 @@ export async function buildCommanderSessionSeedFromResolvedWorkflow(
     {
       currentTask: toPromptTaskFromTaskContext(params.currentTask, params.taskSource),
       recentConversation: [],
+      mode: 'startup',
     },
   )
 

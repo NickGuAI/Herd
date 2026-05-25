@@ -38,16 +38,19 @@ import type {
   ExitedStreamSessionState,
   MachineConfig,
   StreamSessionAdapter,
+  StreamDispatchOptions,
   StreamJsonEvent,
   StreamSession,
 } from '../../types.js'
 import {
   buildCodexApprovalMissingIdSystemEvent,
+  buildCodexMcpElicitationPlanApprovalEvent,
   clearCodexPendingApprovalByItemId,
   getCodexApprovalRequestDetails,
   getCodexApprovalToolCall,
   getCodexCompletedItemId,
   isCodexApprovalLikeMethod,
+  isCodexMcpElicitationMethod,
   markCodexTurnHealthy,
   parseCodexSidecarError,
   parseCodexApprovalMethod,
@@ -649,7 +652,7 @@ export async function sendTextToCodexSession(
     | 'setCompletedSession'
     | 'setExitedSession'
   >,
-  options: { userEventSubtype?: string } = {},
+  options: StreamDispatchOptions = {},
   images?: QueuedMessageImage[],
 ): Promise<CodexSendAttemptResult> {
   const pendingRecovery = codexTransportRecoveryPromises.get(session)
@@ -701,6 +704,7 @@ export async function sendTextToCodexSession(
   const userEvent: StreamJsonEvent = {
     type: 'user',
     ...(options.userEventSubtype ? { subtype: options.userEventSubtype } : {}),
+    ...(options.displayText !== undefined ? { displayText: options.displayText.trim() } : {}),
     message: { role: 'user', content: buildCodexUserEventContent(text, images) },
   } as unknown as StreamJsonEvent
   deps.appendEvent(session, userEvent)
@@ -735,6 +739,7 @@ export function createCodexSessionAdapter(
         }
         const { message, position } = session.messageQueue.enqueue({
           text,
+          displayText: options?.displayText,
           images: normalizedImages,
           priority: 'normal',
         })
@@ -848,6 +853,33 @@ async function createCodexSessionFromThread(
         clearCodexActiveTurnId(session)
         deps.schedulePersistedSessionsWrite()
       }
+    }
+
+    if (isCodexMcpElicitationMethod(method)) {
+      if (typeof requestId !== 'number') {
+        runtime.log('warn', 'Codex MCP elicitation request missing JSON-RPC id', {
+          sessionName: session.name,
+          threadId,
+          method,
+        })
+        const missingIdEvent: StreamJsonEvent = {
+          type: 'system',
+          text: 'Codex requested MCP user input, but the request id was missing. This request cannot be resolved from Hammurabi.',
+        }
+        deps.appendEvent(session, missingIdEvent)
+        deps.broadcastEvent(session, missingIdEvent)
+        deps.schedulePersistedSessionsWrite()
+        return
+      }
+
+      deps.clearTurnWatchdog(session)
+      markCodexTurnHealthy(session)
+
+      const planApprovalEvent = buildCodexMcpElicitationPlanApprovalEvent(requestId, params)
+      deps.appendEvent(session, planApprovalEvent)
+      deps.broadcastEvent(session, planApprovalEvent)
+      deps.schedulePersistedSessionsWrite()
+      return
     }
 
     const approvalMethod = parseCodexApprovalMethod(method)

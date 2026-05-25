@@ -23,6 +23,7 @@ import {
 } from '../choose-heartbeat-mode.js'
 import {
   profileForApiResponse,
+  GAIA_COMMANDER_AVATAR_URL,
   readCommanderUiProfile,
   resolveCommanderAvatarUrl,
 } from '../commander-profile.js'
@@ -1423,7 +1424,9 @@ export function buildCommandersContext(
     return {
       ...payload,
       ui: profileForApiResponse(commanderId, profile),
-      avatarUrl: await resolveCommanderAvatarUrl(commanderId, commanderBasePath, profile),
+      avatarUrl: await resolveCommanderAvatarUrl(commanderId, commanderBasePath, profile, {
+        defaultAvatarUrl: payload.host === 'gaia' ? GAIA_COMMANDER_AVATAR_URL : undefined,
+      }),
     }
   }
 

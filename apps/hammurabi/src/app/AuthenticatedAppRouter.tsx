@@ -1,7 +1,7 @@
 import { Suspense, lazy, useMemo, type ComponentType, type LazyExoticComponent } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { FOUNDER_SETUP_PATH } from '@modules/onboarding/contracts'
-import { useFounderSetupStatus } from '@modules/onboarding/hooks/useFounderOnboarding'
+import { FOUNDER_SETUP_PATH, type OnboardingStatus } from '@modules/onboarding/contracts'
+import { useOnboardingStatus } from '@modules/onboarding/hooks/useFounderOnboarding'
 import { bindFrontendGraphToStaticBindings } from '@/module-graph-bindings'
 import { useModuleGraph } from '@/hooks/use-module-graph'
 import { ModuleGraphProvider } from '@/module-graph-context'
@@ -46,6 +46,14 @@ function StartupError({
   )
 }
 
+function requiresInitialOnboardingGate(status: OnboardingStatus): boolean {
+  return (
+    !status.founderSetup.setupComplete ||
+    !status.gaia.exists ||
+    !status.starterWorkforce.complete
+  )
+}
+
 export function AuthenticatedAppRouter({
   componentBindings,
   moduleGraph,
@@ -76,14 +84,14 @@ export function AuthenticatedAppRouter({
     () => (onboardingModule ? lazy(onboardingModule.component) : null),
     [onboardingModule],
   )
-  const founderSetup = useFounderSetupStatus()
+  const onboarding = useOnboardingStatus()
 
-  if (founderSetup.error) {
+  if (onboarding.error) {
     return (
       <StartupError
-        error={founderSetup.error as Error}
+        error={onboarding.error as Error}
         onRetry={() => {
-          void founderSetup.refetch()
+          void onboarding.refetch()
         }}
       />
     )
@@ -100,7 +108,7 @@ export function AuthenticatedAppRouter({
     )
   }
 
-  if (!graph || !boundGraph || founderSetup.isLoading || !founderSetup.data) {
+  if (!graph || !boundGraph || onboarding.isLoading || !onboarding.data) {
     return <Loading />
   }
 
@@ -108,46 +116,50 @@ export function AuthenticatedAppRouter({
     throw new Error(`Onboarding route "${FOUNDER_SETUP_PATH}" is not registered`)
   }
 
-  if (!founderSetup.data.setupComplete) {
-    const setupRoutePath = founderSetup.data.nextRoute
+  if (requiresInitialOnboardingGate(onboarding.data)) {
     return (
       <ModuleGraphProvider graph={graph}>
         <Suspense fallback={<Loading />}>
           <Routes>
-            <Route path={`${setupRoutePath}/*`} element={<OnboardingPage />} />
-            <Route path="*" element={<Navigate to={setupRoutePath} replace />} />
+            <Route path={`${FOUNDER_SETUP_PATH}/*`} element={<OnboardingPage />} />
+            <Route path="*" element={<Navigate to={FOUNDER_SETUP_PATH} replace />} />
           </Routes>
         </Suspense>
       </ModuleGraphProvider>
     )
   }
 
-  const completedSetupRoutePath = founderSetup.data.nextRoute || defaultRoutePath
-
   return (
     <ModuleGraphProvider graph={graph}>
-      <Shell modules={boundGraph.nav}>
-        <Suspense fallback={<Loading />}>
-          <Routes>
-            <Route path="/" element={<Navigate to={completedSetupRoutePath} replace />} />
-            <Route path={FOUNDER_SETUP_PATH} element={<Navigate to={completedSetupRoutePath} replace />} />
-            {boundGraph.redirects.map((redirect) => (
-              <Route
-                key={redirect.id}
-                path={redirect.from}
-                element={<Navigate to={redirect.to} replace />}
-              />
-            ))}
-            {shellModuleRoutes.map((route) => (
-              <Route
-                key={route.path}
-                path={`${route.path}/*`}
-                element={<route.Component />}
-              />
-            ))}
-          </Routes>
-        </Suspense>
-      </Shell>
+      <Suspense fallback={<Loading />}>
+        <Routes>
+          <Route path={FOUNDER_SETUP_PATH} element={<OnboardingPage />} />
+          <Route
+            path="/*"
+            element={(
+              <Shell modules={boundGraph.nav}>
+                <Routes>
+                  <Route path="/" element={<Navigate to={defaultRoutePath} replace />} />
+                  {boundGraph.redirects.map((redirect) => (
+                    <Route
+                      key={redirect.id}
+                      path={redirect.from}
+                      element={<Navigate to={redirect.to} replace />}
+                    />
+                  ))}
+                  {shellModuleRoutes.map((route) => (
+                    <Route
+                      key={route.path}
+                      path={`${route.path}/*`}
+                      element={<route.Component />}
+                    />
+                  ))}
+                </Routes>
+              </Shell>
+            )}
+          />
+        </Routes>
+      </Suspense>
     </ModuleGraphProvider>
   )
 }

@@ -2,6 +2,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveModuleDataDir } from '../data-dir.js'
 import type { AppSettings, AppTheme } from './types.js'
+import {
+  cloneComposerAbilitySettings,
+  getDefaultComposerAbilitySettings,
+  mergeComposerAbilitySettingsPatch,
+  normalizePersistedComposerAbilitySettings,
+  type ComposerAbilitySettingsPatch,
+} from './composer-abilities.js'
 
 export const APP_FONT_SCALE_MIN = 0.8
 export const APP_FONT_SCALE_MAX = 1.6
@@ -13,7 +20,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function cloneSettings(settings: AppSettings): AppSettings {
-  return { ...settings }
+  return {
+    ...settings,
+    composerAbilities: cloneComposerAbilitySettings(settings.composerAbilities),
+  }
 }
 
 export function normalizeAppTheme(value: unknown): AppTheme | null {
@@ -49,6 +59,7 @@ function defaultSettings(now: () => Date): AppSettings {
   return {
     theme: 'light',
     fontScale: DEFAULT_APP_FONT_SCALE,
+    composerAbilities: getDefaultComposerAbilitySettings(),
     updatedAt: now().toISOString(),
   }
 }
@@ -62,6 +73,7 @@ function parsePersistedSettings(raw: unknown, now: () => Date): AppSettings {
   return {
     theme: normalizeAppTheme(raw.theme) ?? fallback.theme,
     fontScale: normalizePersistedAppFontScale(raw.fontScale) ?? fallback.fontScale,
+    composerAbilities: normalizePersistedComposerAbilitySettings(raw.composerAbilities),
     updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt.trim().length > 0
       ? raw.updatedAt.trim()
       : fallback.updatedAt,
@@ -93,7 +105,9 @@ export class AppSettingsStore {
     return cloneSettings(created)
   }
 
-  async update(input: Partial<Pick<AppSettings, 'theme' | 'fontScale'>>): Promise<AppSettings> {
+  async update(input: Partial<Pick<AppSettings, 'theme' | 'fontScale'>> & {
+    composerAbilities?: ComposerAbilitySettingsPatch
+  }): Promise<AppSettings> {
     return this.withMutationLock(async () => {
       const current = await this.readFromDisk() ?? defaultSettings(this.now)
       const theme = input.theme === undefined
@@ -102,10 +116,14 @@ export class AppSettingsStore {
       const fontScale = input.fontScale === undefined
         ? current.fontScale
         : normalizeAppFontScale(input.fontScale) ?? current.fontScale
+      const composerAbilities = input.composerAbilities === undefined
+        ? current.composerAbilities
+        : mergeComposerAbilitySettingsPatch(current.composerAbilities, input.composerAbilities)
       const next: AppSettings = {
         ...current,
         theme,
         fontScale,
+        composerAbilities,
         updatedAt: this.now().toISOString(),
       }
 

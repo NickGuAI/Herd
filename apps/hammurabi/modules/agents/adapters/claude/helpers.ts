@@ -21,18 +21,52 @@ import {
 } from '../../machines.js'
 import type { ClaudePermissionMode } from '../../types.js'
 
+const CLAUDE_APPEND_PROMPT_FILE_ARG = '__HAMMURABI_CLAUDE_APPEND_PROMPT_FILE__'
+
+function buildPromptFileDelimiter(prompt: string): string {
+  let delimiter = 'HAMMURABI_CLAUDE_PROMPT'
+  while (
+    prompt === delimiter ||
+    prompt.startsWith(`${delimiter}\n`) ||
+    prompt.endsWith(`\n${delimiter}`) ||
+    prompt.includes(`\n${delimiter}\n`)
+  ) {
+    delimiter = `${delimiter}_END`
+  }
+  return delimiter
+}
+
+function buildAppendPromptFileBootstrap(appendSystemPrompt: string): string {
+  const delimiter = buildPromptFileDelimiter(appendSystemPrompt)
+  return [
+    'hammurabi_prompt_file="$(mktemp "${TMPDIR:-/tmp}/hammurabi-claude-prompt.XXXXXX")"',
+    `cat > "$hammurabi_prompt_file" <<'${delimiter}'`,
+    appendSystemPrompt,
+    delimiter,
+    'trap \'rm -f "$hammurabi_prompt_file"\' EXIT',
+    '',
+  ].join('\n')
+}
+
+function shellEscapeClaudeArg(arg: string): string {
+  return arg === CLAUDE_APPEND_PROMPT_FILE_ARG
+    ? '"$hammurabi_prompt_file"'
+    : shellEscape(arg)
+}
+
 export function buildClaudeStreamArgs(
   mode: ClaudePermissionMode,
   resumeSessionId?: string,
-  systemPrompt?: string,
+  appendSystemPromptFile?: string,
   maxTurns?: number,
   effort: ClaudeEffortLevel = DEFAULT_CLAUDE_EFFORT_LEVEL,
   settingsJson?: string,
   model?: string,
 ): string[] {
   const args = ['-p', '--verbose', '--output-format', 'stream-json', '--input-format', 'stream-json', '--effort', effort]
-  if (systemPrompt) {
-    args.push('--system-prompt', systemPrompt)
+  if (appendSystemPromptFile) {
+    args.push('--append-system-prompt-file', appendSystemPromptFile)
+    args.push('--exclude-dynamic-system-prompt-sections')
   }
   if (resumeSessionId) {
     args.push('--resume', resumeSessionId)
@@ -170,9 +204,21 @@ export function buildClaudeShellInvocation(
   args: string[],
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  appendSystemPrompt?: string,
 ): string {
   const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} MAX_THINKING_TOKENS=${maxThinkingTokens}; ${buildUnsetEnvironmentCommand(['CLAUDECODE', ...ANTHROPIC_MODEL_ENV_KEYS])};`
-  return `${envPrefix} claude ${args.map((arg) => shellEscape(arg)).join(' ')}`
+  const promptBootstrap = appendSystemPrompt
+    ? buildAppendPromptFileBootstrap(appendSystemPrompt)
+    : ''
+  const cliArgs = appendSystemPrompt
+    ? [
+        ...args,
+        '--append-system-prompt-file',
+        CLAUDE_APPEND_PROMPT_FILE_ARG,
+        '--exclude-dynamic-system-prompt-sections',
+      ]
+    : args
+  return `${promptBootstrap}${envPrefix} claude ${cliArgs.map((arg) => shellEscapeClaudeArg(arg)).join(' ')}`
 }
 
 const CLAUDE_APPROVAL_HOOK_INLINE_SCRIPT = `
@@ -203,10 +249,11 @@ export function buildClaudeLocalLoginShellSpawn(
   cwd?: string,
   envFile?: string,
   shellPath?: string,
+  appendSystemPrompt?: string,
 ): { command: string; args: string[] } {
   const normalizedScript = cwd
-    ? `cd ${shellEscape(cwd)} && ${buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens)}`
-    : buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens)
+    ? `cd ${shellEscape(cwd)} && ${buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)}`
+    : buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)
   const script = `${buildLoginShellBootstrap(envFile)}; ${normalizedScript}`
   return {
     command: shellPath?.trim() || '/bin/bash',

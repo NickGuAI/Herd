@@ -500,6 +500,7 @@ export interface DeliverConversationMessageOptions {
 
 export interface ConversationMessagePayload {
   message: string
+  displayMessage?: string
   images?: QueuedMessageImage[]
 }
 
@@ -689,6 +690,7 @@ export async function deliverConversationMessage(
     : { queue: options.queue, priority: options.priority }
   const sessionPayload = {
     text: payload.message,
+    ...(payload.displayMessage !== undefined ? { displayText: payload.displayMessage.trim() } : {}),
     images: payload.images && payload.images.length > 0 ? [...payload.images] : undefined,
   }
 

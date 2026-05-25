@@ -1893,6 +1893,99 @@
   .hervald-session-composer .composer-icon-btn {
     border-radius: var(--hv-radius-carved-sm);
   }
+  .hervald-session-composer .composer-ability-chip {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .hervald-session-composer .composer-ability-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 36px;
+    max-width: 150px;
+    padding: 0 10px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved-sm);
+    background: var(--hv-chat-card-muted, var(--hv-ink-wash-01));
+    color: var(--hv-fg-faint);
+    font-family: var(--hv-font-mono);
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+  }
+  .hervald-session-composer .composer-ability-btn span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hervald-session-composer .composer-ability-btn:hover:not(:disabled) {
+    background: var(--hv-bg-raised);
+    color: var(--hv-fg);
+  }
+  .hervald-session-composer .composer-ability-btn:active {
+    transform: scale(0.96);
+  }
+  .hervald-session-composer .composer-ability-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .hervald-session-composer .composer-ability-btn--active {
+    border-color: var(--hv-fg-muted);
+    background: var(--hv-bg-raised);
+    color: var(--hv-fg);
+  }
+  .hervald-session-composer .composer-ability-btn--custom {
+    max-width: 110px;
+  }
+  .hervald-session-composer .composer-ability-remove-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 36px;
+    margin-left: -1px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: 0 var(--hv-radius-carved-sm) var(--hv-radius-carved-sm) 0;
+    background: var(--hv-chat-card-muted, var(--hv-ink-wash-01));
+    color: var(--hv-fg-faint);
+  }
+  .hervald-session-composer .composer-custom-ability-form {
+    display: grid;
+    gap: 8px;
+    padding: 8px 0 12px;
+  }
+  .hervald-session-composer .composer-custom-ability-form input,
+  .hervald-session-composer .composer-custom-ability-form textarea {
+    width: 100%;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved-sm);
+    background: var(--hv-bg-raised);
+    color: var(--hv-fg);
+    font-size: 13px;
+    padding: 8px 10px;
+    outline: none;
+  }
+  .hervald-session-composer .composer-custom-ability-form textarea {
+    resize: vertical;
+  }
+  .hervald-session-composer .composer-custom-ability-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .hervald-session-composer .composer-custom-ability-actions button {
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved-sm);
+    background: var(--hv-chat-card-muted, var(--hv-ink-wash-01));
+    color: var(--hv-fg);
+    font-family: var(--hv-font-mono);
+    font-size: 11px;
+  }
   .hervald-session-composer .mic-btn {
     display: flex;
     align-items: center;
@@ -1981,12 +2074,29 @@
     align-items: center;
     gap: 10px;
     margin-left: auto;
+    min-width: 0;
+  }
+  .hervald-session-composer .composer-row--mobile .composer-ability-btn {
+    width: 36px;
+    max-width: 36px;
+    padding: 0;
+    gap: 0;
+    flex-shrink: 0;
+  }
+  .hervald-session-composer .composer-row--mobile .composer-ability-btn span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
   .hervald-session-composer .composer-desktop-actions {
     display: flex;
     min-width: 0;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
   }
   .hervald-session-composer .composer-desktop-actions--right {
     margin-left: auto;

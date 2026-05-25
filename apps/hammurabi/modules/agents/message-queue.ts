@@ -12,6 +12,7 @@ export interface QueuedMessageImage {
 export interface QueuedMessage {
   id: string
   text: string
+  displayText?: string
   images?: QueuedMessageImage[]
   priority: QueuedMessagePriority
   queuedAt: string
@@ -74,6 +75,7 @@ export class SessionMessageQueue {
 
   enqueue(input: {
     text: string
+    displayText?: string
     images?: QueuedMessageImage[]
     priority?: QueuedMessagePriority
     id?: string
@@ -87,6 +89,7 @@ export class SessionMessageQueue {
     const message: QueuedMessage = {
       id: input.id?.trim() || randomUUID(),
       text: input.text,
+      ...(input.displayText !== undefined ? { displayText: input.displayText.trim() } : {}),
       images: input.images && input.images.length > 0 ? [...input.images] : undefined,
       priority,
       queuedAt: input.queuedAt ?? new Date().toISOString(),

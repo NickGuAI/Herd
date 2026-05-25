@@ -93,6 +93,7 @@ export interface MachineOnboardingReadiness {
 export interface GaiaOnboardingStatus {
   commanderId: string | null
   displayName: string
+  avatarUrl: string
   exists: boolean
   conversationId: string | null
   defaultProviderId: string | null
@@ -111,6 +112,7 @@ export interface StarterWorkforceOnboardingStatus {
   packages: StarterCommanderPackageStatus[]
   installedCount: number
   totalCount: number
+  skipped: boolean
   complete: boolean
 }
 
@@ -142,6 +144,11 @@ export interface SeedGaiaOnboardingResponse {
 }
 
 export interface SeedStarterWorkforceOnboardingResponse {
+  starterWorkforce: StarterWorkforceOnboardingStatus
+  status: OnboardingStatus
+}
+
+export interface SkipStarterWorkforceOnboardingResponse {
   starterWorkforce: StarterWorkforceOnboardingStatus
   status: OnboardingStatus
 }

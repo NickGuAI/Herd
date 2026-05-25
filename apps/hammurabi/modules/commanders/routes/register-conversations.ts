@@ -998,17 +998,27 @@ export function registerConversationRoutes(
     const delivered = await deliverConversationMessage(
       context,
       conversation,
-      { message: messageWithContext, images },
+      { message: messageWithContext, displayMessage: message, images },
       queue ? { queue: true, priority: 'normal' } : undefined,
     )
     if (!delivered.ok) {
       res.status(delivered.status).json({ error: delivered.error })
       return
     }
+    let messagePage: Awaited<ReturnType<typeof getConversationMessagesPage>> | undefined
+    try {
+      messagePage = await getConversationMessagesPage(context, delivered.conversation)
+    } catch (error) {
+      console.warn(
+        `[conversations] Failed to build post-send message page for "${conversation.id}":`,
+        error,
+      )
+    }
     res.json({
       accepted: true,
       createdSession: delivered.createdSession,
       conversation: withLiveSession(context, delivered.conversation),
+      ...(messagePage ? { messagePage } : {}),
     })
   })
 

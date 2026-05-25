@@ -1,5 +1,5 @@
 import express from 'express'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import type { ApiKeyRecord, ApiKeyStoreLike } from '../../../server/api-keys/sto
 import type { ProviderAdapter } from '../../agents/providers/provider-adapter'
 import { CommanderSessionStore } from '../../commanders/store'
 import { ConversationStore } from '../../commanders/conversation-store'
+import { GAIA_COMMANDER_AVATAR_URL } from '../../commanders/commander-profile'
 import { OrgIdentityStore } from '../../org-identity/store'
 import { createOnboardingRouter } from '../route'
 
@@ -176,10 +177,12 @@ describe('onboarding route', () => {
       expect(response.status).toBe(200)
       const payload = await response.json() as {
         currentStepId: string
+        gaia: { avatarUrl: string }
         providers: Array<{ id: string; state: string; authMode: string }>
         machines: Array<{ id: string; state: string }>
       }
       expect(payload.currentStepId).toBe('gaia')
+      expect(payload.gaia.avatarUrl).toBe(GAIA_COMMANDER_AVATAR_URL)
       expect(payload.providers).toContainEqual(expect.objectContaining({
         id: 'codex',
         state: 'ready',
@@ -230,9 +233,17 @@ describe('onboarding route', () => {
         body: JSON.stringify({}),
       })
       expect(first.status).toBe(201)
-      const firstPayload = await first.json() as { gaia: { exists: boolean; commanderId: string | null } }
+      const firstPayload = await first.json() as { gaia: { exists: boolean; commanderId: string | null; avatarUrl: string } }
       expect(firstPayload.gaia.exists).toBe(true)
       expect(firstPayload.gaia.commanderId).toEqual(expect.any(String))
+      expect(firstPayload.gaia.avatarUrl).toBe(GAIA_COMMANDER_AVATAR_URL)
+      const profile = JSON.parse(
+        await readFile(join(dataDir, 'commander', firstPayload.gaia.commanderId as string, '.memory', 'profile.json'), 'utf8'),
+      ) as Record<string, unknown>
+      expect(profile).toMatchObject({
+        avatar: GAIA_COMMANDER_AVATAR_URL,
+        speakingTone: 'Mother-of-all onboarding',
+      })
 
       const second = await fetch(`${server.baseUrl}/api/onboarding/actions/seed-gaia`, {
         method: 'POST',
@@ -267,6 +278,7 @@ describe('onboarding route', () => {
         complete: true,
         installedCount: 3,
         totalCount: 3,
+        skipped: false,
       })
 
       const second = await fetch(`${server.baseUrl}/api/onboarding/actions/seed-starter-workforce`, {
@@ -281,6 +293,79 @@ describe('onboarding route', () => {
         complete: true,
         installedCount: 3,
         totalCount: 3,
+        skipped: false,
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('skips starter workforce installation without creating bundled commanders', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'hammurabi-onboarding-route-'))
+    tempDirs.push(dataDir)
+    const server = await startServer(dataDir)
+    try {
+      const gaia = await fetch(`${server.baseUrl}/api/onboarding/actions/seed-gaia`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+      })
+      expect(gaia.status).toBe(201)
+
+      const skipped = await fetch(`${server.baseUrl}/api/onboarding/actions/skip-starter-workforce`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      })
+      expect(skipped.status).toBe(200)
+      const skippedPayload = await skipped.json() as {
+        currentStepId?: string
+        starterWorkforce: { complete: boolean; installedCount: number; totalCount: number; skipped: boolean }
+        status: { currentStepId: string; starterWorkforce: { complete: boolean; installedCount: number; totalCount: number; skipped: boolean } }
+      }
+      expect(skippedPayload.starterWorkforce).toMatchObject({
+        complete: true,
+        installedCount: 0,
+        totalCount: 3,
+        skipped: true,
+      })
+      expect(skippedPayload.status.currentStepId).toBe('launch')
+      expect(skippedPayload.status.starterWorkforce).toMatchObject({
+        complete: true,
+        installedCount: 0,
+        totalCount: 3,
+        skipped: true,
+      })
+
+      const status = await fetch(`${server.baseUrl}/api/onboarding/status`, {
+        headers: AUTH_HEADERS,
+      })
+      expect(status.status).toBe(200)
+      const statusPayload = await status.json() as {
+        starterWorkforce: { complete: boolean; installedCount: number; totalCount: number; skipped: boolean }
+      }
+      expect(statusPayload.starterWorkforce).toMatchObject({
+        complete: true,
+        installedCount: 0,
+        totalCount: 3,
+        skipped: true,
+      })
+
+      const seededAfterSkip = await fetch(`${server.baseUrl}/api/onboarding/actions/seed-starter-workforce`, {
+        method: 'POST',
+        headers: AUTH_HEADERS,
+      })
+      expect(seededAfterSkip.status).toBe(201)
+      const seededAfterSkipPayload = await seededAfterSkip.json() as {
+        starterWorkforce: { complete: boolean; installedCount: number; totalCount: number; skipped: boolean }
+      }
+      expect(seededAfterSkipPayload.starterWorkforce).toMatchObject({
+        complete: true,
+        installedCount: 3,
+        totalCount: 3,
+        skipped: false,
       })
     } finally {
       await server.close()

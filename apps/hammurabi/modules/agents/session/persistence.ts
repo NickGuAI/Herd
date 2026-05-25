@@ -98,6 +98,7 @@ export function buildTranscriptMeta(session: StreamSession): TranscriptMeta {
     cwd: session.cwd,
     host: session.host,
     createdAt: session.createdAt,
+    promptAudit: session.promptAudit,
     providerContext: sanitizeProviderContextForPersistence(session.providerContext, {
       effort: session.effort,
       adaptiveThinking: session.adaptiveThinking,

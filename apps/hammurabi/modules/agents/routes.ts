@@ -1703,10 +1703,12 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     text: string,
     priority: QueuedMessagePriority,
     images?: QueuedMessageImage[],
+    displayText?: string,
   ): QueuedMessage {
     return {
       id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
+      ...(displayText !== undefined ? { displayText: displayText.trim() } : {}),
       images: images && images.length > 0 ? [...images] : undefined,
       priority,
       queuedAt: new Date().toISOString(),
@@ -1779,17 +1781,19 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     text: string,
     images?: QueuedMessageImage[],
     subtype?: string,
+    displayText?: string,
   ): StreamJsonEvent {
     return {
       type: 'user',
       ...(subtype ? { subtype } : {}),
+      ...(displayText !== undefined ? { displayText: displayText.trim() } : {}),
       message: { role: 'user', content: buildPromptContent(text, images) },
     } as unknown as StreamJsonEvent
   }
 
   async function attemptSendPromptToStreamSession(
     session: StreamSession,
-    prompt: Pick<QueuedMessage, 'text' | 'images'>,
+    prompt: Pick<QueuedMessage, 'text' | 'displayText' | 'images'>,
     options: { userEventSubtype?: string } = {},
   ): Promise<StreamSendAttemptResult> {
     const text = prompt.text
@@ -1801,7 +1805,10 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
         text,
         'live',
         images,
-        options,
+        {
+          ...options,
+          displayText: prompt.displayText,
+        },
       )
       if (!result.ok) {
         return result
@@ -1819,8 +1826,9 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     }
 
     resetActiveTurnState(session)
-    appendStreamEvent(session, userEvent)
-    broadcastStreamEvent(session, userEvent)
+    const displayEvent = buildUserEvent(text, images, options.userEventSubtype, prompt.displayText)
+    appendStreamEvent(session, displayEvent)
+    broadcastStreamEvent(session, displayEvent)
     return { ok: true }
   }
 
@@ -1833,9 +1841,10 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     session: StreamSession,
     text: string,
     images?: QueuedMessageImage[],
+    displayText?: string,
   ): Promise<{ ok: true; message: QueuedMessage; position: number } | { ok: false; status: number; error: string }> {
     if (session.adapter) {
-      const result = await session.adapter.dispatchSend(session, text, 'queue', images)
+      const result = await session.adapter.dispatchSend(session, text, 'queue', images, { displayText })
       if (!result.ok) {
         const status = isQueueBackpressureError(result.reason) ? 409 : 400
         return { ok: false, status, error: result.reason }
@@ -1852,7 +1861,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
       }
     }
 
-    const message = createQueuedMessage(text, 'normal', images)
+    const message = createQueuedMessage(text, 'normal', images, displayText)
     const queued = enqueueQueuedMessage(session, message)
     if (!queued.ok) {
       return queued
@@ -1961,13 +1970,14 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     session: StreamSession,
     text: string,
     images?: QueuedMessageImage[],
+    displayText?: string,
   ): Promise<{ ok: true; queued: boolean; message: QueuedMessage } | { ok: false; error: string }> {
     const liveSession = await awaitAutoRotationIfNeeded(session.name)
     if (!liveSession || liveSession.kind !== 'stream') {
       return { ok: false, error: 'Stream session unavailable' }
     }
 
-    const message = createQueuedMessage(text, 'high', images)
+    const message = createQueuedMessage(text, 'high', images, displayText)
 
     if (
       liveSession.lastTurnCompleted &&
@@ -2813,6 +2823,7 @@ async function isLiveSessionResumeAvailable(session: StreamSession): Promise<boo
     getWorkspaceResolver: options.getWorkspaceResolver,
     writeToStdin,
     appendStreamEvent,
+    scheduleTurnWatchdog: scheduleCodexTurnWatchdog,
     schedulePersistedSessionsWrite,
   })
   const {

@@ -911,7 +911,7 @@ wait_for_first_boot() {
 
 start_first_boot() {
   local port="$1"
-  local login_url="http://localhost:${port}/org"
+  local login_url="http://localhost:${port}/welcome"
 
   INSTALL_LOGIN_URL="$login_url"
   step "Starting ${PRODUCT_NAME} for first boot"
@@ -965,7 +965,7 @@ print_install_receipt() {
   printf "\n${GREEN}╔════════════════════════════════════════════════════════════╗${NC}\n"
   printf "${GREEN}║${NC} ${BOLD}Hervald setup complete${NC}                                  ${GREEN}║${NC}\n"
   printf "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}\n"
-  print_receipt_line "URL" "${INSTALL_LOGIN_URL:-http://localhost:${PORT:-$DEFAULT_PORT}/org}"
+  print_receipt_line "URL" "${INSTALL_LOGIN_URL:-http://localhost:${PORT:-$DEFAULT_PORT}/welcome}"
   print_receipt_line "Account" "local bootstrap admin"
   print_receipt_line "Password" "not used"
   if [[ -n "$INSTALL_BOOTSTRAP_KEY" ]]; then
@@ -1052,7 +1052,7 @@ print_install_receipt
 printf "\n${GREEN}Next:${NC}\n"
 if [[ "$(uname -s)" == "Darwin" && "${HAMMURABI_INSTALL_AUTOSTART:-1}" != "0" ]]; then
   printf "  1. Sign in with the bootstrap key shown above.\n"
-  printf "  2. Create a permanent API key in Settings, then rotate or revoke the bootstrap key.\n"
+  printf "  2. Complete browser onboarding, then create a permanent API key in Settings and rotate or revoke the bootstrap key.\n"
   printf "  3. Hervald now auto-starts at login via launchd.\n"
   printf "     Reload after config changes with:\n"
   printf "       ${CYAN}launchctl kickstart -k gui/%s/io.gehirn.hervald${NC}\n" "$(id -u)"
@@ -1060,7 +1060,7 @@ if [[ "$(uname -s)" == "Darwin" && "${HAMMURABI_INSTALL_AUTOSTART:-1}" != "0" ]]
   printf "  5. Optional: run ${CYAN}hammurabi onboard${NC} to seed CLI integrations.\n"
 else
   printf "  1. Sign in with the bootstrap key shown above.\n"
-  printf "  2. Create a permanent API key in Settings, then rotate or revoke the bootstrap key.\n"
+  printf "  2. Complete browser onboarding, then create a permanent API key in Settings and rotate or revoke the bootstrap key.\n"
   printf "  3. The server is already running in the background.\n"
   printf "     Restart later with ${CYAN}hammurabi up${NC} (or ${CYAN}hammurabi up --dev${NC} for hot reload).\n"
   printf "  4. Run ${CYAN}hammurabi doctor${NC} after provider authentication.\n"

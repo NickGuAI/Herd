@@ -10,14 +10,17 @@ import {
 
 export const COMMANDER_PROFILE_FILE = 'profile.json'
 export const DEFAULT_COMMANDER_AVATAR_URL = '/assets/commanders/atlas-profile.jpg'
+export const GAIA_COMMANDER_AVATAR_URL = '/assets/commanders/gaia-profile.png'
+export const LEGACY_GAIA_COMMANDER_AVATAR_URL = '/assets/commanders/gaia-profile.svg'
+const BUNDLED_COMMANDER_AVATAR_PATTERN = /^\/assets\/commanders\/[a-z0-9][a-z0-9._-]*\.(?:gif|jpe?g|png|svg|webp)$/iu
 
 /** Optional UI metadata stored at `<commander>/.memory/profile.json` on disk. */
 export interface CommanderUiProfile {
   /** Short note for humans / future prompt tuning (not injected into agent by default) */
   speakingTone?: string
   /**
-   * Image path relative to commander root (the directory named by commander id).
-   * Examples: `avatar.png`, `.memory/avatar.webp`
+   * Image path relative to commander root, or a bundled `/assets/commanders/*` URL.
+   * Examples: `avatar.png`, `.memory/avatar.webp`, `/assets/commanders/gaia-profile.png`
    */
   avatar?: string
   /** Built-in art direction used for generated commander headshots. */
@@ -46,10 +49,21 @@ function trimAvatarPath(value: unknown): string | undefined {
   if (!t || t.length > MAX_AVATAR_PATH) {
     return undefined
   }
+  if (BUNDLED_COMMANDER_AVATAR_PATTERN.test(t)) {
+    return t
+  }
   if (t.includes('..') || path.isAbsolute(t)) {
     return undefined
   }
   return t
+}
+
+function isBundledCommanderAvatarUrl(value: string): boolean {
+  return BUNDLED_COMMANDER_AVATAR_PATTERN.test(value)
+}
+
+function normalizeBundledCommanderAvatarUrl(value: string): string {
+  return value === LEGACY_GAIA_COMMANDER_AVATAR_URL ? GAIA_COMMANDER_AVATAR_URL : value
 }
 
 export function sanitizeUiProfile(raw: unknown): CommanderUiProfile | null {
@@ -66,7 +80,7 @@ export function sanitizeUiProfile(raw: unknown): CommanderUiProfile | null {
     out.speakingTone = speakingTone
   }
   if (avatar) {
-    out.avatar = avatar
+    out.avatar = normalizeBundledCommanderAvatarUrl(avatar)
   }
   if (portraitStyleId) {
     out.portraitStyleId = portraitStyleId
@@ -101,6 +115,9 @@ export async function resolveCommanderAvatarPath(
   if (!rel) {
     return null
   }
+  if (isBundledCommanderAvatarUrl(rel)) {
+    return null
+  }
   const { commanderRoot } = resolveCommanderPaths(commanderId, basePath)
   const resolved = path.resolve(commanderRoot, rel)
   const rootWithSep = commanderRoot.endsWith(path.sep) ? commanderRoot : `${commanderRoot}${path.sep}`
@@ -119,11 +136,16 @@ export async function resolveCommanderAvatarUrl(
   commanderId: string,
   basePath: string,
   profile: CommanderUiProfile | null,
+  options: { defaultAvatarUrl?: string | null } = {},
 ): Promise<string> {
+  const rel = profile?.avatar
+  if (rel && isBundledCommanderAvatarUrl(rel)) {
+    return rel
+  }
   const avatarPath = await resolveCommanderAvatarPath(commanderId, basePath, profile)
   return avatarPath
     ? `/api/commanders/${encodeURIComponent(commanderId)}/avatar`
-    : DEFAULT_COMMANDER_AVATAR_URL
+    : options.defaultAvatarUrl ?? DEFAULT_COMMANDER_AVATAR_URL
 }
 
 export function profileForApiResponse(

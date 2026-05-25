@@ -56,6 +56,22 @@ describe('mergeHistoricalAndLiveTranscript', () => {
       { id: 'live-2', kind: 'agent', text: 'newer' },
     ])
   })
+
+  it('does not render both optimistic and history copies for display-safe workspace sends', () => {
+    const historicalMessages: MsgItem[] = [
+      { id: 'history-user', kind: 'user', text: 'Use this context.' },
+    ]
+    const liveMessages: MsgItem[] = [
+      { id: 'optimistic-user', kind: 'user', text: 'Use this context.' },
+    ]
+
+    const merged = mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)
+
+    expect(merged).toEqual([
+      { id: 'optimistic-user', kind: 'user', text: 'Use this context.' },
+    ])
+    expect(merged.some((message) => message.text.includes('<workspace-'))).toBe(false)
+  })
 })
 
 describe('appendQueuedMessagesToTranscript', () => {

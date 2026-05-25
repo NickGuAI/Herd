@@ -216,7 +216,13 @@ export type StreamDispatchResult =
 
 export interface SessionSendPayload {
   text: string
+  displayText?: string
   images?: QueuedMessageImage[]
+}
+
+export interface StreamDispatchOptions {
+  userEventSubtype?: string
+  displayText?: string
 }
 
 export interface StreamSessionAdapter {
@@ -225,8 +231,17 @@ export interface StreamSessionAdapter {
     text: string,
     mode: StreamDispatchMode,
     images?: QueuedMessageImage[],
-    options?: { userEventSubtype?: string },
+    options?: StreamDispatchOptions,
   ): Promise<StreamDispatchResult>
+}
+
+export interface PromptAudit {
+  transport: 'append-system-prompt-file'
+  source: 'hammurabi-commander-bootstrap'
+  byteLength: number
+  tokenEstimate: number
+  maxBytes: number
+  sections: string[]
 }
 
 export interface StreamSession {
@@ -258,6 +273,7 @@ export interface StreamSession {
   createdAt: string
   lastEventAt: string
   systemPrompt?: string
+  promptAudit?: PromptAudit
   maxTurns?: number
   model?: string
   usage: { inputTokens: number; outputTokens: number; costUsd: number }

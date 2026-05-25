@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildPlanApprovalAutoResolvedSystemEvent,
+  buildCodexMcpElicitationResult,
   buildOpenCodePlanApprovalResult,
   buildPlanApprovalToolResultPayload,
   buildToolAnswerPayload,
@@ -150,6 +151,74 @@ describe('plan approval helpers', () => {
       approved: false,
       message: 'Needs a smaller plan.',
     })
+  })
+
+  it('delivers Codex MCP elicitation decisions through the runtime response channel', () => {
+    const sendResponse = vi.fn()
+    const planApproval = makePlanApproval({
+      toolName: 'Codex MCP Elicitation',
+      providerContext: {
+        provider: 'codex',
+        backend: 'rpc',
+        toolUseId: 'codex-mcp-elicitation-19',
+        toolName: 'Codex MCP Elicitation',
+        requestId: 19,
+        answerFormat: 'codex.mcp_elicitation',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            response: { type: 'string', title: 'Response' },
+          },
+          required: ['response'],
+        },
+      },
+    })
+    const session = makeSession([planApproval])
+    session.providerContext = {
+      providerId: 'codex',
+      sessionId: 'thread-1',
+      runtime: {
+        sendResponse,
+      },
+    } as unknown as StreamSession['providerContext']
+    const writeToStdin = vi.fn()
+
+    const result = deliverPlanApprovalDecision(
+      session,
+      planApproval,
+      'approve',
+      'Continue with the default plan.',
+      writeToStdin,
+    )
+
+    expect(result.ok).toBe(true)
+    expect(writeToStdin).not.toHaveBeenCalled()
+    expect(sendResponse).toHaveBeenCalledWith(19, {
+      action: 'accept',
+      content: {
+        response: 'Continue with the default plan.',
+      },
+    })
+    expect(buildCodexMcpElicitationResult(planApproval, 'reject')).toEqual({
+      requestId: 19,
+      result: { action: 'decline' },
+    })
+  })
+
+  it('ignores Codex MCP elicitation events without a numeric request id', () => {
+    const planApproval = makePlanApproval({
+      toolName: 'Codex MCP Elicitation',
+      providerContext: {
+        provider: 'codex',
+        backend: 'rpc',
+        toolUseId: 'codex-mcp-elicitation-bad-id',
+        toolName: 'Codex MCP Elicitation',
+        requestId: 'bad-id',
+        answerFormat: 'codex.mcp_elicitation',
+      },
+    })
+
+    expect(buildCodexMcpElicitationResult(planApproval, 'approve')).toBeNull()
   })
 
   it('finds only expired pending plan approvals', () => {

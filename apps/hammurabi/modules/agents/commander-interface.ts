@@ -51,6 +51,7 @@ export type CreateQueuedMessage = (
   text: string,
   priority: QueuedMessagePriority,
   images?: QueuedMessageImage[],
+  displayText?: string,
 ) => QueuedMessage
 
 export type EnqueueQueuedMessage = (
@@ -73,6 +74,7 @@ export type SendImmediateText = (
   session: StreamSession,
   text: string,
   images?: QueuedMessageImage[],
+  displayText?: string,
 ) => Promise<
   | { ok: true; queued: boolean; message: QueuedMessage }
   | { ok: false; error: string }
@@ -121,8 +123,10 @@ function normalizeSendPayload(payload: string | SessionSendPayload): SessionSend
     return { text: payload }
   }
   const images = payload.images && payload.images.length > 0 ? [...payload.images] : undefined
+  const displayText = payload.displayText !== undefined ? payload.displayText.trim() : undefined
   return {
     text: payload.text,
+    ...(displayText !== undefined ? { displayText } : {}),
     images,
   }
 }
@@ -264,9 +268,11 @@ export function createCommanderSessionsInterface(
       if (!session || session.kind !== 'stream') {
         return false
       }
-      const { text, images } = normalizeSendPayload(payload)
+      const { text, images, displayText } = normalizeSendPayload(payload)
       if (options?.queue) {
-        const message = createQueuedMessage(text, options.priority ?? 'normal', images)
+        const message = displayText !== undefined
+          ? createQueuedMessage(text, options.priority ?? 'normal', images, displayText)
+          : createQueuedMessage(text, options.priority ?? 'normal', images)
         const queued = enqueueQueuedMessage(session, message)
         if (!queued.ok) {
           return false
@@ -275,7 +281,9 @@ export function createCommanderSessionsInterface(
         return true
       }
 
-      const result = await sendImmediateTextToStreamSession(session, text, images)
+      const result = displayText !== undefined
+        ? await sendImmediateTextToStreamSession(session, text, images, displayText)
+        : await sendImmediateTextToStreamSession(session, text, images)
       return result.ok
     },
 

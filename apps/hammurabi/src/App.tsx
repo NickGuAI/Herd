@@ -19,7 +19,7 @@ import { ThemeProvider } from '@/lib/theme-context'
 import { useFontScale } from '@/hooks/use-font-scale'
 
 const API_KEY_STORAGE = 'hammurabi_api_key'
-const DEFAULT_SIGN_IN_PATH = '/org'
+const DEFAULT_SIGN_IN_PATH = '/welcome'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -229,7 +229,7 @@ export default function App() {
     setAccessTokenResolver(() => Promise.resolve(trimmed))
     if (typeof window !== 'undefined') {
       const { pathname } = window.location
-      const onDefaultEntryPath = !pathname || pathname === '/' || pathname === '/welcome'
+      const onDefaultEntryPath = !pathname || pathname === '/'
       if (onDefaultEntryPath) {
         window.history.replaceState({}, document.title, DEFAULT_SIGN_IN_PATH)
       }

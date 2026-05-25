@@ -8,14 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 import type { FrontendModuleBinding } from '@/types'
 import type { HammurabiModuleGraphResponse } from '@/types/module-graph-api'
-import type { FounderSetupStatus } from '@modules/onboarding/contracts'
+import type { OnboardingStatus } from '@modules/onboarding/contracts'
 
 const mocks = vi.hoisted(() => ({
-  useFounderSetupStatus: vi.fn(),
+  useOnboardingStatus: vi.fn(),
 }))
 
 vi.mock('@modules/onboarding/hooks/useFounderOnboarding', () => ({
-  useFounderSetupStatus: mocks.useFounderSetupStatus,
+  useOnboardingStatus: mocks.useOnboardingStatus,
 }))
 
 vi.mock('@/surfaces/desktop/Shell', () => ({
@@ -170,16 +170,66 @@ const moduleGraph: HammurabiModuleGraphResponse = {
   providers: [],
 }
 
-function setupStatus(overrides: Partial<FounderSetupStatus> = {}): FounderSetupStatus {
-  return {
+function onboardingStatus(overrides: Partial<OnboardingStatus> = {}): OnboardingStatus {
+  const founderSetup = overrides.founderSetup ?? {
     setupComplete: true,
     defaultValues: {
-      orgDisplayName: '',
-      founderDisplayName: '',
-      founderEmail: '',
+      orgDisplayName: 'Gehirn Inc.',
+      founderDisplayName: 'Nick Gu',
+      founderEmail: 'nick@example.com',
     },
     validationErrors: {},
     nextRoute: '/org',
+  }
+  const gaia = overrides.gaia ?? {
+    commanderId: 'commander-gaia',
+    displayName: 'Gaia',
+    avatarUrl: '/assets/commanders/gaia-profile.png',
+    exists: true,
+    conversationId: 'conversation-gaia',
+    defaultProviderId: 'claude',
+  }
+  const starterWorkforce = overrides.starterWorkforce ?? {
+    packages: [],
+    installedCount: 3,
+    totalCount: 3,
+    skipped: false,
+    complete: true,
+  }
+
+  return {
+    currentStepId: 'launch',
+    steps: [
+      { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Hervald app and bootstrap admin are available.' },
+      { id: 'founder-org', label: 'Founder + organization', state: founderSetup.setupComplete ? 'complete' : 'current', summary: 'Create founder and organization.' },
+      { id: 'gaia', label: 'Gaia commander', state: gaia.exists ? 'complete' : 'current', summary: 'Seed Gaia.' },
+      { id: 'starter-workforce', label: 'Starter workforce', state: starterWorkforce.complete ? 'complete' : 'current', summary: 'Install starter commanders.' },
+      { id: 'providers-machines', label: 'Providers + machines', state: 'complete', summary: 'Providers and machines ready.' },
+      { id: 'launch', label: 'Launch', state: 'current', summary: 'Open Hervald.' },
+    ],
+    founderSetup,
+    gaia,
+    starterWorkforce,
+    providers: [],
+    machines: [{
+      id: 'local',
+      label: 'Local',
+      transport: 'local',
+      state: 'ready',
+      envFile: null,
+      cwd: null,
+      summary: 'Local machine ready.',
+    }],
+    receipt: {
+      url: 'http://localhost:20001/org',
+      account: 'local bootstrap admin',
+      organization: founderSetup.defaultValues.orgDisplayName || null,
+      founder: founderSetup.defaultValues.founderDisplayName || null,
+      commander: gaia.exists ? gaia.displayName : null,
+      machine: 'Local',
+      providerSummary: 'Provider ready',
+    },
+    launchTarget: '/command-room?commander=commander-gaia&conversation=conversation-gaia',
     ...overrides,
   }
 }
@@ -204,7 +254,7 @@ async function renderRouter(initialEntry: string) {
 
 describe('AuthenticatedAppRouter', () => {
   beforeEach(() => {
-    mocks.useFounderSetupStatus.mockReset()
+    mocks.useOnboardingStatus.mockReset()
   })
 
   afterEach(async () => {
@@ -223,8 +273,8 @@ describe('AuthenticatedAppRouter', () => {
   })
 
   it('keeps existing founders in the normal shell and does not show onboarding', async () => {
-    mocks.useFounderSetupStatus.mockReturnValue({
-      data: setupStatus(),
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus(),
       isLoading: false,
       error: null,
       refetch: vi.fn(),
@@ -240,8 +290,8 @@ describe('AuthenticatedAppRouter', () => {
   })
 
   it('registers the top-level automations route inside the shell', async () => {
-    mocks.useFounderSetupStatus.mockReturnValue({
-      data: setupStatus(),
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus(),
       isLoading: false,
       error: null,
       refetch: vi.fn(),
@@ -255,9 +305,9 @@ describe('AuthenticatedAppRouter', () => {
     })
   })
 
-  it('routes completed onboarding visits back to org', async () => {
-    mocks.useFounderSetupStatus.mockReturnValue({
-      data: setupStatus(),
+  it('keeps launch-ready welcome visits mounted for the explicit launch action', async () => {
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus(),
       isLoading: false,
       error: null,
       refetch: vi.fn(),
@@ -266,14 +316,16 @@ describe('AuthenticatedAppRouter', () => {
     await renderRouter('/welcome')
 
     await vi.waitFor(() => {
-      expect(document.body.querySelector('[data-testid="org-page"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="welcome-page"]')).not.toBeNull()
     })
+    expect(document.body.querySelector('[data-testid="shell"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="org-page"]')).toBeNull()
     expect(document.body.querySelector('[data-testid="command-room-page"]')).toBeNull()
   })
 
   it('redirects the legacy command-room automations path to the top-level route', async () => {
-    mocks.useFounderSetupStatus.mockReturnValue({
-      data: setupStatus(),
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus(),
       isLoading: false,
       error: null,
       refetch: vi.fn(),
@@ -288,8 +340,24 @@ describe('AuthenticatedAppRouter', () => {
   })
 
   it('routes missing-founder sessions to onboarding before the shell mounts', async () => {
-    mocks.useFounderSetupStatus.mockReturnValue({
-      data: setupStatus({ setupComplete: false, nextRoute: '/welcome' }),
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus({
+        currentStepId: 'founder-org',
+        founderSetup: {
+          setupComplete: false,
+          defaultValues: {
+            orgDisplayName: '',
+            founderDisplayName: '',
+            founderEmail: '',
+          },
+          validationErrors: {
+            orgDisplayName: 'Org display name is required.',
+            founderDisplayName: 'Founder display name is required.',
+            founderEmail: 'Founder email is required.',
+          },
+          nextRoute: '/welcome',
+        },
+      }),
       isLoading: false,
       error: null,
       refetch: vi.fn(),
@@ -302,5 +370,96 @@ describe('AuthenticatedAppRouter', () => {
     })
     expect(document.body.querySelector('[data-testid="shell"]')).toBeNull()
     expect(document.body.querySelector('[data-testid="command-room-page"]')).toBeNull()
+  })
+
+  it('keeps founder-complete but Gaia-incomplete sessions on welcome before the shell mounts', async () => {
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus({
+        currentStepId: 'gaia',
+        gaia: {
+          commanderId: null,
+          displayName: 'Gaia',
+          avatarUrl: '/assets/commanders/gaia-profile.png',
+          exists: false,
+          conversationId: null,
+          defaultProviderId: 'claude',
+        },
+      }),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    await renderRouter('/org')
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="welcome-page"]')).not.toBeNull()
+    })
+    expect(document.body.querySelector('[data-testid="shell"]')).toBeNull()
+    expect(document.body.querySelector('[data-testid="org-page"]')).toBeNull()
+  })
+
+  it('does not lock completed installs out of the shell when provider readiness regresses', async () => {
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus({
+        currentStepId: 'providers-machines',
+        steps: [
+          { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Hervald app and bootstrap admin are available.' },
+          { id: 'founder-org', label: 'Founder + organization', state: 'complete', summary: 'Founder exists.' },
+          { id: 'gaia', label: 'Gaia commander', state: 'complete', summary: 'Gaia exists.' },
+          { id: 'starter-workforce', label: 'Starter workforce', state: 'complete', summary: 'Starter commanders are installed.' },
+          { id: 'providers-machines', label: 'Providers + machines', state: 'warning', summary: 'Provider auth needs attention.' },
+          { id: 'launch', label: 'Launch', state: 'pending', summary: 'Open Hervald.' },
+        ],
+        providers: [{
+          id: 'claude',
+          label: 'Claude',
+          cliBinaryName: 'claude',
+          installed: true,
+          authConfigured: false,
+          authMode: 'missing',
+          state: 'warning',
+          shortAction: 'Run claude login and return here.',
+          verificationCommand: 'claude auth status',
+          envSourceKey: null,
+        }],
+      }),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    await renderRouter('/org')
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="shell"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="org-page"]')).not.toBeNull()
+    })
+    expect(document.body.querySelector('[data-testid="welcome-page"]')).toBeNull()
+  })
+
+  it('treats a skipped starter workforce as a completed initial onboarding gate', async () => {
+    mocks.useOnboardingStatus.mockReturnValue({
+      data: onboardingStatus({
+        starterWorkforce: {
+          packages: [],
+          installedCount: 0,
+          totalCount: 3,
+          skipped: true,
+          complete: true,
+        },
+      }),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    })
+
+    await renderRouter('/org')
+
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="shell"]')).not.toBeNull()
+      expect(document.body.querySelector('[data-testid="org-page"]')).not.toBeNull()
+    })
+    expect(document.body.querySelector('[data-testid="welcome-page"]')).toBeNull()
   })
 })

@@ -3,8 +3,8 @@ import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import { AppSettingsStore, normalizeAppFontScale, normalizeAppTheme } from './store.js'
-import type { AppSettings } from './types.js'
 import { buildMobileSettingsDto } from './mobile-settings-dtos.js'
+import { normalizeComposerAbilitySettingsPatch } from './composer-abilities.js'
 
 export interface SettingsRouterOptions {
   store?: AppSettingsStore
@@ -50,9 +50,10 @@ export function createSettingsRouter(options: SettingsRouterOptions = {}): Route
     const body = typeof req.body === 'object' && req.body !== null
       ? req.body as Record<string, unknown>
       : {}
-    const patch: Partial<Pick<AppSettings, 'theme' | 'fontScale'>> = {}
+    const patch: Parameters<AppSettingsStore['update']>[0] = {}
     const hasTheme = Object.prototype.hasOwnProperty.call(body, 'theme')
     const hasFontScale = Object.prototype.hasOwnProperty.call(body, 'fontScale')
+    const hasComposerAbilities = Object.prototype.hasOwnProperty.call(body, 'composerAbilities')
 
     if (hasTheme) {
       const theme = normalizeAppTheme(body.theme)
@@ -72,8 +73,17 @@ export function createSettingsRouter(options: SettingsRouterOptions = {}): Route
       patch.fontScale = fontScale
     }
 
-    if (!hasTheme && !hasFontScale) {
-      res.status(400).json({ error: 'settings patch must include theme or fontScale' })
+    if (hasComposerAbilities) {
+      const composerAbilities = normalizeComposerAbilitySettingsPatch(body.composerAbilities)
+      if (!composerAbilities.ok) {
+        res.status(400).json({ error: composerAbilities.error })
+        return
+      }
+      patch.composerAbilities = composerAbilities.patch
+    }
+
+    if (!hasTheme && !hasFontScale && !hasComposerAbilities) {
+      res.status(400).json({ error: 'settings patch must include theme, fontScale, or composerAbilities' })
       return
     }
 

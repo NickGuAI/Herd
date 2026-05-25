@@ -6,6 +6,7 @@ import {
   buildClaudeEnvironmentPrefix,
   buildClaudeLocalLoginShellSpawn,
   buildClaudePtyCommand,
+  buildClaudeShellInvocation,
   buildClaudeSpawnEnv,
   buildClaudeStreamArgs,
   mergeClaudeExtraBody,
@@ -177,6 +178,32 @@ describe('agents/adapters/claude/helpers', () => {
   it('passes an explicit model through Claude stream args', () => {
     expect(buildClaudeStreamArgs('default', undefined, undefined, undefined, 'high', undefined, 'claude-opus-4-6'))
       .toEqual(expect.arrayContaining(['--model', 'claude-opus-4-6']))
+  })
+
+  it('uses Claude append-system-prompt-file args instead of replacing the system prompt', () => {
+    const args = buildClaudeStreamArgs('default', undefined, '/tmp/hammurabi-prompt.md')
+
+    expect(args).toContain('--append-system-prompt-file')
+    expect(args).toContain('/tmp/hammurabi-prompt.md')
+    expect(args).toContain('--exclude-dynamic-system-prompt-sections')
+    expect(args).not.toContain('--system-prompt')
+  })
+
+  it('creates an on-target prompt tempfile when the append prompt is provided to the shell invocation', () => {
+    const command = buildClaudeShellInvocation(
+      ['-p', '--output-format', 'stream-json'],
+      'enabled',
+      128000,
+      '# Hammurabi Bootstrap\n\nUse progressive memory discovery.',
+    )
+
+    expect(command).toContain('mktemp "${TMPDIR:-/tmp}/hammurabi-claude-prompt.XXXXXX"')
+    expect(command).toContain("cat > \"$hammurabi_prompt_file\" <<'HAMMURABI_CLAUDE_PROMPT'")
+    expect(command).toContain('Use progressive memory discovery.')
+    expect(command).toContain('--append-system-prompt-file')
+    expect(command).toContain('"$hammurabi_prompt_file"')
+    expect(command).toContain('--exclude-dynamic-system-prompt-sections')
+    expect(command).not.toContain('--system-prompt')
   })
 
   it('builds a local login-shell spawn that bootstraps shell init before execing Claude', () => {

@@ -117,6 +117,56 @@ describe('MemoryContextBuilder.build()', () => {
     expect(built.systemPromptSection).not.toContain('### Cue-based Recollection')
   })
 
+  it('builds startup context as progressive discovery without injecting memory bodies', async () => {
+    await writeFile(
+      join(memoryRoot, 'MEMORY.md'),
+      '# Commander Memory\n\n- DO_NOT_INJECT_DURABLE_FACT.\n',
+      'utf-8',
+    )
+    await writeFile(
+      join(memoryRoot, 'LONG_TERM_MEM.md'),
+      '# Commander Long-Term Memory\n\nDO_NOT_INJECT_LONG_TERM_NOTE.\n',
+      'utf-8',
+    )
+    await writeFile(join(memoryRoot, 'GOALS.md'), '# Active Goals\n\n## [startup] Hidden goal\n', 'utf-8')
+    await writeFile(join(memoryRoot, 'backlog', 'thin-index.md'), '- #247 Fix auth token refresh', 'utf-8')
+
+    const workingMemory = new WorkingMemoryStore(commanderId, tmpDir)
+    await workingMemory.update({
+      source: 'message',
+      summary: 'DO_NOT_INJECT_WORKING_MEMORY',
+    })
+
+    const builder = new MemoryContextBuilder(commanderId, tmpDir)
+    const built = await builder.build({
+      currentTask: {
+        number: 247,
+        title: 'Fix auth token refresh',
+        body: 'Refresh fails when cert rotates.',
+        owner: 'NickGuAI',
+        repo: 'example-repo',
+      },
+      recentConversation: [{ role: 'user', content: 'DO_NOT_INJECT_RECENT_CONVERSATION' }],
+      mode: 'startup',
+    })
+
+    expect(built.layersIncluded).toEqual([1, 2])
+    expect(built.systemPromptSection).toContain('### Current Task')
+    expect(built.systemPromptSection).toContain('### Backlog Overview')
+    expect(built.systemPromptSection).toContain('### Progressive Memory Discovery')
+    expect(built.systemPromptSection).toContain('.memory/MEMORY.md')
+    expect(built.systemPromptSection).toContain('.memory/LONG_TERM_MEM.md')
+    expect(built.systemPromptSection).toContain('.memory/working-memory.md')
+    expect(built.systemPromptSection).not.toContain('### Long-term Memory')
+    expect(built.systemPromptSection).not.toContain('### Active Goals')
+    expect(built.systemPromptSection).not.toContain('### Working Memory Scratchpad')
+    expect(built.systemPromptSection).not.toContain('### Recent Conversation')
+    expect(built.systemPromptSection).not.toContain('DO_NOT_INJECT_DURABLE_FACT')
+    expect(built.systemPromptSection).not.toContain('DO_NOT_INJECT_LONG_TERM_NOTE')
+    expect(built.systemPromptSection).not.toContain('DO_NOT_INJECT_WORKING_MEMORY')
+    expect(built.systemPromptSection).not.toContain('DO_NOT_INJECT_RECENT_CONVERSATION')
+  })
+
   it('drops lower-priority layers when token budget is tight', async () => {
     const memoryLines = Array.from({ length: 80 }, (_, idx) => `- line ${idx + 1}`).join('\n')
     await writeFile(join(memoryRoot, 'MEMORY.md'), `# Commander Memory\n\n${memoryLines}\n`, 'utf-8')

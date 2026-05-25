@@ -6,11 +6,13 @@ import {
   useState,
   type ChangeEvent,
   type ClipboardEvent,
+  type FormEvent,
   type KeyboardEvent,
 } from 'react'
-import { ArrowUp, ListPlus, Mic, Paperclip, Plus, Zap } from 'lucide-react'
+import { ArrowUp, BrainCircuit, ListChecks, ListPlus, Mic, Paperclip, Plus, X, Zap } from 'lucide-react'
 import { useOpenAITranscription, useOpenAITranscriptionConfig } from '@/hooks/use-openai-transcription'
 import { useSpeechRecognition } from '@/hooks/use-speech-recognition'
+import { useComposerAbilities } from '@/hooks/use-composer-abilities'
 import type { AgentType, SessionQueueSnapshot } from '@/types'
 import { cn } from '@/lib/utils'
 import { getQueuePendingCount } from '../queue-state'
@@ -18,6 +20,10 @@ import { SkillsPicker } from './SkillsPicker'
 import { QueuePanel } from './QueuePanel'
 import { useSessionDraft } from '../page-shell/use-session-draft'
 import type { WorkspaceContextRequest, WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
+import {
+  applyComposerAbilitiesToText,
+  type ComposerAbility,
+} from '@modules/settings/composer-abilities'
 
 export interface SessionComposerImage {
   mediaType: string
@@ -116,7 +122,18 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   const [pendingImages, setPendingImages] = useState<SessionComposerImage[]>([])
   const [showSkills, setShowSkills] = useState(false)
   const [showQueuePanel, setShowQueuePanel] = useState(false)
+  const [selectedAbilityIds, setSelectedAbilityIds] = useState<string[]>([])
+  const [showCustomAbilityForm, setShowCustomAbilityForm] = useState(false)
+  const [customAbilityLabel, setCustomAbilityLabel] = useState('')
+  const [customAbilityPrompt, setCustomAbilityPrompt] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const {
+    abilities: composerAbilities,
+    customAbilitiesEnabled,
+    addCustomAbility,
+    removeCustomAbility,
+    isSaving: isSavingComposerAbility,
+  } = useComposerAbilities()
   const { data: realtimeTranscriptionConfig } = useOpenAITranscriptionConfig()
   const openAITranscription = useOpenAITranscription({
     enabled: Boolean(realtimeTranscriptionConfig?.openaiConfigured),
@@ -173,6 +190,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     : queueDraftsSupported
       ? 'Enter send · Tab queue'
       : 'Enter send'
+  const selectedAbilities = composerAbilities.filter((ability) => selectedAbilityIds.includes(ability.id))
 
   useImperativeHandle(ref, () => ({
     seedText(nextText: string) {
@@ -202,6 +220,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
 
   function clearComposer() {
     setPendingImages([])
+    setSelectedAbilityIds([])
     onClearContextFilePaths?.()
     clearDraft()
   }
@@ -238,7 +257,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     let sent: boolean | void | Promise<boolean | void>
     try {
       sent = onSend({
-        text,
+        text: applyComposerAbilitiesToText(text, selectedAbilities),
         images: images.length > 0 ? images : undefined,
         context,
       })
@@ -262,7 +281,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     const images = pendingImages.slice()
     const context = buildContextPayload()
     const queued = await onQueue({
-      text: inputText.trim(),
+      text: applyComposerAbilitiesToText(inputText.trim(), selectedAbilities),
       images: images.length > 0 ? images : undefined,
       context,
     })
@@ -346,6 +365,95 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
       return
     }
     startListening()
+  }
+
+  function toggleAbility(abilityId: string) {
+    setSelectedAbilityIds((current) => (
+      current.includes(abilityId)
+        ? current.filter((id) => id !== abilityId)
+        : [...current, abilityId]
+    ))
+  }
+
+  function abilityIcon(ability: ComposerAbility) {
+    if (ability.id === 'think-hard') {
+      return <BrainCircuit size={14} />
+    }
+    return <ListChecks size={14} />
+  }
+
+  async function handleCustomAbilitySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const added = await addCustomAbility(customAbilityLabel, customAbilityPrompt)
+    if (!added) {
+      return
+    }
+    setCustomAbilityLabel('')
+    setCustomAbilityPrompt('')
+    setShowCustomAbilityForm(false)
+  }
+
+  async function handleRemoveCustomAbility(abilityId: string) {
+    const removed = await removeCustomAbility(abilityId)
+    if (!removed) {
+      return
+    }
+    setSelectedAbilityIds((current) => current.filter((id) => id !== abilityId))
+  }
+
+  function renderAbilityActions() {
+    if (composerAbilities.length === 0 && !customAbilitiesEnabled) {
+      return null
+    }
+
+    return (
+      <>
+        {composerAbilities.map((ability) => {
+          const selected = selectedAbilityIds.includes(ability.id)
+          return (
+            <span key={ability.id} className="composer-ability-chip">
+              <button
+                type="button"
+                className={cn('composer-ability-btn', selected && 'composer-ability-btn--active')}
+                onClick={() => toggleAbility(ability.id)}
+                aria-label={`${selected ? 'Disable' : 'Enable'} ${ability.label} ability`}
+                aria-pressed={selected}
+                title={ability.label}
+                disabled={disabled}
+              >
+                {abilityIcon(ability)}
+                <span>{ability.label}</span>
+              </button>
+              {customAbilitiesEnabled && ability.source === 'custom' && (
+                <button
+                  type="button"
+                  className="composer-ability-remove-btn"
+                  onClick={() => void handleRemoveCustomAbility(ability.id)}
+                  aria-label={`Remove ${ability.label} ability`}
+                  title={`Remove ${ability.label}`}
+                  disabled={disabled || isSavingComposerAbility}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </span>
+          )
+        })}
+        {customAbilitiesEnabled && (
+          <button
+            type="button"
+            className="composer-ability-btn composer-ability-btn--custom"
+            onClick={() => setShowCustomAbilityForm((visible) => !visible)}
+            aria-label="Add custom composer ability"
+            aria-expanded={showCustomAbilityForm}
+            disabled={disabled}
+          >
+            <Plus size={14} />
+            <span>Custom</span>
+          </button>
+        )}
+      </>
+    )
   }
 
   function renderComposerField() {
@@ -444,6 +552,46 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
             ))}
           </div>
         )}
+        {customAbilitiesEnabled && showCustomAbilityForm && (
+          <form className="composer-custom-ability-form" onSubmit={handleCustomAbilitySubmit}>
+            <input
+              value={customAbilityLabel}
+              onChange={(event) => setCustomAbilityLabel(event.target.value)}
+              placeholder="Ability name"
+              aria-label="Custom ability name"
+              maxLength={40}
+              disabled={disabled || isSavingComposerAbility}
+            />
+            <textarea
+              value={customAbilityPrompt}
+              onChange={(event) => setCustomAbilityPrompt(event.target.value)}
+              placeholder="Prompt instructions"
+              aria-label="Custom ability prompt"
+              rows={2}
+              maxLength={4000}
+              disabled={disabled || isSavingComposerAbility}
+            />
+            <div className="composer-custom-ability-actions">
+              <button
+                type="button"
+                onClick={() => setShowCustomAbilityForm(false)}
+                disabled={isSavingComposerAbility}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  isSavingComposerAbility
+                  || customAbilityLabel.trim().length === 0
+                  || customAbilityPrompt.trim().length === 0
+                }
+              >
+                Add
+              </button>
+            </div>
+          </form>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -489,6 +637,8 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
               )}
 
               <div className="composer-mobile-actions">
+                {renderAbilityActions()}
+
                 {isMicSupported && (
                   <button
                     type="button"
@@ -553,6 +703,8 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
                 >
                   <Zap size={18} />
                 </button>
+
+                {renderAbilityActions()}
 
                 {isMicSupported && (
                   <button

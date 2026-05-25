@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
+import { GAIA_COMMANDER_AVATAR_URL } from '../../commanders/commander-profile'
 import { CommanderSessionStore } from '../../commanders/store'
 import { ConversationStore } from '../../commanders/conversation-store'
 import { createDefaultHeartbeatConfig } from '../../commanders/heartbeat'
@@ -533,6 +534,7 @@ describe('org route', () => {
         displayName: 'Gaia',
         status: 'idle',
         templateId: 'gaia-onboarding',
+        avatarUrl: GAIA_COMMANDER_AVATAR_URL,
         profile: {
           portraitStyleId: expect.any(String),
           speakingTone: 'Mother-of-all onboarding',

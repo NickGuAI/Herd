@@ -7,12 +7,19 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
 import { createSettingsRouter } from '../routes'
 import { AppSettingsStore } from '../store'
+import { DEFAULT_COMPOSER_ABILITIES } from '../composer-abilities'
 
 const API_KEY_HEADERS = {
   'x-hammurabi-api-key': 'test-key',
 }
 
 const tempDirs: string[] = []
+
+const expectedDefaultComposerAbilities = {
+  defaultAbilities: DEFAULT_COMPOSER_ABILITIES.map((ability) => ({ ...ability })),
+  customAbilities: [],
+  customAbilitiesEnabled: false,
+}
 
 interface RunningServer {
   baseUrl: string
@@ -117,6 +124,7 @@ describe('settings routes', () => {
         settings: {
           theme: 'light',
           fontScale: 1,
+          composerAbilities: expectedDefaultComposerAbilities,
           updatedAt: '2026-05-03T00:00:00.000Z',
         },
       })
@@ -223,6 +231,7 @@ describe('settings routes', () => {
         settings: {
           theme: 'dark',
           fontScale: 1,
+          composerAbilities: expectedDefaultComposerAbilities,
           updatedAt: '2026-05-03T01:00:00.000Z',
         },
       })
@@ -230,6 +239,7 @@ describe('settings routes', () => {
       await expect(store.get()).resolves.toEqual({
         theme: 'dark',
         fontScale: 1,
+        composerAbilities: expectedDefaultComposerAbilities,
         updatedAt: '2026-05-03T01:00:00.000Z',
       })
     } finally {
@@ -288,6 +298,7 @@ describe('settings routes', () => {
         settings: {
           theme: 'light',
           fontScale: 1.2,
+          composerAbilities: expectedDefaultComposerAbilities,
           updatedAt: '2026-05-03T02:00:00.000Z',
         },
       })
@@ -295,6 +306,7 @@ describe('settings routes', () => {
       await expect(store.get()).resolves.toEqual({
         theme: 'light',
         fontScale: 1.2,
+        composerAbilities: expectedDefaultComposerAbilities,
         updatedAt: '2026-05-03T02:00:00.000Z',
       })
     } finally {
@@ -323,6 +335,111 @@ describe('settings routes', () => {
       expect(response.status).toBe(400)
       expect(await response.json()).toEqual({
         error: 'fontScale must be a number between 0.8 and 1.6',
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('updates and persists composer ability settings separately from skills', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'hammurabi-settings-route-'))
+    tempDirs.push(dir)
+    const store = new AppSettingsStore({
+      filePath: path.join(dir, 'settings.json'),
+      now: () => new Date('2026-05-03T03:00:00.000Z'),
+    })
+    const server = await startServer(store)
+
+    try {
+      const updateResponse = await fetch(`${server.baseUrl}/api/settings`, {
+        method: 'PATCH',
+        headers: {
+          ...API_KEY_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          composerAbilities: {
+            customAbilitiesEnabled: true,
+            defaultAbilities: DEFAULT_COMPOSER_ABILITIES.map((ability) => ({
+              ...ability,
+              enabled: ability.id !== 'think-hard',
+            })),
+            customAbilities: [{
+              id: 'custom-summarize',
+              label: 'Summarize',
+              prompt: 'Summarize the requested context before answering.',
+              enabled: true,
+            }],
+          },
+        }),
+      })
+
+      expect(updateResponse.status).toBe(200)
+      expect(await updateResponse.json()).toEqual({
+        settings: {
+          theme: 'light',
+          fontScale: 1,
+          composerAbilities: {
+            defaultAbilities: [
+              DEFAULT_COMPOSER_ABILITIES[0],
+              {
+                ...DEFAULT_COMPOSER_ABILITIES[1],
+                enabled: false,
+              },
+            ],
+            customAbilities: [{
+              id: 'custom-summarize',
+              label: 'Summarize',
+              prompt: 'Summarize the requested context before answering.',
+              enabled: true,
+            }],
+            customAbilitiesEnabled: true,
+          },
+          updatedAt: '2026-05-03T03:00:00.000Z',
+        },
+      })
+
+      await expect(store.get()).resolves.toMatchObject({
+        composerAbilities: {
+          customAbilitiesEnabled: true,
+          customAbilities: [{
+            id: 'custom-summarize',
+            label: 'Summarize',
+            prompt: 'Summarize the requested context before answering.',
+            enabled: true,
+          }],
+        },
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('rejects malformed composer ability payloads', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'hammurabi-settings-route-'))
+    tempDirs.push(dir)
+    const store = new AppSettingsStore({
+      filePath: path.join(dir, 'settings.json'),
+    })
+    const server = await startServer(store)
+
+    try {
+      const response = await fetch(`${server.baseUrl}/api/settings`, {
+        method: 'PATCH',
+        headers: {
+          ...API_KEY_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          composerAbilities: {
+            customAbilitiesEnabled: 'yes',
+          },
+        }),
+      })
+
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: 'composerAbilities.customAbilitiesEnabled must be a boolean',
       })
     } finally {
       await server.close()

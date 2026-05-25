@@ -14,6 +14,40 @@ const speechRecognitionMock = {
   isSupported: true,
 }
 
+const composerAbilitiesMock = vi.hoisted(() => ({
+  customAbilitiesEnabled: false,
+  addCustomAbility: vi.fn(),
+  removeCustomAbility: vi.fn(),
+  useComposerAbilities: vi.fn(() => ({
+    abilities: [
+      {
+        id: 'create-quests',
+        label: 'Create Quests',
+        prompt: 'Load quests, ask for acceptance criteria when missing, and add drift detection.',
+        enabled: true,
+        source: 'default',
+      },
+      {
+        id: 'think-hard',
+        label: 'Think Hard',
+        prompt: 'Think ultra hard internally and keep the user-visible answer concise.',
+        enabled: true,
+        source: 'default',
+      },
+    ],
+    settings: {
+      defaultAbilities: [],
+      customAbilities: [],
+      customAbilitiesEnabled: composerAbilitiesMock.customAbilitiesEnabled,
+    },
+    customAbilitiesEnabled: composerAbilitiesMock.customAbilitiesEnabled,
+    addCustomAbility: composerAbilitiesMock.addCustomAbility,
+    removeCustomAbility: composerAbilitiesMock.removeCustomAbility,
+    isLoading: false,
+    isSaving: false,
+  })),
+}))
+
 vi.mock('@/hooks/use-openai-transcription', () => ({
   useOpenAITranscriptionConfig: () => ({ data: { openaiConfigured: false } }),
   useOpenAITranscription: () => ({
@@ -27,6 +61,10 @@ vi.mock('@/hooks/use-openai-transcription', () => ({
 
 vi.mock('@/hooks/use-speech-recognition', () => ({
   useSpeechRecognition: () => speechRecognitionMock,
+}))
+
+vi.mock('@/hooks/use-composer-abilities', () => ({
+  useComposerAbilities: composerAbilitiesMock.useComposerAbilities,
 }))
 
 vi.mock('../SkillsPicker', () => ({
@@ -90,6 +128,10 @@ beforeEach(() => {
   speechRecognitionMock.isSupported = true
   speechRecognitionMock.startListening.mockReset()
   speechRecognitionMock.stopListening.mockReset()
+  composerAbilitiesMock.customAbilitiesEnabled = false
+  composerAbilitiesMock.addCustomAbility.mockReset()
+  composerAbilitiesMock.removeCustomAbility.mockReset()
+  composerAbilitiesMock.useComposerAbilities.mockClear()
 })
 
 afterEach(() => {
@@ -141,14 +183,17 @@ describe('SessionComposer', () => {
     expect(document.body.querySelector('.composer-preview-markdown')).toBeNull()
   })
 
-  it('renders exactly three bottom-row controls in the mobile variant when queue access is unavailable', async () => {
+  it('renders composer abilities in the mobile variant when queue access is unavailable', async () => {
     renderComposer({ variant: 'mobile' })
 
     const buttons = Array.from(composerRow().querySelectorAll('button'))
-    expect(buttons).toHaveLength(3)
+    expect(buttons).toHaveLength(5)
     expect(findButtonByLabel('Add to chat')).toBeDefined()
+    expect(findButtonByLabel('Enable Create Quests ability')).toBeDefined()
+    expect(findButtonByLabel('Enable Think Hard ability')).toBeDefined()
     expect(findButtonByLabel('Start voice input')).toBeDefined()
     expect(findButtonByLabel('Send message')).toBeDefined()
+    expect(document.body.querySelector('button[aria-label="Add custom composer ability"]')).toBeNull()
   })
 
   it('renders the mobile queue button and opens the queue panel with controls', async () => {
@@ -324,15 +369,74 @@ describe('SessionComposer', () => {
     expect(onSend).toHaveBeenCalledWith({ text: 'Keep follow-up send enabled', images: undefined })
   })
 
-  it('keeps the desktop variant on the existing five-control row', async () => {
+  it('keeps the desktop abilities inside the existing action row', async () => {
     renderComposer({ variant: 'desktop' })
 
     const buttons = Array.from(composerRow().querySelectorAll('button'))
-    expect(buttons).toHaveLength(5)
+    expect(buttons).toHaveLength(7)
     expect(findButtonByLabel('Attach image')).toBeDefined()
     expect(findButtonByLabel('Skills')).toBeDefined()
+    expect(findButtonByLabel('Enable Create Quests ability')).toBeDefined()
+    expect(findButtonByLabel('Enable Think Hard ability')).toBeDefined()
     expect(findButtonByLabel('Start voice input')).toBeDefined()
     expect(document.body.textContent).toContain('Queue')
+    expect(document.body.querySelector('button[aria-label="Add custom composer ability"]')).toBeNull()
+  })
+
+  it('applies the selected Create Quests ability to the next send payload without losing context', async () => {
+    const onSend = vi.fn(() => true)
+
+    renderComposer({
+      onSend,
+      contextFilePaths: ['docs/spec.md'],
+    })
+    setDraftText('Break this into implementation work')
+
+    flushSync(() => {
+      findButtonByLabel('Enable Create Quests ability').click()
+    })
+    flushSync(() => {
+      findButtonByLabel('Send').click()
+    })
+
+    expect(onSend).toHaveBeenCalledWith({
+      text: expect.stringContaining('[Composer abilities]'),
+      images: undefined,
+      context: {
+        filePaths: ['docs/spec.md'],
+      },
+    })
+    const payload = onSend.mock.calls[0]?.[0] as { text: string }
+    expect(payload.text).toContain('Create Quests: Load quests')
+    expect(payload.text).toContain('[User message]\nBreak this into implementation work')
+  })
+
+  it('applies the selected Think Hard ability to the mobile queue payload', async () => {
+    const onSend = vi.fn(() => true)
+    const onQueue = vi.fn(() => true)
+
+    renderComposer({
+      variant: 'mobile',
+      isStreaming: true,
+      onSend,
+      onQueue,
+    })
+    setDraftText('Compare the options')
+
+    flushSync(() => {
+      findButtonByLabel('Enable Think Hard ability').click()
+    })
+    flushSync(() => {
+      findButtonByLabel('Add to queue').click()
+    })
+
+    expect(onQueue).toHaveBeenCalledWith({
+      text: expect.stringContaining('Think Hard: Think ultra hard internally'),
+      images: undefined,
+    })
+    const payload = onQueue.mock.calls[0]?.[0] as { text: string }
+    expect(payload.text).toContain('[User message]\nCompare the options')
+    expect(onSend).not.toHaveBeenCalled()
   })
 
   it('opens the queue panel from the desktop queue button', async () => {

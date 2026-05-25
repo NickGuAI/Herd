@@ -1738,6 +1738,14 @@ describe('commanders routes', () => {
       })
       expect(mock.createCalls[0]?.systemPrompt).not.toContain(`# ${'Shared'} Commander Knowledge`)
       expect(mock.createCalls[0]?.systemPrompt).not.toContain(`shared-${'knowledge'}/*.md`)
+      expect(mock.createCalls[0]?.systemPrompt).toContain('# Global Rules Bootstrap')
+      expect(mock.createCalls[0]?.systemPrompt).toContain('~/.hammurabi/global-rules/USER.md')
+      expect(mock.createCalls[0]?.systemPrompt).toContain('~/.hammurabi/global-rules/WORKSPACE.md')
+      expect(mock.createCalls[0]?.systemPrompt).toContain('~/.hammurabi/global-rules/SKILLS_INDEX.md')
+      expect(mock.createCalls[0]?.systemPrompt).toContain('# Shared Knowledge Bootstrap')
+      expect(mock.createCalls[0]?.systemPrompt).toContain('~/.hammurabi/shared-knowledge/DOCTRINES.md')
+      expect(mock.createCalls[0]?.systemPrompt).toContain('~/.hammurabi/shared-knowledge/COMMANDER_GUIDE.md')
+      expect(mock.createCalls[0]?.systemPrompt).toContain('~/.hammurabi/shared-knowledge/LEARNINGS.md')
       expect(mock.createCalls[0]?.systemPrompt).toEqual(
         expect.stringContaining('## Commander Memory'),
       )
@@ -2449,7 +2457,21 @@ describe('commanders routes', () => {
           }),
         },
       )
-      expect(startSecondConversationResponse.status).toBe(200)
+      expect([200, 202]).toContain(startSecondConversationResponse.status)
+      await vi.waitFor(async () => {
+        const detailResponse = await fetch(`${server.baseUrl}/api/conversations/${secondConversationId}`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(detailResponse.status).toBe(200)
+        expect(await detailResponse.json()).toEqual(expect.objectContaining({
+          id: secondConversationId,
+          status: 'active',
+          runtimeState: 'active',
+          liveSession: expect.objectContaining({
+            name: expect.stringContaining(`-conversation-${secondConversationId}`),
+          }),
+        }))
+      })
 
       const messageResponse = await fetch(`${server.baseUrl}/api/conversations/${secondConversationId}/message`, {
         method: 'POST',
@@ -3571,15 +3593,6 @@ describe('commanders routes', () => {
     } finally {
       await server.close()
     }
-  })
-
-  // NOTE: WebSocket live-event streaming is no longer tested here.
-  // The WS endpoint for commander sessions has moved to the agents router:
-  //   /api/agents/sessions/commander-{id}/ws
-  // End-to-end WS streaming is verified via agents router integration tests.
-  it.skip('streams live events over websocket', () => {
-    // Skipped: commander WS endpoint was removed as part of the stream-session migration.
-    // See apps/hammurabi/modules/agents/routes.ts for the agents WS handler.
   })
 
   it('supports quest CRUD routes including note appends', async () => {

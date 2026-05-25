@@ -5,6 +5,7 @@ import {
   useOnboardingStatus,
   useSeedGaiaCommander,
   useSeedStarterWorkforce,
+  useSkipStarterWorkforce,
 } from '@modules/onboarding/hooks/useFounderOnboarding'
 import {
   DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
@@ -91,29 +92,50 @@ function SectionActions({
   nextLabel = 'Continue',
   nextDisabled = false,
   nextTestId,
+  secondaryAction,
+  secondaryLabel,
+  secondaryDisabled = false,
+  secondaryTestId,
 }: {
   onBack?: () => void
   onNext?: () => void
   nextLabel?: string
   nextDisabled?: boolean
   nextTestId?: string
+  secondaryAction?: () => void
+  secondaryLabel?: string
+  secondaryDisabled?: boolean
+  secondaryTestId?: string
 }) {
   return (
     <div className="hv-onboarding-actions">
       <button type="button" className="hv-onboarding-button hv-onboarding-button-ghost" onClick={onBack} disabled={!onBack}>
         Back
       </button>
-      {onNext ? (
-        <button
-          type="button"
-          className="hv-onboarding-button hv-onboarding-button-primary"
-          onClick={onNext}
-          disabled={nextDisabled}
-          data-testid={nextTestId}
-        >
-          {nextLabel}
-        </button>
-      ) : null}
+      <div className="hv-onboarding-action-group">
+        {secondaryAction ? (
+          <button
+            type="button"
+            className="hv-onboarding-button hv-onboarding-button-ghost"
+            onClick={secondaryAction}
+            disabled={secondaryDisabled}
+            data-testid={secondaryTestId}
+          >
+            {secondaryLabel ?? 'Skip'}
+          </button>
+        ) : null}
+        {onNext ? (
+          <button
+            type="button"
+            className="hv-onboarding-button hv-onboarding-button-primary"
+            onClick={onNext}
+            disabled={nextDisabled}
+            data-testid={nextTestId}
+          >
+            {nextLabel}
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -124,6 +146,7 @@ export function FounderOrgSetupPage() {
   const createFounderOrg = useCreateFounderOrgSetup()
   const seedGaia = useSeedGaiaCommander()
   const seedStarterWorkforce = useSeedStarterWorkforce()
+  const skipStarterWorkforce = useSkipStarterWorkforce()
   const submissionLockRef = useRef(false)
   const defaultsAppliedRef = useRef(false)
   const hasEditedRef = useRef(false)
@@ -221,6 +244,16 @@ export function FounderOrgSetupPage() {
     setActionError(null)
     try {
       await seedStarterWorkforce.mutateAsync()
+      setActiveStepId('providers-machines')
+    } catch (error) {
+      setActionError(formatSetupError(error))
+    }
+  }
+
+  async function handleSkipStarterWorkforce() {
+    setActionError(null)
+    try {
+      await skipStarterWorkforce.mutateAsync()
       setActiveStepId('providers-machines')
     } catch (error) {
       setActionError(formatSetupError(error))
@@ -362,6 +395,12 @@ export function FounderOrgSetupPage() {
           gap: var(--hv-space-3);
           margin-top: var(--hv-space-5);
         }
+        .hv-onboarding-action-group {
+          display: flex;
+          justify-content: flex-end;
+          gap: var(--hv-space-3);
+          flex-wrap: wrap;
+        }
         .hv-onboarding-button {
           min-height: 42px;
           border-radius: var(--hv-radius-carved);
@@ -430,6 +469,30 @@ export function FounderOrgSetupPage() {
         .hv-onboarding-provider p,
         .hv-onboarding-machine p {
           margin: 3px 0 0;
+          font-size: var(--hv-text-small);
+        }
+        .hv-onboarding-readiness-section {
+          margin-top: var(--hv-space-5);
+          padding-top: var(--hv-space-4);
+          border-top: 1px solid var(--hv-border-soft);
+        }
+        .hv-onboarding-readiness-section:first-of-type {
+          margin-top: var(--hv-space-4);
+        }
+        .hv-onboarding-readiness-heading {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: var(--hv-space-3);
+        }
+        .hv-onboarding-readiness-heading h3 {
+          margin: 0;
+          font-family: var(--hv-font-primary);
+          font-size: var(--hv-text-title);
+          font-weight: 300;
+        }
+        .hv-onboarding-readiness-heading span {
+          color: var(--hv-fg-subtle);
           font-size: var(--hv-text-small);
         }
         .hv-onboarding-provider details {
@@ -531,6 +594,25 @@ export function FounderOrgSetupPage() {
         .hv-onboarding-receipt-row strong {
           color: var(--hv-fg);
           font-weight: 500;
+        }
+        .hv-onboarding-gaia-card {
+          display: grid;
+          grid-template-columns: 84px 1fr;
+          gap: var(--hv-space-4);
+          align-items: center;
+          margin-top: var(--hv-space-5);
+          border: 1px solid var(--hv-border-hair);
+          background: var(--hv-bg-raised);
+          border-radius: var(--hv-radius-carved);
+          padding: var(--hv-space-4);
+        }
+        .hv-onboarding-gaia-avatar {
+          width: 84px;
+          height: 84px;
+          border-radius: 50%;
+          object-fit: cover;
+          border: 1px solid var(--hv-border-soft);
+          background: var(--hv-bg);
         }
         @keyframes hvOnboardingFloat {
           from { transform: translateY(0); }
@@ -662,6 +744,18 @@ export function FounderOrgSetupPage() {
               <p>
                 Seed Gaia as the first commander for onboarding, commander creation, provider setup, and ongoing maintenance.
               </p>
+              <div className="hv-onboarding-gaia-card">
+                <img
+                  className="hv-onboarding-gaia-avatar"
+                  src={status?.gaia.avatarUrl ?? '/assets/commanders/gaia-profile.png'}
+                  alt="Gaia commander headshot"
+                  data-testid="gaia-avatar"
+                />
+                <div>
+                  <div className="hv-onboarding-provider-title">{status?.gaia.displayName ?? 'Gaia'}</div>
+                  <p>Bundled onboarding commander profile.</p>
+                </div>
+              </div>
               <div className="hv-onboarding-receipt">
                 <div className="hv-onboarding-receipt-row">
                   <span>Name</span>
@@ -707,7 +801,7 @@ export function FounderOrgSetupPage() {
                       <p>{pkg.summary}</p>
                     </div>
                     <div className={`hv-onboarding-badge ${pkg.installed ? 'hv-onboarding-badge-ready' : 'hv-onboarding-badge-skipped'}`}>
-                      {pkg.installed ? 'installed' : 'ready'}
+                      {pkg.installed ? 'installed' : status?.starterWorkforce.skipped ? 'skipped' : 'ready'}
                     </div>
                   </article>
                 ))}
@@ -716,9 +810,13 @@ export function FounderOrgSetupPage() {
               <SectionActions
                 onBack={() => setActiveStepId(previousStep?.id ?? 'gaia')}
                 onNext={status?.starterWorkforce.complete ? () => setActiveStepId('providers-machines') : handleSeedStarterWorkforce}
-                nextDisabled={seedStarterWorkforce.isPending}
+                nextDisabled={seedStarterWorkforce.isPending || skipStarterWorkforce.isPending}
                 nextLabel={status?.starterWorkforce.complete ? 'Continue' : seedStarterWorkforce.isPending ? 'Installing...' : 'Install starter workforce'}
                 nextTestId="seed-starter-workforce-submit"
+                secondaryAction={!status?.starterWorkforce.complete ? handleSkipStarterWorkforce : undefined}
+                secondaryDisabled={seedStarterWorkforce.isPending || skipStarterWorkforce.isPending}
+                secondaryLabel={skipStarterWorkforce.isPending ? 'Skipping...' : 'Skip for now'}
+                secondaryTestId="skip-starter-workforce-submit"
               />
             </>
           ) : null}
@@ -729,19 +827,39 @@ export function FounderOrgSetupPage() {
               <p>
                 Provider and machine readiness is reported by the backend. Missing auth can be completed now or later from settings.
               </p>
-              <section className="hv-onboarding-provider-grid" aria-label="Provider readiness">
-                {providerSummary.map((provider) => (
-                  <ProviderCard key={provider.id} provider={provider} />
-                ))}
+              <section
+                className="hv-onboarding-readiness-section"
+                aria-label="Provider readiness"
+                data-testid="provider-readiness-section"
+              >
+                <div className="hv-onboarding-readiness-heading">
+                  <h3>Provider readiness</h3>
+                  <span>CLI and auth</span>
+                </div>
+                <div className="hv-onboarding-provider-grid">
+                  {providerSummary.map((provider) => (
+                    <ProviderCard key={provider.id} provider={provider} />
+                  ))}
+                </div>
               </section>
-              <section className="hv-onboarding-machine-grid" aria-label="Machine readiness">
-                {(status?.machines ?? []).map((machine) => (
-                  <article key={machine.id} className="hv-onboarding-machine" data-testid={`machine-card-${machine.id}`}>
-                    <div className="hv-onboarding-provider-title">{machine.label}</div>
-                    <p>{machine.summary}</p>
-                    <p>{machine.envFile ? `env: ${machine.envFile}` : 'no env file configured'}</p>
-                  </article>
-                ))}
+              <section
+                className="hv-onboarding-readiness-section"
+                aria-label="Machine readiness"
+                data-testid="machine-readiness-section"
+              >
+                <div className="hv-onboarding-readiness-heading">
+                  <h3>Machine readiness</h3>
+                  <span>runtime targets</span>
+                </div>
+                <div className="hv-onboarding-machine-grid">
+                  {(status?.machines ?? []).map((machine) => (
+                    <article key={machine.id} className="hv-onboarding-machine" data-testid={`machine-card-${machine.id}`}>
+                      <div className="hv-onboarding-provider-title">{machine.label}</div>
+                      <p>{machine.summary}</p>
+                      <p>{machine.envFile ? `env: ${machine.envFile}` : 'no env file configured'}</p>
+                    </article>
+                  ))}
+                </div>
               </section>
               <SectionActions
                 onBack={() => setActiveStepId(previousStep?.id ?? 'gaia')}

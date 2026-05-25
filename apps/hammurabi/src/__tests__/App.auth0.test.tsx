@@ -40,6 +40,18 @@ vi.mock('@/components/LandingPage', () => ({
   LandingPage: () => null,
 }))
 
+vi.mock('@/components/ApiKeyLandingPage', () => ({
+  ApiKeyLandingPage: ({ onApiKeySubmit }: { onApiKeySubmit: (key: string) => void }) => (
+    <button
+      type="button"
+      data-testid="api-key-submit"
+      onClick={() => onApiKeySubmit(' bootstrap-key ')}
+    >
+      Sign in
+    </button>
+  ),
+}))
+
 vi.mock('@/app/AuthenticatedAppRouter', () => ({
   AuthenticatedAppRouter: () => null,
 }))
@@ -126,6 +138,40 @@ describe('App Auth0 configuration', () => {
       audience: 'https://pmai-api',
       scope: expect.stringContaining('offline_access'),
     }))
+  })
+
+  it('preserves /welcome after bootstrap API-key sign-in', async () => {
+    vi.stubEnv('VITE_AUTH0_DOMAIN', '')
+    vi.stubEnv('VITE_AUTH0_AUDIENCE', '')
+    vi.stubEnv('VITE_AUTH0_CLIENT_ID', '')
+
+    await renderApp('/welcome')
+
+    await act(async () => {
+      const button = document.body.querySelector('[data-testid="api-key-submit"]') as HTMLButtonElement | null
+      button?.click()
+      await Promise.resolve()
+    })
+
+    expect(localStorage.getItem('hammurabi_api_key')).toBe('bootstrap-key')
+    expect(window.location.pathname).toBe('/welcome')
+  })
+
+  it('routes root bootstrap API-key sign-in to /welcome by default', async () => {
+    vi.stubEnv('VITE_AUTH0_DOMAIN', '')
+    vi.stubEnv('VITE_AUTH0_AUDIENCE', '')
+    vi.stubEnv('VITE_AUTH0_CLIENT_ID', '')
+
+    await renderApp('/')
+
+    await act(async () => {
+      const button = document.body.querySelector('[data-testid="api-key-submit"]') as HTMLButtonElement | null
+      button?.click()
+      await Promise.resolve()
+    })
+
+    expect(localStorage.getItem('hammurabi_api_key')).toBe('bootstrap-key')
+    expect(window.location.pathname).toBe('/welcome')
   })
 
   it('redirects Auth0 users to re-authenticate when silent token recovery fails', async () => {

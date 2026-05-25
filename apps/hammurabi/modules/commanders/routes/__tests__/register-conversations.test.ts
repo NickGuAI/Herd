@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import express from 'express'
 import { createServer, type Server } from 'node:http'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import type { ApiKeyStoreLike } from '../../../../server/api-keys/store'
 import { createCommandersRouter, type CommandersRouterOptions } from '../../routes'
 import type { CommanderSessionsInterface } from '../../../agents/routes'
+import { resetConversationRuntimeOverlays } from '../conversation-runtime-state'
 import {
   CommanderSessionStore,
   DEFAULT_COMMANDER_CONTEXT_MODE,
@@ -35,7 +36,12 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir
 }
 
+beforeEach(() => {
+  resetConversationRuntimeOverlays()
+})
+
 afterEach(async () => {
+  resetConversationRuntimeOverlays()
   await Promise.all(
     tempDirs.splice(0).map((directory) =>
       rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),

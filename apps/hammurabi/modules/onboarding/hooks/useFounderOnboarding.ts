@@ -9,6 +9,7 @@ import type {
   OnboardingStatus,
   SeedGaiaOnboardingResponse,
   SeedStarterWorkforceOnboardingResponse,
+  SkipStarterWorkforceOnboardingResponse,
 } from '../contracts'
 
 export const FOUNDER_SETUP_STATUS_QUERY_KEY = ['onboarding', 'founder-setup-status'] as const
@@ -42,6 +43,14 @@ async function seedGaiaCommander(): Promise<SeedGaiaOnboardingResponse> {
 
 async function seedStarterWorkforce(): Promise<SeedStarterWorkforceOnboardingResponse> {
   return fetchJson<SeedStarterWorkforceOnboardingResponse>('/api/onboarding/actions/seed-starter-workforce', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+}
+
+async function skipStarterWorkforce(): Promise<SkipStarterWorkforceOnboardingResponse> {
+  return fetchJson<SkipStarterWorkforceOnboardingResponse>('/api/onboarding/actions/skip-starter-workforce', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
@@ -108,6 +117,21 @@ export function useSeedStarterWorkforce() {
 
   return useMutation({
     mutationFn: seedStarterWorkforce,
+    onSuccess: async (result) => {
+      queryClient.setQueryData(ONBOARDING_STATUS_QUERY_KEY, result.status)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ONBOARDING_STATUS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY }),
+      ])
+    },
+  })
+}
+
+export function useSkipStarterWorkforce() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: skipStarterWorkforce,
     onSuccess: async (result) => {
       queryClient.setQueryData(ONBOARDING_STATUS_QUERY_KEY, result.status)
       await Promise.all([

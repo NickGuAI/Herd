@@ -47,6 +47,12 @@ export interface ProfileCardProps extends Omit<ButtonHTMLAttributes<HTMLButtonEl
 const DEFAULT_INNER_GRADIENT = 'linear-gradient(145deg,var(--hv-surface-card) 0%,var(--hv-bg-raised) 100%)'
 const DEFAULT_BEHIND_GLOW_COLOR = 'var(--hv-ink-wash-03)'
 const DEFAULT_BEHIND_GLOW_SIZE = '64%'
+const LEGACY_GAIA_AVATAR_URL = '/assets/commanders/gaia-profile.svg'
+const GAIA_AVATAR_URL = '/assets/commanders/gaia-profile.png'
+
+function normalizeAvatarUrl(avatarUrl: string | null | undefined): string | null | undefined {
+  return avatarUrl === LEGACY_GAIA_AVATAR_URL ? GAIA_AVATAR_URL : avatarUrl
+}
 
 function clamp(value: number, min = 0, max = 100): number {
   return Math.min(Math.max(value, min), max)
@@ -99,6 +105,8 @@ export const ProfileCard = memo(function ProfileCard({
   onPointerLeave,
   ...buttonProps
 }: ProfileCardProps) {
+  const normalizedAvatarUrl = normalizeAvatarUrl(avatarUrl)
+  const normalizedMiniAvatarUrl = normalizeAvatarUrl(miniAvatarUrl)
   const wrapRef = useRef<HTMLSpanElement | null>(null)
   const shellRef = useRef<HTMLButtonElement | null>(null)
   const [imageFailed, setImageFailed] = useState(false)
@@ -106,11 +114,11 @@ export const ProfileCard = memo(function ProfileCard({
 
   useEffect(() => {
     setImageFailed(false)
-  }, [avatarUrl])
+  }, [normalizedAvatarUrl])
 
   useEffect(() => {
     setMiniImageFailed(false)
-  }, [miniAvatarUrl])
+  }, [normalizedMiniAvatarUrl])
 
   useEffect(() => {
     const shell = shellRef.current
@@ -155,9 +163,9 @@ export const ProfileCard = memo(function ProfileCard({
     ...style,
   }
 
-  const displayMiniAvatar = miniAvatarUrl && !miniImageFailed
-  const hasAvatarUrl = Boolean(avatarUrl)
-  const displayAvatar = avatarUrl && !imageFailed
+  const displayMiniAvatar = normalizedMiniAvatarUrl && !miniImageFailed
+  const hasAvatarUrl = Boolean(normalizedAvatarUrl)
+  const displayAvatar = normalizedAvatarUrl && !imageFailed
   const buttonAriaLabel = buttonProps['aria-label'] ?? `${name}, ${title}`
 
   return (
@@ -194,7 +202,7 @@ export const ProfileCard = memo(function ProfileCard({
           <span className="hv-profile-card-portrait" aria-hidden="true">
             {displayAvatar ? (
               <img
-                src={avatarUrl}
+                src={normalizedAvatarUrl}
                 alt=""
                 loading="lazy"
                 onError={() => setImageFailed(true)}
@@ -217,7 +225,7 @@ export const ProfileCard = memo(function ProfileCard({
                 <span className="hv-profile-card-mini-avatar" aria-hidden="true">
                   {displayMiniAvatar ? (
                     <img
-                      src={miniAvatarUrl}
+                      src={normalizedMiniAvatarUrl}
                       alt=""
                       loading="lazy"
                       onError={() => setMiniImageFailed(true)}

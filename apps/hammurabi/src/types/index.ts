@@ -132,6 +132,7 @@ export type QueuedMessagePriority = 'high' | 'normal' | 'low'
 export interface QueuedMessage {
   id: string
   text: string
+  displayText?: string
   images?: Array<{
     mediaType: string
     data: string

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createClaudeStreamSession, type ClaudeStreamSessionDeps } from '../../../adapters/claude/session'
+import { buildClaudePromptAudit, createClaudeStreamSession, type ClaudeStreamSessionDeps } from '../../../adapters/claude/session'
 
 const UNSET_CLAUDE_CHILD_ENV = 'unset CLAUDECODE ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL'
 
@@ -73,6 +73,61 @@ describe('agents/adapters/claude/session', () => {
       cwd: '/tmp/project alpha',
       stdio: ['pipe', 'pipe', 'pipe'],
     })
+  })
+
+  it('passes commander prompts through an on-target append prompt file and records audit metadata', () => {
+    process.env.SHELL = '/bin/bash'
+
+    const child = createFakeChildProcess()
+    const spawnImpl = vi.fn().mockReturnValue(child)
+    const deps = createDeps(spawnImpl)
+
+    const session = createClaudeStreamSession(
+      'local-claude-prompt-file',
+      'default',
+      '',
+      '/tmp/project alpha',
+      undefined,
+      {
+        systemPrompt: '# Commander Bootstrap\n\n## Commander Memory\n\n### Progressive Memory Discovery\nNo memory bodies.',
+      },
+      deps,
+    )
+
+    expect(spawnImpl).toHaveBeenCalledTimes(1)
+    const [, args] = spawnImpl.mock.calls[0]!
+    const script = (args as string[])[1] ?? ''
+
+    expect(script).toContain('mktemp "${TMPDIR:-/tmp}/hammurabi-claude-prompt.XXXXXX"')
+    expect(script).toContain('--append-system-prompt-file')
+    expect(script).toContain('--exclude-dynamic-system-prompt-sections')
+    expect(script).toContain('### Progressive Memory Discovery')
+    expect(script).not.toContain('--system-prompt')
+    expect(session.promptAudit).toMatchObject({
+      transport: 'append-system-prompt-file',
+      source: 'hammurabi-commander-bootstrap',
+    })
+    expect(session.promptAudit?.sections).toEqual([
+      'Commander Bootstrap',
+      'Commander Memory',
+      'Progressive Memory Discovery',
+    ])
+    expect(deps.writeTranscriptMeta).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptAudit: expect.objectContaining({
+          transport: 'append-system-prompt-file',
+          source: 'hammurabi-commander-bootstrap',
+        }),
+      }),
+    )
+  })
+
+  it('rejects oversized append prompt bundles before spawning Claude', () => {
+    expect(() =>
+      buildClaudePromptAudit('x'.repeat(20), {
+        HAMMURABI_CLAUDE_APPEND_PROMPT_MAX_BYTES: '10',
+      }),
+    ).toThrow(/Claude append prompt is 20 bytes/)
   })
 
   it('reverse-tunnels the approval daemon and propagates the internal token when launching Claude on a remote machine (issue/1225)', () => {

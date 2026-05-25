@@ -7,6 +7,7 @@ import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../claude-effort.js'
 import {
   profileForApiResponse,
+  GAIA_COMMANDER_AVATAR_URL,
   readCommanderUiProfile,
   resolveCommanderAvatarUrl,
   writeCommanderUiProfile,
@@ -378,6 +379,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
         mergeIdentityOperatingStyleIntoCommanderWorkflow(created.id, GAIA_IDENTITY, { basePath: commanderDataDir }),
         setCommanderDisplayName(commanderDataDir, created.id, GAIA_DISPLAY_NAME),
         writeCommanderUiProfile(created.id, commanderDataDir, ensureCommanderVisualProfile(created.id, {
+          avatar: GAIA_COMMANDER_AVATAR_URL,
           speakingTone: GAIA_SPEAKING_TONE,
         })),
       ]

@@ -2,7 +2,7 @@ import type {
   PlanApprovalDecision,
   PlanApprovalStreamEvent,
 } from '../../src/types/hammurabi-events.js'
-import { readOpenCodeRuntime } from './providers/provider-session-context.js'
+import { readCodexRuntime, readOpenCodeRuntime } from './providers/provider-session-context.js'
 import { getToolResultIds } from './session/state.js'
 import type { StreamJsonEvent, StreamSession } from './types.js'
 
@@ -164,6 +164,113 @@ export function buildOpenCodePlanApprovalResult(
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function readFirstSchemaField(schema: unknown): {
+  name: string
+  property: Record<string, unknown> | null
+} | null {
+  const record = asRecord(schema)
+  const properties = asRecord(record?.properties)
+  if (!properties) {
+    return null
+  }
+
+  const required = Array.isArray(record?.required)
+    ? record.required.find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : undefined
+  const fieldName = required ?? Object.keys(properties).find((key) => key.trim().length > 0)
+  if (!fieldName) {
+    return null
+  }
+
+  return {
+    name: fieldName,
+    property: asRecord(properties[fieldName]),
+  }
+}
+
+function coerceElicitationValue(property: Record<string, unknown> | null, message: string | undefined): unknown {
+  const type = typeof property?.type === 'string' ? property.type : 'string'
+  const enumValues = Array.isArray(property?.enum) ? property.enum : []
+
+  if (enumValues.length > 0) {
+    if (message) {
+      const matched = enumValues.find((value) => String(value) === message)
+      if (matched !== undefined) {
+        return matched
+      }
+    }
+    return enumValues[0]
+  }
+
+  if (type === 'boolean') {
+    if (!message) {
+      return true
+    }
+    const normalized = message.trim().toLowerCase()
+    if (['false', 'no', 'reject', 'rejected', 'decline', 'declined'].includes(normalized)) {
+      return false
+    }
+    return true
+  }
+
+  if (type === 'number' || type === 'integer') {
+    const parsed = message ? Number(message) : Number.NaN
+    if (Number.isFinite(parsed)) {
+      return type === 'integer' ? Math.trunc(parsed) : parsed
+    }
+    return 0
+  }
+
+  return message ?? 'Approved'
+}
+
+function buildCodexElicitationAcceptContent(
+  event: PlanApprovalEvent,
+  message: string | undefined,
+): Record<string, unknown> {
+  const field = readFirstSchemaField(event.providerContext.requestedSchema)
+  if (!field) {
+    return message ? { message } : {}
+  }
+  return {
+    [field.name]: coerceElicitationValue(field.property, message),
+  }
+}
+
+export function buildCodexMcpElicitationResult(
+  event: PlanApprovalEvent,
+  decision: PlanApprovalDecision,
+  message?: string,
+): { requestId: number; result: Record<string, unknown> } | null {
+  if (event.providerContext.answerFormat !== 'codex.mcp_elicitation') {
+    return null
+  }
+  const requestId = event.providerContext.requestId
+  if (typeof requestId !== 'number') {
+    return null
+  }
+  if (decision === 'reject') {
+    return {
+      requestId,
+      result: { action: 'decline' },
+    }
+  }
+  const trimmedMessage = message?.trim()
+  return {
+    requestId,
+    result: {
+      action: 'accept',
+      content: buildCodexElicitationAcceptContent(event, trimmedMessage || undefined),
+    },
+  }
+}
+
 export function deliverPlanApprovalDecision(
   session: StreamSession,
   event: PlanApprovalEvent,
@@ -172,6 +279,16 @@ export function deliverPlanApprovalDecision(
   writeToStdin: (session: StreamSession, data: string) => boolean,
 ): { ok: true; payload: StreamJsonEvent } | { ok: false; reason: string } {
   const payload = buildPlanApprovalToolResultPayload(event, decision, message)
+  const codexResult = buildCodexMcpElicitationResult(event, decision, message)
+  if (codexResult) {
+    const runtime = readCodexRuntime(session)
+    if (!runtime) {
+      return { ok: false, reason: 'Codex runtime is unavailable' }
+    }
+    runtime.sendResponse(codexResult.requestId, codexResult.result)
+    return { ok: true, payload }
+  }
+
   const openCodeResult = buildOpenCodePlanApprovalResult(event, decision, message)
   if (openCodeResult) {
     const runtime = readOpenCodeRuntime(session)

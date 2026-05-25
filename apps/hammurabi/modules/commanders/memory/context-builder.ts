@@ -14,6 +14,9 @@ import {
 const DEFAULT_TOKEN_BUDGET = 4_000
 const MAX_MEMORY_LINES = 200
 const MAX_LONG_TERM_LINES = 100
+const MAX_TASK_BODY_CHARS = 8_000
+const MAX_COMMENT_CHARS = 1_000
+const MAX_BACKLOG_CHARS = 4_000
 
 const LAYER_GOALS = 1.5
 const PRIORITY_ORDER = [1, LAYER_GOALS, 2, 3, 6] as const
@@ -36,6 +39,7 @@ export interface ContextBuildOptions {
   currentTask: PromptTask | null
   recentConversation: Message[]
   tokenBudget?: number
+  mode?: 'startup' | 'full'
 }
 
 export interface BuiltContext {
@@ -74,6 +78,14 @@ function compactText(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
+function trimChars(text: string, maxChars: number, label: string): string {
+  const trimmed = text.trim()
+  if (trimmed.length <= maxChars) {
+    return trimmed
+  }
+  return `${trimmed.slice(0, maxChars).trimEnd()}\n\n_...${label} truncated to ${maxChars} chars._`
+}
+
 function toRepo(task: PromptTask | null): string | null {
   if (!task) return null
   if (task.owner && task.repo) return `${task.owner}/${task.repo}`
@@ -99,10 +111,12 @@ export class MemoryContextBuilder {
 
   async build(options: ContextBuildOptions): Promise<BuiltContext> {
     const tokenBudget = options.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+    const mode = options.mode ?? 'full'
     const cacheKey = {
       commanderId: this.commanderId,
       currentTaskId: buildCurrentTaskCacheId(options.currentTask),
       tokenBudget,
+      mode,
       recentConversationKey: buildRecentConversationCacheKey(options.recentConversation),
       memoryMtimeKey: await buildMemoryContextMtimeKey(this.memoryRoot),
     }
@@ -111,13 +125,15 @@ export class MemoryContextBuilder {
       return cached
     }
 
-    const [layer1, layerGoals, layer2, layer3] = await Promise.all([
-      this.buildLayer1(options.currentTask),
-      this.goalsStore.buildContextSection(),
-      this.buildLayer2(),
-      this.buildLayer3(),
-    ])
-    const layer6 = this.buildLayer6(options.recentConversation)
+    const layer1 = await this.buildLayer1(options.currentTask)
+    const [layerGoals, layer2, layer3] = mode === 'startup'
+      ? [null, this.buildMemoryDiscoveryLayer(), null] as const
+      : await Promise.all([
+        this.goalsStore.buildContextSection(),
+        this.buildLayer2(),
+        this.buildLayer3(),
+      ])
+    const layer6 = mode === 'startup' ? null : this.buildLayer6(options.recentConversation)
 
     const layers = new Map<number, string>([
       [1, layer1],
@@ -177,7 +193,7 @@ export class MemoryContextBuilder {
     } else {
       lines.push(`**Issue #${task.number}**: ${task.title} — ${repo}`)
       if (task.body?.trim()) {
-        lines.push('', task.body.trim())
+        lines.push('', trimChars(task.body, MAX_TASK_BODY_CHARS, 'task body'))
       }
       const comments = (task.comments ?? [])
         .filter((comment) => comment.body.trim().length > 0)
@@ -189,7 +205,7 @@ export class MemoryContextBuilder {
             (value): value is string => typeof value === 'string' && value.trim().length > 0,
           )
           const meta = metaBits.length > 0 ? `${metaBits.join(' • ')}: ` : ''
-          lines.push(`- ${meta}${compactText(comment.body)}`)
+          lines.push(`- ${meta}${compactText(trimChars(comment.body, MAX_COMMENT_CHARS, 'comment'))}`)
         }
       }
     }
@@ -197,11 +213,30 @@ export class MemoryContextBuilder {
     const thinIndex = await this.readThinIndex()
     lines.push('', '### Backlog Overview')
     if (thinIndex) {
-      lines.push(thinIndex)
+      lines.push(trimChars(thinIndex, MAX_BACKLOG_CHARS, 'backlog overview'))
     } else {
       lines.push('_No local thin index found._')
     }
     return lines.join('\n').trim()
+  }
+
+  private buildMemoryDiscoveryLayer(): string {
+    return [
+      '### Progressive Memory Discovery',
+      'Memory contents are not injected into this startup prompt.',
+      'Discover and read memory only when the current task needs prior facts, decisions, paths, or working state.',
+      '',
+      '#### Commander memory files',
+      '- `.memory/MEMORY.md` — durable facts and decisions',
+      '- `.memory/LONG_TERM_MEM.md` — distilled long-term context',
+      '- `.memory/working-memory.md` — transient active scratch state',
+      '',
+      '#### Context tools',
+      `- \`hammurabi memory --type=working_memory read --commander ${this.commanderId}\``,
+      `- \`hammurabi commander transcripts search --commander ${this.commanderId} "<query>"\``,
+      '',
+      'Use exact file reads or transcript search to load only relevant context.',
+    ].join('\n')
   }
 
   private async buildLayer2(): Promise<string> {
