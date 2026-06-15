@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Hervald installer.
+# Herd installer.
 #
 # Piped (no local checkout):
-#   curl -fsSL https://hervald.gehirn.ai/install.sh | bash
+#   curl -fsSL https://herd.gehirn.ai/install.sh | bash
 #
 # From a local checkout (apps/hammurabi):
 #   ./install.sh
@@ -20,9 +20,11 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-PRODUCT_NAME="Hervald"
-NODE_VERSION="${HERVALD_NODE_VERSION:-22.12.0}"
-PNPM_VERSION="${HERVALD_PNPM_VERSION:-10.23.0}"
+PRODUCT_NAME="Herd"
+NODE_VERSION="${HERD_NODE_VERSION:-${HERVALD_NODE_VERSION:-22.12.0}}"
+PNPM_VERSION="${HERD_PNPM_VERSION:-${HERVALD_PNPM_VERSION:-10.23.0}}"
+INSTALLER_MARKER=".herd-installer-checkout"
+LEGACY_INSTALLER_MARKER=".hervald-installer-checkout"
 
 step() { printf "${CYAN}==>${NC} %s\n" "$*"; }
 ok()   { printf "${GREEN}✓${NC} %s\n" "$*"; }
@@ -83,12 +85,13 @@ prompt_select_menu() {
 }
 
 choose_setup_path() {
-  local choice normalized
-  if [[ -n "${HERVALD_SETUP_PATH:-}" ]]; then
-    normalized="$(printf '%s' "$HERVALD_SETUP_PATH" | tr '[:upper:]' '[:lower:]')"
+  local choice normalized setup_path_env
+  setup_path_env="${HERD_SETUP_PATH:-${HERVALD_SETUP_PATH:-}}"
+  if [[ -n "$setup_path_env" ]]; then
+    normalized="$(printf '%s' "$setup_path_env" | tr '[:upper:]' '[:lower:]')"
     case "$normalized" in
       quickstart|advanced) printf '%s' "$normalized"; return 0 ;;
-      *) warn "Unknown HERVALD_SETUP_PATH=$HERVALD_SETUP_PATH; using Quickstart." ;;
+      *) warn "Unknown HERD_SETUP_PATH/HERVALD_SETUP_PATH=$setup_path_env; using Quickstart." ;;
     esac
   fi
 
@@ -230,8 +233,10 @@ repo_archive_url() {
   local repo_ref="$2"
   local repo_path
 
-  if [[ -n "${HERVALD_ARCHIVE_URL:-}" ]]; then
-    printf '%s' "$HERVALD_ARCHIVE_URL"
+  local archive_override
+  archive_override="${HERD_ARCHIVE_URL:-${HERVALD_ARCHIVE_URL:-}}"
+  if [[ -n "$archive_override" ]]; then
+    printf '%s' "$archive_override"
     return 0
   fi
 
@@ -263,9 +268,9 @@ replace_checkout_with_archive() {
   require_command_or_prompt curl
   require_command_or_prompt tar
 
-  step "Downloading Hervald into $CHECKOUT_DIR"
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/hervald-checkout.XXXXXX")"
-  archive="$tmp_dir/hervald.tar.gz"
+  step "Downloading Herd into $CHECKOUT_DIR"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/herd-checkout.XXXXXX")"
+  archive="$tmp_dir/herd.tar.gz"
   extract_dir="$tmp_dir/extract"
   mkdir -p "$extract_dir"
 
@@ -287,34 +292,46 @@ replace_checkout_with_archive() {
   fi
   mkdir -p "$(dirname "$CHECKOUT_DIR")"
   mv "$archive_root" "$CHECKOUT_DIR"
-  printf 'archive_url=%s\nrepo_ref=%s\n' "$archive_url" "${REPO_REF:-unknown}" > "$CHECKOUT_DIR/.hervald-installer-checkout"
+  printf 'archive_url=%s\nrepo_ref=%s\n' "$archive_url" "${REPO_REF:-unknown}" > "$CHECKOUT_DIR/$INSTALLER_MARKER"
   rm -rf "$tmp_dir"
-  ok "downloaded Hervald to $CHECKOUT_DIR"
+  ok "downloaded Herd to $CHECKOUT_DIR"
 }
 
 clone_and_exec_installer() {
-  REPO_URL="${HERVALD_REPO_URL:-https://github.com/NickGuAI/Hervald.git}"
-  REPO_REF="${HERVALD_REPO_REF:-main}"
-  CHECKOUT_DIR="${HERVALD_CHECKOUT_DIR:-$HOME/Hervald}"
+  local default_checkout checkout_override
+  default_checkout="$HOME/Herd"
+  if [[ -z "${HERD_CHECKOUT_DIR:-${HERVALD_CHECKOUT_DIR:-}}" && ! -e "$default_checkout" && -d "$HOME/Herd/.git" ]]; then
+    default_checkout="$HOME/Herd"
+  fi
+
+  REPO_URL="${HERD_REPO_URL:-${HERVALD_REPO_URL:-https://github.com/NickGuAI/Herd.git}}"
+  REPO_REF="${HERD_REPO_REF:-${HERVALD_REPO_REF:-main}}"
+  checkout_override="${HERD_CHECKOUT_DIR:-${HERVALD_CHECKOUT_DIR:-}}"
+  CHECKOUT_DIR="${checkout_override:-$default_checkout}"
   ARCHIVE_URL="$(repo_archive_url "$REPO_URL" "$REPO_REF" || true)"
 
   if [ -d "$CHECKOUT_DIR/.git" ]; then
     ensure_git_or_prompt
-    step "Refreshing existing Hervald checkout at $CHECKOUT_DIR"
+    step "Refreshing existing Herd checkout at $CHECKOUT_DIR"
+    if git -C "$CHECKOUT_DIR" remote get-url origin >/dev/null 2>&1; then
+      git -C "$CHECKOUT_DIR" remote set-url origin "$REPO_URL"
+    else
+      git -C "$CHECKOUT_DIR" remote add origin "$REPO_URL"
+    fi
     git -C "$CHECKOUT_DIR" fetch --quiet origin "$REPO_REF"
     git -C "$CHECKOUT_DIR" checkout --quiet "$REPO_REF"
     git -C "$CHECKOUT_DIR" reset --quiet --hard "origin/$REPO_REF"
   elif [ -n "$ARCHIVE_URL" ]; then
-    if [ -e "$CHECKOUT_DIR" ] && ! directory_is_empty "$CHECKOUT_DIR" && [ ! -f "$CHECKOUT_DIR/.hervald-installer-checkout" ]; then
-      warn "$CHECKOUT_DIR already exists and is not a Hervald git checkout."
-      if ! prompt_yes_no "Replace it with a fresh Hervald download? [y/N] " "n"; then
+    if [ -e "$CHECKOUT_DIR" ] && ! directory_is_empty "$CHECKOUT_DIR" && [ ! -f "$CHECKOUT_DIR/$INSTALLER_MARKER" ] && [ ! -f "$CHECKOUT_DIR/$LEGACY_INSTALLER_MARKER" ]; then
+      warn "$CHECKOUT_DIR already exists and is not a Herd git checkout."
+      if ! prompt_yes_no "Replace it with a fresh Herd download? [y/N] " "n"; then
         fail "Cannot install into existing non-empty directory: $CHECKOUT_DIR"
       fi
     fi
     replace_checkout_with_archive "$ARCHIVE_URL"
   else
     ensure_git_or_prompt
-    step "Cloning Hervald into $CHECKOUT_DIR"
+    step "Cloning Herd into $CHECKOUT_DIR"
     git clone --quiet --branch "$REPO_REF" --single-branch "$REPO_URL" "$CHECKOUT_DIR"
   fi
 
@@ -322,7 +339,7 @@ clone_and_exec_installer() {
 }
 
 # Piped mode: when invoked via `curl ... | bash`, BASH_SOURCE[0] is empty
-# and there is no local checkout to install from. Clone the public Hervald
+# and there is no local checkout to install from. Clone the public Herd
 # repo (or refresh an existing clone) and re-exec the in-tree installer.
 SCRIPT_PATH="${BASH_SOURCE[0]:-}"
 if [ -z "$SCRIPT_PATH" ] || [ ! -f "$SCRIPT_PATH" ]; then
@@ -483,7 +500,7 @@ ensure_pnpm() {
 }
 
 auth0_enabled() {
-  [[ "${HERVALD_ENABLE_AUTH0:-0}" == "1" ]]
+  [[ "${HERD_ENABLE_AUTH0:-${HERVALD_ENABLE_AUTH0:-0}}" == "1" ]]
 }
 
 configure_environment() {
@@ -596,7 +613,7 @@ write_local_provider_secret() {
 
 source_local_provider_env() {
   if [ -f "$LOCAL_MACHINE_ENV_FILE" ]; then
-    # This file is created by Hervald with 0600 permissions and `export KEY='value'` lines.
+    # This file is created by Herd with 0600 permissions and `export KEY='value'` lines.
     # Sourcing it keeps install-time probes aligned with server launch behavior.
     # shellcheck disable=SC1090
     . "$LOCAL_MACHINE_ENV_FILE"
@@ -655,10 +672,10 @@ provider_secret_key() {
 
 provider_env_secret() {
   case "$1" in
-    claude) printf '%s' "${HERVALD_CLAUDE_SETUP_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}}}" ;;
-    codex) printf '%s' "${HERVALD_CODEX_API_KEY:-${OPENAI_API_KEY:-}}" ;;
-    gemini) printf '%s' "${HERVALD_GEMINI_API_KEY:-${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}}" ;;
-    opencode) printf '%s' "${HERVALD_OPENCODE_API_KEY:-${OPENCODE_API_KEY:-}}" ;;
+    claude) printf '%s' "${HERD_CLAUDE_SETUP_TOKEN:-${HERVALD_CLAUDE_SETUP_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}}}}" ;;
+    codex) printf '%s' "${HERD_CODEX_API_KEY:-${HERVALD_CODEX_API_KEY:-${OPENAI_API_KEY:-}}}" ;;
+    gemini) printf '%s' "${HERD_GEMINI_API_KEY:-${HERVALD_GEMINI_API_KEY:-${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}}}" ;;
+    opencode) printf '%s' "${HERD_OPENCODE_API_KEY:-${HERVALD_OPENCODE_API_KEY:-${OPENCODE_API_KEY:-}}}" ;;
     *) return 1 ;;
   esac
 }
@@ -677,13 +694,13 @@ provider_auth_hint() {
       printf 'Run `claude auth login` if your Claude Code version supports it, or run `claude setup-token` and paste the setup token here.'
       ;;
     codex)
-      printf 'Run `codex login` in another terminal, or provide OPENAI_API_KEY/HERVALD_CODEX_API_KEY for API-key mode.'
+      printf 'Run `codex login` in another terminal, or provide OPENAI_API_KEY/HERD_CODEX_API_KEY for API-key mode.'
       ;;
     gemini)
-      printf 'Provide GEMINI_API_KEY or HERVALD_GEMINI_API_KEY.'
+      printf 'Provide GEMINI_API_KEY or HERD_GEMINI_API_KEY.'
       ;;
     opencode)
-      printf 'Provide OPENCODE_API_KEY or HERVALD_OPENCODE_API_KEY.'
+      printf 'Provide OPENCODE_API_KEY or HERD_OPENCODE_API_KEY.'
       ;;
   esac
 }
@@ -867,15 +884,15 @@ configure_providers() {
   local setup_path="${1:-advanced}"
   local raw_selection selected provider
 
-  if [[ "${HERVALD_CONFIGURE_PROVIDERS:-1}" == "0" ]]; then
-    warn "Skipping provider setup because HERVALD_CONFIGURE_PROVIDERS=0"
+  if [[ "${HERD_CONFIGURE_PROVIDERS:-${HERVALD_CONFIGURE_PROVIDERS:-1}}" == "0" ]]; then
+    warn "Skipping provider setup because HERD_CONFIGURE_PROVIDERS=0"
     return 0
   fi
 
-  raw_selection="${HERVALD_PROVIDERS:-}"
+  raw_selection="${HERD_PROVIDERS:-${HERVALD_PROVIDERS:-}}"
   if [[ "$setup_path" != "advanced" && -z "$raw_selection" ]]; then
     warn "Quickstart skips provider CLI customization."
-    printf "  ${DIM}%s${NC}\n" "Choose Advanced setup, or set HERVALD_PROVIDERS=claude,codex,gemini,opencode for non-interactive provider setup."
+    printf "  ${DIM}%s${NC}\n" "Choose Advanced setup, or set HERD_PROVIDERS=claude,codex,gemini,opencode for non-interactive provider setup."
     return 0
   fi
 
@@ -883,7 +900,7 @@ configure_providers() {
 
   if [[ -z "$raw_selection" ]]; then
     if ! prompt_available; then
-      warn "No interactive terminal is available; skipping provider setup. Re-run with HERVALD_PROVIDERS=claude,codex,gemini,opencode to configure non-interactively."
+      warn "No interactive terminal is available; skipping provider setup. Re-run with HERD_PROVIDERS=claude,codex,gemini,opencode to configure non-interactively."
       return 0
     fi
     selected="$(prompt_provider_selection || true)"
@@ -1150,7 +1167,7 @@ print_receipt_line() {
 
 print_install_receipt() {
   printf "\n${GREEN}╔════════════════════════════════════════════════════════════╗${NC}\n"
-  printf "${GREEN}║${NC} ${BOLD}Hervald setup complete${NC}                                  ${GREEN}║${NC}\n"
+  printf "${GREEN}║${NC} ${BOLD}Herd setup complete${NC}                                     ${GREEN}║${NC}\n"
   printf "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}\n"
   print_receipt_line "URL" "${INSTALL_LOGIN_URL:-http://localhost:${PORT:-$DEFAULT_PORT}/welcome}"
   print_receipt_line "Account" "local bootstrap admin"
@@ -1186,7 +1203,7 @@ print_configuration_saved_summary() {
   printf "\n${CYAN}Next commands${NC}\n"
   printf "  hammurabi doctor\n"
   printf "  hammurabi up\n"
-  printf "  Open Hervald, finish browser onboarding, then start the first commander conversation from Command Room.\n"
+  printf "  Open Herd, finish browser onboarding, then start the first commander conversation from Command Room.\n"
 }
 
 brand_opener
@@ -1262,7 +1279,7 @@ printf "\n${GREEN}Next:${NC}\n"
 if [[ "$(uname -s)" == "Darwin" && "${HAMMURABI_INSTALL_AUTOSTART:-1}" != "0" ]]; then
   printf "  1. Sign in with the bootstrap key shown above.\n"
   printf "  2. Complete browser onboarding within 24 hours, then create a permanent API key in Settings and rotate or revoke the expiring bootstrap key.\n"
-  printf "  3. Hervald now auto-starts at login via launchd.\n"
+  printf "  3. Herd now auto-starts at login via launchd.\n"
   printf "     Reload after config changes with:\n"
   printf "       ${CYAN}launchctl kickstart -k gui/%s/io.gehirn.hervald${NC}\n" "$(id -u)"
   printf "  4. Run ${CYAN}hammurabi doctor${NC} after provider authentication if you want a readiness report.\n"

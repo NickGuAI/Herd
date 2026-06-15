@@ -42,7 +42,7 @@ describe('auth0Middleware', () => {
     expect(auth0PermissionsFromClaims({
       permissions: ['agents:read', 'agents:write'],
       scope: 'telemetry:write agents:read',
-      'https://hervald.gehirn.ai/permissions': ['commanders:write'],
+      'https://herd.gehirn.ai/permissions': ['commanders:write'],
     })).toEqual([
       'agents:read',
       'agents:write',
@@ -53,7 +53,7 @@ describe('auth0Middleware', () => {
 
   it('preserves human profile fields in the server-side auth0 metadata', () => {
     expect(auth0MetadataFromClaims({
-      aud: 'https://hervald.gehirn.ai',
+      aud: 'https://herd.gehirn.ai',
       permissions: ['commanders:read'],
       email_verified: true,
       name: ' Nick Gu ',
@@ -61,7 +61,7 @@ describe('auth0Middleware', () => {
       picture: ' https://example.com/nick.png ',
     })).toEqual({
       provider: 'auth0',
-      aud: 'https://hervald.gehirn.ai',
+      aud: 'https://herd.gehirn.ai',
       permissions: ['commanders:read'],
       emailVerified: true,
       name: 'Nick Gu',

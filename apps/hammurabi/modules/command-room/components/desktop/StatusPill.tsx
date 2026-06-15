@@ -1,5 +1,5 @@
 /**
- * Hervald — StatusPill
+ * Herd — StatusPill
  *
  * Compact status badge for commander state.
  * tone variants: waiting (orange), running (green), pending (red)

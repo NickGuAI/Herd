@@ -70,7 +70,7 @@ export function buildCommanderPortraitPrompt(input: {
   const style = getCommanderPortraitStyle(input.styleId ?? DEFAULT_COMMANDER_PORTRAIT_STYLE_ID)
 
   return [
-    `Create a portrait of ${displayName}, a Hervald commander.`,
+    `Create a portrait of ${displayName}, a Herd commander.`,
     `Portrait style (${style.label}):`,
     style.promptPrefix,
     'Identity cues from COMMANDER.md:',

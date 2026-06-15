@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -89,7 +89,7 @@ describe('runAutomationCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toContain('daily-briefing')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/automations?parentCommanderId=cmd-1&trigger=schedule',
+      'https://herd.gehirn.ai/api/automations?parentCommanderId=cmd-1&trigger=schedule',
       expect.objectContaining({ method: 'GET' }),
     )
   })
@@ -119,13 +119,13 @@ describe('runAutomationCli', () => {
   it('creates a schedule automation with unified fields', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const url = String(input)
-      if (url === 'https://hervald.gehirn.ai/api/providers') {
+      if (url === 'https://herd.gehirn.ai/api/providers') {
         return new Response(JSON.stringify(providerRegistryPayload), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         })
       }
-      if (url === 'https://hervald.gehirn.ai/api/automations') {
+      if (url === 'https://herd.gehirn.ai/api/automations') {
         return new Response(JSON.stringify({ id: 'auto-1' }), {
           status: 201,
           headers: { 'content-type': 'application/json' },
@@ -186,8 +186,8 @@ describe('runAutomationCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toContain('Created automation ID: auto-1')
 
-    const call = fetchImpl.mock.calls.find(([url]) => String(url) === 'https://hervald.gehirn.ai/api/automations')
-    expect(call?.[0]).toBe('https://hervald.gehirn.ai/api/automations')
+    const call = fetchImpl.mock.calls.find(([url]) => String(url) === 'https://herd.gehirn.ai/api/automations')
+    expect(call?.[0]).toBe('https://herd.gehirn.ai/api/automations')
     expect(call?.[1]).toMatchObject({
       method: 'POST',
       headers: expect.objectContaining({
@@ -312,7 +312,7 @@ describe('runAutomationCli', () => {
     expect(exitCode).toBe(0)
     expect(stdout.read()).toContain('Updated automation auto-1.')
     const call = fetchImpl.mock.calls[0]
-    expect(call?.[0]).toBe('https://hervald.gehirn.ai/api/automations/auto-1')
+    expect(call?.[0]).toBe('https://herd.gehirn.ai/api/automations/auto-1')
     expect(JSON.parse((call?.[1]?.body as string) ?? '{}')).toEqual({
       schedule: '0 7 * * *',
       enabled: false,
@@ -400,7 +400,7 @@ describe('runAutomationCli', () => {
     expect(output).toContain('sent')
     expect(output).toContain('email_followup')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/automations/auto-1/history?limit=10',
+      'https://herd.gehirn.ai/api/automations/auto-1/history?limit=10',
       expect.objectContaining({ method: 'GET' }),
     )
   })
@@ -423,7 +423,7 @@ describe('runAutomationCli', () => {
     expect(exitCode).toBe(0)
     expect(stdout.read()).toContain('Triggered automation auto-1 (run run-1).')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/automations/auto-1/run',
+      'https://herd.gehirn.ai/api/automations/auto-1/run',
       expect.objectContaining({ method: 'POST' }),
     )
   })
@@ -454,7 +454,7 @@ describe('runAutomationCli', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
     for (const [index, [, status]] of commands.entries()) {
       const call = fetchImpl.mock.calls[index]
-      expect(call?.[0]).toBe('https://hervald.gehirn.ai/api/automations/auto-1')
+      expect(call?.[0]).toBe('https://herd.gehirn.ai/api/automations/auto-1')
       expect(JSON.parse((call?.[1]?.body as string) ?? '{}')).toEqual({ status })
     }
   })
@@ -474,7 +474,7 @@ describe('runAutomationCli', () => {
     expect(exitCode).toBe(0)
     expect(stdout.read()).toContain('Deleted automation auto-1.')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/automations/auto-1',
+      'https://herd.gehirn.ai/api/automations/auto-1',
       expect.objectContaining({ method: 'DELETE' }),
     )
   })

@@ -297,7 +297,7 @@ describe('agents websocket', () => {
     }
   })
 
-  it('replays only the buffered event tail and sets more when truncated', async () => {
+  it('replays a projected tail cursor and sets more when truncated', async () => {
     const mock = createMockChildProcess()
     mockedSpawn.mockReturnValueOnce(mock.cp as never)
     const server = await startServer()
@@ -329,7 +329,9 @@ describe('agents websocket', () => {
 
       expect(replayFrame.type).toBe('replay')
       expect(replayFrame.more).toBe(true)
-      expect(replayFrame.events).toBeUndefined()
+      expect(replayFrame.events).toHaveLength(WS_REPLAY_TAIL_LIMIT)
+      expect(replayFrame.events?.[0]?.marker).toBe(26)
+      expect(replayFrame.events?.at(-1)?.marker).toBe(WS_REPLAY_TAIL_LIMIT + 25)
       expect(replayFrame.projection).toEqual(expect.objectContaining({
         schemaVersion: 1,
         replayCursor: {
@@ -338,7 +340,8 @@ describe('agents websocket', () => {
           more: true,
         },
       }))
-      expect(replayFrame.messages).toEqual(replayFrame.projection?.messages)
+      expect(replayFrame.messages).toBeUndefined()
+      expect(replayFrame.projection?.messages).toBeDefined()
 
       const debugResponse = await fetch(`${server.baseUrl}/api/agents/sessions/ws-replay-tail/debug/events`, {
         headers: AUTH_HEADERS,
@@ -390,19 +393,20 @@ describe('agents websocket', () => {
 
       const { ws, replay } = await connectWsWithReplay(server.baseUrl, 'ws-replay-v2')
       const replayFrame = replay as typeof replay & {
+        events?: Array<{ id?: string }>
         projection?: { schemaVersion?: number; envelopes?: Array<{ id: string }> }
         envelopes?: Array<{ id: string }>
       }
 
-      expect(replayFrame.events).toBeUndefined()
+      expect(replayFrame.events).toEqual([
+        expect.objectContaining({ id: 'env-1' }),
+        expect.objectContaining({ id: 'env-2' }),
+      ])
       expect(replayFrame.projection).toEqual(expect.objectContaining({
         schemaVersion: 2,
         envelopes: [expect.objectContaining({ id: 'env-1' }), expect.objectContaining({ id: 'env-2' })],
       }))
-      expect(replayFrame.envelopes).toEqual([
-        expect.objectContaining({ id: 'env-1' }),
-        expect.objectContaining({ id: 'env-2' }),
-      ])
+      expect(replayFrame.envelopes).toBeUndefined()
 
       ws.close()
     } finally {

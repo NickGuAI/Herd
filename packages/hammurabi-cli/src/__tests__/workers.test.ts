@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -123,7 +123,7 @@ describe('runWorkersCli', () => {
     expect(stdout.read()).toContain('Worker dispatched: worker-1710000000000')
     expect(stdout.read()).toContain('Cwd: /tmp/worktree-a')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/sessions/dispatch-worker',
+      'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -217,7 +217,7 @@ describe('runWorkersCli', () => {
     expect(stderr.read()).toContain('.hammurabi.json')
     expect(stderr.read()).toContain('api-keys/keys.json')
     expect(stderr.read()).toContain('HAMMURABI_ALLOW_DEFAULT_MASTER_KEY=1')
-    expect(stderr.read()).toContain('restart the Hervald installer')
+    expect(stderr.read()).toContain('restart the Herd installer')
   })
 
   it('dispatches a worker without an initial task', async () => {
@@ -255,7 +255,7 @@ describe('runWorkersCli', () => {
     expect(exitCode).toBe(0)
     expect(stderr.read()).toBe('')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/sessions/dispatch-worker',
+      'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -294,7 +294,7 @@ describe('runWorkersCli', () => {
       expect(exitCode).toBe(0)
       expect(stderr.read()).toBe('')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/agents/sessions/dispatch-worker',
+        'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
         expect.objectContaining({
           body: JSON.stringify({
             spawnedBy: 'commander-d66a5217-ace6-4f00-b2ac-bbd64a9a7e7e',
@@ -335,7 +335,7 @@ describe('runWorkersCli', () => {
       expect(exitCode).toBe(0)
       expect(stderr.read()).toBe('')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/agents/sessions/dispatch-worker',
+        'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
         expect.objectContaining({
           body: JSON.stringify({
             spawnedBy: 'commander-explicit-wins',
@@ -376,7 +376,7 @@ describe('runWorkersCli', () => {
       expect(exitCode).toBe(0)
       expect(stderr.read()).toBe('')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/agents/sessions/dispatch-worker',
+        'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
         expect.objectContaining({
           body: JSON.stringify({ task: 'No parent expected' }),
         }),
@@ -409,7 +409,7 @@ describe('runWorkersCli', () => {
     expect(stdout.read()).toContain('status: running')
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/sessions/worker-1710000000000',
+      'https://herd.gehirn.ai/api/agents/sessions/worker-1710000000000',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -672,7 +672,7 @@ describe('runWorkersCli', () => {
     expect(stdout.read()).toContain('Session worker-1710000000000 killed.')
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/sessions/worker-1710000000000',
+      'https://herd.gehirn.ai/api/agents/sessions/worker-1710000000000',
       expect.objectContaining({
         method: 'DELETE',
         headers: expect.objectContaining({
@@ -703,7 +703,7 @@ describe('runWorkersCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toContain('sent: true')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/sessions/worker-1710000000000/send',
+      'https://herd.gehirn.ai/api/agents/sessions/worker-1710000000000/send',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({

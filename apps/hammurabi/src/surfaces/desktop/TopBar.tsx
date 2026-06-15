@@ -1,8 +1,8 @@
 /**
- * Hervald — Dark top bar.
+ * Herd — Dark top bar.
  *
- * Replaces the left sidebar. Full-width Hervald chrome.
- * Vermillion dot + italic "Hervald" branding, breadcrumb nav,
+ * Replaces the left sidebar. Full-width Herd chrome.
+ * Vermillion dot + italic "Herd" branding, breadcrumb nav,
  * inline tab navigation, status counters, and ops overflow.
  */
 import { NavLink, useLocation } from 'react-router-dom'
@@ -212,7 +212,7 @@ export function TopBar({ modules, counts }: TopBarProps) {
       {/* Branding */}
       <div style={brandingStyle}>
         <span style={dotStyle} />
-        <span className="font-display" style={nameStyle}>Hervald</span>
+        <span className="font-display" style={nameStyle}>Herd</span>
       </div>
 
       <span style={separatorStyle}>/</span>

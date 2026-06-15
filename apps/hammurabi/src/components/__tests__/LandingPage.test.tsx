@@ -102,7 +102,7 @@ describe('LandingPage', () => {
     await clickSignIn()
 
     expect(mocks.loginWithRedirect).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('Hervald is reconnecting')
+    expect(document.body.textContent).toContain('Herd is reconnecting')
   })
 
   it('allows Auth0 sign-in when the health probe is unreachable', async () => {

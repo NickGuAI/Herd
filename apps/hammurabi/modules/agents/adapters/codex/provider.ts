@@ -1,4 +1,3 @@
-import { normalizeCodexEvent } from '../../event-normalizers/codex.js'
 import { registerProvider } from '../../providers/registry-core.js'
 import {
   asCodexProviderContext,
@@ -250,5 +249,3 @@ export const codexProvider: ProviderAdapter = registerProvider({
     return migrateLegacyCodexProviderContext(rawProviderContext)
   },
 })
-
-void normalizeCodexEvent

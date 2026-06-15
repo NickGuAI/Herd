@@ -1,9 +1,11 @@
 import {
+  createOpenCodeAssistantStartEnvelope,
+  createOpenCodeProviderActivityEnvelope,
   createOpenCodeTurnState,
+  createOpenCodeTurnEndEnvelope,
+  createOpenCodeUserTranscriptEnvelopes,
   mapOpenCodePromptResponseToTranscriptEnvelopes,
   mapOpenCodeToTranscriptEnvelopes,
-  normalizeOpenCodePromptResponse,
-  normalizeOpenCodeSessionUpdate,
 } from '../../event-normalizers/opencode.js'
 import {
   opencodeApprovalAdapter,
@@ -75,28 +77,29 @@ export async function finalizeOpenCodeTurnFailure(
   detail: string,
   deps: Pick<OpenCodeSessionDeps, 'appendEvent' | 'broadcastEvent'>,
 ): Promise<void> {
-  const closeEvents = normalizeOpenCodePromptResponse(
+  const closeEvents = mapOpenCodePromptResponseToTranscriptEnvelopes(
     { stopReason: 'cancelled' },
     session.opencodeTurnState ?? createOpenCodeTurnState(),
   )
-  for (const event of closeEvents.filter((candidate) => candidate.type !== 'result')) {
+  for (const event of closeEvents.filter((candidate) => candidate.ev.type !== 'turn.end')) {
     deps.appendEvent(session, event)
     deps.broadcastEvent(session, event)
   }
 
-  const systemEvent: StreamJsonEvent = {
-    type: 'system',
-    text: `OpenCode turn failed: ${detail}`,
-  }
+  const sessionId = readOpenCodeSessionId(session)
+  const systemEvent = createOpenCodeProviderActivityEnvelope(
+    'OpenCode turn failed',
+    { detail },
+    sessionId,
+  )
   deps.appendEvent(session, systemEvent)
   deps.broadcastEvent(session, systemEvent)
 
-  const resultEvent: StreamJsonEvent = {
-    type: 'result',
-    subtype: 'failed',
-    is_error: true,
-    result: `OpenCode turn failed: ${detail}`,
-  }
+  const resultEvent = createOpenCodeTurnEndEnvelope(
+    'failed',
+    `OpenCode turn failed: ${detail}`,
+    sessionId,
+  )
   deps.appendEvent(session, resultEvent)
   deps.broadcastEvent(session, resultEvent)
 }
@@ -118,17 +121,7 @@ export async function startOpenCodeTurn(
   const promptText = buildOpenCodePromptText(session, text)
   session.opencodeTurnState = createOpenCodeTurnState()
 
-  const messageStartEvent: StreamJsonEvent = {
-    type: 'message_start',
-    message: {
-      id: `opencode-${Date.now()}`,
-      role: 'assistant',
-    },
-    source: {
-      provider: 'opencode',
-      backend: 'acp',
-    },
-  }
+  const messageStartEvent = createOpenCodeAssistantStartEnvelope(resumeSessionId)
   deps.appendEvent(session, messageStartEvent)
   deps.broadcastEvent(session, messageStartEvent)
 
@@ -155,19 +148,17 @@ export async function startOpenCodeTurn(
   }
 }
 
-function buildOpenCodeUserEvent(
+function buildOpenCodeUserEvents(
+  session: StreamSession,
   text: string,
-  subtype?: string,
   displayText?: string,
   clientSendId?: string,
-): StreamJsonEvent {
-  return {
-    type: 'user',
-    ...(subtype ? { subtype } : {}),
-    ...(displayText !== undefined ? { displayText: displayText.trim() } : {}),
-    ...(clientSendId ? { clientSendId } : {}),
-    message: { role: 'user', content: text },
-  } as unknown as StreamJsonEvent
+): StreamJsonEvent[] {
+  return createOpenCodeUserTranscriptEnvelopes(text, {
+    sessionId: readOpenCodeSessionId(session),
+    displayText,
+    clientSendId,
+  }) as StreamJsonEvent[]
 }
 
 function trackOpenCodeToolCallSnapshot(session: StreamSession, update: Record<string, unknown> | null): void {
@@ -260,10 +251,11 @@ export function createOpenCodeSessionAdapter(
         const imageEventText = text
           ? 'Image attachments are not supported in OpenCode sessions. Sending text only.'
           : 'Image attachments are not supported in OpenCode sessions.'
-        const imageEvent: StreamJsonEvent = {
-          type: 'system',
-          text: imageEventText,
-        }
+        const imageEvent = createOpenCodeProviderActivityEnvelope(
+          'OpenCode image attachments unsupported',
+          { detail: imageEventText },
+          readOpenCodeSessionId(session),
+        )
         deps.appendEvent(session, imageEvent)
         deps.broadcastEvent(session, imageEvent)
         if (!text) {
@@ -272,14 +264,16 @@ export function createOpenCodeSessionAdapter(
       }
 
       deps.resetActiveTurnState(session)
-      const userEvent = buildOpenCodeUserEvent(
+      const userEvents = buildOpenCodeUserEvents(
+        session,
         text,
-        options?.userEventSubtype,
         options?.displayText,
         options?.clientSendId,
       )
-      deps.appendEvent(session, userEvent)
-      deps.broadcastEvent(session, userEvent)
+      for (const userEvent of userEvents) {
+        deps.appendEvent(session, userEvent)
+        deps.broadcastEvent(session, userEvent)
+      }
 
       try {
         await startOpenCodeTurn(session, text, deps)
@@ -439,10 +433,11 @@ export async function createOpenCodeAcpSession(
 
         const actionPolicyGate = deps.getActionPolicyGate?.()
         if (!actionPolicyGate) {
-          const unavailableEvent: StreamJsonEvent = {
-            type: 'system',
-            text: 'Hervald approval gate is unavailable. OpenCode request denied.',
-          }
+          const unavailableEvent = createOpenCodeProviderActivityEnvelope(
+            'OpenCode request denied',
+            { detail: 'Herd approval gate is unavailable. OpenCode request denied.' },
+            readOpenCodeSessionId(session),
+          )
           deps.appendEvent(session, unavailableEvent)
           deps.broadcastEvent(session, unavailableEvent)
           deps.schedulePersistedSessionsWrite()
@@ -456,10 +451,11 @@ export async function createOpenCodeAcpSession(
 
         void handleProviderApproval(opencodeApprovalAdapter, permissionRequest, session, { actionPolicyGate }).catch((error) => {
           const detail = error instanceof Error ? error.message : String(error)
-          const failureEvent: StreamJsonEvent = {
-            type: 'system',
-            text: `OpenCode approval handling failed: ${detail}`,
-          }
+          const failureEvent = createOpenCodeProviderActivityEnvelope(
+            'OpenCode approval handling failed',
+            { detail },
+            readOpenCodeSessionId(session),
+          )
           deps.appendEvent(session, failureEvent)
           deps.broadcastEvent(session, failureEvent)
           deps.schedulePersistedSessionsWrite()
@@ -585,8 +581,13 @@ export async function createOpenCodeAcpSession(
       signal: signalText,
       text: baseText,
     }
-    deps.appendEvent(session, exitEvent)
-    deps.broadcastEvent(session, exitEvent)
+    const exitEnvelope = createOpenCodeProviderActivityEnvelope(
+      'OpenCode process exited',
+      { exitCode, signal: signalText, detail: baseText },
+      readOpenCodeSessionId(session),
+    )
+    deps.appendEvent(session, exitEnvelope)
+    deps.broadcastEvent(session, exitEnvelope)
 
     for (const client of session.clients) {
       client.close(1000, 'Session ended')
@@ -615,19 +616,24 @@ export async function createOpenCodeAcpSession(
       return
     }
 
-    const errorEvent: ExitCompletionEvent = {
-      type: 'system',
-      text: `Process error: ${error.message}`,
-    }
-    deps.appendEvent(session, errorEvent)
-    deps.broadcastEvent(session, errorEvent)
+    const detail = `Process error: ${error.message}`
+    const errorEnvelope = createOpenCodeTurnEndEnvelope('failed', detail, readOpenCodeSessionId(session))
+    deps.appendEvent(session, errorEnvelope)
+    deps.broadcastEvent(session, errorEnvelope)
 
     for (const client of session.clients) {
       client.close(1000, 'Session ended')
     }
 
     if (!finalizationContext) {
-      finalizationContext = { kind: 'error', errorEvent }
+      finalizationContext = {
+        kind: 'error',
+        errorEvent: {
+          type: 'exit',
+          exitCode: -1,
+          text: detail,
+        } as ExitCompletionEvent,
+      }
     }
     processExited = true
     // Errors imply the process is in trouble (often spawn failure with no
@@ -642,12 +648,10 @@ export async function createOpenCodeAcpSession(
 
   if (task.length > 0) {
     try {
-      const userEvent: StreamJsonEvent = {
-        type: 'user',
-        message: { role: 'user', content: task },
-      } as unknown as StreamJsonEvent
-      deps.appendEvent(session, userEvent)
-      deps.broadcastEvent(session, userEvent)
+      for (const userEvent of buildOpenCodeUserEvents(session, task)) {
+        deps.appendEvent(session, userEvent)
+        deps.broadcastEvent(session, userEvent)
+      }
       await startOpenCodeTurn(session, task, deps)
     } catch (error) {
       await runtime.teardown({

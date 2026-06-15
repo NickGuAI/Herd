@@ -1,6 +1,6 @@
-# Hervald
+# Herd
 
-> Hervald is an operator-controlled agent fleet runtime. It coordinates
+> Herd is an operator-controlled agent fleet runtime. It coordinates
 > commanders, workers, provider CLIs, channels, workspace files, approvals,
 > telemetry, onboarding, and persistent memory.
 

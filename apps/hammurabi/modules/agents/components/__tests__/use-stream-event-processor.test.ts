@@ -6,14 +6,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { describe, expect, it } from 'vitest'
 import type { StreamEvent } from '@/types'
 import type { MsgItem } from '../session-messages'
-import { normalizeClaudeEvent } from '../../event-normalizers/claude'
+import { mapClaudeToTranscriptEnvelopes } from '../../event-normalizers/claude'
 import { mapCodexToTranscriptEnvelopes } from '../../event-normalizers/codex'
 import {
   createOpenCodeTurnState,
   mapOpenCodePromptResponseToTranscriptEnvelopes,
   mapOpenCodeToTranscriptEnvelopes,
 } from '../../event-normalizers/opencode'
-import { bridgeLegacyEventToTranscriptEnvelopes } from '../../transcript-legacy-bridge'
 import { useStreamEventProcessor } from '../use-stream-event-processor'
 
 type Harness = {
@@ -101,18 +100,12 @@ const codexSource = {
   backend: 'rpc' as const,
 }
 
-function dispatchBridgedClaudeReplayEvent(
+function dispatchClaudeReplayEvent(
   harness: Harness,
   event: { type: string; [key: string]: unknown },
 ) {
-  const normalized = normalizeClaudeEvent(event as never)
-  const normalizedEvents = normalized === null
-    ? []
-    : (Array.isArray(normalized) ? normalized : [normalized])
-  for (const normalizedEvent of normalizedEvents) {
-    for (const envelope of bridgeLegacyEventToTranscriptEnvelopes(normalizedEvent as never)) {
-      harness.dispatchReplayEvent(envelope as StreamEvent)
-    }
+  for (const envelope of mapClaudeToTranscriptEnvelopes(event)) {
+    harness.dispatchReplayEvent(envelope as StreamEvent)
   }
 }
 
@@ -160,36 +153,31 @@ describe('useStreamEventProcessor assistant tail-repeat handling', () => {
     harness.cleanup()
   })
 
-  it('hydrates projected replay messages without creating a second tail-only live block', () => {
+  it('hydrates projection-only replay messages without creating a second tail-only live block', () => {
     const harness = createHarness()
     const baseParams = {
       threadId: 'thread-hydrated-tail',
       turnId: 'turn-hydrated-tail',
       itemId: 'msg-hydrated-tail',
     }
-    const replayEvents = [
-      ...mapCodexToTranscriptEnvelopes('item/started', {
-        threadId: baseParams.threadId,
-        turnId: baseParams.turnId,
-        item: { id: baseParams.itemId, type: 'agentMessage' },
-      }),
-      ...mapCodexToTranscriptEnvelopes('item/agentMessage/delta', {
-        ...baseParams,
-        delta: 'Hydrated answer',
-      }),
-      ...mapCodexToTranscriptEnvelopes('item/completed', {
-        threadId: baseParams.threadId,
-        turnId: baseParams.turnId,
-        item: { id: baseParams.itemId, type: 'agentMessage' },
-      }),
-    ] as StreamEvent[]
     const projectedMessages: MsgItem[] = [{
       id: 'msg-1',
       kind: 'agent',
       text: 'Hydrated answer',
+      transcript: {
+        source: {
+          provider: 'codex',
+          backend: 'rpc',
+          sessionId: baseParams.threadId,
+          rawEventType: 'item/agentMessage/delta',
+          rawEventId: baseParams.itemId,
+        },
+        turnId: baseParams.turnId,
+        itemId: baseParams.itemId,
+      },
     }]
 
-    harness.hydrateReplayMessages(projectedMessages, replayEvents)
+    harness.hydrateReplayMessages(projectedMessages, [])
     harness.dispatchLiveEvent(mapCodexToTranscriptEnvelopes('item/agentMessage/delta', {
       ...baseParams,
       delta: ' tail',
@@ -209,26 +197,22 @@ describe('useStreamEventProcessor assistant tail-repeat handling', () => {
   it('appends late Claude bridged content_block_delta text to the existing assistant block', () => {
     const harness = createHarness()
     const events = [
-      ...bridgeLegacyEventToTranscriptEnvelopes({
+      ...mapClaudeToTranscriptEnvelopes({
         type: 'content_block_start',
-        source: { provider: 'claude', backend: 'cli' },
         index: 0,
         content_block: { type: 'text' },
       }),
-      ...bridgeLegacyEventToTranscriptEnvelopes({
+      ...mapClaudeToTranscriptEnvelopes({
         type: 'content_block_delta',
-        source: { provider: 'claude', backend: 'cli' },
         index: 0,
         delta: { type: 'text_delta', text: 'Claude final ' },
       }),
-      ...bridgeLegacyEventToTranscriptEnvelopes({
+      ...mapClaudeToTranscriptEnvelopes({
         type: 'content_block_stop',
-        source: { provider: 'claude', backend: 'cli' },
         index: 0,
       }),
-      ...bridgeLegacyEventToTranscriptEnvelopes({
+      ...mapClaudeToTranscriptEnvelopes({
         type: 'content_block_delta',
-        source: { provider: 'claude', backend: 'cli' },
         index: 0,
         delta: { type: 'text_delta', text: 'tail' },
       }),
@@ -341,10 +325,67 @@ describe('useStreamEventProcessor replay user handling', () => {
     harness.cleanup()
   })
 
+  it('replaces optimistic Codex user sends when v2 echoes include clientSendId', () => {
+    const harness = createHarness()
+
+    harness.hydrateReplayMessages([{
+      id: 'optimistic-user-send',
+      kind: 'user',
+      text: 'please inspect the workspace',
+      clientSendId: 'send-v2-optimistic',
+    }], [])
+
+    harness.dispatchLiveEvent({
+      schemaVersion: 2,
+      id: 'env-user-start',
+      time: '2026-05-27T00:00:00.000Z',
+      source: { ...codexSource, rawEventType: 'hammurabi/user' },
+      turnId: 'turn-user-echo',
+      itemId: 'user-message-echo',
+      clientSendId: 'send-v2-optimistic',
+      ev: { type: 'message.start', role: 'user' },
+    })
+    harness.dispatchLiveEvent({
+      schemaVersion: 2,
+      id: 'env-user-delta',
+      time: '2026-05-27T00:00:01.000Z',
+      source: { ...codexSource, rawEventType: 'hammurabi/user' },
+      turnId: 'turn-user-echo',
+      itemId: 'user-message-echo',
+      clientSendId: 'send-v2-optimistic',
+      ev: { type: 'message.delta', text: 'please inspect the workspace', channel: 'final' },
+    })
+    harness.dispatchLiveEvent({
+      schemaVersion: 2,
+      id: 'env-user-end',
+      time: '2026-05-27T00:00:02.000Z',
+      source: { ...codexSource, rawEventType: 'hammurabi/user' },
+      turnId: 'turn-user-echo',
+      itemId: 'user-message-echo',
+      clientSendId: 'send-v2-optimistic',
+      ev: { type: 'message.end' },
+    })
+
+    const userMessages = harness.getMessages().filter((message) => message.kind === 'user')
+    expect(userMessages).toEqual([
+      expect.objectContaining({
+        id: 'optimistic-user-send',
+        text: 'please inspect the workspace',
+        clientSendId: 'send-v2-optimistic',
+        transcript: expect.objectContaining({
+          envelopeId: 'env-user-delta',
+          itemId: 'user-message-echo',
+        }),
+      }),
+    ])
+
+    harness.cleanup()
+  })
+
   it('renders bridged Claude Code Agent child events under the Agent block', () => {
     const harness = createHarness()
 
-    dispatchBridgedClaudeReplayEvent(harness, {
+    dispatchClaudeReplayEvent(harness, {
       type: 'assistant',
       message: {
         id: 'assistant-agent',
@@ -357,7 +398,7 @@ describe('useStreamEventProcessor replay user handling', () => {
         }],
       },
     })
-    dispatchBridgedClaudeReplayEvent(harness, {
+    dispatchClaudeReplayEvent(harness, {
       type: 'system',
       subtype: 'task_progress',
       tool_use_id: 'toolu_parent',
@@ -367,7 +408,7 @@ describe('useStreamEventProcessor replay user handling', () => {
       description: 'Running nested investigation',
       last_tool_name: 'Read',
     })
-    dispatchBridgedClaudeReplayEvent(harness, {
+    dispatchClaudeReplayEvent(harness, {
       type: 'assistant',
       parent_tool_use_id: 'toolu_parent',
       message: {
@@ -381,7 +422,7 @@ describe('useStreamEventProcessor replay user handling', () => {
         }],
       },
     })
-    dispatchBridgedClaudeReplayEvent(harness, {
+    dispatchClaudeReplayEvent(harness, {
       type: 'user',
       parent_tool_use_id: 'toolu_parent',
       message: {
@@ -389,7 +430,7 @@ describe('useStreamEventProcessor replay user handling', () => {
         content: [{ type: 'tool_result', tool_use_id: 'toolu_child', content: 'file contents' }],
       },
     })
-    dispatchBridgedClaudeReplayEvent(harness, {
+    dispatchClaudeReplayEvent(harness, {
       type: 'assistant',
       parent_tool_use_id: 'toolu_parent',
       message: {
@@ -440,7 +481,7 @@ describe('useStreamEventProcessor replay user handling', () => {
     harness.cleanup()
   })
 
-  it('promotes legacy Codex raw agentMessage delta envelopes into assistant chat text', () => {
+  it('keeps Codex raw agentMessage delta envelopes as provider activity', () => {
     const harness = createHarness()
 
     harness.dispatchReplayEvent({
@@ -472,8 +513,18 @@ describe('useStreamEventProcessor replay user handling', () => {
 
     expect(harness.getMessages()).toEqual([
       expect.objectContaining({
-        kind: 'agent',
-        text: 'Final answer',
+        kind: 'provider',
+        text: 'codex raw: item/agentMessage/delta',
+        transcript: expect.objectContaining({
+          providerPayload: { delta: 'Final ' },
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'provider',
+        text: 'codex raw: item/agentMessage/delta',
+        transcript: expect.objectContaining({
+          providerPayload: { delta: 'answer' },
+        }),
       }),
     ])
 

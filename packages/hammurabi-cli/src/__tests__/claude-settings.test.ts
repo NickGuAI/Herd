@@ -14,7 +14,7 @@ afterEach(async () => {
   )
 })
 
-const vars = buildClaudeCodeOtelEnv('https://hervald.gehirn.ai', 'hmrb_test_key')
+const vars = buildClaudeCodeOtelEnv('https://herd.gehirn.ai', 'hmrb_test_key')
 
 async function readJson(filePath: string): Promise<unknown> {
   return JSON.parse(await readFile(filePath, 'utf8')) as unknown
@@ -31,7 +31,7 @@ describe('mergeClaudeCodeEnv', () => {
     const result = await readJson(settingsPath) as Record<string, Record<string, string>>
     expect(result.env).toMatchObject({
       CLAUDE_CODE_ENABLE_TELEMETRY: '1',
-      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://hervald.gehirn.ai',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://herd.gehirn.ai',
       OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json',
       OTEL_EXPORTER_OTLP_HEADERS: 'x-hammurabi-api-key=hmrb_test_key',
     })
@@ -52,7 +52,7 @@ describe('mergeClaudeCodeEnv', () => {
     const result = await readJson(settingsPath) as Record<string, unknown>
     expect(result.permissions).toEqual({ allow: [] })
     expect(result.env).toMatchObject({
-      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://hervald.gehirn.ai',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://herd.gehirn.ai',
     })
   })
 
@@ -71,7 +71,7 @@ describe('mergeClaudeCodeEnv', () => {
 
     const result = await readJson(settingsPath) as Record<string, Record<string, string>>
     expect(result.env.MY_VAR).toBe('keep_me')
-    expect(result.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://hervald.gehirn.ai')
+    expect(result.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://herd.gehirn.ai')
   })
 
   it('removes legacy HAMMURABI_* keys on re-onboard', async () => {
@@ -97,6 +97,6 @@ describe('mergeClaudeCodeEnv', () => {
     expect(result.env.MY_VAR).toBe('keep_me')
     expect(result.env).not.toHaveProperty('HAMMURABI_ENDPOINT')
     expect(result.env).not.toHaveProperty('HAMMURABI_API_KEY')
-    expect(result.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://hervald.gehirn.ai')
+    expect(result.env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://herd.gehirn.ai')
   })
 })

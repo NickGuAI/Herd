@@ -1,6 +1,6 @@
-# Hervald Docs
+# Herd Docs
 
-Hervald is the operating system for a personal agent fleet: commanders,
+Herd is the operating system for a personal agent fleet: commanders,
 workers, channels, workspace context, approvals, provider credentials, and
 memory in one operator-controlled runtime.
 
@@ -8,7 +8,7 @@ Use these docs in this order when you are setting up or operating the product.
 
 ## Start Here
 
-1. [Quickstart](getting-started/quickstart.md): install Hervald and reach the
+1. [Quickstart](getting-started/quickstart.md): install Herd and reach the
    first useful commander chat.
 2. [Provider auth](operate/provider-auth.md): connect Codex, Claude Code,
    Gemini CLI, or OpenCode on the host that runs the provider.
@@ -29,7 +29,7 @@ Use these docs in this order when you are setting up or operating the product.
 - [Approvals](concepts/approvals.md): human-gated action policy and pending
   tool decisions.
 
-## Operate Hervald
+## Operate Herd
 
 - [Provider auth](operate/provider-auth.md)
 - [Machines and workers](operate/machines.md)

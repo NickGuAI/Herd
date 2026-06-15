@@ -86,7 +86,7 @@ interface MobileSettingsProfile {
 }
 
 function initials(name?: string | null, email?: string | null): string {
-  const source = name?.trim() || email?.trim() || 'Hervald'
+  const source = name?.trim() || email?.trim() || 'Herd'
   const [first = 'H', second = 'A'] = source.split(/\s+/)
   return `${first.charAt(0)}${second.charAt(0)}`.toLowerCase()
 }
@@ -660,7 +660,7 @@ function AboutPanel() {
   return (
     <SettingsPanel>
       <div className="space-y-3 text-sm">
-        <SettingRow label="Product" value="Hervald" />
+        <SettingRow label="Product" value="Herd" />
         <SettingRow label="Version" value={APP_VERSION} />
         {BUILD_COMMIT ? <SettingRow label="Build" value={BUILD_COMMIT} /> : null}
       </div>

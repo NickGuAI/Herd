@@ -22,6 +22,7 @@ import type {
   CompletedSession,
   ExitedStreamSessionState,
   PersistedStreamSession,
+  StreamJsonEvent,
   StreamSession,
 } from '../../types.js'
 
@@ -175,5 +176,88 @@ describe('session persistence quick wins', () => {
       exitedStreamSessions: new Map<string, ExitedStreamSessionState>(),
     })
     expect(serialized.sessions[0]?.model).toBe('claude-sonnet-4-6')
+  })
+
+  it('restores exited v2 turn.end terminal statuses as completed session subtypes', async () => {
+    const cases = [
+      {
+        sessionName: 'restore-failed-v2-turn',
+        threadId: 'thread-failed-v2-turn',
+        status: 'failed',
+        expectedSubtype: 'failed',
+        finalComment: 'Codex turn failed',
+        costUsd: 0.42,
+      },
+      {
+        sessionName: 'restore-interrupted-v2-turn',
+        threadId: 'thread-interrupted-v2-turn',
+        status: 'interrupted',
+        expectedSubtype: 'interrupted',
+        finalComment: '',
+        costUsd: 0.11,
+      },
+    ]
+    const entries: PersistedStreamSession[] = cases.map((testCase) => {
+      const turnEnd: StreamJsonEvent = {
+        schemaVersion: 2,
+        id: `turn-end-${testCase.status}`,
+        time: '2026-05-04T00:01:00.000Z',
+        source: {
+          provider: 'codex',
+          backend: 'rpc',
+          sessionId: testCase.threadId,
+          rawEventType: 'hammurabi/codex-watchdog-thread-read',
+        },
+        turnId: `turn-${testCase.status}-v2`,
+        ev: {
+          type: 'turn.end',
+          status: testCase.status,
+          ...(testCase.finalComment ? { error: testCase.finalComment } : {}),
+          result: {
+            total_cost_usd: testCase.costUsd,
+          },
+        },
+      }
+      return {
+        ...buildPersistedSession(testCase.sessionName),
+        agentType: 'codex',
+        providerContext: {
+          providerId: 'codex',
+          threadId: testCase.threadId,
+        },
+        sessionState: 'exited',
+        hadResult: true,
+        events: [turnEnd],
+      }
+    })
+    const sessionStorePath = join(tempDir, 'stream-sessions.json')
+    await writeFile(sessionStorePath, JSON.stringify({ sessions: entries }, null, 2), 'utf8')
+
+    const completedSessions = new Map<string, CompletedSession>()
+    const restoreProviderSession = vi.fn(async (persistedEntry: PersistedStreamSession) =>
+      buildRestoredSession(persistedEntry)
+    )
+
+    await restorePersistedSessions({
+      sessionStorePath,
+      sessions: new Map<string, StreamSession>(),
+      completedSessions,
+      exitedStreamSessions: new Map<string, ExitedStreamSessionState>(),
+      maxSessions: 10,
+      machineRegistry: {
+        readMachineRegistry: vi.fn(async () => []),
+      } as never,
+      applyUsageEvent: vi.fn(),
+      restoreProviderSession,
+    })
+
+    expect(restoreProviderSession).not.toHaveBeenCalled()
+    for (const testCase of cases) {
+      expect(completedSessions.get(testCase.sessionName)).toMatchObject({
+        subtype: testCase.expectedSubtype,
+        finalComment: testCase.finalComment,
+        costUsd: testCase.costUsd,
+      })
+    }
   })
 })

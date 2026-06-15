@@ -38,7 +38,7 @@ describe('BottomSheet', () => {
     document.documentElement.classList.remove('hv-light', 'hv-dark')
   })
 
-  it('applies the active Hervald theme class to the portaled panel root', async () => {
+  it('applies the active Herd theme class to the portaled panel root', async () => {
     document.documentElement.classList.add('hv-dark')
 
     await renderSheet()

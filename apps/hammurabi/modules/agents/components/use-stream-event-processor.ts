@@ -3,6 +3,7 @@ import type { StreamEvent } from '@/types'
 import { capMessages, type MsgItem } from '../messages/model'
 import {
   createStreamProcessorState,
+  hydrateStreamProcessorStateFromMessages,
   markAskAnsweredMessages,
   processStreamEvent,
   resetStreamProcessorState,
@@ -33,19 +34,23 @@ export function useStreamEventProcessor(options?: {
     resetStreamProcessorState(processorStateRef.current)
 
     let shadowMessages: MsgItem[] = []
-    const shadowContext: StreamEventProcessorContext = {
-      state: processorStateRef.current,
-      nextId,
-      setMessages: (updater) => {
-        shadowMessages = updater(shadowMessages)
-      },
-      setIsStreaming,
-      capMessages: (items) => items,
-      onWorkspaceMutation,
-    }
+    if (replayEvents.length > 0) {
+      const shadowContext: StreamEventProcessorContext = {
+        state: processorStateRef.current,
+        nextId,
+        setMessages: (updater) => {
+          shadowMessages = updater(shadowMessages)
+        },
+        setIsStreaming,
+        capMessages: (items) => items,
+        onWorkspaceMutation,
+      }
 
-    for (const replayEvent of replayEvents) {
-      processStreamEvent(shadowContext, replayEvent, true)
+      for (const replayEvent of replayEvents) {
+        processStreamEvent(shadowContext, replayEvent, true)
+      }
+    } else {
+      hydrateStreamProcessorStateFromMessages(processorStateRef.current, nextMessages)
     }
 
     const nextCounter = Math.max(

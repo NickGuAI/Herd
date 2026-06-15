@@ -33,7 +33,7 @@ function StartupError({
   return (
     <div className="flex h-full w-full items-center justify-center px-4 py-8">
       <div className="card-sumi flex max-w-md flex-col items-center gap-4 p-8 text-center">
-        <h1 className="text-xl font-medium text-sumi-black">Hervald</h1>
+        <h1 className="text-xl font-medium text-sumi-black">Herd</h1>
         <p className="text-sm text-sumi-diluted">{error.message}</p>
         <button
           type="button"

@@ -9,6 +9,7 @@ import type {
   StreamJsonEvent,
   WorkerState,
 } from '../types.js'
+import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 
 const AUTH_HEADERS = {
   'x-hammurabi-api-key': 'test-key',
@@ -215,6 +216,27 @@ function assistantTextEvent(index: number, text: string): StreamJsonEvent {
   }
 }
 
+function codexEnvelope(
+  id: string,
+  time: string,
+  ev: TranscriptEnvelope['ev'],
+  overrides: Partial<Omit<TranscriptEnvelope, 'schemaVersion' | 'id' | 'time' | 'source' | 'ev'>> = {},
+): StreamJsonEvent {
+  return {
+    schemaVersion: 2,
+    id,
+    time,
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      sessionId: 'thread-v2-peek',
+      rawEventType: 'hammurabi/user',
+    },
+    ...overrides,
+    ev,
+  }
+}
+
 describe('GET /sessions/:name/messages', () => {
   it('returns 404 for an unknown session', async () => {
     const response = await invokeMessagesRoute({
@@ -411,6 +433,58 @@ describe('GET /sessions/:name/messages', () => {
     }))).toEqual([
       { type: 'assistant', kind: 'text', preview: 'plain assistant text' },
       { type: 'user', kind: 'text', preview: 'plain user text' },
+    ])
+  })
+
+  it('returns v2 transcript user sends in the message peek API', async () => {
+    const sessionName = 'peek-v2-user-send'
+    const sessions = new Map<string, AnySession>([[
+      sessionName,
+      createExternalSession(sessionName, [
+        codexEnvelope(
+          'v2-turn-start',
+          '2026-04-22T12:00:00.000Z',
+          { type: 'turn.start', role: 'assistant' },
+          { turnId: 'turn-v2-peek' },
+        ),
+        codexEnvelope(
+          'v2-user-start',
+          '2026-04-22T12:00:01.000Z',
+          { type: 'message.start', role: 'user' },
+          { turnId: 'turn-v2-peek', itemId: 'user-message-v2', clientSendId: 'send-v2-peek' },
+        ),
+        codexEnvelope(
+          'v2-user-delta',
+          '2026-04-22T12:00:02.000Z',
+          { type: 'message.delta', text: 'please inspect the workspace' },
+          { turnId: 'turn-v2-peek', itemId: 'user-message-v2', clientSendId: 'send-v2-peek' },
+        ),
+        codexEnvelope(
+          'v2-user-end',
+          '2026-04-22T12:00:03.000Z',
+          { type: 'message.end' },
+          { turnId: 'turn-v2-peek', itemId: 'user-message-v2', clientSendId: 'send-v2-peek' },
+        ),
+      ]),
+    ]])
+
+    const response = await invokeMessagesRoute({
+      headers: AUTH_HEADERS,
+      query: { last: '10', role: 'user' },
+      sessionName,
+      sessions,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect((response.body as {
+      messages: Array<{ type: string; kind?: string; preview: string }>
+    }).messages).toEqual([
+      {
+        type: 'user',
+        kind: 'text',
+        ts: '2026-04-22T12:00:02.000Z',
+        preview: 'please inspect the workspace',
+      },
     ])
   })
 

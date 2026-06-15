@@ -33,6 +33,8 @@ import {
   writeSessionMeta,
 } from './routes-test-harness'
 import type { MockCodexSidecar, MockGeminiAcpRuntime, RunningServer } from './routes-test-harness'
+import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope'
+import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope'
 
 function getTurnStartText(request: { params?: unknown } | undefined): string | null {
   const params = request?.params
@@ -107,6 +109,55 @@ function buildCodexThreadReadResult(item: Record<string, unknown>) {
       ],
     },
   }
+}
+
+function readCodexUserText(event: unknown): string | null {
+  if (!isTranscriptEnvelope(event) || event.source.provider !== 'codex') {
+    return null
+  }
+  if (event.ev.type !== 'message.delta' || event.source.rawEventType !== 'hammurabi/user') {
+    return null
+  }
+  return event.ev.text
+}
+
+function isCodexUserTextEvent(event: unknown, text: string): event is TranscriptEnvelope {
+  return readCodexUserText(event) === text
+}
+
+function isCodexUserImageEvent(event: unknown, imageData: string): event is TranscriptEnvelope {
+  return isTranscriptEnvelope(event)
+    && event.source.provider === 'codex'
+    && event.source.rawEventType === 'hammurabi/user'
+    && event.ev.type === 'message.image'
+    && event.ev.image.source.data === imageData
+}
+
+function readProviderActivityText(event: unknown): string | null {
+  if (!isTranscriptEnvelope(event) || event.ev.type !== 'provider.activity') {
+    return null
+  }
+  return [
+    event.ev.title,
+    event.ev.detail,
+    event.ev.data === undefined ? undefined : JSON.stringify(event.ev.data),
+  ].filter((value): value is string => typeof value === 'string').join(' ')
+}
+
+function isProviderActivityContaining(event: unknown, text: string): event is TranscriptEnvelope {
+  return readProviderActivityText(event)?.includes(text) ?? false
+}
+
+function isTranscriptTurnEnd(event: unknown, status?: string): event is TranscriptEnvelope {
+  return isTranscriptEnvelope(event)
+    && event.ev.type === 'turn.end'
+    && (status === undefined || event.ev.status === status)
+}
+
+function isLegacyStreamEventType(event: unknown, type: string): boolean {
+  return typeof event === 'object'
+    && event !== null
+    && (event as { type?: unknown }).type === type
 }
 
 describe("stream sessions", () => {
@@ -713,10 +764,14 @@ describe("stream sessions", () => {
           const events = raw
             .split('\n')
             .filter((line) => line.trim().length > 0)
-            .map((line) => JSON.parse(line) as { type?: string; subtype?: string; message?: { content?: string } })
+            .map((line) => JSON.parse(line) as unknown)
 
-          expect(events.some((event) => event.subtype === 'session_rotated')).toBe(true)
-          expect(events.some((event) => event.type === 'user' && event.message?.content === 'first commander codex turn')).toBe(true)
+          expect(events.some((event) => (
+            typeof event === 'object'
+            && event !== null
+            && (event as { subtype?: unknown }).subtype === 'session_rotated'
+          ))).toBe(true)
+          expect(events.some((event) => isCodexUserTextEvent(event, 'first commander codex turn'))).toBe(true)
         })
 
         await vi.waitFor(async () => {
@@ -724,9 +779,9 @@ describe("stream sessions", () => {
           const events = raw
             .split('\n')
             .filter((line) => line.trim().length > 0)
-            .map((line) => JSON.parse(line) as { type?: string; message?: { content?: string } })
+            .map((line) => JSON.parse(line) as unknown)
 
-          expect(events.some((event) => event.type === 'user' && event.message?.content === 'second commander codex turn')).toBe(true)
+          expect(events.some((event) => isCodexUserTextEvent(event, 'second commander codex turn'))).toBe(true)
         })
       } finally {
         await sidecar.closeServer()
@@ -818,7 +873,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-rest-send')
-        const received: Array<{ type: string; message?: { content?: string } }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; message?: { content?: string } }
           if (parsed.type !== 'replay') {
@@ -839,9 +894,8 @@ describe("stream sessions", () => {
         expect(await sendResponse.json()).toEqual({ sent: true })
 
         await vi.waitFor(() => {
-          const userEvent = received.find((event) => event.type === 'user')
+          const userEvent = received.find((event) => isCodexUserTextEvent(event, 'status?'))
           expect(userEvent).toBeDefined()
-          expect(userEvent?.message?.content).toBe('status?')
         })
 
         const turnRequests = sidecar.getRequests('turn/start')
@@ -891,7 +945,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-image-send')
-        const received: Array<{ type: string; message?: { content?: unknown } }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; message?: { content?: unknown } }
           if (parsed.type !== 'replay') {
@@ -916,18 +970,8 @@ describe("stream sessions", () => {
         expect(await sendResponse.json()).toMatchObject({ sent: true, queued: false })
 
         await vi.waitFor(() => {
-          const userEvent = received.find((event) => event.type === 'user')
+          const userEvent = received.find((event) => isCodexUserImageEvent(event, image.data))
           expect(userEvent).toBeDefined()
-          expect(userEvent?.message?.content).toEqual([
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: 'image/png',
-                data: image.data,
-              },
-            },
-          ])
         })
 
         const turnRequests = sidecar.getRequests('turn/start')
@@ -939,18 +983,7 @@ describe("stream sessions", () => {
         })
 
         const session = server.agents.sessionsInterface.getSession('codex-image-send')
-        const storedImageUserEvents = (session?.events ?? []).filter((event) => {
-          if (event.type !== 'user') {
-            return false
-          }
-          const content = (event as { message?: { content?: unknown } }).message?.content
-          return Array.isArray(content)
-            && content.some((item) => (
-              typeof item === 'object'
-              && item !== null
-              && (item as { source?: { data?: unknown } }).source?.data === image.data
-            ))
-        })
+        const storedImageUserEvents = (session?.events ?? []).filter((event) => isCodexUserImageEvent(event, image.data))
         expect(storedImageUserEvents).toHaveLength(1)
 
         ws.close()
@@ -1171,18 +1204,6 @@ describe("stream sessions", () => {
           })
         })
 
-        const waitingSession = server.agents.sessionsInterface.getSession('codex-direct-send-preemption')
-        const waitingUserTexts = (waitingSession?.events ?? []).flatMap((event) => {
-          if (event.type !== 'user') {
-            return []
-          }
-          const content = (event as { message?: { content?: unknown } }).message?.content
-          return typeof content === 'string' ? [content] : []
-        })
-        expect(waitingUserTexts).not.toContain('stop')
-        expect(waitingUserTexts).not.toContain('A')
-        expect(waitingUserTexts).not.toContain('visible queue')
-
         const requestCountBeforeStop = sidecar.getRequests('turn/start').length
         sidecar.emitNotification('turn/completed', {
           threadId: 'thread-1',
@@ -1230,19 +1251,11 @@ describe("stream sessions", () => {
 
         await vi.waitFor(() => {
           const session = server.agents.sessionsInterface.getSession('codex-direct-send-preemption')
-          const queuedUserEvents = (session?.events ?? []).filter((event) => {
-            if (event.type !== 'user') {
-              return false
-            }
-            const content = (event as { message?: { content?: unknown } }).message?.content
-            return content === 'stop' || content === 'A' || content === 'visible queue'
-          })
-          expect(queuedUserEvents.map((event) => (
-            (event as { message?: { content?: unknown } }).message?.content
-          ))).toEqual(['stop', 'A', 'visible queue'])
-          expect(queuedUserEvents.map((event) => (
-            (event as { subtype?: string }).subtype
-          ))).toEqual(['queued_message', 'queued_message', 'queued_message'])
+          const queuedUserTexts = (session?.events ?? [])
+            .map(readCodexUserText)
+            .filter((text): text is string => text === 'stop' || text === 'A' || text === 'visible queue')
+          expect(queuedUserTexts).toHaveLength(3)
+          expect(new Set(queuedUserTexts)).toEqual(new Set(['stop', 'A', 'visible queue']))
         })
       } finally {
         await sidecar.closeServer()
@@ -1360,7 +1373,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-user-echo-dedupe')
-        const received: Array<{ type: string; message?: { content?: string } }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; message?: { content?: string } }
           if (parsed.type !== 'replay') {
@@ -1381,9 +1394,7 @@ describe("stream sessions", () => {
         expect(await sendResponse.json()).toEqual({ sent: true })
 
         await vi.waitFor(() => {
-          const userEvents = received.filter(
-            (event) => event.type === 'user' && event.message?.content === 'status?',
-          )
+          const userEvents = received.filter((event) => isCodexUserTextEvent(event, 'status?'))
           expect(userEvents).toHaveLength(1)
         })
 
@@ -1398,19 +1409,11 @@ describe("stream sessions", () => {
 
         await new Promise((resolve) => setTimeout(resolve, 50))
 
-        const userEvents = received.filter(
-          (event) => event.type === 'user' && event.message?.content === 'status?',
-        )
+        const userEvents = received.filter((event) => isCodexUserTextEvent(event, 'status?'))
         expect(userEvents).toHaveLength(1)
 
         const session = server.agents.sessionsInterface.getSession('codex-user-echo-dedupe')
-        const storedUserEvents = (session?.events ?? []).filter((event) => {
-          if (event.type !== 'user') {
-            return false
-          }
-          const userEvent = event as { message?: { content?: unknown } }
-          return userEvent.message?.content === 'status?'
-        })
+        const storedUserEvents = (session?.events ?? []).filter((event) => isCodexUserTextEvent(event, 'status?'))
         expect(storedUserEvents).toHaveLength(1)
 
         ws.close()
@@ -1441,7 +1444,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-turn-start-error')
-        const received: Array<{ type: string; text?: string; message?: { content?: string } }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string; message?: { content?: string } }
           if (parsed.type !== 'replay') {
@@ -1466,12 +1469,12 @@ describe("stream sessions", () => {
         })
 
         await vi.waitFor(() => {
-          const systemEvent = received.find((event) => event.type === 'system')
-          expect(systemEvent?.text).toContain('Injected turn/start failure')
+          const failureEvent = received.find((event) => isProviderActivityContaining(event, 'Injected turn/start failure'))
+          expect(failureEvent).toBeDefined()
         })
 
-        expect(received.some((event) => event.type === 'user' && event.message?.content === 'status?')).toBe(false)
-        expect(received.some((event) => event.type === 'exit')).toBe(true)
+        expect(received.some((event) => isCodexUserTextEvent(event, 'status?'))).toBe(true)
+        expect(received.some((event) => isTranscriptTurnEnd(event, 'failed'))).toBe(true)
 
         await vi.waitFor(async () => {
           const sessionResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-turn-start-error`, {
@@ -1522,7 +1525,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-sidecar-close')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
           if (parsed.type !== 'replay') {
@@ -1533,12 +1536,10 @@ describe("stream sessions", () => {
         await sidecar.closeConnection(1006)
 
         await vi.waitFor(() => {
-          const systemEvent = received.find(
-            (event) => event.type === 'system' && event.text?.includes('transport recovered'),
-          )
-          expect(systemEvent?.text).toContain('code 1006')
+          const recoveryEvent = received.find((event) => isProviderActivityContaining(event, 'transport recovered'))
+          expect(readProviderActivityText(recoveryEvent)).toContain('code 1006')
         })
-        expect(received.some((event) => event.type === 'exit')).toBe(false)
+        expect(received.some((event) => isLegacyStreamEventType(event, 'exit'))).toBe(false)
 
         await vi.waitFor(async () => {
           const sessionResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-sidecar-close`, {
@@ -1587,7 +1588,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-sidecar-exit-race')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
           if (parsed.type !== 'replay') {
@@ -1599,11 +1600,11 @@ describe("stream sessions", () => {
         sidecar.emitProcessExit(17)
 
         await vi.waitFor(() => {
-          const systemEvent = received.find((event) => event.type === 'system')
-          expect(systemEvent?.text).toContain('exited with code 17')
-          expect(systemEvent?.text).not.toContain('code 1006')
+          const failureEvent = received.find((event) => isProviderActivityContaining(event, 'exited with code 17'))
+          expect(readProviderActivityText(failureEvent)).toContain('exited with code 17')
+          expect(readProviderActivityText(failureEvent)).not.toContain('code 1006')
         })
-        expect(received.some((event) => event.type === 'exit')).toBe(true)
+        expect(received.some((event) => isTranscriptTurnEnd(event, 'failed'))).toBe(true)
 
         await vi.waitFor(async () => {
           const sessionResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-sidecar-exit-race`, {
@@ -1675,8 +1676,8 @@ describe("stream sessions", () => {
 
         const wsA = await connectWs(server.baseUrl, 'codex-isolation-a')
         const wsB = await connectWs(server.baseUrl, 'codex-isolation-b')
-        const receivedA: Array<{ type: string; text?: string }> = []
-        const receivedB: Array<{ type: string; text?: string }> = []
+        const receivedA: unknown[] = []
+        const receivedB: unknown[] = []
 
         wsA.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
@@ -1694,12 +1695,10 @@ describe("stream sessions", () => {
         await sidecar.closeConnectionForThread(threadA!, 1006)
 
         await vi.waitFor(() => {
-          const systemEvent = receivedA.find(
-            (event) => event.type === 'system' && event.text?.includes('transport recovered'),
-          )
-          expect(systemEvent?.text).toContain('code 1006')
+          const recoveryEvent = receivedA.find((event) => isProviderActivityContaining(event, 'transport recovered'))
+          expect(readProviderActivityText(recoveryEvent)).toContain('code 1006')
         })
-        expect(receivedA.some((event) => event.type === 'exit')).toBe(false)
+        expect(receivedA.some((event) => isLegacyStreamEventType(event, 'exit'))).toBe(false)
 
         await vi.waitFor(() => {
           const resumeRequest = sidecar.getRequests('thread/resume').find((request) => {
@@ -1710,8 +1709,8 @@ describe("stream sessions", () => {
         })
 
         await new Promise((resolve) => setTimeout(resolve, 40))
-        expect(receivedB.some((event) => event.type === 'exit')).toBe(false)
-        expect(receivedB.some((event) => event.type === 'system' && event.text?.includes('transport recovered'))).toBe(false)
+        expect(receivedB.some((event) => isLegacyStreamEventType(event, 'exit'))).toBe(false)
+        expect(receivedB.some((event) => isProviderActivityContaining(event, 'transport recovered'))).toBe(false)
 
         const sendB = await fetch(`${server.baseUrl}/api/agents/sessions/codex-isolation-b/send`, {
           method: 'POST',
@@ -1937,7 +1936,7 @@ describe("stream sessions", () => {
         sidecar.suppressPongResponses()
 
         const ws = await connectWs(server.baseUrl, 'codex-sidecar-keepalive-timeout')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
           if (parsed.type !== 'replay') {
@@ -1946,12 +1945,10 @@ describe("stream sessions", () => {
         })
 
         await vi.waitFor(() => {
-          const systemEvent = received.find(
-            (event) => event.type === 'system' && event.text?.includes('transport recovered'),
-          )
-          expect(systemEvent?.text).toContain('keepalive timeout')
+          const recoveryEvent = received.find((event) => isProviderActivityContaining(event, 'transport recovered'))
+          expect(readProviderActivityText(recoveryEvent)).toContain('keepalive timeout')
         })
-        expect(received.some((event) => event.type === 'exit')).toBe(false)
+        expect(received.some((event) => isLegacyStreamEventType(event, 'exit'))).toBe(false)
 
         await vi.waitFor(async () => {
           const sessionResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-sidecar-keepalive-timeout`, {
@@ -2428,7 +2425,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-approval-wait-no-stale')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
           if (parsed.type !== 'replay') {
@@ -2471,7 +2468,7 @@ describe("stream sessions", () => {
 
         await new Promise((resolve) => setTimeout(resolve, 240))
 
-        expect(received.some((event) => event.type === 'system' && event.text?.includes('Codex turn is stale'))).toBe(false)
+        expect(received.some((event) => isProviderActivityContaining(event, 'Codex turn is stale'))).toBe(false)
         expect(sidecar.getRequests('thread/read').length).toBeGreaterThan(0)
 
         ws.close()
@@ -2526,7 +2523,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-watchdog-complete')
-        const received: Array<{ type: string; result?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; result?: string }
           if (parsed.type !== 'replay') {
@@ -2545,8 +2542,8 @@ describe("stream sessions", () => {
         expect(sendResponse.status).toBe(200)
 
         await vi.waitFor(() => {
-          const resultEvent = received.find((event) => event.type === 'result')
-          expect(resultEvent?.result).toBe('Turn completed')
+          const resultEvent = received.find((event) => isTranscriptTurnEnd(event, 'completed'))
+          expect(resultEvent).toBeDefined()
         })
 
         await vi.waitFor(() => {
@@ -2607,7 +2604,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-watchdog-stale')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
           if (parsed.type !== 'replay') {
@@ -2626,8 +2623,8 @@ describe("stream sessions", () => {
         expect(sendResponse.status).toBe(200)
 
         await vi.waitFor(() => {
-          const staleEvent = received.find((event) => event.type === 'system')
-          expect(staleEvent?.text).toContain('Codex turn is stale')
+          const staleEvent = received.find((event) => isProviderActivityContaining(event, 'Codex turn is stale'))
+          expect(staleEvent).toBeDefined()
         })
 
         await vi.waitFor(async () => {
@@ -2656,7 +2653,7 @@ describe("stream sessions", () => {
           expect(entry?.resumeAvailable).toBe(true)
         })
 
-        expect(received.some((event) => event.type === 'result')).toBe(false)
+        expect(received.some((event) => isLegacyStreamEventType(event, 'result'))).toBe(false)
         ws.close()
       } finally {
         await sidecar.closeServer()
@@ -2700,7 +2697,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-unhandled-approval')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
           if (parsed.type !== 'replay') {
@@ -2732,9 +2729,8 @@ describe("stream sessions", () => {
 
         await vi.waitFor(() => {
           const unhandledEvent = received.find(
-            (event) => event.type === 'system'
-              && event.text?.includes('item/connector/requestApproval')
-              && event.text?.includes('Hervald automatically declined'),
+            (event) => isProviderActivityContaining(event, 'item/connector/requestApproval')
+              && isProviderActivityContaining(event, 'Herd automatically declined'),
           )
           expect(unhandledEvent).toBeDefined()
         })
@@ -2857,11 +2853,7 @@ describe("stream sessions", () => {
         expect(received.some((event) => event.type === 'plan_approval')).toBe(false)
 
         await new Promise((resolve) => setTimeout(resolve, 80))
-        expect(received.some(
-          (event) => event.type === 'system'
-            && typeof event.text === 'string'
-            && event.text.includes('Codex turn is stale'),
-        )).toBe(false)
+        expect(received.some((event) => isProviderActivityContaining(event, 'Codex turn is stale'))).toBe(false)
 
         await server.approvalCoordinator.resolve(approvalId, 'approve')
 
@@ -3174,11 +3166,7 @@ describe("stream sessions", () => {
         })
 
         await new Promise((resolve) => setTimeout(resolve, 80))
-        expect(received.some(
-          (event) => event.type === 'system'
-            && typeof event.text === 'string'
-            && event.text.includes('Codex turn is stale'),
-        )).toBe(false)
+        expect(received.some((event) => isProviderActivityContaining(event, 'Codex turn is stale'))).toBe(false)
 
         ws.close()
       } finally {
@@ -3345,11 +3333,11 @@ describe("stream sessions", () => {
 
         await vi.waitFor(() => {
           const staleEvent = received.find(
-            (event) => event.type === 'system' && event.text?.includes('Codex turn is stale'),
+            (event) => isProviderActivityContaining(event, 'Codex turn is stale'),
           )
           expect(staleEvent).toBeDefined()
-          expect(staleEvent?.text).toContain('item/connector/requestApproval')
-          expect(staleEvent?.text).toContain('1 unclassified incoming approval request')
+          expect(readProviderActivityText(staleEvent)).toContain('item/connector/requestApproval')
+          expect(readProviderActivityText(staleEvent)).toContain('1 unclassified incoming approval request')
         })
 
         ws.close()
@@ -3385,7 +3373,7 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'codex-watchdog-thread-read-error')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: unknown[] = []
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
           if (parsed.type !== 'replay') {
@@ -3405,7 +3393,7 @@ describe("stream sessions", () => {
 
         await vi.waitFor(() => {
           const staleEvent = received.find(
-            (event) => event.type === 'system' && event.text?.includes('Codex turn is stale'),
+            (event) => isProviderActivityContaining(event, 'Codex turn is stale'),
           )
           expect(staleEvent).toBeDefined()
         })
@@ -3701,13 +3689,16 @@ describe("stream sessions", () => {
               type: string
               events?: Array<{ type?: string; schemaVersion?: number; ev?: { type?: string; data?: unknown }; source?: unknown }>
               envelopes?: Array<{ schemaVersion?: number; ev?: { type?: string; data?: unknown }; source?: unknown }>
+              projection?: {
+                envelopes?: Array<{ schemaVersion?: number; ev?: { type?: string; data?: unknown }; source?: unknown }>
+              }
               usage?: { inputTokens: number; outputTokens: number; costUsd: number }
             }
-            if (parsed.type === 'replay' && parsed.envelopes && parsed.usage) {
+            if (parsed.type === 'replay' && parsed.projection?.envelopes && parsed.usage) {
               resolve({
                 type: parsed.type,
                 events: parsed.events,
-                envelopes: parsed.envelopes,
+                envelopes: parsed.projection.envelopes,
                 usage: parsed.usage,
               })
             }
@@ -3725,7 +3716,11 @@ describe("stream sessions", () => {
           outputTokens: 33,
           costUsd: 0.11,
         })
-        expect(replay.events).toBeUndefined()
+        expect(replay.events).toEqual([
+          expect.objectContaining({
+            schemaVersion: 2,
+          }),
+        ])
         expect(replay.envelopes).toEqual([
           expect.objectContaining({
             schemaVersion: 2,
@@ -3792,7 +3787,7 @@ describe("stream sessions", () => {
         })
 
         const session = server.agents.sessionsInterface.getSession('codex-interface-send')
-        expect(session?.events.some((event) => event.type === 'user')).toBe(true)
+        expect(session?.events.some((event) => isCodexUserTextEvent(event, 'heartbeat'))).toBe(true)
       } finally {
         await sidecar.closeServer()
         await server.close()

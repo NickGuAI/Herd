@@ -358,7 +358,7 @@ export function providerUsesManagedOAuth(_provider: AgentType): boolean {
 }
 
 export function buildProviderNativeAuthDetail(provider: AgentType, host: string): string | null {
-  const target = host === 'local' ? 'the Hervald host' : `machine "${host}"`
+  const target = host === 'local' ? 'the Herd host' : `machine "${host}"`
   if (provider === 'claude') {
     return `Claude Code uses native CLI authentication. Run \`claude auth status\` on ${target}; if it is not authenticated, run \`claude auth login\` there.`
   }
@@ -471,14 +471,14 @@ function refreshTokenUrl(provider: AgentType, env: NodeJS.ProcessEnv): string {
   if (provider === 'codex') {
     return env.HAMMURABI_CODEX_OAUTH_TOKEN_URL?.trim() || CODEX_TOKEN_URL
   }
-  throw new Error(`${provider} does not use Hervald-managed OAuth tokens`)
+  throw new Error(`${provider} does not use Herd-managed OAuth tokens`)
 }
 
 function providerClientId(provider: AgentType): string {
   if (provider === 'codex') {
     return CODEX_CLIENT_ID
   }
-  throw new Error(`${provider} does not use Hervald-managed OAuth tokens`)
+  throw new Error(`${provider} does not use Herd-managed OAuth tokens`)
 }
 
 function tokenExpiresSoon(token: ProviderTokenRecord, nowMs: number): boolean {
@@ -686,7 +686,7 @@ export async function prepareProviderSpawnAuth(args: {
 
     const status = hasApiKeyAuth(args.provider, env) ? 'ready' : 'unknown'
     const detail = status === 'unknown'
-      ? `${args.provider} uses API-key auth in Hervald today; no OAuth refresh adapter is available.`
+      ? `${args.provider} uses API-key auth in Herd today; no OAuth refresh adapter is available.`
       : undefined
     const snapshot = buildSnapshot(args.provider, args.scopeId, host, status, status === 'ready' ? 'api-key' : 'missing', detail)
     await args.store.upsertSnapshot(snapshot)
@@ -725,13 +725,13 @@ export async function prepareProviderSpawnAuth(args: {
         host,
         'ready',
         'login',
-        'Using existing host login credentials; re-auth in Hervald to enable managed refresh.',
+        'Using existing host login credentials; re-auth in Herd to enable managed refresh.',
       )
       await args.store.upsertSnapshot(snapshot)
       return { provider: args.provider, snapshot, env: loginEnv }
     }
 
-    const snapshot = buildSnapshot(args.provider, args.scopeId, host, 'auth_required', 'missing', 'No Hervald-managed provider token is stored.')
+    const snapshot = buildSnapshot(args.provider, args.scopeId, host, 'auth_required', 'missing', 'No Herd-managed provider token is stored.')
     await args.store.upsertSnapshot(snapshot)
     throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
   }
@@ -810,14 +810,14 @@ function authorizeUrl(provider: AgentType, env: NodeJS.ProcessEnv): string {
   if (provider === 'codex') {
     return env.HAMMURABI_CODEX_OAUTH_AUTHORIZE_URL?.trim() || CODEX_AUTHORIZE_URL
   }
-  throw new Error(`${provider} does not use Hervald-managed OAuth tokens`)
+  throw new Error(`${provider} does not use Herd-managed OAuth tokens`)
 }
 
 function redirectPort(provider: AgentType): number {
   if (provider === 'codex') {
     return CODEX_REDIRECT_PORT
   }
-  throw new Error(`${provider} does not use Hervald-managed OAuth tokens`)
+  throw new Error(`${provider} does not use Herd-managed OAuth tokens`)
 }
 
 export async function startProviderOAuthFlow(args: {
@@ -831,7 +831,7 @@ export async function startProviderOAuthFlow(args: {
 }): Promise<ProviderOAuthStartResult> {
   if (!providerUsesManagedOAuth(args.provider)) {
     const nativeDetail = buildProviderNativeAuthDetail(args.provider, args.host)
-    throw new Error(nativeDetail ?? `${args.provider} does not expose a Hervald OAuth flow`)
+    throw new Error(nativeDetail ?? `${args.provider} does not expose a Herd OAuth flow`)
   }
   const env = args.env ?? process.env
   const nowMs = args.nowMs ?? Date.now()
@@ -892,7 +892,7 @@ export async function completeProviderOAuthFlow(args: {
   }
   if (!providerUsesManagedOAuth(flow.provider)) {
     const nativeDetail = buildProviderNativeAuthDetail(flow.provider, flow.host)
-    throw new Error(nativeDetail ?? `${flow.provider} does not expose a Hervald OAuth flow`)
+    throw new Error(nativeDetail ?? `${flow.provider} does not expose a Herd OAuth flow`)
   }
   const env = args.env ?? process.env
   const fetchImpl = args.fetchImpl ?? fetch
@@ -1019,7 +1019,7 @@ async function handleOAuthCallbackRequest(
       res,
       200,
       'Re-auth complete',
-      'Provider authentication is ready. You can close this tab and return to Hervald.',
+      'Provider authentication is ready. You can close this tab and return to Herd.',
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : 'OAuth token exchange failed.'

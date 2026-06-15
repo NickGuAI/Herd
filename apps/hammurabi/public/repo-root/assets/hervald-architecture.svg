@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620" role="img" aria-labelledby="title desc">
-  <title id="title">Hervald agent orchestration architecture</title>
-  <desc id="desc">Hervald routes operator intent through Command Room, mission state, approvals, workers, provider CLIs, and user-controlled machines.</desc>
+  <title id="title">Herd agent orchestration architecture</title>
+  <desc id="desc">Herd routes operator intent through Command Room, mission state, approvals, workers, provider CLIs, and user-controlled machines.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0%" stop-color="#08141b"/>
@@ -27,7 +27,7 @@
   <rect width="1120" height="620" rx="34" fill="url(#bg)"/>
   <path d="M92 126 H1028 M92 308 H1028 M92 490 H1028" stroke="#244651" stroke-opacity=".58"/>
   <path d="M270 82 V540 M560 82 V540 M850 82 V540" stroke="#244651" stroke-opacity=".58"/>
-  <text x="82" y="64" class="mono">HERVALD CONTROL PLANE</text>
+  <text x="82" y="64" class="mono">HERD CONTROL PLANE</text>
   <text x="758" y="64" class="mono">RUNS ON MACHINES YOU CONTROL</text>
 
   <g transform="translate(70 222)">

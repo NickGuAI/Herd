@@ -221,9 +221,13 @@ function checkPublicReadmeDocsLinks(): void {
       docsTarget = targetWithoutAnchor.slice('./docs/'.length)
     } else if (targetWithoutAnchor.startsWith('docs/')) {
       docsTarget = targetWithoutAnchor.slice('docs/'.length)
-    } else if (targetWithoutAnchor.startsWith('https://hervald.gehirn.ai/docs/')) {
-      docsTarget = targetWithoutAnchor.slice('https://hervald.gehirn.ai/docs/'.length)
-    } else if (targetWithoutAnchor === 'https://hervald.gehirn.ai/docs') {
+    } else if (targetWithoutAnchor.startsWith('https://herd.gehirn.ai/docs/')) {
+      docsTarget = targetWithoutAnchor.slice('https://herd.gehirn.ai/docs/'.length)
+    } else if (targetWithoutAnchor === 'https://herd.gehirn.ai/docs') {
+      docsTarget = 'index.md'
+    } else if (targetWithoutAnchor.startsWith('https://herd.gehirn.ai/docs/')) {
+      docsTarget = targetWithoutAnchor.slice('https://herd.gehirn.ai/docs/'.length)
+    } else if (targetWithoutAnchor === 'https://herd.gehirn.ai/docs') {
       docsTarget = 'index.md'
     }
 
@@ -267,10 +271,10 @@ function checkDocsIndex(): void {
   }
 
   if (/Source And Runtime|module-index\.xml|architecture\//u.test(llms)) {
-    fail('llms.txt must expose only public Hervald docs, not source/runtime maps')
+    fail('llms.txt must expose only public Herd docs, not source/runtime maps')
   }
   if (/Source And Runtime|module-index\.xml|architecture\//u.test(directory)) {
-    fail('docs-directory.md must expose only public Hervald docs, not source/runtime maps')
+    fail('docs-directory.md must expose only public Herd docs, not source/runtime maps')
   }
 }
 
@@ -684,12 +688,12 @@ function checkNamingPolicy(): void {
 
   assertContains(
     readText(path.join(appRoot, 'src', 'App.tsx')),
-    'Hervald is reconnecting',
+    'Herd is reconnecting',
     'App auth recovery copy',
   )
   assertContains(
     readText(path.join(appRoot, 'src', '__tests__', 'App.auth0.test.tsx')),
-    'Hervald is reconnecting',
+    'Herd is reconnecting',
     'App auth recovery copy test',
   )
   assertContains(
@@ -714,14 +718,14 @@ async function main(): Promise<void> {
   }
 
   if (failures.length > 0) {
-    console.error('Hervald docs guardrail failed:')
+    console.error('Herd docs guardrail failed:')
     for (const failure of failures) {
       console.error(`- ${failure}`)
     }
     process.exit(1)
   }
 
-  console.log('Hervald docs guardrail passed.')
+  console.log('Herd docs guardrail passed.')
   process.exit(0)
 }
 

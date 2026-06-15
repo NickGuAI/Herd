@@ -362,7 +362,7 @@ function createBenchmarkCommanderPayload(options: BootstrapOptions): Record<stri
     },
     taskSource: {
       owner: 'NickGuAI',
-      repo: 'Hervald',
+      repo: 'Herd',
       label: 'benchmark',
     },
   }

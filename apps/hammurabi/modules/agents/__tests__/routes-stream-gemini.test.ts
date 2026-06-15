@@ -26,6 +26,42 @@ import {
 } from './routes-test-harness'
 import type { MockCodexSidecar, MockGeminiAcpRuntime, RunningServer } from './routes-test-harness'
 
+function expectGeminiUserText(text: string) {
+  return expect.objectContaining({
+    schemaVersion: 2,
+    source: expect.objectContaining({
+      provider: 'gemini',
+      backend: 'acp',
+      rawEventType: 'hammurabi/user',
+    }),
+    ev: { type: 'message.delta', text, channel: 'final' },
+  })
+}
+
+function expectGeminiAssistantStart() {
+  return expect.objectContaining({
+    schemaVersion: 2,
+    source: expect.objectContaining({
+      provider: 'gemini',
+      backend: 'acp',
+      rawEventType: 'hammurabi/assistant-start',
+    }),
+    ev: { type: 'message.start', role: 'assistant' },
+  })
+}
+
+function expectGeminiProviderActivity(title: string, data?: unknown) {
+  return expect.objectContaining({
+    schemaVersion: 2,
+    source: expect.objectContaining({ provider: 'gemini', backend: 'acp' }),
+    ev: {
+      type: 'provider.activity',
+      title,
+      ...(data !== undefined ? { data } : {}),
+    },
+  })
+}
+
 
 describe("stream sessions", () => {
   function installMockProcess() {
@@ -80,13 +116,8 @@ describe("stream sessions", () => {
         await vi.waitFor(() => {
           const visible = received.filter((message) => message.type !== 'queue_update')
           expect(visible).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-              type: 'user',
-            }),
-            expect.objectContaining({
-              type: 'message_start',
-              source: { provider: 'gemini', backend: 'acp' },
-            }),
+            expectGeminiUserText('What files handle auth?'),
+            expectGeminiAssistantStart(),
             expect.objectContaining({
               schemaVersion: 2,
               source: expect.objectContaining({ provider: 'gemini', backend: 'acp' }),
@@ -122,10 +153,7 @@ describe("stream sessions", () => {
         })
 
         expect(received).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            type: 'message_start',
-            source: { provider: 'gemini', backend: 'acp' },
-          }),
+          expectGeminiAssistantStart(),
           expect.objectContaining({
             schemaVersion: 2,
             ev: { type: 'message.delta', text: 'reply 1', channel: 'final' },
@@ -165,10 +193,10 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'gemini-ws-images')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: Array<Record<string, unknown>> = []
 
         ws.on('message', (data) => {
-          const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
+          const parsed = JSON.parse(data.toString()) as Record<string, unknown>
           if (parsed.type !== 'replay') {
             received.push(parsed)
           }
@@ -183,12 +211,11 @@ describe("stream sessions", () => {
         }))
 
         await vi.waitFor(() => {
-          expect(received.filter((message) => message.type === 'system')).toEqual([
-            {
-              type: 'system',
-              text: 'Image attachments are not supported in Gemini sessions.',
-            },
-          ])
+          expect(received).toEqual(expect.arrayContaining([
+            expectGeminiProviderActivity('Gemini image attachments unsupported', {
+              detail: 'Image attachments are not supported in Gemini sessions.',
+            }),
+          ]))
         })
 
         expect(geminiAcp.requests.some((request) => request.method === 'session/prompt')).toBe(false)
@@ -221,10 +248,10 @@ describe("stream sessions", () => {
         expect(createResponse.status).toBe(201)
 
         const ws = await connectWs(server.baseUrl, 'gemini-ws-text-and-images')
-        const received: Array<{ type: string; text?: string }> = []
+        const received: Array<Record<string, unknown>> = []
 
         ws.on('message', (data) => {
-          const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
+          const parsed = JSON.parse(data.toString()) as Record<string, unknown>
           if (parsed.type !== 'replay') {
             received.push(parsed)
           }
@@ -241,10 +268,9 @@ describe("stream sessions", () => {
 
         await vi.waitFor(() => {
           expect(received).toEqual(expect.arrayContaining([
-            {
-              type: 'system',
-              text: 'Image attachments are not supported in Gemini sessions. Sending text only.',
-            },
+            expectGeminiProviderActivity('Gemini image attachments unsupported', {
+              detail: 'Image attachments are not supported in Gemini sessions. Sending text only.',
+            }),
           ]))
           expect(geminiAcp.promptTexts).toEqual(['Describe the auth files.'])
         })
@@ -292,10 +318,7 @@ describe("stream sessions", () => {
         const liveSession = server.agents.sessionsInterface.getSession('gemini-acp')
         expect(liveSession?.agentType).toBe('gemini')
         expect(liveSession?.events).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            type: 'message_start',
-            source: { provider: 'gemini', backend: 'acp' },
-          }),
+          expectGeminiAssistantStart(),
           expect.objectContaining({
             schemaVersion: 2,
             ev: { type: 'thinking.delta', text: 'pondering...' },
@@ -514,14 +537,7 @@ describe("stream sessions", () => {
         await vi.waitFor(() => {
           const liveSession = server.agents.sessionsInterface.getSession('gemini-acp-queued-send')
           expect(liveSession?.events).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-              type: 'user',
-              subtype: 'queued_message',
-              message: {
-                role: 'user',
-                content: 'queued follow-up',
-              },
-            }),
+            expectGeminiUserText('queued follow-up'),
           ]))
         })
 

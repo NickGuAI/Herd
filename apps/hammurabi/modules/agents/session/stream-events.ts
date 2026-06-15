@@ -25,6 +25,10 @@ import {
   extractClaudeSessionId,
 } from './state.js'
 import { MAX_STREAM_EVENTS } from '../constants.js'
+import {
+  getNextStreamEventSeq,
+  stampStreamEventSeq,
+} from '../messages/canonical-timeline.js'
 import type {
   CommanderTranscriptAppender,
   StreamJsonEvent,
@@ -66,8 +70,11 @@ export function createStreamEventAppender(
   deps: StreamEventAppenderDeps,
 ): (session: StreamSession, event: StreamJsonEvent) => void {
   return function appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void {
+    const nextSeq = session.nextEventSeq ?? getNextStreamEventSeq(session.events)
+    session.nextEventSeq = nextSeq + 1
+    const sequencedEvent = stampStreamEventSeq(event, nextSeq)
     session.lastEventAt = new Date().toISOString()
-    session.events.push(event)
+    session.events.push(sequencedEvent)
     if (session.events.length > MAX_STREAM_EVENTS) {
       session.events = session.events.slice(-MAX_STREAM_EVENTS)
     }
@@ -75,7 +82,7 @@ export function createStreamEventAppender(
     const provider = getProvider(session.agentType)
     const usesRuntimeWatchdog = Boolean(provider?.runtimeWatchdog)
     const persistsResumeFromEvents = Boolean(provider?.uiCapabilities.supportsEffort)
-    if (isTranscriptTurnStartRecord(event)) {
+    if (isTranscriptTurnStartRecord(sequencedEvent)) {
       const wasCompleted = session.lastTurnCompleted
       const isCompletedOneShot =
         (
@@ -98,7 +105,7 @@ export function createStreamEventAppender(
         deps.schedulePersistedSessionsWrite()
       }
     }
-    if (isTranscriptTurnEndRecord(event)) {
+    if (isTranscriptTurnEndRecord(sequencedEvent)) {
       const queueRuntime = deps.getQueueRuntime()
       const autoRotation = deps.getAutoRotationRuntime()
       const wasCompleted = session.lastTurnCompleted
@@ -142,13 +149,13 @@ export function createStreamEventAppender(
         autoRotation.scheduleAutoRotationIfNeeded(session.name)
       }
     }
-    if (isTranscriptExitRecord(event) && usesRuntimeWatchdog) {
+    if (isTranscriptExitRecord(sequencedEvent) && usesRuntimeWatchdog) {
       deps.getApprovalRuntime().clearCodexPendingApprovals(session)
       clearCodexTurnWatchdog(session)
       markCodexTurnHealthy(session)
     }
-    applyStreamUsageEvent(session, event)
-    const usageUpdate = extractTranscriptUsageUpdate(event)
+    applyStreamUsageEvent(session, sequencedEvent)
+    const usageUpdate = extractTranscriptUsageUpdate(sequencedEvent)
     if (usageUpdate?.totalCostUsd !== undefined) {
       session.usage.costUsd = usageUpdate.totalCostUsd
     } else if (usageUpdate?.costUsd !== undefined) {
@@ -156,7 +163,7 @@ export function createStreamEventAppender(
     }
 
     if (persistsResumeFromEvents) {
-      const sessionId = extractClaudeSessionId(event) ?? readTranscriptEnvelopeSessionId(event)
+      const sessionId = extractClaudeSessionId(sequencedEvent) ?? readTranscriptEnvelopeSessionId(sequencedEvent)
       if (sessionId && readClaudeSessionId(session) !== sessionId) {
         ensureClaudeProviderContext(session).sessionId = sessionId
         deps.schedulePersistedSessionsWrite()
@@ -165,10 +172,10 @@ export function createStreamEventAppender(
 
     appendCommanderTranscriptEvent(
       session,
-      event,
+      sequencedEvent,
       deps.commanderTranscriptAppender,
       extractClaudeSessionId,
     )
-    appendGenericTranscriptEvent(session, event)
+    appendGenericTranscriptEvent(session, sequencedEvent)
   }
 }

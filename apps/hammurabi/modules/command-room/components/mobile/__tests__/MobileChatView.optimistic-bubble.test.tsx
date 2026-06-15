@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     hasNextPage: false,
     isFetchingNextPage: false,
     fetchNextPage: vi.fn(),
+    refetch: vi.fn(async () => undefined),
   })),
   useCreateConversation: vi.fn(),
   useDeleteConversation: vi.fn(),
@@ -109,7 +110,7 @@ vi.mock('@modules/command-room/components/mobile/MobileCommandRoom', () => ({
         type="button"
         data-testid="mobile-send-probe"
         onClick={() => {
-          void onSend?.({ text: 'Ship the mobile bubble' })
+          void onSend?.({ text: 'Ship the mobile bubble', clientSendId: 'send-mobile-bubble-1' })
         }}
       >
         Send
@@ -357,8 +358,12 @@ describe('MobileChatView optimistic user bubble', () => {
         messages,
         sendInput: streamSendInputSpy,
         sendDispatcher: { mode: 'ws-direct', send: streamSendInputSpy },
-        pushOptimisticUserMessage: (text: string, images?: { mediaType: string; data: string }[]) => {
-          pushOptimisticUserMessageSpy(text, images)
+        pushOptimisticUserMessage: (
+          text: string,
+          images?: { mediaType: string; data: string }[],
+          clientSendId?: string,
+        ) => {
+          pushOptimisticUserMessageSpy(text, images, clientSendId)
           setMessages((prev) => [
             ...prev,
             {
@@ -366,6 +371,7 @@ describe('MobileChatView optimistic user bubble', () => {
               kind: 'user',
               text: text || '[image]',
               images,
+              clientSendId,
             },
           ])
         },
@@ -427,10 +433,15 @@ describe('MobileChatView optimistic user bubble', () => {
     })
 
     await vi.waitFor(() => {
-      expect(pushOptimisticUserMessageSpy).toHaveBeenCalledWith('Ship the mobile bubble', undefined)
+      expect(pushOptimisticUserMessageSpy).toHaveBeenCalledWith(
+        'Ship the mobile bubble',
+        undefined,
+        'send-mobile-bubble-1',
+      )
       expect(conversationMessageSpy).toHaveBeenCalledWith({
         conversationId: 'conv-1',
         message: 'Ship the mobile bubble',
+        clientSendId: 'send-mobile-bubble-1',
         queue: false,
       })
       const transcriptProbe = document.body.querySelector('[data-testid="mobile-transcript-probe"]')

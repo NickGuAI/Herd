@@ -239,7 +239,7 @@ describe('App Auth0 configuration', () => {
 
     expect(mocks.loginWithRedirect).not.toHaveBeenCalled()
     expect(document.body.querySelector('[data-testid="auth-recovery-unavailable"]')?.textContent)
-      .toContain('Hervald is reconnecting')
+      .toContain('Herd is reconnecting')
   })
 
   it('clears unavailable Auth0 recovery state after the auth session ends', async () => {

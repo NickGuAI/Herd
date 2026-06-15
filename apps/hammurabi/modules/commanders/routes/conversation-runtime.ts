@@ -9,6 +9,7 @@ import type { AgentType, StreamJsonEvent, StreamSession } from '../../agents/typ
 import type { QueuedMessageImage } from '../../agents/message-queue.js'
 import { mapStreamEventsToMessages } from '../../agents/messages/history.js'
 import type { MsgItem } from '../../agents/messages/model.js'
+import { mergeCanonicalStreamEvents } from '../../agents/messages/canonical-timeline.js'
 import { readTranscriptTailPage } from '../../agents/transcript-store.js'
 import { STARTUP_PROMPT } from './context.js'
 import type { CommanderSession } from '../store.js'
@@ -135,7 +136,7 @@ export interface ConversationMessagesPageOptions {
 export interface ConversationMessagesPage {
   conversationId: string
   sessionName: string
-  source: 'live' | 'transcript' | 'empty'
+  source: 'canonical' | 'empty'
   limit: number
   before: string | null
   nextBefore: string | null
@@ -207,12 +208,14 @@ function appendChannelReplyDeliveryMessage(
   ]
 }
 
-async function readTranscriptMessagesWindow(
+async function readTranscriptEventsWindow(
   sessionName: string,
   targetMessages: number,
-): Promise<{ messages: MsgItem[]; hasMoreBeforeWindow: boolean }> {
+  liveEvents: readonly StreamJsonEvent[],
+): Promise<{ events: StreamJsonEvent[]; messages: MsgItem[]; hasMoreBeforeWindow: boolean }> {
   let maxTurns = Math.max(targetMessages, DEFAULT_CONVERSATION_MESSAGES_LIMIT)
   let maxEvents = Math.max(DEFAULT_TRANSCRIPT_TAIL_EVENT_LIMIT, targetMessages * 25)
+  let lastEvents: StreamJsonEvent[] = []
   let lastMessages: MsgItem[] = []
   let lastHasMore = false
 
@@ -221,7 +224,12 @@ async function readTranscriptMessagesWindow(
       maxTurns,
       maxEvents,
     })
-    const messages = mapStreamEventsToMessages(page.events as readonly StreamJsonEvent[])
+    const events = mergeCanonicalStreamEvents({
+      persistedEvents: page.events as readonly StreamJsonEvent[],
+      liveEvents,
+    })
+    const messages = mapStreamEventsToMessages(events)
+    lastEvents = events
     lastMessages = messages
     lastHasMore = page.hasMore
 
@@ -234,6 +242,7 @@ async function readTranscriptMessagesWindow(
   }
 
   return {
+    events: lastEvents,
     messages: lastMessages,
     hasMoreBeforeWindow: lastHasMore,
   }
@@ -248,31 +257,8 @@ export async function getConversationMessagesPage(
   const limit = normalizeConversationMessagesLimit(options.limit)
   const skipNewest = normalizeConversationMessagesCursor(options.before)
   const liveEvents = getLiveConversationSession(context, conversation)?.events ?? []
-
-  if (liveEvents.length > 0) {
-    const liveMessages = appendChannelReplyDeliveryMessage(
-      conversation,
-      mapStreamEventsToMessages(liveEvents as readonly StreamJsonEvent[]),
-    )
-    if (skipNewest < liveMessages.length) {
-      const livePage = sliceMessagesFromNewest({
-        messages: liveMessages,
-        limit,
-        skipNewest,
-        hasMoreBeforeWindow: false,
-      })
-      return {
-        conversationId: conversation.id,
-        sessionName,
-        source: 'live',
-        limit,
-        ...livePage,
-      }
-    }
-  }
-
   const targetMessages = skipNewest + limit
-  const transcriptWindow = await readTranscriptMessagesWindow(sessionName, targetMessages)
+  const transcriptWindow = await readTranscriptEventsWindow(sessionName, targetMessages, liveEvents)
   const transcriptMessages = appendChannelReplyDeliveryMessage(conversation, transcriptWindow.messages)
   const transcriptPage = sliceMessagesFromNewest({
     messages: transcriptMessages,
@@ -282,7 +268,7 @@ export async function getConversationMessagesPage(
   })
   const source: ConversationMessagesPage['source'] = transcriptMessages.length === 0
     ? 'empty'
-    : 'transcript'
+    : 'canonical'
 
   return {
     conversationId: conversation.id,

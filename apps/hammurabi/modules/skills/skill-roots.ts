@@ -79,7 +79,7 @@ export async function resolveAgentSkillsDirCandidates(
     pushUnique(candidates, path.join(installedAppDir, '..', '..', 'agent-skills'))
   }
 
-  pushUnique(candidates, path.join(homedir(), 'Hervald', 'agent-skills'))
+  pushUnique(candidates, path.join(homedir(), 'Herd', 'agent-skills'))
   pushUnique(candidates, path.join(homedir(), 'App', 'agent-skills'))
 
   return candidates

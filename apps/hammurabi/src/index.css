@@ -14,7 +14,7 @@
     background: var(--hv-accent-info-wash);
   }
 
-  /* Hervald surfaces need a visible selection wash on both paper and dark ink backgrounds. */
+  /* Herd surfaces need a visible selection wash on both paper and dark ink backgrounds. */
   .hv-light ::selection,
   .hervald ::selection,
   .hervald-chat-pane ::selection {
@@ -66,7 +66,7 @@
    * Mobile form-control font-size floor — iOS Safari auto-zooms any input,
    * textarea, or select whose computed font-size is below 16px. This layer-base
    * rule sets a mobile baseline; more specific component rules (e.g. the
-   * Hervald composer) are free to set their own 16px+ size and will win on
+   * Herd composer) are free to set their own 16px+ size and will win on
    * specificity. Desktop rendering is unaffected.
    */
   @media (max-width: 767px) {

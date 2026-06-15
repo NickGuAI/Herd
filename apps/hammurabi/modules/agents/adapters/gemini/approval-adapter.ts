@@ -1,7 +1,8 @@
 import type { ActionPolicyGateResult } from '../../../policies/action-policy-gate.js'
 import type { ProviderApprovalAdapter } from '../../../policies/provider-approval-adapter.js'
 import { registerApprovalAdapter } from '../../../policies/types.js'
-import { readGeminiRuntime } from '../../providers/provider-session-context.js'
+import { createGeminiProviderActivityEnvelope } from '../../event-normalizers/gemini.js'
+import { readGeminiRuntime, readGeminiSessionId } from '../../providers/provider-session-context.js'
 import type { StreamJsonEvent, StreamSession } from '../../types.js'
 
 interface GeminiApprovalReplyDeps {
@@ -164,10 +165,11 @@ export const geminiApprovalAdapter = registerApprovalAdapter<ProviderApprovalAda
 
   async sendReply(result: ActionPolicyGateResult, rawEvent: GeminiApprovalRawEvent, session: StreamSession): Promise<void> {
     if (result.decision === 'deny' && result.reason) {
-      const policyEvent: StreamJsonEvent = {
-        type: 'system',
-        text: result.reason,
-      }
+      const policyEvent = createGeminiProviderActivityEnvelope(
+        'Gemini request denied by policy',
+        { detail: result.reason },
+        readGeminiSessionId(session),
+      )
       rawEvent.replyDeps.appendEvent(session, policyEvent)
       rawEvent.replyDeps.broadcastEvent(session, policyEvent)
       rawEvent.replyDeps.schedulePersistedSessionsWrite()

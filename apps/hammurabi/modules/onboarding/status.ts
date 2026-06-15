@@ -65,7 +65,7 @@ const GAIA_TEMPLATE_ID = 'gaia-onboarding'
 const GAIA_SPEAKING_TONE = 'Mother-of-all onboarding'
 const ONBOARDING_STATE_FILE = 'onboarding.json'
 const GAIA_IDENTITY = [
-  'Gaia is the mother-of-all onboarding commander for Hervald.',
+  'Gaia is the mother-of-all onboarding commander for Herd.',
   'She helps the founder complete first-run setup, create and manage commanders,',
   'configure providers and machines, and keep onboarding decisions routed through backend APIs.',
 ].join(' ')
@@ -469,7 +469,7 @@ function buildSteps(args: {
   }
 
   const steps: OnboardingStep[] = [
-    { id: 'instance', label: 'Instance ready', state: stateFor('instance'), summary: 'Local Hervald app and bootstrap admin are available.' },
+    { id: 'instance', label: 'Instance ready', state: stateFor('instance'), summary: 'Local Herd app and bootstrap admin are available.' },
     { id: 'founder-org', label: 'Founder + organization', state: stateFor('founder-org'), summary: args.founderSetup.setupComplete ? 'Founder profile and organization exist.' : 'Create the first local operator and org identity.' },
     { id: 'gaia', label: 'Gaia commander', state: stateFor('gaia'), summary: args.gaia.exists ? 'Gaia is ready to guide onboarding.' : 'Seed Gaia as the default onboarding commander.' },
     { id: 'starter-workforce', label: 'Starter workforce', state: stateFor('starter-workforce'), summary: args.starterWorkforce.skipped ? 'Starter commanders were skipped for this install.' : args.starterWorkforce.complete ? 'Starter commanders are installed.' : 'Install the bundled engineering, research, and assistant commanders.' },

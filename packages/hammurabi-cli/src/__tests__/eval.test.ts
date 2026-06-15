@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai/',
+  endpoint: 'https://herd.gehirn.ai/',
   apiKey: 'hmrb_test_key',
   agents: ['codex'],
   configuredAt: new Date('2026-06-01T00:00:00.000Z'),
@@ -61,7 +61,7 @@ describe('runEvalCli', () => {
     expect(stdout.read()).toContain('Benchmark commander: cmdr-benchmark')
     expect(stdout.read()).toContain('Session: commander-cmdr-benchmark')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/commanders',
+      'https://herd.gehirn.ai/api/commanders',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -84,7 +84,7 @@ describe('runEvalCli', () => {
       contextConfig: { fatPinInterval: 2 },
       taskSource: {
         owner: 'NickGuAI',
-        repo: 'Hervald',
+        repo: 'Herd',
         label: 'benchmark',
       },
     })
@@ -139,7 +139,7 @@ describe('runEvalCli', () => {
     expect(exitCode).toBe(0)
     expect(stderr.read()).toBe('')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/eval/doctor?bench=terminal-bench&runner=subscription-host-cli',
+      'https://herd.gehirn.ai/api/eval/doctor?bench=terminal-bench&runner=subscription-host-cli',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -174,7 +174,7 @@ describe('runEvalCli', () => {
     expect(exitCode).toBe(0)
     expect(stderr.read()).toBe('')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/eval/doctor?bench=terminal-bench&runner=api-key',
+      'https://herd.gehirn.ai/api/eval/doctor?bench=terminal-bench&runner=api-key',
       expect.any(Object),
     )
     expect(String(fetchImpl.mock.calls[0]?.[0])).not.toContain('subscription-host-cli')
@@ -255,7 +255,7 @@ describe('runEvalCli', () => {
       expect(stderr.read()).toBe('')
       expect(stdout.read()).toContain('Eval worker dispatched: eval-terminal-bench-1800000000000')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-benchmark/workers',
+        'https://herd.gehirn.ai/api/commanders/cmdr-benchmark/workers',
         expect.objectContaining({
           method: 'POST',
           headers: expect.objectContaining({
@@ -368,10 +368,10 @@ describe('runEvalCli', () => {
 
     expect(stderr.read()).toBe('')
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), call[1]?.method])).toEqual([
-      ['https://hervald.gehirn.ai/api/eval/list', 'GET'],
-      ['https://hervald.gehirn.ai/api/eval/runs/run-1/status', 'GET'],
-      ['https://hervald.gehirn.ai/api/eval/runs/run-1/report', 'GET'],
-      ['https://hervald.gehirn.ai/api/eval/runs/run-1/submit', 'POST'],
+      ['https://herd.gehirn.ai/api/eval/list', 'GET'],
+      ['https://herd.gehirn.ai/api/eval/runs/run-1/status', 'GET'],
+      ['https://herd.gehirn.ai/api/eval/runs/run-1/report', 'GET'],
+      ['https://herd.gehirn.ai/api/eval/runs/run-1/submit', 'POST'],
     ])
   })
 
@@ -418,6 +418,6 @@ describe('runEvalCli', () => {
     expect(stdout.read()).toBe('')
     expect(stderr.read()).toContain('.hammurabi.json')
     expect(stderr.read()).toContain('api-keys/keys.json')
-    expect(stderr.read()).toContain('restart the Hervald installer')
+    expect(stderr.read()).toContain('restart the Herd installer')
   })
 })

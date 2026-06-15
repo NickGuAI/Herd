@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -77,7 +77,7 @@ describe('runQuestsCli', () => {
     expect(stdout.read()).not.toContain('quest-3')
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/commanders/cmdr-1/quests',
+      'https://herd.gehirn.ai/api/commanders/cmdr-1/quests',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -111,7 +111,7 @@ describe('runQuestsCli', () => {
       expect(stderr.read()).toBe('')
       expect(stdout.read()).toContain('No pending or active quests.')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-cli/quests',
+        'https://herd.gehirn.ai/api/commanders/cmdr-cli/quests',
         expect.objectContaining({ method: 'GET' }),
       )
     } finally {
@@ -214,21 +214,21 @@ describe('runQuestsCli', () => {
       expect(fetchImpl).toHaveBeenCalledTimes(4)
 
       expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-claim/claim',
+        'https://herd.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-claim/claim',
       )
       expect(JSON.parse((fetchImpl.mock.calls[0]?.[1]?.body as string) ?? '{}')).toEqual({
         conversationId: 'conv-generated',
       })
 
       expect(fetchImpl.mock.calls[1]?.[0]).toBe(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-note/notes',
+        'https://herd.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-note/notes',
       )
       expect(JSON.parse((fetchImpl.mock.calls[1]?.[1]?.body as string) ?? '{}')).toEqual({
         note: 'Progress made',
       })
 
       expect(fetchImpl.mock.calls[2]?.[0]).toBe(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-done',
+        'https://herd.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-done',
       )
       expect(JSON.parse((fetchImpl.mock.calls[2]?.[1]?.body as string) ?? '{}')).toEqual({
         status: 'done',
@@ -236,7 +236,7 @@ describe('runQuestsCli', () => {
       })
 
       expect(fetchImpl.mock.calls[3]?.[0]).toBe(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-fail',
+        'https://herd.gehirn.ai/api/commanders/cmdr-prompt/quests/quest-fail',
       )
       expect(JSON.parse((fetchImpl.mock.calls[3]?.[1]?.body as string) ?? '{}')).toEqual({
         status: 'failed',
@@ -423,7 +423,7 @@ describe('runQuestsCli', () => {
     expect(stderr.read()).toContain('.hammurabi.json')
     expect(stderr.read()).toContain('api-keys/keys.json')
     expect(stderr.read()).toContain('HAMMURABI_ALLOW_DEFAULT_MASTER_KEY=1')
-    expect(stderr.read()).toContain('restart the Hervald installer')
+    expect(stderr.read()).toContain('restart the Herd installer')
   })
 
   it('sends POST for claim using explicit conversation id', async () => {
@@ -453,7 +453,7 @@ describe('runQuestsCli', () => {
 
       const call = fetchImpl.mock.calls[0]
       expect(call?.[0]).toBe(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-1/quests/quest-42/claim',
+        'https://herd.gehirn.ai/api/commanders/cmdr-1/quests/quest-42/claim',
       )
       expect(call?.[1]).toMatchObject({
         method: 'POST',
@@ -612,7 +612,7 @@ describe('runQuestsCli', () => {
 
     const call = fetchImpl.mock.calls[0]
     expect(call?.[0]).toBe(
-      'https://hervald.gehirn.ai/api/commanders/cmdr-1/quests/quest-88/notes',
+      'https://herd.gehirn.ai/api/commanders/cmdr-1/quests/quest-88/notes',
     )
     expect(call?.[1]).toMatchObject({
       method: 'POST',
@@ -706,7 +706,7 @@ describe('runQuestsCli', () => {
                   {
                     type: 'github_issue',
                     label: 'Issue #55',
-                    href: 'https://github.com/NickGuAI/Hervald/issues/55',
+                    href: 'https://github.com/NickGuAI/Herd/issues/55',
                   },
                 ],
               },
@@ -737,7 +737,7 @@ describe('runQuestsCli', () => {
         '--label',
         'PR #77',
         '--href',
-        'https://github.com/NickGuAI/Hervald/pull/77',
+        'https://github.com/NickGuAI/Herd/pull/77',
       ],
       {
         fetchImpl,
@@ -753,7 +753,7 @@ describe('runQuestsCli', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
 
     const getCall = fetchImpl.mock.calls[0]
-    expect(getCall?.[0]).toBe('https://hervald.gehirn.ai/api/commanders/cmdr-1/quests')
+    expect(getCall?.[0]).toBe('https://herd.gehirn.ai/api/commanders/cmdr-1/quests')
     expect(getCall?.[1]).toMatchObject({
       method: 'GET',
       headers: expect.objectContaining({
@@ -762,7 +762,7 @@ describe('runQuestsCli', () => {
     })
 
     const patchCall = fetchImpl.mock.calls[1]
-    expect(patchCall?.[0]).toBe('https://hervald.gehirn.ai/api/commanders/cmdr-1/quests/quest-42')
+    expect(patchCall?.[0]).toBe('https://herd.gehirn.ai/api/commanders/cmdr-1/quests/quest-42')
     expect(patchCall?.[1]).toMatchObject({
       method: 'PATCH',
       headers: expect.objectContaining({
@@ -775,12 +775,12 @@ describe('runQuestsCli', () => {
         {
           type: 'github_issue',
           label: 'Issue #55',
-          href: 'https://github.com/NickGuAI/Hervald/issues/55',
+          href: 'https://github.com/NickGuAI/Herd/issues/55',
         },
         {
           type: 'github_pr',
           label: 'PR #77',
-          href: 'https://github.com/NickGuAI/Hervald/pull/77',
+          href: 'https://github.com/NickGuAI/Herd/pull/77',
         },
       ],
     })
@@ -798,7 +798,7 @@ describe('runQuestsCli', () => {
                   {
                     type: 'github_issue',
                     label: 'Issue #10',
-                    href: 'https://github.com/NickGuAI/Hervald/issues/10',
+                    href: 'https://github.com/NickGuAI/Herd/issues/10',
                   },
                   {
                     type: 'url',
@@ -845,7 +845,7 @@ describe('runQuestsCli', () => {
         {
           type: 'github_issue',
           label: 'Issue #10',
-          href: 'https://github.com/NickGuAI/Hervald/issues/10',
+          href: 'https://github.com/NickGuAI/Herd/issues/10',
         },
       ],
     })
@@ -907,7 +907,7 @@ describe('runQuestsCli', () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     const call = fetchImpl.mock.calls[0]
-    expect(call?.[0]).toBe('https://hervald.gehirn.ai/api/commanders/cmdr-1/quests')
+    expect(call?.[0]).toBe('https://herd.gehirn.ai/api/commanders/cmdr-1/quests')
     expect(call?.[1]).toMatchObject({
       method: 'POST',
       headers: expect.objectContaining({
@@ -1076,7 +1076,7 @@ describe('runQuestsCli', () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     const call = fetchImpl.mock.calls[0]
-    expect(call?.[0]).toBe('https://hervald.gehirn.ai/api/commanders/cmdr-1/quests/quest-99')
+    expect(call?.[0]).toBe('https://herd.gehirn.ai/api/commanders/cmdr-1/quests/quest-99')
     expect(call?.[1]).toMatchObject({ method: 'DELETE' })
   })
 

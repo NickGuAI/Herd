@@ -1,4 +1,3 @@
-import { normalizeOpenCodeSessionUpdate } from '../../event-normalizers/opencode.js'
 import { CODEX_RUNTIME_TEARDOWN_TIMEOUT_MS } from '../../constants.js'
 import { registerProvider } from '../../providers/registry-core.js'
 import {
@@ -280,5 +279,3 @@ export const opencodeProvider: ProviderAdapter = registerProvider({
     return migrateLegacyOpenCodeProviderContext(rawProviderContext)
   },
 })
-
-void normalizeOpenCodeSessionUpdate

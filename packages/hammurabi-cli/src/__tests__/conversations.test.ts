@@ -24,7 +24,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -76,7 +76,7 @@ describe('runConversationsCli', () => {
       '- 22222222-2222-4222-8222-222222222222 surface=ui status=idle live=no',
     )
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/commanders/cmdr-1/conversations',
+      'https://herd.gehirn.ai/api/commanders/cmdr-1/conversations',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -120,7 +120,7 @@ describe('runConversationsCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toBe(`${conversationId}\n`)
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/commanders/cmdr-2/conversations',
+      'https://herd.gehirn.ai/api/commanders/cmdr-2/conversations',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -194,7 +194,7 @@ describe('runConversationsCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toBe(`Conversation ${conversationId} attached.\n`)
     expect(fetchImpl).toHaveBeenCalledWith(
-      `https://hervald.gehirn.ai/api/conversations/${conversationId}/resume`,
+      `https://herd.gehirn.ai/api/conversations/${conversationId}/resume`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -235,7 +235,7 @@ describe('runConversationsCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toBe(`Conversation ${conversationId} archived.\n`)
     expect(fetchImpl).toHaveBeenCalledWith(
-      `https://hervald.gehirn.ai/api/conversations/${conversationId}/archive`,
+      `https://herd.gehirn.ai/api/conversations/${conversationId}/archive`,
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -270,7 +270,7 @@ describe('runConversationsCli', () => {
     expect(stderr.read()).toContain('.hammurabi.json')
     expect(stderr.read()).toContain('api-keys/keys.json')
     expect(stderr.read()).toContain('HAMMURABI_ALLOW_DEFAULT_MASTER_KEY=1')
-    expect(stderr.read()).toContain('restart the Hervald installer')
+    expect(stderr.read()).toContain('restart the Herd installer')
   })
 
   it('fails list when the API returns malformed success JSON', async () => {

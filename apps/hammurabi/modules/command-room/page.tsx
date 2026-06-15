@@ -1,5 +1,5 @@
 /**
- * Command Room — Hervald three-column layout.
+ * Command Room — Herd three-column layout.
  *
  * Renders the full Command Room with SessionsColumn, CenterColumn, and optional WorkspacePanel.
  */

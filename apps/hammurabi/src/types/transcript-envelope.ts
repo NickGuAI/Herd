@@ -81,6 +81,7 @@ export interface TranscriptEnvelope {
   itemId?: string
   parentId?: string
   subagentId?: string
+  clientSendId?: string
   seq?: number
   ev: TranscriptEnvelopeEvent
 }

@@ -46,7 +46,7 @@ export function LandingPage({ onApiKeySubmit }: LandingPageProps) {
       <div className="flex items-center justify-center min-h-screen bg-[var(--hv-bg-raised)]">
         <div className="card-sumi max-w-md w-full mx-4 p-12 animate-fade-in">
           <h1 className="font-display text-display text-[color:var(--hv-fg)] mb-2 text-center">
-            Hervald
+            Herd
           </h1>
           <p className="text-sm font-body text-[color:var(--hv-fg-subtle)] mb-6 text-center">
             Sign in with an API key
@@ -96,7 +96,7 @@ export function LandingPage({ onApiKeySubmit }: LandingPageProps) {
     <div className="flex items-center justify-center min-h-screen bg-[var(--hv-bg-raised)]">
       <div className="card-sumi max-w-md w-full mx-4 p-12 text-center animate-fade-in">
         <h1 className="font-display text-display text-[color:var(--hv-fg)] mb-2">
-          Hervald
+          Herd
         </h1>
         <p className="text-sm font-body text-[color:var(--hv-fg-subtle)] mb-10">
           Orchestration shell for your operator team
@@ -113,7 +113,7 @@ export function LandingPage({ onApiKeySubmit }: LandingPageProps) {
                 void loginWithRedirect({ appState: { returnTo } })
                 return
               }
-              setSignInError('Hervald is reconnecting. Try sign-in again after the gateway is healthy.')
+              setSignInError('Herd is reconnecting. Try sign-in again after the gateway is healthy.')
             })
           }}
           disabled={isLoading}

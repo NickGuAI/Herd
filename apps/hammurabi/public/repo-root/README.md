@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/hervald-architecture.svg" alt="Hervald routes operator intent through Command Room, mission state, approvals, workers, provider CLIs, and user-controlled machines." width="920" />
+  <img src="./assets/herd-architecture.svg" alt="Herd routes operator intent through Command Room, mission state, approvals, workers, provider CLIs, and user-controlled machines." width="920" />
 </p>
 
 <p align="center">
@@ -8,32 +8,32 @@
   <a href="./docs/reference/cli.md"><strong>CLI</strong></a> &middot;
   <a href="./docs/operate/machines.md"><strong>Machines</strong></a> &middot;
   <a href="./docs/troubleshoot.md"><strong>Troubleshooting</strong></a> &middot;
-  <a href="https://hervald.gehirn.ai"><strong>Website</strong></a>
+  <a href="https://herd.gehirn.ai"><strong>Website</strong></a>
 </p>
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-d97745" alt="PolyForm Noncommercial license" /></a>
   <a href="./docs/llms.txt"><img src="https://img.shields.io/badge/docs-llms.txt-70a37f" alt="Agent-readable docs" /></a>
-  <a href="https://hervald.gehirn.ai/install.sh"><img src="https://img.shields.io/badge/install-one%20line-10212a" alt="One-line installer" /></a>
+  <a href="https://herd.gehirn.ai/install.sh"><img src="https://img.shields.io/badge/install-one%20line-10212a" alt="One-line installer" /></a>
 </p>
 
-# Hervald is the agent orchestration OS.
+# Herd is the agent orchestration OS.
 
 Cursor is obsolete. Pair-programming with one chatbot is a dead end; the next interface is a fleet of agents running on machines you control, holding persistent memory, and answering to an approval system you own.
 
-Hervald owns mission state, worker orchestration, memory, approvals, and the command-room surface. Connectivity is delegated to infrastructure you already trust: SSH, Tailscale, hosted runtimes, and your own reverse proxy. The mission graph and execution rules stay stable even when the underlying transport changes.
+Herd owns mission state, worker orchestration, memory, approvals, and the command-room surface. Connectivity is delegated to infrastructure you already trust: SSH, Tailscale, hosted runtimes, and your own reverse proxy. The mission graph and execution rules stay stable even when the underlying transport changes.
 
 **Manage agent work, not terminal tabs.**
 
-| Step | Operator action | Hervald outcome |
+| Step | Operator action | Herd outcome |
 | --- | --- | --- |
 | **01** | Install the control plane on a trusted machine. | Hermetic Node/pnpm toolchain, local env, server boot, and bootstrap sign-in. |
 | **02** | Connect provider auth and machines. | Codex, Claude Code, Gemini CLI, OpenCode, local hosts, SSH boxes, and Tailscale machines become explicit runtime targets. |
 | **03** | Run commanders and workers from Command Room. | Work is queued, delegated, reviewed, remembered, and recoverable. |
 
-## What Hervald Is
+## What Herd Is
 
-Hervald is a source-available control plane for personal agent fleets.
+Herd is a source-available control plane for personal agent fleets.
 
 It looks like an operating room for agent work. Under the hood: commanders, workers, persistent memory, provider readiness, machine routing, action policies, approvals, public docs, and an install path that keeps the runtime on infrastructure you own.
 
@@ -41,7 +41,7 @@ It looks like an operating room for agent work. Under the hood: commanders, work
 operator intent -> command room -> mission state -> approval policy -> worker fleet -> provider CLI -> your machine
 ```
 
-## Hervald Is Right For You If
+## Herd Is Right For You If
 
 - You coordinate more than one AI agent and need a persistent command surface.
 - You run work on a Mac mini, VPS, EC2 box, or tailnet machine and want the control plane there too.
@@ -54,10 +54,10 @@ operator intent -> command room -> mission state -> approval policy -> worker fl
 The installer is hermetic for the Node toolchain. It needs `git`, `curl`, `tar`, and outbound HTTPS; it installs Node `22.12.0` and pnpm `10.23.0` in a local toolchain directory without replacing or relying on your system Node.
 
 ```bash
-curl -fsSL https://hervald.gehirn.ai/install.sh | bash
+curl -fsSL https://herd.gehirn.ai/install.sh | bash
 ```
 
-The installer clones Hervald, prepares the local app environment file, installs the hermetic toolchain and dependencies, builds the app, boots the shell once, seeds a one-time bootstrap API key, and prints the local sign-in URL.
+The installer clones Herd, prepares the local app environment file, installs the hermetic toolchain and dependencies, builds the app, boots the shell once, seeds a one-time bootstrap API key, and prints the local sign-in URL.
 
 Continue with the [full quickstart](./docs/getting-started/quickstart.md) to complete first-run onboarding, provider auth, machine readiness, and the first useful commander run.
 
@@ -76,9 +76,9 @@ Continue with the [full quickstart](./docs/getting-started/quickstart.md) to com
 </tr>
 </table>
 
-## Problems Hervald Solves
+## Problems Herd Solves
 
-| Without Hervald | With Hervald |
+| Without Herd | With Herd |
 | --- | --- |
 | One chatbot owns the conversation, state, and bottleneck. | Commanders assign parallel workers while Command Room keeps the mission coherent. |
 | Agent sessions vanish when a tab, machine, or provider session dies. | Mission state, memory, approvals, and history persist outside any single transport. |
@@ -87,13 +87,13 @@ Continue with the [full quickstart](./docs/getting-started/quickstart.md) to com
 
 ## Bundled Commander Workforce
 
-Fresh Hervald installs include a backend-owned commander marketplace and a starter workforce:
+Fresh Herd installs include a backend-owned commander marketplace and a starter workforce:
 
 - **Asina**: engineering manager for issue triage, code investigation, review, orchestration, and release follow-through.
 - **Einstein**: research intelligence analyst for web research, knowledge search, domain distillation, and reports.
 - **Alfred**: general assistant for meeting prep, scheduling support, inbox/doc triage, and daily follow-through.
 
-Open the Marketplace page or complete first-run onboarding to install the starter workforce. Packages are inspectable in the bundled commander package directory; each package contains `COMMANDER.md`, `skills.manifest.json`, `memory-seed.md`, `onboarding.md`, and examples. The required starter skill dependencies ship in `agent-skills/hervald-starter/` so a fresh public checkout has the workflows the bundled commanders advertise.
+Open the Marketplace page or complete first-run onboarding to install the starter workforce. Packages are inspectable in the bundled commander package directory; each package contains `COMMANDER.md`, `skills.manifest.json`, `memory-seed.md`, `onboarding.md`, and examples. The required starter skill dependencies ship in `agent-skills/herd-starter/` so a fresh public checkout has the workflows the bundled commanders advertise.
 
 ## Deploy Shapes
 
@@ -124,7 +124,7 @@ Full documentation lives under [`docs/`](./docs/index.md):
 
 ## License
 
-Hervald is source-available under the [PolyForm Noncommercial 1.0.0](./LICENSE) license.
+Herd is source-available under the [PolyForm Noncommercial 1.0.0](./LICENSE) license.
 
 - Personal and other noncommercial use is allowed under that license.
 - Commercial use requires a separate written agreement.

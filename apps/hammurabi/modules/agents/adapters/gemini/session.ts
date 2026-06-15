@@ -1,9 +1,11 @@
 import {
+  createGeminiAssistantStartEnvelope,
+  createGeminiProviderActivityEnvelope,
   createGeminiTurnState,
+  createGeminiTurnEndEnvelope,
+  createGeminiUserTranscriptEnvelopes,
   mapGeminiPromptResponseToTranscriptEnvelopes,
   mapGeminiToTranscriptEnvelopes,
-  normalizeGeminiPromptResponse,
-  normalizeGeminiSessionUpdate,
 } from '../../event-normalizers/gemini.js'
 import {
   geminiApprovalAdapter,
@@ -75,28 +77,29 @@ export async function finalizeGeminiTurnFailure(
   detail: string,
   deps: Pick<GeminiSessionDeps, 'appendEvent' | 'broadcastEvent'>,
 ): Promise<void> {
-  const closeEvents = normalizeGeminiPromptResponse(
+  const closeEvents = mapGeminiPromptResponseToTranscriptEnvelopes(
     { stopReason: 'cancelled' },
     session.geminiTurnState ?? createGeminiTurnState(),
   )
-  for (const event of closeEvents.filter((candidate) => candidate.type !== 'result')) {
+  for (const event of closeEvents.filter((candidate) => candidate.ev.type !== 'turn.end')) {
     deps.appendEvent(session, event)
     deps.broadcastEvent(session, event)
   }
 
-  const systemEvent: StreamJsonEvent = {
-    type: 'system',
-    text: `Gemini turn failed: ${detail}`,
-  }
+  const sessionId = readGeminiSessionId(session)
+  const systemEvent = createGeminiProviderActivityEnvelope(
+    'Gemini turn failed',
+    { detail },
+    sessionId,
+  )
   deps.appendEvent(session, systemEvent)
   deps.broadcastEvent(session, systemEvent)
 
-  const resultEvent: StreamJsonEvent = {
-    type: 'result',
-    subtype: 'failed',
-    is_error: true,
-    result: `Gemini turn failed: ${detail}`,
-  }
+  const resultEvent = createGeminiTurnEndEnvelope(
+    'failed',
+    `Gemini turn failed: ${detail}`,
+    sessionId,
+  )
   deps.appendEvent(session, resultEvent)
   deps.broadcastEvent(session, resultEvent)
 }
@@ -118,17 +121,7 @@ export async function startGeminiTurn(
   const promptText = buildGeminiPromptText(session, text)
   session.geminiTurnState = createGeminiTurnState()
 
-  const messageStartEvent: StreamJsonEvent = {
-    type: 'message_start',
-    message: {
-      id: `gemini-${Date.now()}`,
-      role: 'assistant',
-    },
-    source: {
-      provider: 'gemini',
-      backend: 'acp',
-    },
-  }
+  const messageStartEvent = createGeminiAssistantStartEnvelope(resumeSessionId)
   deps.appendEvent(session, messageStartEvent)
   deps.broadcastEvent(session, messageStartEvent)
 
@@ -155,19 +148,17 @@ export async function startGeminiTurn(
   }
 }
 
-function buildGeminiUserEvent(
+function buildGeminiUserEvents(
+  session: StreamSession,
   text: string,
-  subtype?: string,
   displayText?: string,
   clientSendId?: string,
-): StreamJsonEvent {
-  return {
-    type: 'user',
-    ...(subtype ? { subtype } : {}),
-    ...(displayText !== undefined ? { displayText: displayText.trim() } : {}),
-    ...(clientSendId ? { clientSendId } : {}),
-    message: { role: 'user', content: text },
-  } as unknown as StreamJsonEvent
+): StreamJsonEvent[] {
+  return createGeminiUserTranscriptEnvelopes(text, {
+    sessionId: readGeminiSessionId(session),
+    displayText,
+    clientSendId,
+  }) as StreamJsonEvent[]
 }
 
 function trackGeminiToolCallSnapshot(session: StreamSession, update: Record<string, unknown> | null): void {
@@ -260,10 +251,11 @@ export function createGeminiSessionAdapter(
         const imageEventText = text
           ? 'Image attachments are not supported in Gemini sessions. Sending text only.'
           : 'Image attachments are not supported in Gemini sessions.'
-        const imageEvent: StreamJsonEvent = {
-          type: 'system',
-          text: imageEventText,
-        }
+        const imageEvent = createGeminiProviderActivityEnvelope(
+          'Gemini image attachments unsupported',
+          { detail: imageEventText },
+          readGeminiSessionId(session),
+        )
         deps.appendEvent(session, imageEvent)
         deps.broadcastEvent(session, imageEvent)
         if (!text) {
@@ -272,14 +264,16 @@ export function createGeminiSessionAdapter(
       }
 
       deps.resetActiveTurnState(session)
-      const userEvent = buildGeminiUserEvent(
+      const userEvents = buildGeminiUserEvents(
+        session,
         text,
-        options?.userEventSubtype,
         options?.displayText,
         options?.clientSendId,
       )
-      deps.appendEvent(session, userEvent)
-      deps.broadcastEvent(session, userEvent)
+      for (const userEvent of userEvents) {
+        deps.appendEvent(session, userEvent)
+        deps.broadcastEvent(session, userEvent)
+      }
 
       try {
         await startGeminiTurn(session, text, deps)
@@ -418,10 +412,11 @@ export async function createGeminiAcpSession(
 
       const actionPolicyGate = deps.getActionPolicyGate?.()
       if (!actionPolicyGate) {
-        const unavailableEvent: StreamJsonEvent = {
-          type: 'system',
-          text: 'Hervald approval gate is unavailable. Gemini request denied.',
-        }
+        const unavailableEvent = createGeminiProviderActivityEnvelope(
+          'Gemini request denied',
+          { detail: 'Herd approval gate is unavailable. Gemini request denied.' },
+          readGeminiSessionId(session),
+        )
         deps.appendEvent(session, unavailableEvent)
         deps.broadcastEvent(session, unavailableEvent)
         deps.schedulePersistedSessionsWrite()
@@ -435,10 +430,11 @@ export async function createGeminiAcpSession(
 
       void handleProviderApproval(geminiApprovalAdapter, permissionRequest, session, { actionPolicyGate }).catch((error) => {
         const detail = error instanceof Error ? error.message : String(error)
-        const failureEvent: StreamJsonEvent = {
-          type: 'system',
-          text: `Gemini approval handling failed: ${detail}`,
-        }
+        const failureEvent = createGeminiProviderActivityEnvelope(
+          'Gemini approval handling failed',
+          { detail },
+          readGeminiSessionId(session),
+        )
         deps.appendEvent(session, failureEvent)
         deps.broadcastEvent(session, failureEvent)
         deps.schedulePersistedSessionsWrite()
@@ -582,8 +578,13 @@ export async function createGeminiAcpSession(
       signal: signalText,
       text: baseText,
     }
-    deps.appendEvent(session, exitEvent)
-    deps.broadcastEvent(session, exitEvent)
+    const exitEnvelope = createGeminiProviderActivityEnvelope(
+      'Gemini process exited',
+      { exitCode, signal: signalText, detail: baseText },
+      readGeminiSessionId(session),
+    )
+    deps.appendEvent(session, exitEnvelope)
+    deps.broadcastEvent(session, exitEnvelope)
 
     for (const client of session.clients) {
       client.close(1000, 'Session ended')
@@ -612,19 +613,24 @@ export async function createGeminiAcpSession(
       return
     }
 
-    const errorEvent: ExitCompletionEvent = {
-      type: 'system',
-      text: `Process error: ${error.message}`,
-    }
-    deps.appendEvent(session, errorEvent)
-    deps.broadcastEvent(session, errorEvent)
+    const detail = `Process error: ${error.message}`
+    const errorEnvelope = createGeminiTurnEndEnvelope('failed', detail, readGeminiSessionId(session))
+    deps.appendEvent(session, errorEnvelope)
+    deps.broadcastEvent(session, errorEnvelope)
 
     for (const client of session.clients) {
       client.close(1000, 'Session ended')
     }
 
     if (!finalizationContext) {
-      finalizationContext = { kind: 'error', errorEvent }
+      finalizationContext = {
+        kind: 'error',
+        errorEvent: {
+          type: 'exit',
+          exitCode: -1,
+          text: detail,
+        } as ExitCompletionEvent,
+      }
     }
     processExited = true
     // Errors imply the process is in trouble (often spawn failure with no
@@ -639,12 +645,10 @@ export async function createGeminiAcpSession(
 
   if (task.length > 0) {
     try {
-      const userEvent: StreamJsonEvent = {
-        type: 'user',
-        message: { role: 'user', content: task },
-      } as unknown as StreamJsonEvent
-      deps.appendEvent(session, userEvent)
-      deps.broadcastEvent(session, userEvent)
+      for (const userEvent of buildGeminiUserEvents(session, task)) {
+        deps.appendEvent(session, userEvent)
+        deps.broadcastEvent(session, userEvent)
+      }
       await startGeminiTurn(session, task, deps)
     } catch (error) {
       await runtime.teardown({

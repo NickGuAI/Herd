@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeCodexEvent } from '../../event-normalizers/codex'
 import type { StreamJsonEvent } from '../../types'
 import { mapStreamEventsToMessages } from '../history'
 import { MAX_CLIENT_MESSAGES } from '../model'
@@ -48,6 +47,37 @@ describe('mapStreamEventsToMessages', () => {
       expect.objectContaining({
         kind: 'thinking',
         text: `(reasoning content redacted by Claude · ${signature.length} bytes signed)`,
+      }),
+    ])
+  })
+
+  it('projects streamed Claude tool input JSON across replay events', () => {
+    const messages = mapStreamEventsToMessages([
+      {
+        type: 'content_block_start',
+        source: { provider: 'claude', backend: 'cli' },
+        index: 0,
+        content_block: { type: 'tool_use', id: 'bash-stream', name: 'Bash', input: {} },
+      },
+      {
+        type: 'content_block_delta',
+        source: { provider: 'claude', backend: 'cli' },
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"command":"pnpm test"}' },
+      },
+      {
+        type: 'content_block_stop',
+        source: { provider: 'claude', backend: 'cli' },
+        index: 0,
+      },
+    ] as StreamJsonEvent[])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'tool',
+        toolName: 'Bash',
+        toolInput: 'pnpm test',
+        toolFile: 'pnpm test',
       }),
     ])
   })
@@ -159,21 +189,17 @@ describe('mapStreamEventsToMessages', () => {
     expect(statusMessages).toHaveLength(1)
   })
 
-  it('merges Codex completed reasoning into the active thinking row', () => {
-    const started = normalizeCodexEvent('item/started', {
-      item: { id: 'reasoning-1', type: 'reasoning' },
-    })
-    const completed = normalizeCodexEvent('item/completed', {
-      item: {
-        id: 'reasoning-1',
-        type: 'reasoning',
-        summary: ['Final completed reasoning'],
-      },
-    })
-
+  it('renders Codex v2 thinking deltas as reasoning messages', () => {
     const messages = mapStreamEventsToMessages([
-      started as StreamJsonEvent,
-      completed as StreamJsonEvent,
+      {
+        schemaVersion: 2,
+        id: 'env-thinking-delta',
+        time: '2026-05-29T00:00:00.000Z',
+        source: { provider: 'codex', backend: 'rpc', rawEventType: 'item/reasoning/textDelta' },
+        turnId: 'turn-reasoning',
+        itemId: 'reasoning-1',
+        ev: { type: 'thinking.delta', text: 'Final completed reasoning' },
+      },
     ])
 
     expect(messages).toEqual([
@@ -334,15 +360,15 @@ describe('mapStreamEventsToMessages', () => {
     ])
   })
 
-  it('projects persisted legacy Codex raw delta envelopes as agent messages', () => {
+  it('keeps persisted Codex raw delta envelopes as provider activity', () => {
     const messages = mapStreamEventsToMessages([
       {
         schemaVersion: 2,
-        id: 'env-legacy-delta-1',
+        id: 'env-raw-delta-1',
         time: '2026-05-29T00:00:00.000Z',
         source: { provider: 'codex', backend: 'rpc', rawEventType: 'item/agentMessage/delta' },
-        turnId: 'turn-legacy',
-        itemId: 'msg-legacy',
+        turnId: 'turn-raw',
+        itemId: 'msg-raw',
         ev: {
           type: 'provider.raw',
           method: 'item/agentMessage/delta',
@@ -351,11 +377,11 @@ describe('mapStreamEventsToMessages', () => {
       },
       {
         schemaVersion: 2,
-        id: 'env-legacy-delta-2',
+        id: 'env-raw-delta-2',
         time: '2026-05-29T00:00:01.000Z',
         source: { provider: 'codex', backend: 'rpc', rawEventType: 'item/agentMessage/delta' },
-        turnId: 'turn-legacy',
-        itemId: 'msg-legacy',
+        turnId: 'turn-raw',
+        itemId: 'msg-raw',
         ev: {
           type: 'provider.raw',
           method: 'item/agentMessage/delta',
@@ -366,8 +392,18 @@ describe('mapStreamEventsToMessages', () => {
 
     expect(messages).toEqual([
       expect.objectContaining({
-        kind: 'agent',
-        text: 'Final answer',
+        kind: 'provider',
+        text: 'codex raw: item/agentMessage/delta',
+        transcript: expect.objectContaining({
+          providerPayload: { delta: 'Final ' },
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'provider',
+        text: 'codex raw: item/agentMessage/delta',
+        transcript: expect.objectContaining({
+          providerPayload: { delta: 'answer' },
+        }),
       }),
     ])
   })

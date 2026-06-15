@@ -48,6 +48,10 @@ import {
   writeSessionMeta,
 } from '../transcript-store.js'
 import {
+  extractTranscriptUsageUpdate,
+  isTranscriptTurnEndRecord,
+} from '../transcript-records.js'
+import {
   ensureCodexProviderContext,
 } from '../providers/provider-session-context.js'
 import { getProvider } from '../providers/registry.js'
@@ -189,6 +193,25 @@ export async function resolveRestoredReplaySource(
     entry: resolvedEntry,
     events: resolvedEntry.events ? [...resolvedEntry.events] : [],
   }
+}
+
+function readCompletedSessionCost(event: StreamJsonEvent): number {
+  const usageUpdate = extractTranscriptUsageUpdate(event)
+  if (typeof usageUpdate?.totalCostUsd === 'number') {
+    return usageUpdate.totalCostUsd
+  }
+  if (typeof usageUpdate?.costUsd === 'number') {
+    return usageUpdate.costUsd
+  }
+
+  const rawEvent = event as { total_cost_usd?: unknown; cost_usd?: unknown }
+  if (typeof rawEvent.total_cost_usd === 'number') {
+    return rawEvent.total_cost_usd
+  }
+  if (typeof rawEvent.cost_usd === 'number') {
+    return rawEvent.cost_usd
+  }
+  return 0
 }
 
 export function serializePersistedSessionsState(
@@ -366,11 +389,9 @@ export async function restorePersistedSessions(
         })
 
         if (hadResult) {
-          const resultEvent = [...events].reverse().find((evt) => evt.type === 'result')
+          const resultEvent = [...events].reverse().find(isTranscriptTurnEndRecord)
           if (resultEvent) {
-            const totalCost = typeof resultEvent.total_cost_usd === 'number'
-              ? resultEvent.total_cost_usd
-              : (typeof resultEvent.cost_usd === 'number' ? resultEvent.cost_usd : 0)
+            const totalCost = readCompletedSessionCost(resultEvent)
             deps.completedSessions.set(
               entry.name,
               toCompletedSession(

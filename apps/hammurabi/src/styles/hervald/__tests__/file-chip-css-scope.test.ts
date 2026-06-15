@@ -14,7 +14,7 @@ const cssContent = readFileSync(cssPath, 'utf8')
 const previewContent = readFileSync(previewPath, 'utf8')
 
 describe('file-chip CSS scope guardrail (issue #1188)', () => {
-  it('declares .file-chip and .file-chip-remove at the global scope so the chip is visible on desktop Hervald', () => {
+  it('declares .file-chip and .file-chip-remove at the global scope so the chip is visible on desktop Herd', () => {
     expect(cssContent).toMatch(/^\s*\.file-chip\s*\{/m)
     expect(cssContent).toMatch(/^\s*\.file-chip-remove\s*\{/m)
   })

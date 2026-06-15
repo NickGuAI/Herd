@@ -1,5 +1,5 @@
 /**
- * Hervald — Command Room Assembly.
+ * Herd — Command Room Assembly.
  *
  * Three-column layout: SessionsColumn (232px) | CenterColumn | right panel.
  * Manages shared state: selected commander, active right panel, selected worker, and workspace column.
@@ -129,9 +129,10 @@ import {
 import type { WorkspaceContextPayload, WorkspaceTreeNode } from '@modules/workspace/types'
 import type { SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
 import {
+  appendPendingOptimisticMessagesToTranscript,
   appendQueuedMessagesToTranscript,
+  hasPendingOptimisticMessages,
   mapSessionMessagesToTranscript,
-  mergeHistoricalAndLiveTranscript,
 } from './transcript'
 import { MobileCommandRoom } from './mobile/MobileCommandRoom'
 
@@ -899,8 +900,39 @@ export function CommandRoom() {
       .reverse()
       .flatMap((page) => page.messages)
   }, [conversationMessagesQuery.data?.pages])
+  const selectedConversationIdForTranscript = selectedConversation?.id ?? null
+  const selectedConversationHasLiveTranscript = Boolean(
+    selectedConversationIdForTranscript && liveTranscript.length > 0,
+  )
+  const selectedConversationHasPendingOptimisticMessages = selectedConversation
+    ? hasPendingOptimisticMessages(historicalConversationMessages, liveTranscript)
+    : false
+  const selectedConversationShouldPollTranscript = selectedConversationHasLiveTranscript && (
+    isStreaming || selectedConversationHasPendingOptimisticMessages
+  )
+  useEffect(() => {
+    if (!selectedConversationHasLiveTranscript) {
+      return undefined
+    }
+
+    void conversationMessagesQuery.refetch()
+    if (!selectedConversationShouldPollTranscript) {
+      return undefined
+    }
+
+    const interval = window.setInterval(() => {
+      void conversationMessagesQuery.refetch()
+    }, 250)
+    return () => {
+      window.clearInterval(interval)
+    }
+  }, [
+    conversationMessagesQuery.refetch,
+    selectedConversationHasLiveTranscript,
+    selectedConversationShouldPollTranscript,
+  ])
   const transcript = selectedConversation
-    ? mergeHistoricalAndLiveTranscript(historicalConversationMessages, liveTranscript)
+    ? appendPendingOptimisticMessagesToTranscript(historicalConversationMessages, liveTranscript)
     : liveTranscript
   const chatTranscript = appendQueuedMessagesToTranscript(transcript, queueSnapshot)
   const hasOlderConversationMessages = Boolean(

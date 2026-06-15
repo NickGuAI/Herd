@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to launch Hervald in tmux
+# Script to launch Herd in tmux
 
 # Colors and symbols
 GREEN='\033[0;32m'
@@ -19,7 +19,7 @@ ensure_hermetic_launch_env "$@"
 
 APP_DIR="$MONOREPO_DIR/apps/hammurabi"
 PUBLIC_SHELL_PORT=20001
-PUBLIC_SHELL_DOMAIN="hervald.gehirn.ai"
+PUBLIC_SHELL_DOMAIN="herd.gehirn.ai"
 PRIVATE_API_PORT=20009
 PRIVATE_BIND_HOST="127.0.0.1"
 PORT=""
@@ -96,7 +96,7 @@ fi
 [[ "$PORT" =~ ^[0-9]+$ ]] || fail "Invalid port: $PORT"
 [ "$PORT" -gt 0 ] || fail "Invalid port: $PORT"
 if [ "$MODE" = "prod" ] && [ "$PORT" -eq "$PUBLIC_SHELL_PORT" ]; then
-    fail "Refusing to run the Hervald API on public shell port $PUBLIC_SHELL_PORT. Use a private port behind Caddy, e.g. --port $PRIVATE_API_PORT."
+    fail "Refusing to run the Herd API on public shell port $PUBLIC_SHELL_PORT. Use a private port behind Caddy, e.g. --port $PRIVATE_API_PORT."
 fi
 
 RUN_COMMAND="pnpm run start"
@@ -152,7 +152,7 @@ wait_for_service_health() {
     local health_url="http://127.0.0.1:${health_port}/api/health"
     HEALTH_READY=false
 
-    echo -n -e "${YELLOW}Waiting for Hervald health on port ${health_port}"
+    echo -n -e "${YELLOW}Waiting for Herd health on port ${health_port}"
     for i in {1..60}; do
         echo -n "."
         sleep 1
@@ -199,7 +199,7 @@ init_launch_log "hammurabi" "$APP_DIR"
 
 clear
 echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║       ⚖️  Hervald Launcher ⚖️           ║${NC}"
+echo -e "${CYAN}║       ⚖️  Herd Launcher ⚖️           ║${NC}"
 echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
 echo
 
@@ -214,12 +214,12 @@ else
 fi
 
 # Check app directory
-echo -n -e "${YELLOW}Checking Hervald source...${NC}"
+echo -n -e "${YELLOW}Checking Herd source...${NC}"
 if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/package.json" ]; then
     echo -e " ${GREEN}${CHECKMARK}${NC}"
 else
     echo -e " ${RED}${CROSS}${NC}"
-    echo -e "${RED}Hervald source directory not found at $APP_DIR${NC}"
+    echo -e "${RED}Herd source directory not found at $APP_DIR${NC}"
     exit 1
 fi
 
@@ -297,7 +297,7 @@ echo -e " ${GREEN}${CHECKMARK} (free)${NC}"
 
 # Launch in tmux
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}Launching Hervald (${RUN_LABEL})...${NC}"
+echo -e "${GREEN}Launching Herd (${RUN_LABEL})...${NC}"
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
 if [ "$MODE" = "prod" ]; then
@@ -310,7 +310,7 @@ fi
 wait_for_service_health "$PORT" "$SESSION_NAME"
 
 # Report status
-echo -n -e "${YELLOW}Hervald health /api/health...${NC}"
+echo -n -e "${YELLOW}Herd health /api/health...${NC}"
 if $HEALTH_READY; then
     echo -e " ${GREEN}${CHECKMARK}${NC}"
     echo "[INFO] $(date -u +%Y-%m-%dT%H:%M:%SZ) /api/health returned 200 on port $PORT" >> "$LAUNCH_LOG_FILE"
@@ -322,7 +322,7 @@ fi
 # Final status
 if tmux has-session -t "$SESSION_NAME" 2>/dev/null && $HEALTH_READY; then
     finalize_launch_log "running"
-    echo -e "\n${GREEN}${CHECKMARK} Hervald is running!${NC}"
+    echo -e "\n${GREEN}${CHECKMARK} Herd is running!${NC}"
     echo -e "\n${CYAN}╔════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║          SERVICE INFORMATION           ║${NC}"
     echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
@@ -348,7 +348,7 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null && $HEALTH_READY; then
     echo -e "  ${GREEN}▸${NC} Stop:    ${BLUE}tmux kill-session -t $SESSION_NAME${NC}"
 else
     finalize_launch_log "failed"
-    echo -e "\n${RED}${CROSS} Failed to start Hervald!${NC}"
+    echo -e "\n${RED}${CROSS} Failed to start Herd!${NC}"
     if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
         echo -e "${YELLOW}The tmux session exists, but /api/health did not return 200 before timeout.${NC}"
     else

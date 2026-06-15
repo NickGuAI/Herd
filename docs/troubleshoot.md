@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Use this page when a fresh Hervald install or first commander run fails before a
+Use this page when a fresh Herd install or first commander run fails before a
 useful response.
 
 ## Installer Fails
@@ -19,7 +19,7 @@ Recovery:
 - Confirm outbound HTTPS works.
 - Rerun the installer.
 
-## Browser Cannot Reach Hervald
+## Browser Cannot Reach Herd
 
 Check:
 
@@ -29,7 +29,7 @@ curl -fsS http://localhost:20001/api/health
 
 Recovery:
 
-- Restart the Hervald process.
+- Restart the Herd process.
 - Confirm the printed URL and port.
 - Check reverse proxy or private-network routing if you are not using local
   access.
@@ -57,7 +57,7 @@ Recovery:
 
 - Log in through the provider CLI on that host.
 - Refresh the Provider Auth panel.
-- Do not authenticate against a parallel Hervald OAuth flow unless the provider
+- Do not authenticate against a parallel Herd OAuth flow unless the provider
   implementation explicitly supports it.
 
 ## Machine Routing Is Missing

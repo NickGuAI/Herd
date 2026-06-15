@@ -162,7 +162,7 @@ function AuthTokenBridge() {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <p style={{ margin: 0, flex: 1, fontSize: 13, lineHeight: 1.45 }}>
-          Hervald is reconnecting. Sign-in recovery will resume after the gateway is healthy.
+          Herd is reconnecting. Sign-in recovery will resume after the gateway is healthy.
         </p>
         <button
           type="button"
@@ -299,7 +299,7 @@ export default function App() {
     <Auth0Provider
       domain={domain}
       clientId={clientId}
-      // Hervald is an operations console expected to survive idle tabs and
+      // Herd is an operations console expected to survive idle tabs and
       // reloads. Refresh-token rotation plus explicit local cache gives the
       // Auth0 SDK a durable recovery path instead of relying only on iframe
       // silent auth, which browsers can block after inactivity.

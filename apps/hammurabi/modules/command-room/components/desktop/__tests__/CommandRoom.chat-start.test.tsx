@@ -438,7 +438,7 @@ describe('CommandRoom chat-row Start (one-click resume)', () => {
         pages: [{
           conversationId: conversation.id,
           sessionName: 'commander-cmd-1-conversation-conv-history',
-          source: 'transcript',
+          source: 'canonical',
           limit: 10,
           before: null,
           nextBefore: '3',

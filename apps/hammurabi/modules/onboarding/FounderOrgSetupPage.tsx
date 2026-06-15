@@ -644,8 +644,8 @@ export function FounderOrgSetupPage() {
 
       <div className="hv-onboarding-frame">
         <aside className="hv-onboarding-panel hv-onboarding-progress" data-testid="onboarding-progress">
-          <div className="hv-onboarding-eyebrow">Hervald / First Run</div>
-          <h1 className="hv-onboarding-title">Welcome to Hervald</h1>
+          <div className="hv-onboarding-eyebrow">Herd / First Run</div>
+          <h1 className="hv-onboarding-title">Welcome to Herd</h1>
           <nav aria-label="First run steps">
             {steps.map((step) => (
               <button
@@ -785,7 +785,7 @@ export function FounderOrgSetupPage() {
             <>
               <h2>Starter workforce</h2>
               <p>
-                Install the bundled commanders that make a fresh Hervald instance useful immediately.
+                Install the bundled commanders that make a fresh Herd instance useful immediately.
                 Each package is stored on disk and installed through the backend commander API.
               </p>
               <section className="hv-onboarding-workforce-grid" aria-label="Starter workforce">

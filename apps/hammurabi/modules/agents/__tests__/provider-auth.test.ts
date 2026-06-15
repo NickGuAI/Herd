@@ -91,7 +91,7 @@ describe('provider auth lifecycle', () => {
           host: 'local',
           status: 'auth_required',
           authMethod: 'oauth',
-          detail: 'No Hervald-managed provider token is stored.',
+          detail: 'No Herd-managed provider token is stored.',
           reauthUrl: '/api/agents/provider-auth/codex/reauth?scopeId=commander-old&host=local',
           lastCheckedAt: '2026-06-02T12:00:00.000Z',
         },
@@ -112,7 +112,7 @@ describe('provider auth lifecycle', () => {
     expect(snapshots[0]).not.toHaveProperty('reauthUrl')
   })
 
-  it('does not start Hervald OAuth for Codex native auth', async () => {
+  it('does not start Herd OAuth for Codex native auth', async () => {
     const { store } = await createStore()
 
     await expect(startProviderOAuthFlow({
@@ -174,7 +174,7 @@ describe('provider auth lifecycle', () => {
     expect(snapshots[0]).not.toHaveProperty('reauthUrl')
   })
 
-  it('does not start Hervald OAuth for Claude Code native auth', async () => {
+  it('does not start Herd OAuth for Claude Code native auth', async () => {
     const { store } = await createStore()
 
     await expect(startProviderOAuthFlow({

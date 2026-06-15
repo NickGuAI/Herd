@@ -204,12 +204,12 @@ function onboardingStatus(overrides: Partial<OnboardingStatus> = {}): Onboarding
   return {
     currentStepId: 'launch',
     steps: [
-      { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Hervald app and bootstrap admin are available.' },
+      { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Herd app and bootstrap admin are available.' },
       { id: 'founder-org', label: 'Founder + organization', state: founderSetup.setupComplete ? 'complete' : 'current', summary: 'Create founder and organization.' },
       { id: 'gaia', label: 'Gaia commander', state: gaia.exists ? 'complete' : 'current', summary: 'Seed Gaia.' },
       { id: 'starter-workforce', label: 'Starter workforce', state: starterWorkforce.complete ? 'complete' : 'current', summary: 'Install starter commanders.' },
       { id: 'providers-machines', label: 'Providers + machines', state: 'complete', summary: 'Providers and machines ready.' },
-      { id: 'launch', label: 'Launch', state: 'current', summary: 'Open Hervald.' },
+      { id: 'launch', label: 'Launch', state: 'current', summary: 'Open Herd.' },
     ],
     founderSetup,
     gaia,
@@ -408,12 +408,12 @@ describe('AuthenticatedAppRouter', () => {
       data: onboardingStatus({
         currentStepId: 'providers-machines',
         steps: [
-          { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Hervald app and bootstrap admin are available.' },
+          { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Herd app and bootstrap admin are available.' },
           { id: 'founder-org', label: 'Founder + organization', state: 'complete', summary: 'Founder exists.' },
           { id: 'gaia', label: 'Gaia commander', state: 'complete', summary: 'Gaia exists.' },
           { id: 'starter-workforce', label: 'Starter workforce', state: 'complete', summary: 'Starter commanders are installed.' },
           { id: 'providers-machines', label: 'Providers + machines', state: 'warning', summary: 'Provider auth needs attention.' },
-          { id: 'launch', label: 'Launch', state: 'pending', summary: 'Open Hervald.' },
+          { id: 'launch', label: 'Launch', state: 'pending', summary: 'Open Herd.' },
         ],
         providers: [{
           id: 'claude',

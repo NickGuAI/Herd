@@ -285,6 +285,7 @@ export interface StreamSession {
   task?: string
   process: ChildProcess
   events: StreamJsonEvent[]
+  nextEventSeq?: number
   clients: Set<WebSocket>
   createdAt: string
   lastEventAt: string
@@ -645,7 +646,7 @@ export interface CommanderSessionsInterface {
    * already been verified by the caller (typically the URL-baked
    * `/api/commanders/:id/workers` route). The spawned session persists with
    * `creator: { kind: "commander", id }` and `sessionType: "worker"` so the
-   * Hervald TEAM panel — and every other consumer that filters by
+   * Herd TEAM panel — and every other consumer that filters by
    * commander ownership — sees it correctly. See issue #1223.
    */
   dispatchWorkerForCommander(input: {

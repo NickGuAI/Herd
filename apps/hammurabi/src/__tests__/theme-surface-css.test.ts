@@ -63,7 +63,7 @@ function getBlock(selector: string): string {
 }
 
 describe('theme surface CSS contracts', () => {
-  it('binds mobile sheets to the active Hervald background tokens', () => {
+  it('binds mobile sheets to the active Herd background tokens', () => {
     const sheetBlock = getBlock('.sheet')
 
     expect(sheetBlock).toContain('background: var(--hv-bg);')
@@ -72,7 +72,7 @@ describe('theme surface CSS contracts', () => {
     expect(sheetBlock).not.toContain('background: var(--washi-white')
   })
 
-  it('binds mobile sheet handles to the active Hervald foreground tokens', () => {
+  it('binds mobile sheet handles to the active Herd foreground tokens', () => {
     const handleBlock = getBlock('.sheet-handle-bar')
 
     expect(handleBlock).toContain('background: var(--hv-fg-faint);')

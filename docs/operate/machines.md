@@ -7,7 +7,7 @@ reachable over SSH, or reachable through a private network such as Tailscale.
 
 1. Verify ordinary SSH to the host.
 2. Confirm the host has the provider CLIs needed for the work.
-3. Register the host in Hervald.
+3. Register the host in Herd.
 4. Bootstrap the host.
 5. Dispatch a small worker and verify the log shows the expected host.
 

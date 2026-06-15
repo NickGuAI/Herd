@@ -91,7 +91,7 @@ function buildAuthGuidance(provider: ProviderRegistryEntry, snapshot: ProviderAu
   const host = snapshot?.host ?? 'local'
   const nativeCommands = nativeLoginCommands(provider)
   if (nativeCommands) {
-    const target = host === 'local' ? 'the Hervald host' : host
+    const target = host === 'local' ? 'the Herd host' : host
     return {
       provider: provider.id,
       message: `${provider.label} uses native CLI authentication on ${target}.`,
@@ -108,7 +108,7 @@ function buildAuthGuidance(provider: ProviderRegistryEntry, snapshot: ProviderAu
 
   return {
     provider: provider.id,
-    message: `${provider.label} uses machine auth. Configure ${keyList} on ${host === 'local' ? 'the Hervald host' : host}, then refresh this panel.`,
+    message: `${provider.label} uses machine auth. Configure ${keyList} on ${host === 'local' ? 'the Herd host' : host}, then refresh this panel.`,
     commands: [command],
   }
 }

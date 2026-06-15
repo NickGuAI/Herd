@@ -7,6 +7,7 @@ import {
 } from '../../../../src/types/transcript-envelope.js'
 import { readCodexRuntime } from '../../providers/provider-session-context.js'
 import { asObject } from '../../session/state.js'
+import { createTranscriptId } from '../../transcript-id.js'
 import type { StreamJsonEvent, StreamSession } from '../../types.js'
 import { markCodexTurnHealthy } from './helpers.js'
 
@@ -574,22 +575,36 @@ function buildCodexMcpElicitationAcceptContentFromAnswers(
   return content
 }
 
-function buildToolResultPayload(toolId: string, answers: ToolAnswerMap): StreamJsonEvent {
-  const serialized: Record<string, string> = {}
-  for (const [key, val] of Object.entries(answers)) {
-    serialized[key] = Array.isArray(val) ? val.join(', ') : String(val)
-  }
-  return {
-    type: 'user',
-    message: {
-      role: 'user',
-      content: [{
-        type: 'tool_result',
-        tool_use_id: toolId,
-        content: JSON.stringify({ answers: serialized, annotations: {} }),
-      }],
+function buildElicitationAnswerResolvedPayload(
+  event: TranscriptEnvelope,
+  answers: ToolAnswerMap,
+): StreamJsonEvent {
+  const toolCallId = event.ev.type === 'approval.request' && event.ev.toolCallId
+    ? event.ev.toolCallId
+    : event.itemId ?? event.id
+  const envelope: TranscriptEnvelope = {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: new Date().toISOString(),
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      ...(event.source.sessionId ? { sessionId: event.source.sessionId } : {}),
+      rawEventType: 'item/tool/requestUserInput/answered',
+      rawEventId: toolCallId,
+    },
+    ...(event.turnId ? { turnId: event.turnId } : {}),
+    itemId: toolCallId,
+    ev: {
+      type: 'approval.resolved',
+      toolCallId,
+      approved: true,
+      result: {
+        answers,
+      },
     },
   }
+  return envelope as StreamJsonEvent
 }
 
 export function deliverCodexMcpElicitationQuestionAnswer(
@@ -620,7 +635,7 @@ export function deliverCodexMcpElicitationQuestionAnswer(
   )
 
   markCodexTurnHealthy(session)
-  return { ok: true, payload: buildToolResultPayload(event.ev.toolCallId, answers) }
+  return { ok: true, payload: buildElicitationAnswerResolvedPayload(event, answers) }
 }
 
 export function sendCodexMcpElicitationReply(
@@ -646,13 +661,28 @@ export function sendCodexMcpElicitationReply(
     rawEvent.replyDeps.scheduleTurnWatchdog(session)
   }
 
-  const event: StreamJsonEvent = {
-    type: 'system',
-    text: decision === 'accept'
-      ? `Accepted Codex MCP elicitation request ${rawEvent.requestId}.`
-      : decision === 'cancel'
-        ? `Cancelled Codex MCP elicitation request ${rawEvent.requestId}.`
-        : `Declined Codex MCP elicitation request ${rawEvent.requestId}.`,
+  const toolCallId = rawEvent.toolCallId ?? String(rawEvent.requestId)
+  const event: TranscriptEnvelope = {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: new Date().toISOString(),
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      ...(rawEvent.threadId ? { sessionId: rawEvent.threadId } : {}),
+      rawEventType: 'item/tool/requestUserInput/resolved',
+      rawEventId: toolCallId,
+    },
+    itemId: toolCallId,
+    ev: {
+      type: 'approval.resolved',
+      toolCallId,
+      approved: decision === 'accept',
+      result: {
+        decision,
+        requestId: rawEvent.requestId,
+      },
+    },
   }
   rawEvent.replyDeps.appendEvent(session, event)
   rawEvent.replyDeps.broadcastEvent(session, event)

@@ -58,7 +58,7 @@ describe('channel provider descriptors', () => {
       pairing: { mode: 'qr', transport: 'baileys', statusPollIntervalMs: 2_000 },
       formDefaults: {
         transport: 'baileys',
-        browserName: 'Hervald',
+        browserName: 'Herd',
         connectTimeoutSeconds: '30',
         printQrInTerminal: true,
         markOnlineOnConnect: false,

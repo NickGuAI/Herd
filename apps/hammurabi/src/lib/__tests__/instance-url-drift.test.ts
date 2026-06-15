@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
  * Drift guard for issue #1561 (iOS app connects to user-selected instance).
  *
  * The native app must route every request through `getApiBase()` / `getWsBase()`
- * so a user can point the iOS bundle at any Hervald/Hammurabi instance. If a
+ * so a user can point the iOS bundle at any Herd/Hammurabi instance. If a
  * future change reintroduces a hardcoded backend URL anywhere in the client
  * tree, this test fails before the regression ships.
  *

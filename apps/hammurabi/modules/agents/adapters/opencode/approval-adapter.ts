@@ -1,7 +1,8 @@
 import type { ActionPolicyGateResult } from '../../../policies/action-policy-gate.js'
 import type { ProviderApprovalAdapter } from '../../../policies/provider-approval-adapter.js'
 import { registerApprovalAdapter } from '../../../policies/types.js'
-import { readOpenCodeRuntime } from '../../providers/provider-session-context.js'
+import { createOpenCodeProviderActivityEnvelope } from '../../event-normalizers/opencode.js'
+import { readOpenCodeRuntime, readOpenCodeSessionId } from '../../providers/provider-session-context.js'
 import type { StreamJsonEvent, StreamSession } from '../../types.js'
 
 interface OpenCodeApprovalReplyDeps {
@@ -257,10 +258,11 @@ export const opencodeApprovalAdapter = registerApprovalAdapter<ProviderApprovalA
 
   async sendReply(result: ActionPolicyGateResult, rawEvent: OpenCodeApprovalRawEvent, session: StreamSession): Promise<void> {
     if (result.decision === 'deny' && result.reason) {
-      const policyEvent: StreamJsonEvent = {
-        type: 'system',
-        text: result.reason,
-      }
+      const policyEvent = createOpenCodeProviderActivityEnvelope(
+        'OpenCode request denied by policy',
+        { detail: result.reason },
+        readOpenCodeSessionId(session),
+      )
       rawEvent.replyDeps.appendEvent(session, policyEvent)
       rawEvent.replyDeps.broadcastEvent(session, policyEvent)
       rawEvent.replyDeps.schedulePersistedSessionsWrite()

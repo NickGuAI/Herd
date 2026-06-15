@@ -89,6 +89,66 @@ export function resetStreamProcessorState(state: MutableStreamProcessorState) {
   state.planningToolNames = {}
 }
 
+function hydrateEnvelopeMessageStateFromMessage(
+  state: MutableStreamProcessorState,
+  message: MsgItem,
+) {
+  const transcript = message.transcript
+  if (!transcript?.source) {
+    return
+  }
+
+  if (message.kind === 'agent' || message.kind === 'user' || message.kind === 'system') {
+    const role: TranscriptMessageRole = message.kind === 'agent'
+      ? 'assistant'
+      : message.kind
+    const key = [
+      role,
+      transcript.source.provider,
+      transcript.itemId ?? '',
+      transcript.turnId ?? '',
+      transcript.parentId ?? '',
+      transcript.subagentId ?? '',
+    ].join(':')
+    state.activeEnvelopeMessages[key] = { msgId: message.id, role, ended: true }
+    return
+  }
+
+  if (message.kind === 'thinking') {
+    const key = `thinking:${transcript.itemId ?? transcript.turnId ?? transcript.envelopeId ?? ''}:${transcript.subagentId ?? ''}`
+    state.activeEnvelopeMessages[key] = { msgId: message.id, role: 'assistant', ended: true }
+    return
+  }
+
+  if (
+    message.kind === 'tool'
+    && message.toolName === 'Agent'
+    && message.toolStatus === 'running'
+  ) {
+    const subagentId = transcript.subagentId ?? message.toolId
+    if (subagentId) {
+      state.activeEnvelopeSubagents[subagentId] = message.id
+      pushActiveAgentMessageId(state, message.id)
+    }
+  }
+}
+
+export function hydrateStreamProcessorStateFromMessages(
+  state: MutableStreamProcessorState,
+  messages: readonly MsgItem[],
+) {
+  resetStreamProcessorState(state)
+  const visit = (items: readonly MsgItem[]) => {
+    for (const message of items) {
+      hydrateEnvelopeMessageStateFromMessage(state, message)
+      if (message.children && message.children.length > 0) {
+        visit(message.children)
+      }
+    }
+  }
+  visit(messages)
+}
+
 export function markAskAnsweredMessages(messages: MsgItem[], toolId: string): MsgItem[] {
   return messages.map((message) =>
     message.kind === 'ask' && message.toolId === toolId
@@ -145,6 +205,7 @@ function buildTranscriptMeta(
     itemId: envelope.itemId,
     parentId: envelope.parentId,
     subagentId: envelope.subagentId,
+    seq: envelope.seq,
     providerEventType: envelope.source.rawEventType,
     providerEventId: envelope.source.rawEventId,
     ...extra,
@@ -265,6 +326,18 @@ function findMessageId(
     }
   }
   return undefined
+}
+
+function findUserMessageIdByClientSendId(
+  messages: MsgItem[],
+  clientSendId: string | undefined,
+): string | undefined {
+  if (!clientSendId) {
+    return undefined
+  }
+  return findMessageId(messages, (message) =>
+    message.kind === 'user' && message.clientSendId === clientSendId
+  )
 }
 
 function formatPlanText(plan: unknown): string {
@@ -485,39 +558,6 @@ function readPlanningEventFromV2Plan(plan: unknown): Extract<StreamEvent, { type
   }
 }
 
-function readTranscriptTextDelta(payload: unknown): string | undefined {
-  const record = asRecord(payload)
-  if (!record) {
-    return undefined
-  }
-  for (const key of ['text', 'delta', 'textDelta', 'outputTextDelta']) {
-    const value = record[key]
-    if (typeof value === 'string' && value.length > 0) {
-      return value
-    }
-  }
-  const delta = asRecord(record.delta)
-  const deltaText = delta?.text
-  return typeof deltaText === 'string' && deltaText.length > 0 ? deltaText : undefined
-}
-
-function promoteLegacyCodexRawDelta(envelope: TranscriptEnvelope): TranscriptEnvelope | null {
-  if (
-    envelope.ev.type !== 'provider.raw'
-    || envelope.source.provider !== 'codex'
-    || envelope.ev.method !== 'item/agentMessage/delta'
-  ) {
-    return null
-  }
-  const text = readTranscriptTextDelta(envelope.ev.payload)
-  return text
-    ? {
-        ...envelope,
-        ev: { type: 'message.delta', text, channel: 'final' },
-      }
-    : null
-}
-
 function appendProviderActivity(
   context: StreamEventProcessorContext,
   envelope: TranscriptEnvelope,
@@ -593,6 +633,10 @@ function isReflectedUserInputActivity(
   return itemType === 'userMessage'
 }
 
+function isTranscriptUserEcho(envelope: TranscriptEnvelope): boolean {
+  return Boolean(envelope.clientSendId) || envelope.source.rawEventType === 'hammurabi/user'
+}
+
 function normalizeToolStatus(status: string | undefined): 'running' | 'success' | 'error' {
   const normalized = status?.trim().toLowerCase()
   if (!normalized) {
@@ -607,17 +651,17 @@ function normalizeToolStatus(status: string | undefined): 'running' | 'success' 
   return 'running'
 }
 
+function readToolDeltaInput(ev: Extract<TranscriptEnvelope['ev'], { type: 'tool.delta' }>): unknown {
+  const patch = asRecord(ev.patch)
+  const data = asRecord(ev.data)
+  return patch?.input ?? data?.input
+}
+
 function processTranscriptEnvelope(
   context: StreamEventProcessorContext,
   envelope: TranscriptEnvelope,
   isReplay: boolean,
 ) {
-  const promotedEnvelope = promoteLegacyCodexRawDelta(envelope)
-  if (promotedEnvelope) {
-    processTranscriptEnvelope(context, promotedEnvelope, isReplay)
-    return
-  }
-
   const parentMessageId = getEnvelopeSubagentParentId(context.state, envelope)
   const ev = envelope.ev
 
@@ -675,12 +719,16 @@ function processTranscriptEnvelope(
       const kind = ev.role === 'assistant'
         ? 'agent'
         : (ev.role === 'user' ? 'user' : 'system')
+      if (ev.role === 'user' && envelope.clientSendId) {
+        return
+      }
       const id = context.nextId()
       context.state.activeEnvelopeMessages[key] = { msgId: id, role: ev.role, ended: false }
       appendMessageWithOptionalParent(context, {
         id,
         kind,
         text: '',
+        ...(ev.role === 'user' && envelope.clientSendId ? { clientSendId: envelope.clientSendId } : {}),
         timestamp: envelope.time,
         transcript: buildTranscriptMeta(envelope),
       }, parentMessageId)
@@ -695,17 +743,21 @@ function processTranscriptEnvelope(
         ? 'system'
         : (context.state.activeEnvelopeMessages[getEnvelopeMessageKey(envelope, 'assistant')]?.role
           ?? context.state.activeEnvelopeMessages[getEnvelopeMessageKey(envelope, 'user')]?.role
-          ?? 'assistant')
+          ?? (isTranscriptUserEcho(envelope) ? 'user' : 'assistant'))
       const key = getEnvelopeMessageKey(envelope, role)
       const existing = context.state.activeEnvelopeMessages[key]
       const kind = role === 'assistant'
         ? 'agent'
         : (role === 'user' ? 'user' : 'system')
-      const targetId = existing?.msgId ?? context.nextId()
-      if (!existing) {
-        context.state.activeEnvelopeMessages[key] = { msgId: targetId, role, ended: false }
-      }
       context.setMessages((prev) => {
+        const optimisticUserMessageId = role === 'user'
+          ? findUserMessageIdByClientSendId(prev, envelope.clientSendId)
+          : undefined
+        const targetId = existing?.msgId ?? optimisticUserMessageId ?? context.nextId()
+        const replacesOptimisticUserText = role === 'user' && !existing && Boolean(optimisticUserMessageId)
+        if (!existing) {
+          context.state.activeEnvelopeMessages[key] = { msgId: targetId, role, ended: false }
+        }
         const existingMessageId = findMessageId(prev, (message) => message.id === targetId)
         const base = existingMessageId
           ? prev
@@ -713,12 +765,17 @@ function processTranscriptEnvelope(
               id: targetId,
               kind,
               text: '',
+              ...(role === 'user' && envelope.clientSendId ? { clientSendId: envelope.clientSendId } : {}),
               timestamp: envelope.time,
               transcript: buildTranscriptMeta(envelope),
             }, parentMessageId, (items) => items)
         return (context.capMessages ?? capMessages)(updateMessageOrChild(base, targetId, (message) => ({
           ...message,
-          text: message.text + ev.text,
+          text: replacesOptimisticUserText && envelope.clientSendId === message.clientSendId
+            ? ev.text
+            : message.text + ev.text,
+          timestamp: message.timestamp ?? envelope.time,
+          transcript: message.transcript ?? buildTranscriptMeta(envelope),
         })))
       })
       if (!isReplay && role === 'assistant' && !existing?.ended) {
@@ -732,17 +789,20 @@ function processTranscriptEnvelope(
       if (!image) {
         return
       }
-      const role = ev.role ?? 'assistant'
+      const role = ev.role ?? (isTranscriptUserEcho(envelope) ? 'user' : 'assistant')
       const key = getEnvelopeMessageKey(envelope, role)
       const existing = context.state.activeEnvelopeMessages[key]
       const kind = role === 'assistant'
         ? 'agent'
         : (role === 'user' ? 'user' : 'system')
-      const targetId = existing?.msgId ?? context.nextId()
-      if (!existing) {
-        context.state.activeEnvelopeMessages[key] = { msgId: targetId, role, ended: false }
-      }
       context.setMessages((prev) => {
+        const optimisticUserMessageId = role === 'user'
+          ? findUserMessageIdByClientSendId(prev, envelope.clientSendId)
+          : undefined
+        const targetId = existing?.msgId ?? optimisticUserMessageId ?? context.nextId()
+        if (!existing) {
+          context.state.activeEnvelopeMessages[key] = { msgId: targetId, role, ended: false }
+        }
         const existingMessageId = findMessageId(prev, (message) => message.id === targetId)
         const base = existingMessageId
           ? prev
@@ -750,13 +810,20 @@ function processTranscriptEnvelope(
               id: targetId,
               kind,
               text: '',
+              ...(role === 'user' && envelope.clientSendId ? { clientSendId: envelope.clientSendId } : {}),
               timestamp: envelope.time,
               transcript: buildTranscriptMeta(envelope),
             }, parentMessageId, (items) => items)
-        return (context.capMessages ?? capMessages)(updateMessageOrChild(base, targetId, (message) => ({
-          ...message,
-          images: [...(message.images ?? []), image],
-        })))
+        return (context.capMessages ?? capMessages)(updateMessageOrChild(base, targetId, (message) => {
+          const images = [...(message.images ?? [])]
+          pushUniqueImage(images, image)
+          return {
+            ...message,
+            images,
+            timestamp: message.timestamp ?? envelope.time,
+            transcript: message.transcript ?? buildTranscriptMeta(envelope),
+          }
+        }))
       })
       if (!isReplay && role === 'assistant' && !existing?.ended) {
         context.setIsStreaming(true)
@@ -871,9 +938,14 @@ function processTranscriptEnvelope(
     }
 
     case 'tool.delta': {
+      const inputPatch = readToolDeltaInput(ev)
       context.setMessages((prev) => {
         const toolMessageId = findMessageId(prev, (message) =>
-          message.kind === 'tool' && message.toolId === ev.toolCallId,
+          (message.kind === 'tool' || message.kind === 'ask')
+            && (
+              message.toolId === ev.toolCallId
+              || message.transcript?.itemId === ev.toolCallId
+            ),
         )
         if (!toolMessageId) {
           return prev
@@ -881,6 +953,12 @@ function processTranscriptEnvelope(
         return updateMessageOrChild(prev, toolMessageId, (message) => ({
           ...message,
           toolStatus: normalizeToolStatus(ev.status),
+          ...(message.kind === 'tool' && inputPatch !== undefined
+            ? extractToolDetails(message.toolName, inputPatch)
+            : {}),
+          ...(message.kind === 'ask' && Array.isArray((inputPatch as { questions?: unknown } | undefined)?.questions)
+            ? { askQuestions: (inputPatch as { questions: AskQuestion[] }).questions }
+            : {}),
           toolOutput: `${message.toolOutput ?? ''}${ev.output ?? ''}`,
           transcript: buildTranscriptMeta(envelope, { providerPayload: ev.data }),
         }))

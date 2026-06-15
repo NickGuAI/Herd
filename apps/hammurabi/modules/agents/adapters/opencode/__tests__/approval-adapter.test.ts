@@ -134,15 +134,25 @@ describe('opencodeApprovalAdapter', () => {
     expect(rawEvent.replyDeps.appendEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Email to matt.feroz@example.com requires manual approval.',
+        schemaVersion: 2,
+        source: expect.objectContaining({ provider: 'opencode', backend: 'acp' }),
+        ev: {
+          type: 'provider.activity',
+          title: 'OpenCode request denied by policy',
+          data: { detail: 'Email to matt.feroz@example.com requires manual approval.' },
+        },
       }),
     )
     expect(rawEvent.replyDeps.broadcastEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Email to matt.feroz@example.com requires manual approval.',
+        schemaVersion: 2,
+        source: expect.objectContaining({ provider: 'opencode', backend: 'acp' }),
+        ev: {
+          type: 'provider.activity',
+          title: 'OpenCode request denied by policy',
+          data: { detail: 'Email to matt.feroz@example.com requires manual approval.' },
+        },
       }),
     )
     expect(rawEvent.replyDeps.schedulePersistedSessionsWrite).toHaveBeenCalledTimes(1)

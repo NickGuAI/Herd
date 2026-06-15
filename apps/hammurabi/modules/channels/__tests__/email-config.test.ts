@@ -105,7 +105,7 @@ describe('email channel config', () => {
 
   it('routes plus-address aliases and filters obvious non-human inbound mail', () => {
     expect(parsePlusAliasFromRecipients([
-      'Hervald <assistant+atlas@example.com>',
+      'Herd <assistant+atlas@example.com>',
       'assistant@example.com',
     ])).toBe('atlas')
 

@@ -23,7 +23,7 @@ const mockQuest = {
     {
       type: 'github_issue',
       label: 'Issue 1465',
-      href: 'https://github.com/NickGuAI/Hervald/issues/1465',
+      href: 'https://github.com/NickGuAI/Herd/issues/1465',
     },
   ],
 }

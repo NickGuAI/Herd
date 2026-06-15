@@ -15,7 +15,7 @@ afterEach(async () => {
   )
 })
 
-const config = buildCodexOtelConfig('https://hervald.gehirn.ai', 'hmrb_test_key')
+const config = buildCodexOtelConfig('https://herd.gehirn.ai', 'hmrb_test_key')
 
 async function readToml(filePath: string): Promise<Record<string, unknown>> {
   return parse(await readFile(filePath, 'utf8')) as Record<string, unknown>
@@ -35,7 +35,7 @@ describe('mergeCodexOtelConfig', () => {
 
     const exporter = otel.exporter as Record<string, Record<string, unknown>>
     const httpConfig = exporter['otlp-http']
-    expect(httpConfig.endpoint).toBe('https://hervald.gehirn.ai/v1/logs')
+    expect(httpConfig.endpoint).toBe('https://herd.gehirn.ai/v1/logs')
     expect(httpConfig.protocol).toBe('json')
 
     const headers = httpConfig.headers as Record<string, string>
@@ -58,7 +58,7 @@ describe('mergeCodexOtelConfig', () => {
     expect(otel.log_user_prompt).toBe(true)
 
     const exporter = otel.exporter as Record<string, Record<string, unknown>>
-    expect(exporter['otlp-http'].endpoint).toBe('https://hervald.gehirn.ai/v1/logs')
+    expect(exporter['otlp-http'].endpoint).toBe('https://herd.gehirn.ai/v1/logs')
   })
 
   it('preserves existing otel keys like environment and trace_exporter', async () => {
@@ -90,14 +90,14 @@ describe('mergeCodexOtelConfig', () => {
     await mergeCodexOtelConfig(config, configPath)
 
     // Re-onboard with different endpoint
-    const newConfig = buildCodexOtelConfig('https://new-hervald.gehirn.ai', 'hmrb_new_key')
+    const newConfig = buildCodexOtelConfig('https://new-herd.gehirn.ai', 'hmrb_new_key')
     await mergeCodexOtelConfig(newConfig, configPath)
 
     const result = await readToml(configPath)
     const otel = result.otel as Record<string, unknown>
     const exporter = otel.exporter as Record<string, Record<string, unknown>>
     const httpConfig = exporter['otlp-http']
-    expect(httpConfig.endpoint).toBe('https://new-hervald.gehirn.ai/v1/logs')
+    expect(httpConfig.endpoint).toBe('https://new-herd.gehirn.ai/v1/logs')
 
     const headers = httpConfig.headers as Record<string, string>
     expect(headers['x-hammurabi-api-key']).toBe('hmrb_new_key')

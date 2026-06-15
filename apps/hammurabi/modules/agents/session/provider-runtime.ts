@@ -24,6 +24,8 @@ import {
   readCodexRuntime,
   readCodexThreadId,
 } from '../providers/provider-session-context.js'
+import { createTranscriptId } from '../transcript-id.js'
+import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import {
   getProvider,
   listProviders,
@@ -286,7 +288,7 @@ export function createProviderSessionRuntime(
     await provider.teardown(session, reason)
   }
 
-  async function shutdownProviderRuntimes(reason = 'Hervald shutdown'): Promise<void> {
+  async function shutdownProviderRuntimes(reason = 'Herd shutdown'): Promise<void> {
     await Promise.allSettled(
       listProviders().map(async (provider) => {
         const providerSessions = [...deps.sessions.values()].filter((session): session is StreamSession => (
@@ -325,6 +327,7 @@ export function createProviderSessionRuntime(
   }
 
   function buildCodexResultFromThreadSnapshot(
+    session: StreamSession,
     status: string,
     turn: Record<string, unknown>,
     thread: Record<string, unknown>,
@@ -334,40 +337,38 @@ export function createProviderSessionRuntime(
     const usage = turnUsage.usage ?? threadUsage.usage
     const totalCostUsd = turnUsage.totalCostUsd ?? threadUsage.totalCostUsd
 
-    if (status === 'failed') {
-      const error = asObject(turn.error)
-      const message = typeof error?.message === 'string' && error.message.trim().length > 0
-        ? error.message.trim()
-        : 'Codex turn failed'
-      return {
-        type: 'result',
-        subtype: 'failed',
-        is_error: true,
-        result: message,
-        ...(usage ? { usage } : {}),
-        ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
-      }
-    }
-
-    if (status === 'interrupted') {
-      return {
-        type: 'result',
-        subtype: 'interrupted',
-        is_error: false,
-        result: 'Turn interrupted',
-        ...(usage ? { usage } : {}),
-        ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
-      }
-    }
-
-    return {
-      type: 'result',
-      subtype: 'success',
-      is_error: false,
-      result: 'Turn completed',
-      ...(usage ? { usage } : {}),
+    const turnId = typeof turn.id === 'string' && turn.id.trim().length > 0 ? turn.id.trim() : undefined
+    const payload = {
+      turn,
+      thread,
       ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
     }
+    const error = asObject(turn.error)
+    const failureMessage = typeof error?.message === 'string' && error.message.trim().length > 0
+      ? error.message.trim()
+      : 'Codex turn failed'
+
+    return {
+      schemaVersion: 2,
+      id: createTranscriptId(),
+      time: new Date().toISOString(),
+      source: {
+        provider: 'codex',
+        backend: 'rpc',
+        ...(readCodexThreadId(session) ? { sessionId: readCodexThreadId(session) } : {}),
+        rawEventType: 'hammurabi/codex-watchdog-thread-read',
+        ...(turnId ? { rawEventId: turnId } : {}),
+      },
+      ...(turnId ? { turnId } : {}),
+      ev: {
+        type: 'turn.end',
+        status,
+        ...(usage ? { usage } : {}),
+        ...(status === 'failed'
+          ? { error: failureMessage, result: payload }
+          : { result: status === 'interrupted' ? { ...payload, message: 'Turn interrupted' } : payload }),
+      },
+    } satisfies TranscriptEnvelope
   }
 
   async function handleCodexTurnWatchdogTimeout(session: StreamSession): Promise<void> {
@@ -428,7 +429,7 @@ export function createProviderSessionRuntime(
         : ''
 
       if (latestTurn && thread && (status === 'completed' || status === 'failed' || status === 'interrupted')) {
-        const syntheticResult = buildCodexResultFromThreadSnapshot(status, latestTurn, thread)
+        const syntheticResult = buildCodexResultFromThreadSnapshot(session, status, latestTurn, thread)
         deps.appendStreamEvent(session, syntheticResult)
         deps.broadcastStreamEvent(session, syntheticResult)
         deps.schedulePersistedSessionsWrite()
@@ -459,9 +460,28 @@ export function createProviderSessionRuntime(
         : null,
     ].filter((value): value is string => value !== null).join('; ')
     const staleEvent: StreamJsonEvent = {
-      type: 'system',
-      text: `Codex turn is stale (no sidecar events for ${timeoutSeconds}s). Session remains recoverable via resume. Diagnostics: ${diagnosticDetails}.`,
-    }
+      schemaVersion: 2,
+      id: createTranscriptId(),
+      time: session.codexTurnStaleAt,
+      source: {
+        provider: 'codex',
+        backend: 'rpc',
+        sessionId: threadId,
+        rawEventType: 'hammurabi/codex-watchdog-stale',
+      },
+      ev: {
+        type: 'provider.activity',
+        title: 'Codex turn is stale',
+        detail: `No sidecar events for ${timeoutSeconds}s. Session remains recoverable via resume.`,
+        data: {
+          timeoutSeconds,
+          lastIncomingMethod: lastIncomingMethod ?? null,
+          lastIncomingAt: lastIncomingAt ?? null,
+          unclassifiedIncomingCount,
+          diagnostics: diagnosticDetails,
+        },
+      },
+    } satisfies TranscriptEnvelope
     deps.appendStreamEvent(session, staleEvent)
     deps.broadcastStreamEvent(session, staleEvent)
     deps.schedulePersistedSessionsWrite()

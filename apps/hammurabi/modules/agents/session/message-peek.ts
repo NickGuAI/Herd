@@ -1,4 +1,9 @@
 import type { StreamJsonEvent } from '../types.js'
+import {
+  isTranscriptEnvelope,
+  type TranscriptEnvelope,
+  type TranscriptMessageRole,
+} from '../../../src/types/transcript-envelope.js'
 
 export type SessionMessagePeekRoleFilter = 'assistant' | 'user' | 'all'
 
@@ -185,6 +190,13 @@ function pushEntry(
 }
 
 function resolveEventTimestamp(event: StreamJsonEvent, fallbackTimestamp: string): string {
+  if (isTranscriptEnvelope(event)) {
+    const envelopeTimestamp = normalizeIsoTimestamp(event.time)
+    if (envelopeTimestamp) {
+      return envelopeTimestamp
+    }
+  }
+
   const directTimestamp = normalizeIsoTimestamp(event.timestamp)
   if (directTimestamp) {
     return directTimestamp
@@ -197,6 +209,36 @@ function resolveEventTimestamp(event: StreamJsonEvent, fallbackTimestamp: string
   }
 
   return fallbackTimestamp
+}
+
+function transcriptMessageKey(envelope: TranscriptEnvelope): string {
+  return [
+    envelope.source.provider,
+    envelope.source.backend,
+    envelope.source.sessionId ?? '',
+    envelope.turnId ?? '',
+    envelope.itemId ?? '',
+    envelope.parentId ?? '',
+    envelope.subagentId ?? '',
+  ].join('\u0001')
+}
+
+function transcriptEntryType(role: TranscriptMessageRole): SessionMessagePeekEntry['type'] {
+  return role === 'assistant' || role === 'user' ? role : 'system'
+}
+
+function inferTranscriptMessageRole(
+  envelope: TranscriptEnvelope,
+  transcriptMessageRoles: Map<string, TranscriptMessageRole>,
+): TranscriptMessageRole {
+  const role = transcriptMessageRoles.get(transcriptMessageKey(envelope))
+  if (role) {
+    return role
+  }
+  if (envelope.clientSendId || envelope.source.rawEventType === 'hammurabi/user') {
+    return 'user'
+  }
+  return 'assistant'
 }
 
 function buildToolUseEntry(
@@ -379,17 +421,135 @@ function collectUserEntries(
   }
 }
 
+function collectTranscriptEnvelopeEntry(
+  envelope: TranscriptEnvelope,
+  ts: string,
+  entries: SessionMessagePeekEntry[],
+  role: SessionMessagePeekRoleFilter,
+  includeToolUse: boolean,
+  toolNamesById: Map<string, string>,
+  transcriptMessageRoles: Map<string, TranscriptMessageRole>,
+): void {
+  const ev = envelope.ev
+  if (ev.type === 'message.start') {
+    transcriptMessageRoles.set(transcriptMessageKey(envelope), ev.role)
+    return
+  }
+
+  if (ev.type === 'message.delta') {
+    const messageRole = inferTranscriptMessageRole(envelope, transcriptMessageRoles)
+    pushEntry(entries, {
+      ts,
+      type: transcriptEntryType(messageRole),
+      kind: 'text',
+      preview: truncatePreview(ev.text),
+    }, role, includeToolUse)
+    return
+  }
+
+  if (ev.type === 'message.image') {
+    const messageRole = ev.role ?? inferTranscriptMessageRole(envelope, transcriptMessageRoles)
+    pushEntry(entries, {
+      ts,
+      type: transcriptEntryType(messageRole),
+      kind: 'image',
+      preview: truncatePreview(imageBlockPreview(ev.image)),
+    }, role, includeToolUse)
+    return
+  }
+
+  if (ev.type === 'thinking.delta') {
+    pushEntry(entries, {
+      ts,
+      type: 'assistant',
+      kind: 'thinking',
+      preview: truncatePreview(ev.text),
+    }, role, includeToolUse)
+    return
+  }
+
+  if (ev.type === 'tool.start') {
+    const toolId = ev.toolCallId.trim()
+    const toolName = ev.name.trim()
+    if (toolId.length > 0 && toolName.length > 0) {
+      toolNamesById.set(toolId, toolName)
+    }
+    pushEntry(
+      entries,
+      buildToolUseEntry({ id: toolId, name: toolName, input: ev.input }, 'assistant', ts),
+      role,
+      includeToolUse,
+    )
+    return
+  }
+
+  if (ev.type === 'tool.delta') {
+    pushEntry(
+      entries,
+      buildToolResultEntry({
+        tool_use_id: ev.toolCallId,
+        content: ev.output ?? ev.patch ?? ev.data,
+      }, 'user', ts, toolNamesById),
+      role,
+      includeToolUse,
+    )
+    return
+  }
+
+  if (ev.type === 'tool.end') {
+    pushEntry(
+      entries,
+      buildToolResultEntry({
+        tool_use_id: ev.toolCallId,
+        content: ev.result ?? ev.error,
+        is_error: ev.status === 'error' || ev.status === 'failed',
+      }, 'user', ts, toolNamesById),
+      role,
+      includeToolUse,
+    )
+    return
+  }
+
+  if (ev.type === 'provider.activity') {
+    const preview = truncatePreview(
+      ev.detail
+      ?? ev.title
+      ?? stringifyPreview(ev.data),
+    )
+    pushEntry(entries, {
+      ts,
+      type: 'system',
+      kind: 'text',
+      preview,
+    }, role, includeToolUse)
+  }
+}
+
 export function extractSessionMessagePeek(
   events: StreamJsonEvent[],
   options: ExtractSessionMessagePeekOptions,
 ): SessionMessagePeekEntry[] {
   const entries: SessionMessagePeekEntry[] = []
   const toolNamesById = new Map<string, string>()
+  const transcriptMessageRoles = new Map<string, TranscriptMessageRole>()
   let lastTimestamp = options.fallbackTimestamp
 
   for (const event of events) {
     const ts = resolveEventTimestamp(event, lastTimestamp)
     lastTimestamp = ts
+
+    if (isTranscriptEnvelope(event)) {
+      collectTranscriptEnvelopeEntry(
+        event,
+        ts,
+        entries,
+        options.role,
+        options.includeToolUse,
+        toolNamesById,
+        transcriptMessageRoles,
+      )
+      continue
+    }
 
     if (event.type === 'assistant') {
       collectAssistantEntries(event, ts, entries, options.role, options.includeToolUse, toolNamesById)

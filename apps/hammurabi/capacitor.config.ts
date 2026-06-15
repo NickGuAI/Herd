@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
   appId: 'ai.gehirn.hammurabi',
-  appName: 'Hervald',
+  appName: 'Herd',
   webDir: 'dist',
   // Bundled mode: app loads from built assets. The native app picks the
   // backend instance URL on first launch via the Connect screen, which

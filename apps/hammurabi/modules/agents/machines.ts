@@ -532,7 +532,7 @@ export function buildSshDestination(machine: MachineConfig & { host: string }): 
  *
  *   -R 127.0.0.1:<port>:127.0.0.1:<port>
  *      Reverse port-forward — remote 127.0.0.1:<port> reaches the EC2
- *      Hervald daemon. Binds remote loopback only; the daemon is not
+ *      Herd daemon. Binds remote loopback only; the daemon is not
  *      exposed on any other interface.
  *
  *   -o SendEnv=HAMMURABI_APPROVAL_BRIDGE_TOKEN
@@ -767,7 +767,7 @@ export async function resolveTailscaleHostname(
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ENOENT') {
-      throw new Error('Tailscale CLI is not installed on this Hervald host')
+      throw new Error('Tailscale CLI is not installed on this Herd host')
     }
     throw new Error(error instanceof Error ? error.message : 'Failed to run tailscale ping')
   }

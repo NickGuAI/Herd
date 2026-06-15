@@ -489,7 +489,7 @@ function mockConversationEndpoints(
   })
 }
 
-describe('Hervald command-room routing', () => {
+describe('Herd command-room routing', () => {
   beforeEach(() => {
     previousActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true
@@ -1020,16 +1020,11 @@ describe('Hervald command-room routing', () => {
 
     expect(sendInput).not.toHaveBeenCalled()
     await vi.waitFor(() => {
-      expect(mocks.fetchJson).toHaveBeenCalledWith(
-        '/api/conversations/conversation-1/message',
-        expect.objectContaining({
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({ message: 'Queue this follow-up.', queue: true }),
-        }),
-      )
+      expect(latestConversationMessagePostBody()).toEqual({
+        message: 'Queue this follow-up.',
+        clientSendId: expect.any(String),
+        queue: true,
+      })
     })
   })
 
@@ -1229,7 +1224,7 @@ describe('Hervald command-room routing', () => {
     expect(document.body.textContent).toContain('Initial Task (Optional)')
   })
 
-  it('exposes a full-height shell contract for the Hervald route host', async () => {
+  it('exposes a full-height shell contract for the Herd route host', async () => {
     await renderAt('/command-room')
     await flushAsync()
 

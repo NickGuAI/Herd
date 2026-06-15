@@ -1,11 +1,11 @@
 /**
  * API base URL for fetch and WebSocket. When running in Capacitor (bundled),
  * the app loads from capacitor://localhost so relative URLs fail. The native
- * app instead targets a user-selected Hervald/Hammurabi instance URL stored
+ * app instead targets a user-selected Herd/Hammurabi instance URL stored
  * in localStorage, falling back to the default hosted instance only as a
  * suggestion in the connection screen — never as a hard-coded backend.
  */
-const DEFAULT_INSTANCE_URL = 'https://hervald.gehirn.ai'
+const DEFAULT_INSTANCE_URL = 'https://herd.gehirn.ai'
 const INSTANCE_URL_STORAGE = 'hammurabi_instance_url'
 const INSTANCE_URL_INVITE_KEYS = [
   'instanceUrl',

@@ -150,12 +150,12 @@ describe('runOnboardCli', () => {
     process.env.HAMMURABI_DATA_DIR = dataDir
     await seedOperatorFile(path.join(dataDir, 'operators.json'))
 
-    promptTextMock.mockResolvedValue('https://hervald.gehirn.ai')
+    promptTextMock.mockResolvedValue('https://herd.gehirn.ai')
     promptSecretMock.mockResolvedValue('hmrb_test_key')
     promptMultiSelectMock.mockResolvedValue(['claude-code', 'codex'])
     validateTelemetryWriteKeyMock.mockResolvedValue({
       ok: true,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
     })
     applyManagedAgentTelemetryConfigMock.mockResolvedValue({
       configured: ['claude-code', 'codex'],
@@ -170,7 +170,7 @@ describe('runOnboardCli', () => {
     const cliConfigPath = path.join(homeDir, '.hammurabi.json')
     const runtimeConfigPath = path.join(homeDir, '.hammurabi', 'config.yaml')
 
-    await expect(readFile(cliConfigPath, 'utf8')).resolves.toContain('"endpoint": "https://hervald.gehirn.ai"')
+    await expect(readFile(cliConfigPath, 'utf8')).resolves.toContain('"endpoint": "https://herd.gehirn.ai"')
     await expect(readFile(runtimeConfigPath, 'utf8')).resolves.toBe([
       '# Hammurabi commander runtime defaults and limits.',
       'commanders:',
@@ -188,7 +188,7 @@ describe('runOnboardCli', () => {
       '',
     ].join('\n'))
     expect(validateTelemetryWriteKeyMock).toHaveBeenCalledWith({
-      endpoint: 'https://hervald.gehirn.ai',
+      endpoint: 'https://herd.gehirn.ai',
       apiKey: 'hmrb_test_key',
     })
     expect(promptSelectMock).toHaveBeenCalledWith(
@@ -215,7 +215,7 @@ describe('runOnboardCli', () => {
     promptSecretMock.mockResolvedValue('hmrb_test_key')
     validateTelemetryWriteKeyMock.mockResolvedValue({
       ok: true,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
     })
     applyManagedAgentTelemetryConfigMock.mockResolvedValue({
       configured: [],
@@ -227,11 +227,11 @@ describe('runOnboardCli', () => {
     })
 
     expect(exitCode).toBe(0)
-    expect(promptTextMock).not.toHaveBeenCalledWith('Hervald endpoint', expect.anything())
+    expect(promptTextMock).not.toHaveBeenCalledWith('Herd endpoint', expect.anything())
     expect(promptMultiSelectMock).not.toHaveBeenCalled()
     const config = JSON.parse(await readFile(path.join(homeDir, '.hammurabi.json'), 'utf8')) as Record<string, unknown>
     expect(config).toMatchObject({
-      endpoint: 'https://hervald.gehirn.ai',
+      endpoint: 'https://herd.gehirn.ai',
       agents: ['claude-code', 'codex', 'terminal-cri'],
     })
     expect(stdoutSpy?.mock.calls.map(([chunk]) => String(chunk)).join('')).toContain('Configuration saved')
@@ -309,12 +309,12 @@ describe('runOnboardCli', () => {
     process.env.HAMMURABI_DATA_DIR = dataDir
     await seedOperatorFile(path.join(dataDir, 'operators.json'))
 
-    promptTextMock.mockResolvedValue('https://hervald.gehirn.ai')
+    promptTextMock.mockResolvedValue('https://herd.gehirn.ai')
     promptSecretMock.mockResolvedValue('hmrb_test_key')
     promptMultiSelectMock.mockResolvedValue(['claude-code'])
     validateTelemetryWriteKeyMock.mockResolvedValue({
       ok: true,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
     })
     applyManagedAgentTelemetryConfigMock.mockResolvedValue({
       configured: [],
@@ -367,7 +367,7 @@ describe('runOnboardCli', () => {
     process.env.HAMMURABI_DATA_DIR = dataDir
     await seedOperatorFile(path.join(dataDir, 'operators.json'))
 
-    promptTextMock.mockResolvedValue('https://hervald.gehirn.ai')
+    promptTextMock.mockResolvedValue('https://herd.gehirn.ai')
     promptSecretMock.mockResolvedValue('hmrb_test_key')
     promptMultiSelectMock.mockResolvedValue(['claude-code'])
     promptConfirmMock
@@ -375,7 +375,7 @@ describe('runOnboardCli', () => {
       .mockResolvedValueOnce(true)
     validateTelemetryWriteKeyMock.mockResolvedValue({
       ok: true,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
     })
     applyManagedAgentTelemetryConfigMock.mockResolvedValue({
       configured: ['claude-code'],
@@ -423,14 +423,14 @@ describe('runOnboardCli', () => {
     process.env.HAMMURABI_DATA_DIR = dataDir
 
     promptTextMock
-      .mockResolvedValueOnce('https://hervald.gehirn.ai')
+      .mockResolvedValueOnce('https://herd.gehirn.ai')
       .mockResolvedValueOnce('Founder Override')
       .mockResolvedValueOnce('founder@example.com')
     promptSecretMock.mockResolvedValue('hmrb_test_key')
     promptMultiSelectMock.mockResolvedValue(['claude-code'])
     validateTelemetryWriteKeyMock.mockResolvedValue({
       ok: true,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
     })
     applyManagedAgentTelemetryConfigMock.mockResolvedValue({
       configured: ['claude-code'],
@@ -485,12 +485,12 @@ describe('runOnboardCli', () => {
     }
     await seedOperatorFile(operatorPath, existingOperator)
 
-    promptTextMock.mockResolvedValue('https://hervald.gehirn.ai')
+    promptTextMock.mockResolvedValue('https://herd.gehirn.ai')
     promptSecretMock.mockResolvedValue('hmrb_test_key')
     promptMultiSelectMock.mockResolvedValue(['claude-code'])
     validateTelemetryWriteKeyMock.mockResolvedValue({
       ok: true,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
     })
     applyManagedAgentTelemetryConfigMock.mockResolvedValue({
       configured: ['claude-code'],

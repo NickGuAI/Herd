@@ -1,5 +1,6 @@
 import { getProvider } from '../providers/registry.js'
 import { SessionMessageQueue } from '../message-queue.js'
+import { getNextStreamEventSeq } from '../messages/canonical-timeline.js'
 import type { ProviderCreateOptions } from '../providers/provider-adapter.js'
 import type {
   AnySession,
@@ -189,6 +190,7 @@ export function createSessionAutoRotationRuntime(
       rotated.messageQueue = new SessionMessageQueue(current.messageQueue.maxSize, current.messageQueue.list())
       rotated.pendingDirectSendMessages = [...current.pendingDirectSendMessages]
       rotated.events = [...current.events, ...rotatedPreludeEvents]
+      rotated.nextEventSeq = getNextStreamEventSeq(rotated.events)
       rotated.usage = { ...current.usage }
       if (rotatedPreludeEvents.length === 0) {
         rotated.lastEventAt = current.lastEventAt

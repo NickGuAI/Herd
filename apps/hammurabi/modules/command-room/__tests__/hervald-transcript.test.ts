@@ -2,13 +2,14 @@ import type { SessionQueueSnapshot } from '@/types'
 import { describe, expect, it } from 'vitest'
 import type { MsgItem } from '@modules/agents/messages/model'
 import {
+  appendPendingOptimisticMessagesToTranscript,
   appendQueuedMessagesToTranscript,
+  hasPendingOptimisticMessages,
   mapSessionMessagesToTranscript,
-  mergeHistoricalAndLiveTranscript,
 } from '../components/transcript'
 
 describe('mapSessionMessagesToTranscript', () => {
-  it('preserves the rich MsgItem transcript shape for Hervald rendering parity', () => {
+  it('preserves the rich MsgItem transcript shape for Herd rendering parity', () => {
     const messages = [
       {
         id: 'user-1',
@@ -37,264 +38,103 @@ describe('mapSessionMessagesToTranscript', () => {
   })
 })
 
-describe('mergeHistoricalAndLiveTranscript', () => {
-  it('drops only replayed historical messages when live messages overlap', () => {
-    const historicalMessages: MsgItem[] = [
-      { id: 'history-1', kind: 'agent', text: 'same' },
-      { id: 'history-2', kind: 'agent', text: 'older' },
-      { id: 'history-3', kind: 'agent', text: 'same' },
-    ]
-    const liveMessages: MsgItem[] = [
-      { id: 'live-1', kind: 'agent', text: 'same' },
-      { id: 'live-2', kind: 'agent', text: 'newer' },
-    ]
-
-    expect(mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)).toEqual([
-      { id: 'history-1', kind: 'agent', text: 'same' },
-      { id: 'history-2', kind: 'agent', text: 'older' },
-      { id: 'live-1', kind: 'agent', text: 'same' },
-      { id: 'live-2', kind: 'agent', text: 'newer' },
-    ])
-  })
-
-  it('does not render both optimistic and history copies for display-safe workspace sends', () => {
-    const historicalMessages: MsgItem[] = [
-      { id: 'history-user', kind: 'user', text: 'Use this context.' },
-    ]
-    const liveMessages: MsgItem[] = [
-      { id: 'optimistic-user', kind: 'user', text: 'Use this context.' },
-    ]
-
-    const merged = mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)
-
-    expect(merged).toEqual([
-      { id: 'optimistic-user', kind: 'user', text: 'Use this context.' },
-    ])
-    expect(merged.some((message) => message.text.includes('<workspace-'))).toBe(false)
-  })
-
-  it('does not render both optimistic and backend copies for image-only user prompts', () => {
-    const image = {
-      mediaType: 'image/png',
-      data: 'base64-product-logo',
-      alt: 'Product logo upload',
-    }
-    const historicalMessages: MsgItem[] = [
-      {
-        id: 'history-user-image',
-        kind: 'user',
-        text: '',
-        images: [image],
-        transcript: {
-          source: { provider: 'codex', backend: 'rpc' },
-          turnId: 'turn-user-image',
-          itemId: 'user-image-1',
-        },
-      },
-    ]
-    const liveMessages: MsgItem[] = [
-      {
-        id: 'optimistic-user-image',
-        kind: 'user',
-        text: '[image]',
-        images: [image],
-      },
-    ]
-
-    expect(mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)).toEqual([
-      liveMessages[0],
-    ])
-  })
-
-  it('dedupes separated historical and live user image rows by client send id when image bytes differ', () => {
+describe('appendPendingOptimisticMessagesToTranscript', () => {
+  it('appends pending optimistic user sends after the canonical page', () => {
     const clientSendId = 'conversation-image-send-1705'
-    const historicalMessages: MsgItem[] = [
-      {
-        id: 'history-user-image',
-        kind: 'user',
-        text: '',
-        clientSendId,
-        images: [{ mediaType: 'image/png', data: 'history-image-bytes' }],
-        transcript: {
-          source: { provider: 'codex', backend: 'rpc' },
-          turnId: 'turn-user-image',
-          itemId: 'user-image-history',
-        },
-      },
-      {
-        id: 'history-agent-between',
-        kind: 'agent',
-        text: 'I will inspect the image.',
-      },
-    ]
-    const liveMessages: MsgItem[] = [
-      {
-        id: 'live-user-image',
-        kind: 'user',
-        text: '[image]',
-        clientSendId,
-        images: [{ mediaType: 'image/png', data: 'live-image-bytes' }],
-      },
-    ]
-
-    const merged = mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)
-
-    expect(merged).toEqual([
-      liveMessages[0],
-      historicalMessages[1],
-    ])
-    expect(merged.filter((message) => (
-      message.kind === 'user'
-      && message.clientSendId === clientSendId
-      && (message.images?.length ?? 0) > 0
-    ))).toHaveLength(1)
-  })
-
-  it('keeps repeated same-image user prompts when their text differs', () => {
-    const image = {
-      mediaType: 'image/png',
-      data: 'base64-product-logo',
-    }
-    const historicalMessages: MsgItem[] = [
-      {
-        id: 'history-user-image',
-        kind: 'user',
-        text: 'Use this product logo.',
-        images: [image],
-      },
-    ]
-    const liveMessages: MsgItem[] = [
-      {
-        id: 'live-user-image',
-        kind: 'user',
-        text: 'Now use it for the app icon.',
-        images: [image],
-      },
-    ]
-
-    expect(mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)).toEqual([
-      historicalMessages[0],
-      liveMessages[0],
-    ])
-  })
-
-  it('folds a live replay tail into the fuller historical assistant message with the same transcript identity', () => {
-    const fullText = [
-      'CommandRoom.tsx](/home/builder/App/apps/hammurabi/modules/command-room/components/CommandRoom.tsx:825).',
-      '',
-      'So the clean fix is:',
-      '',
-      'After Resume/Start, set the conversation into a starting visual state.',
-      'Show a full conversation loading panel while conversation.runtimeState === starting.',
-      'Switch to transcript + composer only when composerEnabled && composerSendReady.',
-    ].join('\n')
-    const replayTail = [
-      'So the clean fix is:',
-      '',
-      'After Resume/Start, set the conversation into a starting visual state.',
-      'Show a full conversation loading panel while conversation.runtimeState === starting.',
-      'Switch to transcript + composer only when composerEnabled && composerSendReady.',
-    ].join('\n')
-    const historicalMessages: MsgItem[] = [
+    const canonicalMessages: MsgItem[] = [
       {
         id: 'history-agent',
         kind: 'agent',
-        text: fullText,
-        transcript: {
-          source: { provider: 'codex', backend: 'rpc' },
-          turnId: 'turn-1',
-          itemId: 'assistant-1',
-        },
+        text: 'Previous reply',
+        transcript: { seq: 1, source: { provider: 'codex', backend: 'rpc' } },
+      },
+      {
+        id: 'history-provider',
+        kind: 'provider',
+        text: 'Codex turn started',
+        transcript: { seq: 2, source: { provider: 'codex', backend: 'rpc' } },
       },
     ]
     const liveMessages: MsgItem[] = [
       {
-        id: 'live-agent-tail',
-        kind: 'agent',
-        text: replayTail,
-        transcript: {
-          source: { provider: 'codex', backend: 'rpc' },
-          turnId: 'turn-1',
-          itemId: 'assistant-1',
-        },
+        id: 'optimistic-user',
+        kind: 'user',
+        text: 'Run tests',
+        clientSendId,
       },
     ]
 
-    expect(mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)).toEqual([
-      historicalMessages[0],
-    ])
-  })
-
-  it('keeps the fuller live assistant message when the historical copy is the replay tail', () => {
-    const historyTail = [
-      'Show a full conversation loading panel while conversation.runtimeState === starting.',
-      'Switch to transcript + composer only when composerEnabled && composerSendReady.',
-    ].join('\n')
-    const liveFullText = [
-      'So the clean fix is:',
-      '',
-      'After Resume/Start, set the conversation into a starting visual state.',
-      'Show a full conversation loading panel while conversation.runtimeState === starting.',
-      'Switch to transcript + composer only when composerEnabled && composerSendReady.',
-    ].join('\n')
-    const historicalMessages: MsgItem[] = [
-      {
-        id: 'history-agent-tail',
-        kind: 'agent',
-        text: historyTail,
-        transcript: {
-          source: { provider: 'codex', backend: 'rpc' },
-          turnId: 'turn-2',
-          itemId: 'assistant-2',
-        },
-      },
-    ]
-    const liveMessages: MsgItem[] = [
-      {
-        id: 'live-agent-full',
-        kind: 'agent',
-        text: liveFullText,
-        transcript: {
-          source: { provider: 'codex', backend: 'rpc' },
-          turnId: 'turn-2',
-          itemId: 'assistant-2',
-        },
-      },
-    ]
-
-    expect(mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)).toEqual([
+    expect(appendPendingOptimisticMessagesToTranscript(canonicalMessages, liveMessages)).toEqual([
+      canonicalMessages[0],
+      canonicalMessages[1],
       liveMessages[0],
     ])
+    expect(hasPendingOptimisticMessages(canonicalMessages, liveMessages)).toBe(true)
   })
 
-  it('drops long adjacent assistant tail duplicates even when old transcript rows lack provider identity', () => {
-    const historicalMessages: MsgItem[] = [
+  it('drops optimistic sends once the canonical page contains the clientSendId', () => {
+    const clientSendId = 'send-1'
+    const canonicalMessages: MsgItem[] = [
+      {
+        id: 'history-user',
+        kind: 'user',
+        text: 'Run tests',
+        clientSendId,
+        transcript: { seq: 1, source: { provider: 'codex', backend: 'rpc' } },
+      },
+    ]
+    const liveMessages: MsgItem[] = [
+      {
+        id: 'optimistic-user',
+        kind: 'user',
+        text: 'Run tests',
+        clientSendId,
+      },
+    ]
+
+    expect(appendPendingOptimisticMessagesToTranscript(canonicalMessages, liveMessages)).toEqual(canonicalMessages)
+    expect(hasPendingOptimisticMessages(canonicalMessages, liveMessages)).toBe(false)
+  })
+
+  it('ignores sequenced live backend rows until they arrive through the canonical page', () => {
+    const canonicalMessages: MsgItem[] = [
+      {
+        id: 'history-provider',
+        kind: 'provider',
+        text: 'Turn started',
+        transcript: { seq: 2, source: { provider: 'codex', backend: 'rpc' } },
+      },
+    ]
+    const liveMessages: MsgItem[] = [
+      {
+        id: 'live-user',
+        kind: 'user',
+        text: 'Run tests',
+        clientSendId: 'send-1',
+        transcript: { seq: 1, source: { provider: 'codex', backend: 'rpc' } },
+      },
+    ]
+
+    expect(appendPendingOptimisticMessagesToTranscript(canonicalMessages, liveMessages)).toEqual(canonicalMessages)
+  })
+
+  it('does not content-dedupe or append unkeyed live rows', () => {
+    const canonicalMessages: MsgItem[] = [
       {
         id: 'history-agent',
         kind: 'agent',
-        text: [
-          'The backend/read model already exposes runtimeState, websocketReady, sendTarget, liveSession, and allowedActions.',
-          'The UI should not infer readiness from message text or transcript events when deciding whether the conversation is ready.',
-        ].join(' '),
+        text: 'same',
       },
     ]
     const liveMessages: MsgItem[] = [
       {
-        id: 'live-agent-tail',
+        id: 'live-agent',
         kind: 'agent',
-        text: 'The UI should not infer readiness from message text or transcript events when deciding whether the conversation is ready.',
-      },
-      {
-        id: 'live-agent-next',
-        kind: 'agent',
-        text: 'A genuinely new follow-up remains visible.',
+        text: 'same',
       },
     ]
 
-    expect(mergeHistoricalAndLiveTranscript(historicalMessages, liveMessages)).toEqual([
-      historicalMessages[0],
-      liveMessages[1],
-    ])
+    expect(appendPendingOptimisticMessagesToTranscript(canonicalMessages, liveMessages)).toEqual(canonicalMessages)
   })
 })
 

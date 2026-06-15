@@ -99,7 +99,7 @@ export function AutomationsPage() {
       data-testid="automations-page"
     >
       <div className="border-b border-ink-border px-6 py-5">
-        <p className="text-xs uppercase tracking-wide text-sumi-diluted">Hervald</p>
+        <p className="text-xs uppercase tracking-wide text-sumi-diluted">Herd</p>
         <h1 className="mt-1 text-3xl font-medium text-sumi-black">Automations</h1>
 
         <label className="mt-4 block max-w-sm" data-testid="automations-commander-filter">

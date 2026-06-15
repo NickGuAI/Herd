@@ -19,7 +19,7 @@ function createStorage() {
 }
 
 function createWindow(path: string) {
-  const url = new URL(path, 'https://hervald.gehirn.ai')
+  const url = new URL(path, 'https://herd.gehirn.ai')
   return {
     location: {
       href: url.toString(),
@@ -58,7 +58,7 @@ describe('auth build guard', () => {
       '/command-room?commander=gaia',
     )
     expect(win.location.assign).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/command-room?commander=gaia&__hammurabi_auth_reload=1234',
+      'https://herd.gehirn.ai/command-room?commander=gaia&__hammurabi_auth_reload=1234',
     )
   })
 

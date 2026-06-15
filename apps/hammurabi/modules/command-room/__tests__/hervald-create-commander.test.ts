@@ -149,7 +149,7 @@ function clickButtonByLabel(label: string) {
   button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 }
 
-describe('Hervald create commander workflow', () => {
+describe('Herd create commander workflow', () => {
   beforeEach(() => {
     previousActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = true
@@ -295,7 +295,7 @@ describe('Hervald create commander workflow', () => {
       clickButtonByLabel('New commander')
     })
 
-    // The Hervald "New Commander" modal renders CreateCommanderWizard. Its
+    // The Herd "New Commander" modal renders CreateCommanderWizard. Its
     // default mode is the choice screen ("Quick Create" / "Talk to Me" /
     // "Advanced"); the "Advanced" branch is the CreateCommanderForm path,
     // which matches this test's POST flow (host input + "+ Create" button).

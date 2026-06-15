@@ -82,7 +82,7 @@ async function decodeVideoFrame(
  * (where Auth0 checkSession hangs in the WebView).
  *
  * On native (Capacitor), the user can paste a pairing invite or manually enter
- * an instance URL (hosted Hervald or a self-hosted Hammurabi) and credential.
+ * an instance URL (hosted Herd or a self-hosted Hammurabi) and credential.
  * The URL is verified against `/api/modules` and the mobile scope endpoint
  * before either value is persisted, so a bad URL or key never leaves partial
  * state behind.
@@ -298,7 +298,7 @@ export function ApiKeyLandingPage({
         return
       }
       if (!isValidInstanceUrl(instanceUrlToStore)) {
-        setSubmitError('Enter a valid instance URL like https://hervald.gehirn.ai.')
+        setSubmitError('Enter a valid instance URL like https://herd.gehirn.ai.')
         return
       }
       verifyUrl = `${instanceUrlToStore}/api/modules`
@@ -348,10 +348,10 @@ export function ApiKeyLandingPage({
     <div className="flex items-center justify-center min-h-screen bg-[var(--hv-bg-raised)]">
       <div className="card-sumi max-w-lg w-full mx-4 p-8 sm:p-12 animate-fade-in">
         <h1 className="font-display text-display text-[color:var(--hv-fg)] mb-2 text-center">
-          Hervald
+          Herd
         </h1>
         <p className="text-sm font-body text-[color:var(--hv-fg-subtle)] mb-6 text-center">
-          {isNative ? 'Connect to your Hervald instance' : 'Sign in with API key'}
+          {isNative ? 'Connect to your Herd instance' : 'Sign in with API key'}
         </p>
 
         <div className="divider-ink mb-6" />
@@ -410,7 +410,7 @@ export function ApiKeyLandingPage({
               )}
               <textarea
                 id="pairing-invite"
-                placeholder='{"instanceUrl":"https://hervald.gehirn.ai","apiKey":"..."}'
+                placeholder='{"instanceUrl":"https://herd.gehirn.ai","apiKey":"..."}'
                 value={pairingInvite}
                 onChange={(e) => setPairingInvite(e.target.value)}
                 className="w-full min-h-24 px-4 py-3 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] font-mono text-xs text-[color:var(--hv-fg)] placeholder:text-[color:var(--hv-fg-faint)] focus:outline-none focus:ring-2 focus:ring-[color:var(--hv-field-focus-border)]"
@@ -436,7 +436,7 @@ export function ApiKeyLandingPage({
                   className="text-xs font-body text-[color:var(--hv-accent)] hover:text-[color:var(--hv-fg)] disabled:opacity-50"
                   disabled={isSubmitting}
                 >
-                  Hosted Hervald
+                  Hosted Herd
                 </button>
               </div>
               <input

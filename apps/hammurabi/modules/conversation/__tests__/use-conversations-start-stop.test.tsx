@@ -295,7 +295,7 @@ describe('useConversationMessage', () => {
     const previousPage: ConversationMessagesPage = {
       conversationId: conversation.id,
       sessionName: 'commander-atlas-conversation-conv-active',
-      source: 'transcript',
+      source: 'canonical',
       limit: 10,
       before: null,
       nextBefore: null,
@@ -311,7 +311,7 @@ describe('useConversationMessage', () => {
     }
     const messagePage: ConversationMessagesPage = {
       ...previousPage,
-      source: 'live',
+      source: 'canonical',
       totalMessages: 2,
       messages: [
         { id: 'old-user', kind: 'user', text: 'old cached text' },

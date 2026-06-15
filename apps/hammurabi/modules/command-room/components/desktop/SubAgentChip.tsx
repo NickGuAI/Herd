@@ -1,5 +1,5 @@
 /**
- * Hervald — SubAgentChip
+ * Herd — SubAgentChip
  *
  * Inline worker chip: 5px status dot + name in mono 11.5px
  * Border radius: 2px 8px 2px 8px

@@ -15,7 +15,7 @@ afterEach(async () => {
 })
 
 describe('provider auth routes', () => {
-  it('does not expose Hervald OAuth start for Codex native auth', async () => {
+  it('does not expose Herd OAuth start for Codex native auth', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hammurabi-provider-auth-routes-'))
     tempDirs.push(dir)
     const providerAuthStore = new ProviderAuthStore(join(dir, 'provider-secrets.json'))
@@ -42,7 +42,7 @@ describe('provider auth routes', () => {
     }
   })
 
-  it('does not expose Hervald OAuth start for Claude Code native auth', async () => {
+  it('does not expose Herd OAuth start for Claude Code native auth', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'hammurabi-provider-auth-routes-'))
     tempDirs.push(dir)
     const providerAuthStore = new ProviderAuthStore(join(dir, 'provider-secrets.json'))

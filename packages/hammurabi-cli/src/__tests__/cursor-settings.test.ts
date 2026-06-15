@@ -14,7 +14,7 @@ afterEach(async () => {
   )
 })
 
-const vars = buildCursorOtelEnv('https://hervald.gehirn.ai', 'hmrb_test_key')
+const vars = buildCursorOtelEnv('https://herd.gehirn.ai', 'hmrb_test_key')
 
 async function readJson(filePath: string): Promise<unknown> {
   return JSON.parse(await readFile(filePath, 'utf8')) as unknown
@@ -36,7 +36,7 @@ describe('mergeCursorEnv', () => {
 
     const result = await readJson(settingsPath) as Record<string, Record<string, string>>
     expect(result[expectedEnvKey()]).toMatchObject({
-      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://hervald.gehirn.ai',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://herd.gehirn.ai',
       OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json',
       OTEL_EXPORTER_OTLP_HEADERS: 'x-hammurabi-api-key=hmrb_test_key',
     })
@@ -56,7 +56,7 @@ describe('mergeCursorEnv', () => {
     const result = await readJson(settingsPath) as Record<string, unknown>
     expect(result['editor.fontSize']).toBe(14)
     expect(result[expectedEnvKey()]).toMatchObject({
-      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://hervald.gehirn.ai',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://herd.gehirn.ai',
     })
   })
 
@@ -75,7 +75,7 @@ describe('mergeCursorEnv', () => {
 
     const result = await readJson(settingsPath) as Record<string, Record<string, string>>
     expect(result[expectedEnvKey()]?.MY_VAR).toBe('keep_me')
-    expect(result[expectedEnvKey()]?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://hervald.gehirn.ai')
+    expect(result[expectedEnvKey()]?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://herd.gehirn.ai')
   })
 
   it('removes legacy HAMMURABI_* keys on re-onboard', async () => {
@@ -101,6 +101,6 @@ describe('mergeCursorEnv', () => {
     expect(result[expectedEnvKey()]?.MY_VAR).toBe('keep_me')
     expect(result[expectedEnvKey()]).not.toHaveProperty('HAMMURABI_ENDPOINT')
     expect(result[expectedEnvKey()]).not.toHaveProperty('HAMMURABI_API_KEY')
-    expect(result[expectedEnvKey()]?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://hervald.gehirn.ai')
+    expect(result[expectedEnvKey()]?.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('https://herd.gehirn.ai')
   })
 })

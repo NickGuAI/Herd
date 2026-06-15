@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -88,7 +88,7 @@ describe('runTranscriptsCli', () => {
     expect(stdout.read()).toContain('Reset rebuilt the commander identity and system prompt from disk.')
     expect(stdout.read()).toContain('Source: /tmp/commander/sessions/2026-03-28.jsonl')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/commanders/cmdr-1/transcripts/search',
+      'https://herd.gehirn.ai/api/commanders/cmdr-1/transcripts/search',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({

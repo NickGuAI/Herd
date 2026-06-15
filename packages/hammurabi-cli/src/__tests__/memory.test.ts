@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -91,7 +91,7 @@ describe('runMemoryCli', () => {
       expect(stderr.read()).toBe('')
       expect(stdout.read()).toContain('Working memory updated for cmdr-1.')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-1/memory/working-memory',
+        'https://herd.gehirn.ai/api/commanders/cmdr-1/memory/working-memory',
         expect.objectContaining({
           method: 'POST',
           headers: expect.objectContaining({
@@ -131,7 +131,7 @@ describe('runMemoryCli', () => {
       expect(stdout.read()).toContain('# Working Memory')
       expect(stdout.read()).toContain('Active note')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-1/memory/working-memory',
+        'https://herd.gehirn.ai/api/commanders/cmdr-1/memory/working-memory',
         expect.objectContaining({
           method: 'GET',
           headers: expect.objectContaining({
@@ -162,7 +162,7 @@ describe('runMemoryCli', () => {
       expect(stderr.read()).toBe('')
       expect(stdout.read()).toContain('Working memory cleared for cmdr-1.')
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-1/memory/working-memory',
+        'https://herd.gehirn.ai/api/commanders/cmdr-1/memory/working-memory',
         expect.objectContaining({
           method: 'DELETE',
           headers: expect.objectContaining({
@@ -206,7 +206,7 @@ describe('runMemoryCli', () => {
       expect(stdout.read()).toContain('Saved 2 facts to MEMORY.md (47 total lines).')
 
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-1/memory/facts',
+        'https://herd.gehirn.ai/api/commanders/cmdr-1/memory/facts',
         expect.objectContaining({
           method: 'POST',
           headers: expect.objectContaining({
@@ -320,7 +320,7 @@ describe('runMemoryCli', () => {
       expect(stderr.read()).toContain('.hammurabi.json')
       expect(stderr.read()).toContain('api-keys/keys.json')
       expect(stderr.read()).toContain('HAMMURABI_ALLOW_DEFAULT_MASTER_KEY=1')
-      expect(stderr.read()).toContain('restart the Hervald installer')
+      expect(stderr.read()).toContain('restart the Herd installer')
     })
   })
 
@@ -354,7 +354,7 @@ describe('runMemoryCli', () => {
       expect(stdout.read()).toContain('"memoryMd": "# Commander Memory')
 
       expect(fetchImpl).toHaveBeenCalledWith(
-        'https://hervald.gehirn.ai/api/commanders/cmdr-1/memory/export',
+        'https://herd.gehirn.ai/api/commanders/cmdr-1/memory/export',
         expect.objectContaining({
           method: 'GET',
           headers: expect.objectContaining({

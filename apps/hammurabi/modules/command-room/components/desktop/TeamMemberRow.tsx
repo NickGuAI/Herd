@@ -1,5 +1,5 @@
 /**
- * Hervald — TeamMemberRow
+ * Herd — TeamMemberRow
  *
  * A single row in the Team column worker list.
  * Selected state gets a carved-radius border + whisper shadow.

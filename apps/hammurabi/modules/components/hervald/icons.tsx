@@ -1,5 +1,5 @@
 /**
- * Hervald — SVG icon map.
+ * Herd — SVG icon map.
  *
  * Each entry is a JSX fragment rendered inside an <svg viewBox="0 0 24 24">.
  * The host <svg> supplies fill="none" stroke="currentColor" with round caps/joins.

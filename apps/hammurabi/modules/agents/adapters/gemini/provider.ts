@@ -1,4 +1,3 @@
-import { normalizeGeminiSessionUpdate } from '../../event-normalizers/gemini.js'
 import { CODEX_RUNTIME_TEARDOWN_TIMEOUT_MS } from '../../constants.js'
 import { registerProvider } from '../../providers/registry-core.js'
 import {
@@ -280,5 +279,3 @@ export const geminiProvider: ProviderAdapter = registerProvider({
     return migrateLegacyGeminiProviderContext(rawProviderContext)
   },
 })
-
-void normalizeGeminiSessionUpdate

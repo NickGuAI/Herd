@@ -11,9 +11,6 @@ import {
   DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   isClaudeMaxThinkingTokens,
 } from '../../../claude-max-thinking-tokens.js'
-import {
-  normalizeClaudeEvent,
-} from '../../event-normalizers/claude.js'
 import { isTranscriptEnvelope } from '../../../../src/types/transcript-envelope.js'
 import { registerProvider } from '../../providers/registry-core.js'
 import {
@@ -323,5 +320,3 @@ export const claudeProvider: ProviderAdapter = registerProvider({
     return migrateLegacyClaudeProviderContext(rawProviderContext)
   },
 })
-
-void normalizeClaudeEvent

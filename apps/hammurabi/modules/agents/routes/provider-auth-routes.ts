@@ -81,7 +81,7 @@ function inferPublicRequestOrigin(req: Request): string {
   const proto = firstForwardedHeader(req.headers['x-forwarded-proto']) ?? req.protocol
   const host = firstForwardedHeader(req.headers['x-forwarded-host']) ?? req.get('host')
   if (!host) {
-    throw new Error('Unable to infer Hervald public host for provider OAuth callback')
+    throw new Error('Unable to infer Herd public host for provider OAuth callback')
   }
   return `${proto}://${host}`
 }
@@ -331,7 +331,7 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
         res,
         200,
         'Re-auth complete',
-        'Provider authentication is ready. You can close this tab and return to Hervald.',
+        'Provider authentication is ready. You can close this tab and return to Herd.',
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to complete provider OAuth flow'

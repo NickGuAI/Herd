@@ -14,6 +14,7 @@ export interface TranscriptMessageMeta {
   itemId?: string
   parentId?: string
   subagentId?: string
+  seq?: number
   providerEventType?: string
   providerEventId?: string
   providerPayload?: unknown

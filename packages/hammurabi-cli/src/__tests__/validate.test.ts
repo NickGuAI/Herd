@@ -11,18 +11,18 @@ describe('validateTelemetryWriteKey', () => {
     )
 
     const result = await validateTelemetryWriteKey({
-      endpoint: 'https://hervald.gehirn.ai/',
+      endpoint: 'https://herd.gehirn.ai/',
       apiKey: 'hmrb_test_key',
       fetchImpl,
     })
 
     expect(result).toEqual({
       ok: true,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
     })
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/v1/logs',
+      'https://herd.gehirn.ai/v1/logs',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -53,7 +53,7 @@ describe('validateTelemetryWriteKey', () => {
     )
 
     const result = await validateTelemetryWriteKey({
-      endpoint: 'https://hervald.gehirn.ai',
+      endpoint: 'https://herd.gehirn.ai',
       apiKey: 'hmrb_test_key',
       fetchImpl,
     })
@@ -62,7 +62,7 @@ describe('validateTelemetryWriteKey', () => {
       ok: false,
       code: 'forbidden',
       status: 403,
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
       message: 'API key is missing required telemetry:write scope (403 Forbidden).',
     })
   })
@@ -73,7 +73,7 @@ describe('validateTelemetryWriteKey', () => {
       .mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1'))
 
     const result = await validateTelemetryWriteKey({
-      endpoint: 'https://hervald.gehirn.ai',
+      endpoint: 'https://herd.gehirn.ai',
       apiKey: 'hmrb_test_key',
       fetchImpl,
     })
@@ -81,7 +81,7 @@ describe('validateTelemetryWriteKey', () => {
     expect(result).toEqual({
       ok: false,
       code: 'network',
-      validationUrl: 'https://hervald.gehirn.ai/v1/logs',
+      validationUrl: 'https://herd.gehirn.ai/v1/logs',
       message: 'Could not reach endpoint: connect ECONNREFUSED 127.0.0.1',
     })
   })

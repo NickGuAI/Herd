@@ -1,14 +1,14 @@
 # Naming Policy
 
-The public product name is Hervald.
+The public product name is Herd.
 
 ## Contract
 
 | Surface | Name to use |
 |---|---|
-| Public docs and UI copy | Hervald |
-| Public repo README | Hervald |
-| User onboarding | Hervald |
+| Public docs and UI copy | Herd |
+| Public repo README | Herd |
+| User onboarding | Herd |
 
 ## Disallowed Public Wording
 
@@ -21,7 +21,7 @@ Welcome to the old product name.
 The old product name is reconnecting.
 ```
 
-Write Hervald everywhere in public documentation and UI copy.
+Write Herd everywhere in public documentation and UI copy.
 
 ## Guardrail
 

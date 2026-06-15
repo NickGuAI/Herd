@@ -1,9 +1,9 @@
 /**
- * ColumnHeader — Hervald design system panel header.
+ * ColumnHeader — Herd design system panel header.
  *
  * Renders a flex row with an uppercase 10.5px label on the left
  * and an optional action slot on the right.  Used in SessionsColumn
- * and any other Hervald panel that needs a consistent header.
+ * and any other Herd panel that needs a consistent header.
  */
 import type { ReactNode, CSSProperties } from 'react'
 

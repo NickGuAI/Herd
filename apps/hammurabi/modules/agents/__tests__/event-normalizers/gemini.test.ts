@@ -3,13 +3,7 @@ import {
   createGeminiTurnState,
   mapGeminiPromptResponseToTranscriptEnvelopes,
   mapGeminiToTranscriptEnvelopes,
-  normalizeGeminiPromptResponse,
-  normalizeGeminiSessionUpdate,
 } from '../../event-normalizers/gemini'
-
-const GEMINI_SOURCE = {
-  source: { provider: 'gemini', backend: 'acp' },
-} as const
 
 describe('agents/event-normalizers/gemini', () => {
   it('maps non-final Gemini tool updates into v2 tool.delta envelopes', () => {
@@ -99,112 +93,83 @@ describe('agents/event-normalizers/gemini', () => {
   it('maps Gemini ACP streaming chunks into canonical delta events', () => {
     const state = createGeminiTurnState()
 
-    expect(normalizeGeminiSessionUpdate({
+    expect(mapGeminiToTranscriptEnvelopes({
       sessionUpdate: 'agent_thought_chunk',
       content: { type: 'text', text: 'pondering' },
     }, state)).toEqual([
-      {
-        type: 'content_block_start',
-        index: 0,
-        content_block: { type: 'thinking' },
-        ...GEMINI_SOURCE,
-      },
-      {
-        type: 'content_block_delta',
-        index: 0,
-        delta: { type: 'thinking_delta', thinking: 'pondering' },
-        ...GEMINI_SOURCE,
-      },
+      expect.objectContaining({
+        itemId: 'content-block-0',
+        ev: { type: 'thinking.delta', text: 'pondering' },
+      }),
     ])
 
-    expect(normalizeGeminiSessionUpdate({
+    expect(mapGeminiToTranscriptEnvelopes({
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: 'done' },
     }, state)).toEqual([
-      {
-        type: 'content_block_stop',
-        index: 0,
-        ...GEMINI_SOURCE,
-      },
-      {
-        type: 'content_block_start',
-        index: 1,
-        content_block: { type: 'text' },
-        ...GEMINI_SOURCE,
-      },
-      {
-        type: 'content_block_delta',
-        index: 1,
-        delta: { type: 'text_delta', text: 'done' },
-        ...GEMINI_SOURCE,
-      },
+      expect.objectContaining({
+        itemId: 'content-block-0',
+        ev: { type: 'message.end' },
+      }),
+      expect.objectContaining({
+        itemId: 'content-block-1',
+        ev: { type: 'message.start', role: 'assistant' },
+      }),
+      expect.objectContaining({
+        itemId: 'content-block-1',
+        ev: { type: 'message.delta', text: 'done', channel: 'final' },
+      }),
     ])
   })
 
   it('maps tool calls and prompt completion into canonical events', () => {
     const state = createGeminiTurnState()
 
-    expect(normalizeGeminiSessionUpdate({
+    expect(mapGeminiToTranscriptEnvelopes({
       sessionUpdate: 'tool_call',
       toolCallId: 'tool-1',
       kind: 'execute',
       title: 'Run shell command',
       rawInput: { command: 'pwd' },
     }, state)).toEqual([
-      {
-        type: 'assistant',
-        message: {
-          id: 'tool-1',
-          role: 'assistant',
-          content: [{
-            type: 'tool_use',
-            id: 'tool-1',
-            name: 'Bash',
-            input: { command: 'pwd' },
-          }],
-        },
-        ...GEMINI_SOURCE,
-      },
+      expect.objectContaining({
+        itemId: 'tool-1',
+        ev: { type: 'tool.start', toolCallId: 'tool-1', name: 'Bash', input: { command: 'pwd' } },
+      }),
     ])
 
-    expect(normalizeGeminiSessionUpdate({
+    expect(mapGeminiToTranscriptEnvelopes({
       sessionUpdate: 'tool_call_update',
       toolCallId: 'tool-1',
       status: 'completed',
       rawOutput: { stdout: '/tmp/project' },
-    }, state)).toEqual({
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: 'tool-1',
-          content: '{\n  "stdout": "/tmp/project"\n}',
-          is_error: false,
-        }],
-      },
-      ...GEMINI_SOURCE,
-    })
+    }, state)).toEqual([
+      expect.objectContaining({
+        itemId: 'tool-1',
+        ev: {
+          type: 'tool.end',
+          toolCallId: 'tool-1',
+          status: 'ok',
+          result: '{\n  "stdout": "/tmp/project"\n}',
+        },
+      }),
+    ])
 
-    expect(normalizeGeminiPromptResponse({
+    expect(mapGeminiPromptResponseToTranscriptEnvelopes({
       stopReason: 'end_turn',
       usage: { inputTokens: 4, outputTokens: 6, totalTokens: 10 },
-    }, state)).toEqual([
-      {
-        type: 'message_delta',
-        delta: { stop_reason: 'end_turn' },
-        usage: { input_tokens: 4, output_tokens: 6 },
-        ...GEMINI_SOURCE,
-      },
-      {
-        type: 'message_stop',
-        ...GEMINI_SOURCE,
-      },
-      {
-        type: 'result',
-        result: 'Turn completed',
-        ...GEMINI_SOURCE,
-      },
-    ])
+    }, state)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ev: { type: 'provider.activity', title: 'Usage updated', data: { usage: { input_tokens: 4, output_tokens: 6 } } },
+      }),
+      expect.objectContaining({
+        ev: {
+          type: 'turn.end',
+          status: 'ok',
+          result: 'Turn completed',
+          usage: { input_tokens: 4, output_tokens: 6 },
+        },
+      }),
+    ]))
   })
 })

@@ -85,9 +85,9 @@ describe('api-base instance URL helpers', () => {
   })
 
   it('validates http(s) instance URLs', () => {
-    expect(isValidInstanceUrl('https://hervald.gehirn.ai')).toBe(true)
+    expect(isValidInstanceUrl('https://herd.gehirn.ai')).toBe(true)
     expect(isValidInstanceUrl('http://localhost:20001')).toBe(true)
-    expect(isValidInstanceUrl('hervald.gehirn.ai')).toBe(false)
+    expect(isValidInstanceUrl('herd.gehirn.ai')).toBe(false)
     expect(isValidInstanceUrl('ftp://example.com')).toBe(false)
     expect(isValidInstanceUrl('')).toBe(false)
     expect(isValidInstanceUrl('   ')).toBe(false)

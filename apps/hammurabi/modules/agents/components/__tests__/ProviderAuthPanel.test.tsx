@@ -229,7 +229,7 @@ describe('ProviderAuthPanel', () => {
     expect(renderedText()).toContain('codex login')
   })
 
-  it('shows native Claude Code login instructions instead of starting Hervald OAuth', async () => {
+  it('shows native Claude Code login instructions instead of starting Herd OAuth', async () => {
     setSnapshots([
       authSnapshot({
         provider: 'claude',

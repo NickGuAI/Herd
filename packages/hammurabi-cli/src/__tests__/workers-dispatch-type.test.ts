@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -62,7 +62,7 @@ describe('runWorkersCli command surface', () => {
       [
         'dispatch',
         '--issue',
-        'https://github.com/NickGuAI/Hervald/issues/123',
+        'https://github.com/NickGuAI/Herd/issues/123',
         '--task',
         'Investigate flaky tests',
       ],

@@ -34,7 +34,7 @@ describe('WhatsApp channel config', () => {
       groupPolicy: 'disabled',
       requireMention: false,
       baileys: {
-        browserName: 'Hervald',
+        browserName: 'Herd',
         connectTimeoutMs: 30_000,
         printQrInTerminal: true,
         markOnlineOnConnect: false,

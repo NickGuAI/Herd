@@ -221,7 +221,7 @@ describe('ApiKeysPage MagicBento settings layout', () => {
         'skills:read',
         'telemetry:read',
       ],
-      instanceUrl: 'https://hervald.gehirn.ai',
+      instanceUrl: 'https://herd.gehirn.ai',
       keyPrefix: 'hmrb_mobile',
     }))
     mocks.useCreateMobileAccessInvite.mockReturnValue({
@@ -269,7 +269,7 @@ describe('ApiKeysPage MagicBento settings layout', () => {
       ],
     })
     expect(document.body.textContent).toContain('hmrb_mobile_invite')
-    expect(document.body.textContent).toContain('https://hervald.gehirn.ai')
+    expect(document.body.textContent).toContain('https://herd.gehirn.ai')
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       if (document.querySelector('img[alt="Mobile access pairing QR"]')) break

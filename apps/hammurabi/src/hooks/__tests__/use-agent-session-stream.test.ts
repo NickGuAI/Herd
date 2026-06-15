@@ -3,7 +3,7 @@
 /**
  * Regression tests for apps/hammurabi/src/hooks/use-agent-session-stream.ts
  *
- * Issue #1106 — Hervald commander chat follow-up sends silently dropped when
+ * Issue #1106 — Herd commander chat follow-up sends silently dropped when
  * the underlying WebSocket was reconnecting. Fix has three parts:
  *
  *   Bug A  resetMessages() no longer runs unconditionally on every WS-setup

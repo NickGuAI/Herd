@@ -14,7 +14,7 @@ export const BENCHMARK_COMMANDER_MAX_TURNS = 300
 export const BENCHMARK_COMMANDER_FAT_PIN_INTERVAL = 2
 export const BENCHMARK_COMMANDER_TASK_SOURCE = {
   owner: 'NickGuAI',
-  repo: 'Hervald',
+  repo: 'Herd',
   label: 'benchmark',
 } as const
 export const BENCHMARK_COMMANDER_AUTOMATION_OPERATOR_ID = 'system-benchmark-commander'
@@ -52,7 +52,7 @@ const BENCHMARK_COMMANDER_FILES: Record<string, string> = {
     '',
     '## Benchmark Scope',
     '',
-    '- Only run benchmark tasks from `NickGuAI/Hervald` with the `benchmark` label.',
+    '- Only run benchmark tasks from `NickGuAI/Herd` with the `benchmark` label.',
     '- Keep changes and notes focused on benchmark setup, execution, results, and regressions.',
     '- Do not pick up unrelated implementation, triage, or operations work.',
     '- Never modify product code while running a benchmark.',
@@ -77,7 +77,7 @@ const BENCHMARK_COMMANDER_FILES: Record<string, string> = {
     '# Workspace',
     '',
     `- Cwd: \`${BENCHMARK_COMMANDER_CWD}\``,
-    '- Repository: `NickGuAI/Hervald`',
+    '- Repository: `NickGuAI/Herd`',
     '- Issue label: `benchmark`',
     '- Adapter path: `benchmarks/hammurabi/`',
     '- Eval CLI: `packages/hammurabi-cli/src/eval.ts`',
@@ -87,7 +87,7 @@ const BENCHMARK_COMMANDER_FILES: Record<string, string> = {
     '- Public release boundary: `operations/sops/scripts/sop-15-sync-hervald.sh` and `check-hervald-cleanliness.sh`',
     '',
     'Use this workspace only for benchmark-oriented tasks and artifacts.',
-    'Benchmark adapters remain internal and must not sync into public Hervald release artifacts.',
+    'Benchmark adapters remain internal and must not sync into public Herd release artifacts.',
   ].join('\n'),
   'SKILLS.md': [
     '# Skills',

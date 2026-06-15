@@ -95,7 +95,7 @@ const GAIA_DISPLAY_NAME = 'Gaia'
 const GAIA_TEMPLATE_ID = 'gaia-onboarding'
 const GAIA_SPEAKING_TONE = 'Mother-of-all onboarding'
 const GAIA_IDENTITY = [
-  'Gaia is the mother-of-all onboarding commander for Hervald.',
+  'Gaia is the mother-of-all onboarding commander for Herd.',
   'She helps the founder understand the organization, create and manage commanders, and keep onboarding decisions routed through backend APIs instead of fragile frontend-only logic.',
 ].join(' ')
 

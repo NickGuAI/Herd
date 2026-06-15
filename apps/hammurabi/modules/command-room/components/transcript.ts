@@ -12,251 +12,57 @@ export function appendQueuedMessagesToTranscript(
   return messages
 }
 
-function imageSignature(image: NonNullable<MsgItem['images']>[number]): string {
-  return JSON.stringify({
-    mediaType: image.mediaType ?? null,
-    data: image.data ?? null,
-    url: image.url ?? null,
-    alt: image.alt ?? null,
-  })
-}
-
-function imagesSignature(message: MsgItem): string | null {
-  if (!message.images?.length) {
-    return null
-  }
-  return JSON.stringify(message.images.map(imageSignature))
-}
-
-function comparableText(message: MsgItem): string {
-  return message.text.replace(/\s+/gu, ' ').trim()
-}
-
-function comparableUserImageText(message: MsgItem): string {
-  const text = comparableText(message)
-  return text === '[image]' ? '' : text
-}
-
-function signatureText(message: MsgItem): string {
-  if (message.kind === 'user' && message.images?.length) {
-    return comparableUserImageText(message)
-  }
-  return message.text
-}
-
-function messageSignature(message: MsgItem): string {
-  return JSON.stringify({
-    kind: message.kind,
-    text: signatureText(message),
-    toolId: message.toolId ?? null,
-    toolName: message.toolName ?? null,
-    toolStatus: message.toolStatus ?? null,
-    toolInput: message.toolInput ?? null,
-    toolOutput: message.toolOutput ?? null,
-    images: imagesSignature(message),
-    planningAction: message.planningAction ?? null,
-    planningPlan: message.planningPlan ?? null,
-    planningMessage: message.planningMessage ?? null,
-  })
-}
-
-function transcriptIdentityKey(message: MsgItem): string | null {
-  const clientSendId = message.kind === 'user' ? message.clientSendId?.trim() : undefined
-  if (clientSendId) {
-    return JSON.stringify({
-      kind: message.kind,
-      clientSendId,
-    })
-  }
-
-  const transcript = message.transcript
-  const itemId = transcript?.itemId
-  if (!itemId) {
-    return null
-  }
-
-  return JSON.stringify({
-    kind: message.kind,
-    provider: transcript.source?.provider ?? null,
-    backend: transcript.source?.backend ?? null,
-    sessionId: transcript.source?.sessionId ?? null,
-    turnId: transcript.turnId ?? null,
-    itemId,
-    parentId: transcript.parentId ?? null,
-    subagentId: transcript.subagentId ?? null,
-  })
-}
-
-const TEXT_OVERLAP_SEARCH_WINDOW = 8
-const TEXT_OVERLAP_MIN_LENGTH = 80
-
-function canUseTextOverlap(message: MsgItem): boolean {
+function isPendingOptimisticUserMessage(message: MsgItem): boolean {
   return (
-    message.kind === 'agent'
-    && !message.toolId
-    && !message.toolName
-    && !message.toolInput
-    && !message.toolOutput
-    && !message.images?.length
-    && !message.children?.length
+    message.kind === 'user'
+    && Boolean(message.clientSendId?.trim())
+    && !message.transcript
   )
 }
 
-function textContainmentRedundancy(
-  historicalMessage: MsgItem,
-  liveMessage: MsgItem,
-): 'historical' | 'live' | null {
-  if (!canUseTextOverlap(historicalMessage) || !canUseTextOverlap(liveMessage)) {
-    return null
-  }
-
-  const historicalText = comparableText(historicalMessage)
-  const liveText = comparableText(liveMessage)
-  const shorterLength = Math.min(historicalText.length, liveText.length)
-  if (shorterLength < TEXT_OVERLAP_MIN_LENGTH) {
-    return null
-  }
-
-  if (historicalText === liveText) {
-    return 'historical'
-  }
-  if (historicalText.includes(liveText)) {
-    return 'live'
-  }
-  if (liveText.includes(historicalText)) {
-    return 'historical'
-  }
-  return null
-}
-
-function userImagePromptRedundancy(
-  historicalMessage: MsgItem,
-  liveMessage: MsgItem,
-): 'historical' | 'live' | null {
-  if (historicalMessage.kind !== 'user' || liveMessage.kind !== 'user') {
-    return null
-  }
-
-  const historicalImages = imagesSignature(historicalMessage)
-  const liveImages = imagesSignature(liveMessage)
-  if (!historicalImages || historicalImages !== liveImages) {
-    return null
-  }
-
-  const historicalText = comparableUserImageText(historicalMessage)
-  const liveText = comparableUserImageText(liveMessage)
-  if (historicalText !== liveText) {
-    return null
-  }
-
-  return 'historical'
-}
-
-function messageBoundaryRedundancy(
-  historicalMessage: MsgItem,
-  liveMessage: MsgItem,
-): 'historical' | 'live' | null {
-  return (
-    userImagePromptRedundancy(historicalMessage, liveMessage)
-    ?? textContainmentRedundancy(historicalMessage, liveMessage)
-  )
-}
-
-function chooseFullerMessage(left: MsgItem, right: MsgItem): MsgItem {
-  const leftText = comparableText(left)
-  const rightText = comparableText(right)
-  if (leftText.includes(rightText) && leftText.length >= rightText.length) {
-    return left
-  }
-  if (rightText.includes(leftText) && rightText.length >= leftText.length) {
-    return right
-  }
-  return rightText.length > leftText.length ? right : left
-}
-
-function mergeTranscriptIdentityAndBoundaryOverlap(
-  historicalMessages: MsgItem[],
+function getPendingOptimisticMessages(
+  canonicalMessages: MsgItem[],
   liveMessages: MsgItem[],
 ): MsgItem[] {
-  const mergedHistorical = [...historicalMessages]
-  const remainingLive: MsgItem[] = []
+  if (liveMessages.length === 0) {
+    return []
+  }
 
-  for (const liveMessage of liveMessages) {
-    const identityKey = transcriptIdentityKey(liveMessage)
-    if (identityKey) {
-      const matchingIndex = mergedHistorical.findIndex((historicalMessage) =>
-        transcriptIdentityKey(historicalMessage) === identityKey,
-      )
-      if (matchingIndex !== -1) {
-        mergedHistorical[matchingIndex] = chooseFullerMessage(
-          mergedHistorical[matchingIndex],
-          liveMessage,
-        )
-        continue
-      }
-    }
+  const confirmedClientSendIds = new Set(
+    canonicalMessages
+      .filter((message) => message.kind === 'user')
+      .map((message) => message.clientSendId?.trim())
+      .filter((clientSendId): clientSendId is string => Boolean(clientSendId)),
+  )
+  const pendingMessages = liveMessages.filter((message) => {
+    const clientSendId = message.clientSendId?.trim()
+    return (
+      isPendingOptimisticUserMessage(message)
+      && Boolean(clientSendId)
+      && !confirmedClientSendIds.has(clientSendId)
+    )
+  })
+  return pendingMessages
+}
 
-    const searchStart = Math.max(0, mergedHistorical.length - TEXT_OVERLAP_SEARCH_WINDOW)
-    let overlapIndex = -1
-    let redundancy: 'historical' | 'live' | null = null
-    for (let index = mergedHistorical.length - 1; index >= searchStart; index -= 1) {
-      redundancy = messageBoundaryRedundancy(mergedHistorical[index], liveMessage)
-      if (redundancy) {
-        overlapIndex = index
-        break
-      }
-    }
+export function hasPendingOptimisticMessages(
+  canonicalMessages: MsgItem[],
+  liveMessages: MsgItem[],
+): boolean {
+  return getPendingOptimisticMessages(canonicalMessages, liveMessages).length > 0
+}
 
-    if (overlapIndex !== -1) {
-      if (redundancy === 'historical') {
-        mergedHistorical[overlapIndex] = chooseFullerMessage(
-          mergedHistorical[overlapIndex],
-          liveMessage,
-        )
-      }
-      continue
-    }
-
-    remainingLive.push(liveMessage)
+export function appendPendingOptimisticMessagesToTranscript(
+  canonicalMessages: MsgItem[],
+  liveMessages: MsgItem[],
+): MsgItem[] {
+  const pendingMessages = getPendingOptimisticMessages(canonicalMessages, liveMessages)
+  if (pendingMessages.length === 0) {
+    return canonicalMessages
   }
 
   return [
-    ...mergedHistorical,
-    ...remainingLive,
+    ...canonicalMessages,
+    ...pendingMessages,
   ]
-}
-
-export function mergeHistoricalAndLiveTranscript(
-  historicalMessages: MsgItem[],
-  liveMessages: MsgItem[],
-): MsgItem[] {
-  if (historicalMessages.length === 0) {
-    return liveMessages
-  }
-  if (liveMessages.length === 0) {
-    return historicalMessages
-  }
-
-  const liveSignatureCounts = new Map<string, number>()
-  for (const message of liveMessages) {
-    const signature = messageSignature(message)
-    liveSignatureCounts.set(signature, (liveSignatureCounts.get(signature) ?? 0) + 1)
-  }
-
-  const historicalWithoutReplay: MsgItem[] = []
-  for (let index = historicalMessages.length - 1; index >= 0; index -= 1) {
-    const message = historicalMessages[index]
-    const signature = messageSignature(message)
-    const replayCount = liveSignatureCounts.get(signature) ?? 0
-    if (replayCount > 0) {
-      liveSignatureCounts.set(signature, replayCount - 1)
-      continue
-    }
-    historicalWithoutReplay.push(message)
-  }
-
-  return mergeTranscriptIdentityAndBoundaryOverlap(
-    historicalWithoutReplay.reverse(),
-    liveMessages,
-  )
 }

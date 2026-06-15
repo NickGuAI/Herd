@@ -446,7 +446,7 @@ export default function CommanderPackagesPage() {
       <div className="hv-marketplace-shell">
         <header className="hv-marketplace-header">
           <div>
-            <p className="hv-marketplace-eyebrow">Hervald / Commander Marketplace</p>
+            <p className="hv-marketplace-eyebrow">Herd / Commander Marketplace</p>
             <h1>Hire a bundled commander</h1>
           </div>
           <div className="hv-marketplace-status" data-testid="commander-marketplace-status">

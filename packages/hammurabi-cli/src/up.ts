@@ -118,7 +118,7 @@ export function parseUpArgs(args: readonly string[]): ParsedArgs {
 function printUpUsage(write: (chunk: string) => void): void {
   write('Usage: hammurabi up [--dev] [--port <port>]\n')
   write('\n')
-  write('  Start the Hervald server locally.\n')
+  write('  Start the Herd server locally.\n')
   write('\n')
   write('Options:\n')
   write('  --dev          Run in managed tmux session with hot reload\n')
@@ -271,8 +271,8 @@ function runManagedLaunch(plan: LaunchPlan): number {
 }
 
 function runForegroundLaunch(plan: LaunchPlan): Promise<number> {
-  printHervaldBrand('Hervald up')
-  process.stdout.write(`Starting Hervald (${plan.script}) on port ${plan.port}\n`)
+  printHervaldBrand('Herd up')
+  process.stdout.write(`Starting Herd (${plan.script}) on port ${plan.port}\n`)
   process.stdout.write(`  app: ${plan.appDir}\n`)
   process.stdout.write('  press Ctrl+C to stop\n\n')
 
@@ -342,7 +342,7 @@ export async function runUpCli(args: readonly string[]): Promise<number> {
       `${formatStatusLine(
         'fail',
         'App path',
-        `${appDir} is not a Hervald install`,
+        `${appDir} is not a Herd install`,
         'Expected package.json in the configured app directory.',
       )}\n`,
     )

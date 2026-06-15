@@ -32,7 +32,7 @@ import {
 } from './terminal-style.js'
 import { validateTelemetryWriteKey } from './validate.js'
 
-const DEFAULT_ENDPOINT = 'https://hervald.gehirn.ai'
+const DEFAULT_ENDPOINT = 'https://herd.gehirn.ai'
 const DEFAULT_AGENTS: readonly HammurabiAgent[] = [
   'claude-code',
   'codex',
@@ -506,7 +506,7 @@ async function runTailscaleSetup(
   const tailscalePlatform = detectTailscalePlatform(dependencies.platform ?? readPlatform())
 
   const shouldConfigure = await promptConfirm(
-    'Pair this machine with Tailscale now so Hervald can reach it behind NAT?',
+    'Pair this machine with Tailscale now so Herd can reach it behind NAT?',
     { defaultValue: true },
   )
   if (!shouldConfigure) {
@@ -572,7 +572,7 @@ async function runTailscaleSetup(
   })
   if (!shouldRunUp) {
     process.stdout.write(
-      'Run `sudo tailscale up` when ready, then pair this machine from Hervald Machines.\n',
+      'Run `sudo tailscale up` when ready, then pair this machine from Herd Machines.\n',
     )
     return null
   }
@@ -604,7 +604,7 @@ async function runTailscaleSetup(
   }
 
   process.stdout.write(`Tailscale hostname: ${dnsName}\n`)
-  process.stdout.write('Use that hostname when you register this worker from Hervald or the CLI.\n')
+  process.stdout.write('Use that hostname when you register this worker from Herd or the CLI.\n')
   process.stdout.write(`Example: hammurabi machine add --id <id> --label <label> --tailscale-hostname ${dnsName}\n`)
   return dnsName
 }
@@ -664,13 +664,13 @@ function printProviderRuntimeInstructions(providers: readonly ProviderRegistryEn
     const modes = machineAuth.supportedAuthModes.join(', ')
     process.stdout.write(`- ${provider.label}: install ${installTarget}, verify \`${machineAuth.cliBinaryName} --version\`, then authenticate with ${modes}.\n`)
   }
-  process.stdout.write('- For subscription/OAuth CLI auth on a personal machine, pair the machine from Hervald Machines or run `hammurabi machine daemon-pair --machine <id>`, then run the printed `hammurabi daemon run ...` command on that machine.\n')
+  process.stdout.write('- For subscription/OAuth CLI auth on a personal machine, pair the machine from Herd Machines or run `hammurabi machine daemon-pair --machine <id>`, then run the printed `hammurabi daemon run ...` command on that machine.\n')
   process.stdout.write('- Check daemon readiness with `hammurabi machine daemon-status --machine <id>`.\n')
-  process.stdout.write('- Detailed auth recipes live in the Hervald provider docs.\n')
+  process.stdout.write('- Detailed auth recipes live in the Herd provider docs.\n')
 }
 
 function printOnboardHeader(): void {
-  printHervaldBrand('Hervald onboard')
+  printHervaldBrand('Herd onboard')
 }
 
 async function chooseSetupPath(options: ParsedOnboardArgs): Promise<SetupPath> {
@@ -684,7 +684,7 @@ async function chooseSetupPath(options: ParsedOnboardArgs): Promise<SetupPath> {
       {
         value: 'quickstart',
         label: 'Quickstart (recommended)',
-        hint: 'use Hervald defaults, then save the CLI config',
+        hint: 'use Herd defaults, then save the CLI config',
       },
       {
         value: 'advanced',
@@ -703,7 +703,7 @@ async function resolveEndpoint(options: ParsedOnboardArgs, setupPath: SetupPath)
   if (setupPath === 'quickstart') {
     return DEFAULT_ENDPOINT
   }
-  return promptText('Hervald endpoint', {
+  return promptText('Herd endpoint', {
     defaultValue: DEFAULT_ENDPOINT,
     required: true,
   })
@@ -755,7 +755,7 @@ function printConfigurationSavedSummary(input: {
   process.stdout.write('\nNext commands\n')
   process.stdout.write('  hammurabi doctor\n')
   process.stdout.write('  hammurabi up\n')
-  process.stdout.write('  Open Hervald and start the first commander conversation from Command Room.\n')
+  process.stdout.write('  Open Herd and start the first commander conversation from Command Room.\n')
 }
 
 export async function runCli(
@@ -788,7 +788,7 @@ export async function runCli(
     }
 
     printOnboardHeader()
-    process.stdout.write('Configure agents to send telemetry to your Hervald instance.\n\n')
+    process.stdout.write('Configure agents to send telemetry to your Herd instance.\n\n')
 
     const setupPath = await chooseSetupPath(options)
     if (!options.nonInteractive) {
@@ -867,7 +867,7 @@ export async function runCli(
       printProviderRuntimeInstructions(providers)
     } catch {
       process.stdout.write('\nProvider runtime setup:\n')
-      process.stdout.write('- Provider registry unavailable right now. Open Hervald docs after the server is reachable for provider-specific auth steps.\n')
+      process.stdout.write('- Provider registry unavailable right now. Open Herd docs after the server is reachable for provider-specific auth steps.\n')
     }
     if (options.skipTailscale) {
       process.stdout.write('\nSkipped Tailscale pairing.\n')

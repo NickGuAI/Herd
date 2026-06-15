@@ -396,16 +396,20 @@ export function MobileSessionView({
             toolId?: string
             queue?: SessionQueueSnapshot
           }
-          if (raw.type === 'replay' && Array.isArray(raw.events)) {
-            if (raw.events.length === 0) {
-              resetMessages()
-              setMessages([{ id: `system-${Date.now()}`, kind: 'system', text: 'Session started' }])
+          if (raw.type === 'replay') {
+            const projectedMessages = isProjectedMessages(raw.projection?.messages)
+              ? raw.projection.messages
+              : (isProjectedMessages(raw.messages) ? raw.messages : null)
+            if (projectedMessages) {
+              hydrateReplayMessages(projectedMessages, Array.isArray(raw.events) ? raw.events : [])
             } else {
-              const projectedMessages = isProjectedMessages(raw.projection?.messages)
-                ? raw.projection.messages
-                : (isProjectedMessages(raw.messages) ? raw.messages : null)
-              if (projectedMessages) {
-                hydrateReplayMessages(projectedMessages, raw.events)
+              if (!Array.isArray(raw.events)) {
+                resetMessages()
+                return
+              }
+              if (raw.events.length === 0) {
+                resetMessages()
+                setMessages([{ id: `system-${Date.now()}`, kind: 'system', text: 'Session started' }])
               } else {
                 resetMessages()
                 for (const event of raw.events) {

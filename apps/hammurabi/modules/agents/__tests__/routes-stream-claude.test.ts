@@ -39,13 +39,6 @@ const CLAUDE_SOURCE = {
 
 const UNSET_CLAUDE_CHILD_ENV = 'unset CLAUDECODE HAMMURABI_INTERNAL_TOKEN ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL'
 
-function withClaudeSource<T extends Record<string, unknown>>(event: T) {
-  return {
-    ...event,
-    ...CLAUDE_SOURCE,
-  }
-}
-
 function readStreamEventKind(event: unknown): string | undefined {
   const record = event as { type?: string; ev?: { type?: string } }
   return record.type ?? record.ev?.type
@@ -467,7 +460,7 @@ describe("stream sessions", () => {
             ev: {
               type: 'provider.activity',
               title: 'System init',
-              data: withClaudeSource(initEvent),
+              data: initEvent,
             },
           }))
           expect(events[1]).toEqual(expect.objectContaining({
@@ -652,7 +645,7 @@ describe("stream sessions", () => {
               ev: {
                 type: 'provider.activity',
                 title: 'System init',
-                data: withClaudeSource({ type: 'system', subtype: 'init', session_id: 'claude-rotate-new' }),
+                data: { type: 'system', subtype: 'init', session_id: 'claude-rotate-new' },
               },
             }),
           ])
@@ -902,7 +895,7 @@ describe("stream sessions", () => {
               ev: {
                 type: 'provider.activity',
                 title: 'System init',
-                data: withClaudeSource(initEvent),
+                data: initEvent,
               },
             }),
             expect.objectContaining({
@@ -1725,7 +1718,7 @@ describe("stream sessions", () => {
         })
 
         const { ws, replay } = await connectWsWithReplay(server.baseUrl, sessionName)
-        expect(replay.events).toBeUndefined()
+        expect(replay.events).toEqual(expectedReplayEvents)
         const replayEvents = await readDebugEvents(server.baseUrl, sessionName)
         expect(replayEvents).toEqual(expectedReplayEvents)
         expect(replayEvents).not.toContainEqual({ type: 'system', marker: 'persisted-fallback-only' })
@@ -1815,7 +1808,7 @@ describe("stream sessions", () => {
         })
 
         const { ws, replay } = await connectWsWithReplay(server.baseUrl, sessionName)
-        expect(replay.events).toBeUndefined()
+        expect(replay.events).toEqual(persistedEvents)
         const replayEvents = await readDebugEvents(server.baseUrl, sessionName)
         expect(replayEvents).toEqual(persistedEvents)
         expect(replay.usage).toEqual({
@@ -2314,7 +2307,7 @@ describe("stream sessions", () => {
 
       const replay = messages.find((m) => m.type === 'replay')
       expect(replay).toBeDefined()
-      expect(replay!.events).toBeUndefined()
+      expect(replay!.events?.map(readStreamEventKind)).toEqual(['turn.start', 'message.start', 'message.start'])
       const replayEvents = await readDebugEvents(server.baseUrl, 'stream-replay')
       expect(replayEvents.map(readStreamEventKind)).toEqual(['turn.start', 'message.start', 'message.start'])
 
@@ -2367,7 +2360,14 @@ describe("stream sessions", () => {
       const replay = messages.find((message) => message.type === 'replay')
       expect(replay).toBeDefined()
 
-      expect(replay!.events).toBeUndefined()
+      expect(replay!.events?.map(readStreamEventKind)).toEqual([
+        'plan.update',
+        'plan.update',
+        'approval.request',
+        'tool.start',
+        'plan.update',
+        'approval.resolved',
+      ])
       const replayEvents = await readDebugEvents(server.baseUrl, 'stream-plan-mode') as Array<Record<string, unknown>>
       expect(replayEvents.map(readStreamEventKind)).toEqual([
         'plan.update',
@@ -2383,8 +2383,8 @@ describe("stream sessions", () => {
         source: expect.objectContaining({
           provider: 'claude',
           backend: 'cli',
-          rawEventType: 'plan_approval',
-          rawEventId: 'plan-exit',
+          rawEventType: 'assistant',
+          rawEventId: 'm2',
         }),
         ev: {
           type: 'approval.request',
@@ -2489,7 +2489,11 @@ describe("stream sessions", () => {
 
       const replay = messages.find((message) => message.type === 'replay')
       expect(replay).toBeDefined()
-      expect(replay!.events).toBeUndefined()
+      expect(replay!.events?.map(readStreamEventKind)).toEqual([
+        'provider.activity',
+        'provider.activity',
+        'turn.end',
+      ])
       const replayEvents = await readDebugEvents(server.baseUrl, 'stream-replay-reconnect')
       expect(replayEvents.map(readStreamEventKind)).toEqual([
         'provider.activity',
@@ -2741,7 +2745,7 @@ describe("stream sessions", () => {
       await server.close()
     })
 
-  it('broadcasts exit event and cleans up on process exit', async () => {
+  it('broadcasts v2 process-exit activity and cleans up on process exit', async () => {
       const mock = installMockProcess()
       const server = await startServer()
 
@@ -2759,11 +2763,11 @@ describe("stream sessions", () => {
       })
 
       const ws = await connectWs(server.baseUrl, 'stream-exit')
-      const exitPromise = new Promise<{ type: string; exitCode: number }>((resolve) => {
+      const exitPromise = new Promise<{ ev?: { type?: string; title?: string; data?: { exitCode?: number } } }>((resolve) => {
         ws.on('message', (data) => {
-          const parsed = JSON.parse(data.toString()) as { type: string; exitCode?: number }
-          if (parsed.type === 'exit') {
-            resolve(parsed as { type: string; exitCode: number })
+          const parsed = JSON.parse(data.toString()) as { ev?: { type?: string; title?: string; data?: { exitCode?: number } } }
+          if (parsed.ev?.type === 'provider.activity' && parsed.ev.title === 'Claude process exited') {
+            resolve(parsed)
           }
         })
       })
@@ -2771,8 +2775,7 @@ describe("stream sessions", () => {
       mock.emitExit(0)
 
       const exitEvent = await exitPromise
-      expect(exitEvent.type).toBe('exit')
-      expect(exitEvent.exitCode).toBe(0)
+      expect(exitEvent.ev?.data?.exitCode).toBe(0)
 
       // Session should be removed from the list
       await vi.waitFor(async () => {
@@ -2804,7 +2807,7 @@ describe("stream sessions", () => {
       await server.close()
     })
 
-  it('includes stderr summary in exit event payload', async () => {
+  it('includes stderr summary in v2 process-exit activity', async () => {
       const mock = installMockProcess()
       const server = await startServer()
 
@@ -2822,16 +2825,23 @@ describe("stream sessions", () => {
       })
 
       const ws = await connectWs(server.baseUrl, 'stream-exit-stderr')
-      const exitPromise = new Promise<{ type: string; exitCode: number; stderr?: string; text?: string }>((resolve) => {
+      const exitPromise = new Promise<{
+        ev?: {
+          type?: string
+          title?: string
+          data?: { exitCode?: number; stderr?: string; detail?: string }
+        }
+      }>((resolve) => {
         ws.on('message', (data) => {
           const parsed = JSON.parse(data.toString()) as {
-            type: string
-            exitCode?: number
-            stderr?: string
-            text?: string
+            ev?: {
+              type?: string
+              title?: string
+              data?: { exitCode?: number; stderr?: string; detail?: string }
+            }
           }
-          if (parsed.type === 'exit') {
-            resolve(parsed as { type: string; exitCode: number; stderr?: string; text?: string })
+          if (parsed.ev?.type === 'provider.activity' && parsed.ev.title === 'Claude process exited') {
+            resolve(parsed)
           }
         })
       })
@@ -2840,17 +2850,16 @@ describe("stream sessions", () => {
       mock.emitExit(127)
 
       const exitEvent = await exitPromise
-      expect(exitEvent.type).toBe('exit')
-      expect(exitEvent.exitCode).toBe(127)
-      expect(exitEvent.stderr).toBe('claude: command not found')
-      expect(exitEvent.text).toContain('Process exited with code 127')
-      expect(exitEvent.text).toContain('stderr: claude: command not found')
+      expect(exitEvent.ev?.data?.exitCode).toBe(127)
+      expect(exitEvent.ev?.data?.stderr).toBe('claude: command not found')
+      expect(exitEvent.ev?.data?.detail).toContain('Process exited with code 127')
+      expect(exitEvent.ev?.data?.detail).toContain('stderr: claude: command not found')
 
       ws.close()
       await server.close()
     })
 
-  it('broadcasts system event on process error and cleans up session', async () => {
+  it('broadcasts v2 failure event on process error and cleans up session', async () => {
       const mock = installMockProcess()
       const server = await startServer()
 
@@ -2871,7 +2880,7 @@ describe("stream sessions", () => {
       const wsUrl = server.baseUrl.replace('http://', 'ws://') +
         '/api/agents/sessions/stream-error/ws'
       const ws = new WebSocket(wsUrl, { headers: { 'x-hammurabi-api-key': 'test-key' } })
-      const received: Array<{ type: string; text?: string }> = []
+      const received: Array<{ type?: string; ev?: { type?: string; status?: string; result?: string } }> = []
 
       ws.on('message', (data) => {
         received.push(JSON.parse(data.toString()))
@@ -2886,12 +2895,13 @@ describe("stream sessions", () => {
       mock.emitError(new Error('spawn ENOENT'))
 
       await vi.waitFor(() => {
-        const systemMsg = received.find((m) => m.type === 'system')
-        expect(systemMsg).toBeDefined()
+        const failureMsg = received.find((m) => m.ev?.type === 'turn.end')
+        expect(failureMsg).toBeDefined()
       })
 
-      const errorEvent = received.find((m) => m.type === 'system')!
-      expect(errorEvent.text).toContain('spawn ENOENT')
+      const errorEvent = received.find((m) => m.ev?.type === 'turn.end')!
+      expect(errorEvent.ev?.status).toBe('failed')
+      expect(errorEvent.ev?.result).toContain('spawn ENOENT')
 
       // Session should be cleaned up after process error (prevents zombie entries)
       await vi.waitFor(async () => {
@@ -2907,7 +2917,7 @@ describe("stream sessions", () => {
       await server.close()
     })
 
-  it('relays stderr output as system events', async () => {
+  it('relays stderr output as v2 provider activity', async () => {
       const mock = installMockProcess()
       const server = await startServer()
 
@@ -2925,10 +2935,16 @@ describe("stream sessions", () => {
       })
 
       const ws = await connectWs(server.baseUrl, 'stream-stderr')
-      const received: Array<{ type: string; text?: string }> = []
+      const received: Array<{
+        type?: string
+        ev?: { type?: string; title?: string; data?: { detail?: string; text?: string } }
+      }> = []
 
       ws.on('message', (data) => {
-        const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
+        const parsed = JSON.parse(data.toString()) as {
+          type?: string
+          ev?: { type?: string; title?: string; data?: { detail?: string; text?: string } }
+        }
         if (parsed.type !== 'replay') {
           received.push(parsed)
         }
@@ -2938,12 +2954,16 @@ describe("stream sessions", () => {
       mock.cp.stderr.emit('data', Buffer.from('Error: auth token expired'))
 
       await vi.waitFor(() => {
-        const stderrMsg = received.find((m) => m.type === 'system' && m.text?.includes('stderr:'))
+        const stderrMsg = received.find((m) => (
+          m.ev?.type === 'provider.activity'
+          && m.ev.title === 'Claude stderr'
+          && m.ev.data?.detail?.includes('stderr:')
+        ))
         expect(stderrMsg).toBeDefined()
       })
 
-      const stderrEvent = received.find((m) => m.type === 'system' && m.text?.includes('stderr:'))!
-      expect(stderrEvent.text).toContain('auth token expired')
+      const stderrEvent = received.find((m) => m.ev?.title === 'Claude stderr')!
+      expect(stderrEvent.ev?.data?.detail).toContain('auth token expired')
 
       ws.close()
       await server.close()
@@ -3023,7 +3043,7 @@ describe("stream sessions", () => {
 
       const replay = messages.find((m) => m.type === 'replay')
       expect(replay).toBeDefined()
-      expect(replay!.events).toBeUndefined()
+      expect(replay!.events?.map(readStreamEventKind)).toEqual(['provider.activity'])
       const replayEvents = await readDebugEvents(server.baseUrl, 'stream-usage')
       const usageEvent = replayEvents.find((event) => (
         (event.ev as { type?: string } | undefined)?.type === 'provider.activity'
@@ -3110,7 +3130,7 @@ describe("stream sessions", () => {
 
       // Connect and capture replay before the server's immediate replay frame can race past the listener.
       const { ws, replay } = await connectWsWithReplay(server.baseUrl, 'stream-cap')
-      expect(replay.events).toBeUndefined()
+      expect(replay.events).toHaveLength(replay.projection?.replayCursor?.returnedEvents)
       expect(replay.projection?.replayCursor?.returnedEvents).toBeLessThanOrEqual(1000)
       const replayEvents = await readDebugEvents(server.baseUrl, 'stream-cap')
       expect(replayEvents.length).toBeLessThanOrEqual(1000)
@@ -3607,10 +3627,16 @@ describe("stream sessions", () => {
       })
 
       const ws = await connectWs(server.baseUrl, 'stream-race')
-      const received: Array<{ type: string; text?: string }> = []
+      const received: Array<{
+        type?: string
+        ev?: { type?: string; status?: string; result?: string; title?: string }
+      }> = []
 
       ws.on('message', (data) => {
-        const parsed = JSON.parse(data.toString()) as { type: string; text?: string }
+        const parsed = JSON.parse(data.toString()) as {
+          type?: string
+          ev?: { type?: string; status?: string; result?: string; title?: string }
+        }
         if (parsed.type !== 'replay') {
           received.push(parsed)
         }
@@ -3624,14 +3650,18 @@ describe("stream sessions", () => {
       // Give time for both events to process
       await new Promise((r) => setTimeout(r, 100))
 
-      // The error system event should have been broadcast, but NOT the exit
-      // event (session was already deleted when error handler ran).
-      const systemMsgs = received.filter((m) => m.type === 'system')
-      expect(systemMsgs).toHaveLength(1)
-      expect(systemMsgs[0].text).toContain('spawn ENOENT')
+      // The failed turn envelope should have been broadcast, but NOT the exit
+      // activity (session was already deleted when error handler ran).
+      const failureMsgs = received.filter((m) => m.ev?.type === 'turn.end')
+      expect(failureMsgs).toHaveLength(1)
+      expect(failureMsgs[0].ev?.status).toBe('failed')
+      expect(failureMsgs[0].ev?.result).toContain('spawn ENOENT')
 
-      // No exit event should have been sent (guard prevented it)
-      const exitMsgs = received.filter((m) => m.type === 'exit')
+      // No process-exit activity should have been sent (guard prevented it)
+      const exitMsgs = received.filter((m) => (
+        m.ev?.type === 'provider.activity'
+        && m.ev.title === 'Claude process exited'
+      ))
       expect(exitMsgs).toHaveLength(0)
 
       // Session should be cleaned up

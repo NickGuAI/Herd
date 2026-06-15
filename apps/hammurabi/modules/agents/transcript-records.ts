@@ -96,7 +96,31 @@ export function extractTranscriptUsageUpdate(record: StreamJsonEvent): Transcrip
   if (isTranscriptEnvelope(record)) {
     if (record.ev.type === 'turn.end') {
       const usage = readUsageFromUnknown(record.ev.usage)
-      return usage ? { usage, usageIsTotal: true } : null
+      const result = asObject(record.ev.result)
+      const error = asObject(record.ev.error)
+      const totalCostUsd = typeof result?.total_cost_usd === 'number'
+        ? result.total_cost_usd
+        : (typeof result?.totalCostUsd === 'number'
+            ? result.totalCostUsd
+            : (typeof error?.total_cost_usd === 'number'
+                ? error.total_cost_usd
+                : (typeof error?.totalCostUsd === 'number' ? error.totalCostUsd : undefined)))
+      const costUsd = typeof result?.cost_usd === 'number'
+        ? result.cost_usd
+        : (typeof result?.costUsd === 'number'
+            ? result.costUsd
+            : (typeof error?.cost_usd === 'number'
+                ? error.cost_usd
+                : (typeof error?.costUsd === 'number' ? error.costUsd : undefined)))
+      if (!usage && totalCostUsd === undefined && costUsd === undefined) {
+        return null
+      }
+      return {
+        ...(usage ? { usage } : {}),
+        usageIsTotal: true,
+        ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
+        ...(costUsd !== undefined ? { costUsd } : {}),
+      }
     }
 
     if (record.ev.type === 'provider.activity') {

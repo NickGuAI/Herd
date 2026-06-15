@@ -234,8 +234,8 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
     configPath: 'baileys.browserName',
     label: 'Baileys Browser',
     kind: 'text',
-    placeholder: 'Hervald',
-    defaultValue: 'Hervald',
+    placeholder: 'Herd',
+    defaultValue: 'Herd',
     section: 'transport',
   },
   {
@@ -615,7 +615,7 @@ export const WHATSAPP_CHANNEL_FORM_DEFAULTS = {
   accountId: '',
   displayName: '',
   transport: 'baileys',
-  browserName: 'Hervald',
+  browserName: 'Herd',
   authStateDir: '',
   connectTimeoutSeconds: '30',
   printQrInTerminal: true,
@@ -638,7 +638,7 @@ export const WHATSAPP_CHANNEL_CONFIG_DEFAULTS = {
   provider: 'whatsapp',
   transport: 'baileys',
   baileys: {
-    browserName: 'Hervald',
+    browserName: 'Herd',
     connectTimeoutMs: 30_000,
     printQrInTerminal: true,
     markOnlineOnConnect: false,

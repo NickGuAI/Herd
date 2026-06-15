@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -98,7 +98,7 @@ function createProviderAwareFetch(
 ): ReturnType<typeof vi.fn<typeof fetch>> {
   return vi.fn<typeof fetch>().mockImplementation(async (input) => {
     const url = String(input)
-    if (url === 'https://hervald.gehirn.ai/api/providers') {
+    if (url === 'https://herd.gehirn.ai/api/providers') {
       return jsonResponse(providerRegistryPayload)
     }
     const response = handlers[url]
@@ -139,7 +139,7 @@ describe('runMachinesCli', () => {
     expect(stdout.read()).toContain('local')
     expect(stdout.read()).toContain('gpu-1')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines',
+      'https://herd.gehirn.ai/api/agents/machines',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -205,7 +205,7 @@ describe('runMachinesCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toContain('Registered machine: gpu-2')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines',
+      'https://herd.gehirn.ai/api/agents/machines',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -260,7 +260,7 @@ describe('runMachinesCli', () => {
     expect(stdout.read()).toContain('Host: home-mac.tail2bb6ea.ts.net')
     expect(stdout.read()).toContain('Resolved IP: 100.101.102.103')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines',
+      'https://herd.gehirn.ai/api/agents/machines',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -276,7 +276,7 @@ describe('runMachinesCli', () => {
 
   it('prints machine health for check', async () => {
     const fetchImpl = createProviderAwareFetch({
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
         machineId: 'gpu-1',
         mode: 'ssh',
         ssh: {
@@ -330,7 +330,7 @@ describe('runMachinesCli', () => {
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toContain('Removed machine: gpu-1')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1',
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1',
       expect.objectContaining({
         method: 'DELETE',
         headers: expect.objectContaining({
@@ -342,7 +342,7 @@ describe('runMachinesCli', () => {
 
   it('bootstraps a remote machine and prints service health proof', async () => {
     const fetchImpl = createProviderAwareFetch({
-      'https://hervald.gehirn.ai/api/agents/machines': jsonResponse([
+      'https://herd.gehirn.ai/api/agents/machines': jsonResponse([
         {
           id: 'gpu-1',
           label: 'GPU',
@@ -351,7 +351,7 @@ describe('runMachinesCli', () => {
           port: 2222,
         },
       ]),
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
         machineId: 'gpu-1',
         mode: 'ssh',
         ssh: {
@@ -421,7 +421,7 @@ describe('runMachinesCli', () => {
     // Without remote `AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*`,
     // the Claude approval bridge breaks downstream — operator must see this loudly.
     const fetchImpl = createProviderAwareFetch({
-      'https://hervald.gehirn.ai/api/agents/machines': jsonResponse([
+      'https://herd.gehirn.ai/api/agents/machines': jsonResponse([
         {
           id: 'gpu-1',
           label: 'GPU',
@@ -430,7 +430,7 @@ describe('runMachinesCli', () => {
           port: 2222,
         },
       ]),
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
         machineId: 'gpu-1',
         mode: 'ssh',
         ssh: { ok: true, destination: 'builder@10.0.1.50' },
@@ -483,10 +483,10 @@ describe('runMachinesCli', () => {
     // Negative case: when `sshd:configured:changed` (or unchanged) is in the
     // bootstrap output, the warning must NOT fire — the hardening was applied.
     const fetchImpl = createProviderAwareFetch({
-      'https://hervald.gehirn.ai/api/agents/machines': jsonResponse([
+      'https://herd.gehirn.ai/api/agents/machines': jsonResponse([
         { id: 'gpu-1', label: 'GPU', host: '10.0.1.50', user: 'builder', port: 2222 },
       ]),
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/health': jsonResponse({
         machineId: 'gpu-1',
         mode: 'ssh',
         ssh: { ok: true, destination: 'builder@10.0.1.50' },
@@ -561,7 +561,7 @@ describe('runMachinesCli', () => {
 
   it('prints provider auth status for a worker', async () => {
     const fetchImpl = createProviderAwareFetch({
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/auth-status': jsonResponse({
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/auth-status': jsonResponse({
         machineId: 'gpu-1',
         envFile: '/Users/builder/.hammurabi-env',
         checkedAt: '2026-04-29T18:00:00.000Z',
@@ -622,7 +622,7 @@ describe('runMachinesCli', () => {
     expect(stdout.read()).toContain('- Claude: ready (setup-token)')
     expect(stdout.read()).toContain('- Gemini: missing (missing)')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/auth-status',
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/auth-status',
       expect.objectContaining({
         method: 'GET',
       }),
@@ -669,10 +669,10 @@ describe('runMachinesCli', () => {
     expect(exitCode).toBe(0)
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toContain('Paired daemon machine: macbook')
-    expect(stdout.read()).toContain('hammurabi daemon run --machine macbook --pairing-token hmrd_secret --endpoint https://hervald.gehirn.ai')
+    expect(stdout.read()).toContain('hammurabi daemon run --machine macbook --pairing-token hmrd_secret --endpoint https://herd.gehirn.ai')
     expect(stdout.read()).not.toContain('pairing_token')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines/macbook/daemon/pair',
+      'https://herd.gehirn.ai/api/agents/machines/macbook/daemon/pair',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -729,7 +729,7 @@ describe('runMachinesCli', () => {
     expect(stdout.read()).toContain('Provider auth: ready')
     expect(stdout.read()).toContain('- claude: installed, authenticated')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines/macbook/daemon/status',
+      'https://herd.gehirn.ai/api/agents/machines/macbook/daemon/status',
       expect.objectContaining({
         method: 'GET',
       }),
@@ -769,7 +769,7 @@ describe('runMachinesCli', () => {
     expect(stdout.read()).toContain('Revoked daemon pairing: macbook')
     expect(stdout.read()).toContain('Paired: no')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines/macbook/daemon/revoke',
+      'https://herd.gehirn.ai/api/agents/machines/macbook/daemon/revoke',
       expect.objectContaining({
         method: 'POST',
       }),
@@ -778,7 +778,7 @@ describe('runMachinesCli', () => {
 
   it('posts provider auth setup and prints the updated status', async () => {
     const fetchImpl = createProviderAwareFetch({
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/auth-setup': jsonResponse({
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/auth-setup': jsonResponse({
         machineId: 'gpu-1',
         envFile: '/Users/builder/.hammurabi-env',
         checkedAt: '2026-04-29T18:00:00.000Z',
@@ -840,7 +840,7 @@ describe('runMachinesCli', () => {
     expect(stdout.read()).toContain('Updated claude auth on gpu-1.')
     expect(stdout.read()).toContain('- Claude: ready (setup-token)')
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/machines/gpu-1/auth-setup',
+      'https://herd.gehirn.ai/api/agents/machines/gpu-1/auth-setup',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({

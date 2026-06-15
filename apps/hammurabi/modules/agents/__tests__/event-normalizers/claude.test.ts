@@ -1,20 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeClaudeEvent } from '../../event-normalizers/claude'
-
-const CLAUDE_SOURCE = {
-  source: { provider: 'claude', backend: 'cli' },
-} as const
-
-function withClaudeSource<T extends object>(event: T): T & typeof CLAUDE_SOURCE {
-  return {
-    ...event,
-    ...CLAUDE_SOURCE,
-  }
-}
+import {
+  createClaudeTranscriptMapper,
+  mapClaudeToTranscriptEnvelopes,
+} from '../../event-normalizers/claude'
 
 describe('agents/event-normalizers/claude', () => {
-  it('maps EnterPlanMode to a planning.enter event', () => {
-    const result = normalizeClaudeEvent({
+  it('maps EnterPlanMode to a v2 plan update envelope', () => {
+    const result = mapClaudeToTranscriptEnvelopes({
       type: 'assistant',
       message: {
         id: 'assistant-1',
@@ -23,14 +15,17 @@ describe('agents/event-normalizers/claude', () => {
       },
     })
 
-    expect(result).toEqual(withClaudeSource({
-      type: 'planning',
-      action: 'enter',
-    }))
+    expect(result).toEqual([
+      expect.objectContaining({
+        schemaVersion: 2,
+        source: expect.objectContaining({ provider: 'claude', backend: 'cli', rawEventType: 'assistant' }),
+        ev: { type: 'plan.update', plan: { action: 'enter' } },
+      }),
+    ])
   })
 
-  it('maps ExitPlanMode input plans to blocking plan approvals', () => {
-    const result = normalizeClaudeEvent({
+  it('maps ExitPlanMode input plans to blocking v2 approvals', () => {
+    const result = mapClaudeToTranscriptEnvelopes({
       type: 'assistant',
       message: {
         id: 'assistant-2',
@@ -46,27 +41,35 @@ describe('agents/event-normalizers/claude', () => {
       },
     })
 
-    expect(result).toEqual(withClaudeSource({
-      type: 'plan_approval',
-      interactionKind: 'plan_approval',
-      toolId: 'plan-exit',
-      toolName: 'ExitPlanMode',
-      plan: '1. Inspect the stream path\n2. Patch the normalizer',
-      approveLabel: 'Approve',
-      rejectLabel: 'Reject',
-      customResponseLabel: 'Add response',
-      providerContext: {
-        provider: 'claude',
-        backend: 'cli',
-        toolUseId: 'plan-exit',
-        toolName: 'ExitPlanMode',
-        answerFormat: 'claude.exit_plan_mode',
-      },
-    }))
+    expect(result).toEqual([
+      expect.objectContaining({
+        itemId: 'plan-exit',
+        ev: { type: 'plan.update', plan: '1. Inspect the stream path\n2. Patch the normalizer' },
+      }),
+      expect.objectContaining({
+        itemId: 'plan-exit',
+        ev: expect.objectContaining({
+          type: 'approval.request',
+          toolCallId: 'plan-exit',
+          interactionKind: 'plan_approval',
+          prompt: '1. Inspect the stream path\n2. Patch the normalizer',
+          request: expect.objectContaining({
+            toolName: 'ExitPlanMode',
+            providerContext: {
+              provider: 'claude',
+              backend: 'cli',
+              toolUseId: 'plan-exit',
+              toolName: 'ExitPlanMode',
+              answerFormat: 'claude.exit_plan_mode',
+            },
+          }),
+        }),
+      }),
+    ])
   })
 
   it('filters plan-mode tool traffic while preserving other assistant content', () => {
-    const result = normalizeClaudeEvent({
+    const result = mapClaudeToTranscriptEnvelopes({
       type: 'assistant',
       message: {
         id: 'assistant-3',
@@ -79,32 +82,28 @@ describe('agents/event-normalizers/claude', () => {
       },
     })
 
-    expect(result).toEqual([
-      withClaudeSource({
-        type: 'assistant',
-        message: {
-          id: 'assistant-3',
-          role: 'assistant',
-          content: [{ type: 'text', text: 'I investigated the issue.' }],
-        },
-      }),
-      withClaudeSource({
-        type: 'planning',
-        action: 'enter',
-      }),
-      withClaudeSource({
-        type: 'assistant',
-        message: {
-          id: 'assistant-3',
-          role: 'assistant',
-          content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'git status' } }],
-        },
-      }),
+    expect(result.map((event) => event.ev.type)).toEqual([
+      'message.start',
+      'message.delta',
+      'message.end',
+      'plan.update',
+      'tool.start',
     ])
+    expect(result).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        itemId: 'assistant-3',
+        ev: { type: 'message.delta', text: 'I investigated the issue.', channel: 'final' },
+      }),
+      expect.objectContaining({
+        itemId: 'tool-1',
+        parentId: 'assistant-3',
+        ev: { type: 'tool.start', toolCallId: 'tool-1', name: 'Bash', input: { command: 'git status' } },
+      }),
+    ]))
   })
 
-  it('maps ExitPlanMode approval payloads to planning.decision', () => {
-    const result = normalizeClaudeEvent({
+  it('maps ExitPlanMode approval payloads to v2 approval resolution', () => {
+    const result = mapClaudeToTranscriptEnvelopes({
       type: 'user',
       message: {
         role: 'user',
@@ -118,17 +117,33 @@ describe('agents/event-normalizers/claude', () => {
       },
     })
 
-    expect(result).toEqual(withClaudeSource({
-      type: 'planning',
-      action: 'decision',
-      toolId: 'plan-exit',
-      approved: true,
-      message: 'Proceeding with the approved plan.',
-    }))
+    expect(result).toEqual([
+      expect.objectContaining({
+        itemId: 'plan-exit',
+        ev: {
+          type: 'plan.update',
+          plan: {
+            action: 'decision',
+            approved: true,
+            message: 'Proceeding with the approved plan.',
+          },
+          toolCallId: 'plan-exit',
+        },
+      }),
+      expect.objectContaining({
+        itemId: 'plan-exit',
+        ev: {
+          type: 'approval.resolved',
+          toolCallId: 'plan-exit',
+          approved: true,
+          result: 'Proceeding with the approved plan.',
+        },
+      }),
+    ])
   })
 
-  it('keeps AskUserQuestion events unchanged', () => {
-    const event = {
+  it('keeps AskUserQuestion as a v2 tool start', () => {
+    const result = mapClaudeToTranscriptEnvelopes({
       type: 'assistant',
       message: {
         id: 'assistant-4',
@@ -142,15 +157,133 @@ describe('agents/event-normalizers/claude', () => {
           },
         ],
       },
-    }
+    })
 
-    expect(normalizeClaudeEvent(event)).toEqual(withClaudeSource(event))
+    expect(result).toEqual([
+      expect.objectContaining({
+        itemId: 'ask-1',
+        parentId: 'assistant-4',
+        ev: expect.objectContaining({
+          type: 'tool.start',
+          toolCallId: 'ask-1',
+          name: 'AskUserQuestion',
+        }),
+      }),
+    ])
   })
 
-  it('projects signed empty thinking blocks into the backend-owned redaction text', () => {
+  it('preserves streamed AskUserQuestion input JSON in the v2 tool start', () => {
+    const mapper = createClaudeTranscriptMapper()
+    const result = [
+      ...mapper.map({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'ask-stream', name: 'AskUserQuestion', input: {} },
+      }),
+      ...mapper.map({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"questions":[{"question":"Proceed?",' },
+      }),
+      ...mapper.map({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '"header":"Confirm","options":[],"multiSelect":false}]}' },
+      }),
+      ...mapper.map({ type: 'content_block_stop', index: 0 }),
+    ]
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        itemId: 'ask-stream',
+        ev: {
+          type: 'tool.start',
+          toolCallId: 'ask-stream',
+          name: 'AskUserQuestion',
+          input: {
+            questions: [{
+              question: 'Proceed?',
+              header: 'Confirm',
+              options: [],
+              multiSelect: false,
+            }],
+          },
+        },
+      }),
+    ])
+  })
+
+  it('preserves streamed ExitPlanMode input JSON as plan and approval envelopes', () => {
+    const mapper = createClaudeTranscriptMapper()
+    const result = [
+      ...mapper.map({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'plan-stream', name: 'ExitPlanMode', input: {} },
+      }),
+      ...mapper.map({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"plan":"1. Inspect stream handling\\n' },
+      }),
+      ...mapper.map({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '2. Patch replay"}' },
+      }),
+      ...mapper.map({ type: 'content_block_stop', index: 0 }),
+    ]
+
+    expect(result.map((event) => event.ev.type)).toEqual(['plan.update', 'approval.request'])
+    expect(result).toEqual([
+      expect.objectContaining({
+        itemId: 'plan-stream',
+        ev: { type: 'plan.update', plan: '1. Inspect stream handling\n2. Patch replay' },
+      }),
+      expect.objectContaining({
+        itemId: 'plan-stream',
+        ev: expect.objectContaining({
+          type: 'approval.request',
+          toolCallId: 'plan-stream',
+          prompt: '1. Inspect stream handling\n2. Patch replay',
+        }),
+      }),
+    ])
+  })
+
+  it('preserves streamed Bash input JSON in the v2 tool start', () => {
+    const mapper = createClaudeTranscriptMapper()
+    const result = [
+      ...mapper.map({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'bash-stream', name: 'Bash', input: {} },
+      }),
+      ...mapper.map({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"command":"pnpm test"}' },
+      }),
+      ...mapper.map({ type: 'content_block_stop', index: 0 }),
+    ]
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        itemId: 'bash-stream',
+        ev: {
+          type: 'tool.start',
+          toolCallId: 'bash-stream',
+          name: 'Bash',
+          input: { command: 'pnpm test' },
+        },
+      }),
+    ])
+  })
+
+  it('projects signed empty thinking blocks into backend-owned redaction text', () => {
     const signature = 'A'.repeat(464)
 
-    const result = normalizeClaudeEvent({
+    const result = mapClaudeToTranscriptEnvelopes({
       type: 'assistant',
       message: {
         id: 'assistant-thinking',
@@ -159,17 +292,14 @@ describe('agents/event-normalizers/claude', () => {
       },
     })
 
-    expect(result).toEqual(withClaudeSource({
-      type: 'assistant',
-      message: {
-        id: 'assistant-thinking',
-        role: 'assistant',
-        content: [{
-          type: 'thinking',
-          thinking: `(reasoning content redacted by Claude · ${signature.length} bytes signed)`,
-          signature,
-        }],
-      },
-    }))
+    expect(result).toEqual([
+      expect.objectContaining({
+        itemId: 'assistant-thinking',
+        ev: {
+          type: 'thinking.delta',
+          text: `(reasoning content redacted by Claude · ${signature.length} bytes signed)`,
+        },
+      }),
+    ])
   })
 })

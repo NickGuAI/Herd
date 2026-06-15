@@ -266,7 +266,7 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
             queue?: SessionQueueSnapshot
             toolId?: string
           }
-          if (raw.type === 'replay' && Array.isArray(raw.events)) {
+          if (raw.type === 'replay') {
             if (raw.queue) {
               onQueueUpdate?.(normalizeQueueSnapshot(raw.queue))
             }
@@ -274,8 +274,12 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
               ? raw.projection.messages
               : (isProjectedMessages(raw.messages) ? raw.messages : null)
             if (projectedMessages) {
-              hydrateReplayMessages(projectedMessages, raw.events)
+              hydrateReplayMessages(projectedMessages, Array.isArray(raw.events) ? raw.events : [])
             } else {
+              if (!Array.isArray(raw.events)) {
+                resetMessages()
+                return
+              }
               resetMessages()
               for (const replayEvent of raw.events) {
                 if (replayEvent.type === 'queue_update') {

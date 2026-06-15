@@ -165,7 +165,7 @@ export function printDoctorReport(
   report: DoctorReport,
   write: (chunk: string) => void = (chunk) => process.stdout.write(chunk),
 ): void {
-  printHervaldBrand('Hervald Doctor', write)
+  printHervaldBrand('Herd Doctor', write)
 
   for (const check of report.checks) {
     write(`${formatStatusLine(check.state, check.label, stateLabel(check.state), check.detail)}\n`)
@@ -187,7 +187,7 @@ export async function runDoctorCli(args: readonly string[] = []): Promise<number
   if (args.includes('--help') || args.includes('-h')) {
     process.stdout.write('Usage: hammurabi doctor\n')
     process.stdout.write('\n')
-    process.stdout.write('  Print terminal readiness for Hervald first-run onboarding.\n')
+    process.stdout.write('  Print terminal readiness for Herd first-run onboarding.\n')
     return 0
   }
 

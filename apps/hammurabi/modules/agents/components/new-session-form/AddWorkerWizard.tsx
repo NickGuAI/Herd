@@ -18,7 +18,7 @@ import { ModalFormContainer } from '@modules/components/ModalFormContainer'
 const INPUT_CLASS =
   'w-full rounded-lg border border-[color:var(--hv-border-hair)] px-3 py-2 text-[16px] md:text-sm bg-[var(--hv-surface-card)] focus:outline-none focus:ring-1 focus:ring-[color:var(--hv-field-focus-border)] placeholder:text-[color:var(--hv-fg-faint)]'
 const TEXTAREA_CLASS = `${INPUT_CLASS} min-h-[96px] resize-y`
-const GUIDE_URL = 'https://github.com/NickGuAI/Hervald/blob/main/apps/hammurabi/docs/provider-auth-setup.md'
+const GUIDE_URL = 'https://github.com/NickGuAI/Herd/blob/main/apps/hammurabi/docs/provider-auth-setup.md'
 
 interface AddWorkerWizardProps {
   open: boolean

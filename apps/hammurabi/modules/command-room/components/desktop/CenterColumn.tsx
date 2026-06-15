@@ -1,5 +1,5 @@
 /**
- * Hervald — CenterColumn
+ * Herd — CenterColumn
  *
  * Fluid main content area for the Command Room:
  *   - Delegated sub-agent strip

@@ -65,7 +65,7 @@ describe('commander package registry and install', () => {
       'public',
       'repo-root',
       'agent-skills',
-      'hervald-starter',
+      'herd-starter',
     )
 
     expect(packages.map((pkg) => pkg.id).sort()).toEqual([...STARTER_COMMANDER_PACKAGE_IDS].sort())

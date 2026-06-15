@@ -23,7 +23,7 @@ function createBufferWriter(): BufferWriter {
 }
 
 const config = createHammurabiConfig({
-  endpoint: 'https://hervald.gehirn.ai',
+  endpoint: 'https://herd.gehirn.ai',
   apiKey: 'hmrb_test_key',
   agents: ['claude-code'],
   configuredAt: new Date('2026-03-01T00:00:00.000Z'),
@@ -508,7 +508,7 @@ describe('runSessionCli', () => {
     expect(stdout.read()).toContain('Registered session "my-session" from my-laptop')
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/sessions/register',
+      'https://herd.gehirn.ai/api/agents/sessions/register',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -580,7 +580,7 @@ describe('runSessionCli', () => {
     expect(stdout.read()).toContain('Heartbeat sent for "my-session"')
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://hervald.gehirn.ai/api/agents/sessions/my-session/heartbeat',
+      'https://herd.gehirn.ai/api/agents/sessions/my-session/heartbeat',
       expect.objectContaining({ method: 'POST' }),
     )
   })

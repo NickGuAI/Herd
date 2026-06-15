@@ -161,7 +161,7 @@ describe('buildOrgTree', () => {
             surface: 'ui',
             status: 'active',
             totalCostUsd: 3.5,
-            currentTask: { issueUrl: 'https://github.com/NickGuAI/Hervald/issues/1198' },
+            currentTask: { issueUrl: 'https://github.com/NickGuAI/Herd/issues/1198' },
             lastHeartbeat: '2026-05-01T04:00:00.000Z',
           }),
           createConversation({

@@ -1,5 +1,5 @@
 /**
- * Hervald — SelectedDetailCard
+ * Herd — SelectedDetailCard
  *
  * Bottom-pinned detail card for the selected worker in the Team column.
  * Shows worker name, label, pending action, and primary action buttons.

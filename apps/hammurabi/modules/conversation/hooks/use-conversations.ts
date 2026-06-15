@@ -150,7 +150,7 @@ interface ConversationMessageResponse {
 export interface ConversationMessagesPage {
   conversationId: string
   sessionName: string
-  source: 'live' | 'transcript' | 'empty'
+  source: 'canonical' | 'empty'
   limit: number
   before: string | null
   nextBefore: string | null

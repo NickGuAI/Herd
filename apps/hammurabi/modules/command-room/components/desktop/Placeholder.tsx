@@ -1,5 +1,5 @@
 /**
- * Hervald — Shared placeholder wrapper.
+ * Herd — Shared placeholder wrapper.
  *
  * Used by surface pages that are not yet fully implemented.
  * Provides consistent token-driven card styling with carved-xl radius.

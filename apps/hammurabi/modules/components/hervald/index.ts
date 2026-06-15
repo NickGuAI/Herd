@@ -1,5 +1,5 @@
 /**
- * Hervald shared presentation primitives.
+ * Herd shared presentation primitives.
  *
  * CSS imports:
  *   import '@/styles/hervald/tokens.css'

@@ -22,14 +22,14 @@ describe('createHammurabiConfig', () => {
   it('normalizes endpoint and preserves selected agents', () => {
     const configuredAt = new Date('2026-02-17T00:00:00.000Z')
     const config = createHammurabiConfig({
-      endpoint: 'https://hervald.gehirn.ai/',
+      endpoint: 'https://herd.gehirn.ai/',
       apiKey: 'hmrb_test_key',
       agents: ['claude-code', 'codex', 'claude-code'],
       configuredAt,
     })
 
     expect(config).toEqual({
-      endpoint: 'https://hervald.gehirn.ai',
+      endpoint: 'https://herd.gehirn.ai',
       apiKey: 'hmrb_test_key',
       agents: ['claude-code', 'codex'],
       configuredAt: configuredAt.toISOString(),
@@ -44,7 +44,7 @@ describe('readHammurabiConfig/writeHammurabiConfig', () => {
     const configPath = path.join(directory, '.hammurabi.json')
 
     const config = createHammurabiConfig({
-      endpoint: 'https://hervald.gehirn.ai',
+      endpoint: 'https://herd.gehirn.ai',
       apiKey: 'hmrb_test_key',
       agents: ['claude-code', 'codex'],
       configuredAt: new Date('2026-02-17T00:00:00.000Z'),

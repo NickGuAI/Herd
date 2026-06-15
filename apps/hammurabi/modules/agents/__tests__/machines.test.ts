@@ -243,7 +243,7 @@ describe('agents/machines: Codex runtime environment', () => {
       ANTHROPIC_MODEL: 'claude-opus-4-6',
       ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-6',
       ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-5',
-      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://hervald.gehirn.ai/v1',
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'https://herd.gehirn.ai/v1',
       OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer stale',
       OTEL_LOGS_EXPORTER: 'otlp',
       OTEL_SDK_DISABLED: 'false',

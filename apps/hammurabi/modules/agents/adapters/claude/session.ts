@@ -11,8 +11,12 @@ import {
   DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   normalizeClaudeMaxThinkingTokens,
 } from '../../../claude-max-thinking-tokens.js'
-import { normalizeClaudeEvent } from '../../event-normalizers/claude.js'
-import { bridgeLegacyEventToTranscriptEnvelopes } from '../../transcript-legacy-bridge.js'
+import {
+  createClaudeProviderActivityEnvelope,
+  createClaudeTranscriptMapper,
+  createClaudeTurnEndEnvelope,
+  createClaudeUserTranscriptEnvelopes,
+} from '../../event-normalizers/claude.js'
 import {
   buildLoginShellCommand,
   prepareDaemonMachineLaunchEnvironment,
@@ -36,6 +40,7 @@ import {
 import {
   createClaudeProviderContext,
   ensureClaudeProviderContext,
+  readClaudeSessionId,
 } from '../../providers/provider-session-context.js'
 import {
   DEFAULT_SESSION_MESSAGE_QUEUE_LIMIT,
@@ -120,6 +125,21 @@ function buildUserEvent(
     ...(clientSendId ? { clientSendId } : {}),
     message: { role: 'user', content: buildPromptContent(text, images) },
   } as unknown as StreamJsonEvent
+}
+
+function buildClaudeUserEvents(
+  session: StreamSession,
+  text: string,
+  images?: QueuedMessageImage[],
+  displayText?: string,
+  clientSendId?: string,
+): StreamJsonEvent[] {
+  return createClaudeUserTranscriptEnvelopes(text, {
+    sessionId: readClaudeSessionId(session),
+    displayText,
+    clientSendId,
+    images,
+  }) as StreamJsonEvent[]
 }
 
 const DEFAULT_CLAUDE_APPEND_PROMPT_MAX_BYTES = 96 * 1024
@@ -224,15 +244,17 @@ export function createClaudeSessionAdapter(
       }
 
       deps.resetActiveTurnState(session)
-      const displayEvent = buildUserEvent(
+      const displayEvents = buildClaudeUserEvents(
+        session,
         text,
         normalizedImages,
-        options?.userEventSubtype,
         options?.displayText,
         options?.clientSendId,
       )
-      deps.appendEvent(session, displayEvent)
-      deps.broadcastEvent(session, displayEvent)
+      for (const displayEvent of displayEvents) {
+        deps.appendEvent(session, displayEvent)
+        deps.broadcastEvent(session, displayEvent)
+      }
       return { ok: true, delivered: 'live' }
     },
   }
@@ -415,6 +437,7 @@ export function createClaudeStreamSession(
   }
 
   deps.writeTranscriptMeta(session)
+  const transcriptMapper = createClaudeTranscriptMapper()
 
   if (typeof childProcess.stdin?.on === 'function') {
     childProcess.stdin.on('error', () => {
@@ -431,16 +454,13 @@ export function createClaudeStreamSession(
       if (!trimmed) continue
       try {
         const event = JSON.parse(trimmed) as StreamJsonEvent
-        const normalized = normalizeClaudeEvent(event as never) as StreamJsonEvent | StreamJsonEvent[] | null
-        if (!normalized) {
+        const envelopes = transcriptMapper.map(event)
+        if (envelopes.length === 0) {
           continue
         }
-        const events = Array.isArray(normalized) ? normalized : [normalized]
-        for (const normalizedEvent of events) {
-          for (const envelope of bridgeLegacyEventToTranscriptEnvelopes(normalizedEvent as never)) {
-            deps.appendEvent(session, envelope)
-            deps.broadcastEvent(session, envelope)
-          }
+        for (const envelope of envelopes) {
+          deps.appendEvent(session, envelope)
+          deps.broadcastEvent(session, envelope)
         }
       } catch {
         // Skip unparseable lines from the CLI.
@@ -463,16 +483,13 @@ export function createClaudeStreamSession(
     }
     try {
       const event = JSON.parse(remaining) as StreamJsonEvent
-      const normalized = normalizeClaudeEvent(event as never) as StreamJsonEvent | StreamJsonEvent[] | null
-      if (!normalized) {
+      const envelopes = transcriptMapper.map(event)
+      if (envelopes.length === 0) {
         return
       }
-      const events = Array.isArray(normalized) ? normalized : [normalized]
-      for (const normalizedEvent of events) {
-        for (const envelope of bridgeLegacyEventToTranscriptEnvelopes(normalizedEvent as never)) {
-          deps.appendEvent(session, envelope)
-          deps.broadcastEvent(session, envelope)
-        }
+      for (const envelope of envelopes) {
+        deps.appendEvent(session, envelope)
+        deps.broadcastEvent(session, envelope)
       }
     } catch {
       // Ignore unparseable trailing data — same policy as the 'data' handler.
@@ -589,10 +606,11 @@ export function createClaudeStreamSession(
         ? `${lastLine.slice(0, 297)}...`
         : lastLine
     }
-    const stderrEvent: StreamJsonEvent = {
-      type: 'system',
-      text: `stderr: ${text}`,
-    }
+    const stderrEvent = createClaudeProviderActivityEnvelope(
+      'Claude stderr',
+      { detail: `stderr: ${text}`, text },
+      readClaudeSessionId(session),
+    ) as StreamJsonEvent
     deps.appendEvent(session, stderrEvent)
     deps.broadcastEvent(session, stderrEvent)
     if (isProviderAuthRequiredText(text)) {
@@ -623,8 +641,13 @@ export function createClaudeStreamSession(
       stderr: stderrSummary,
       text: stderrSummary ? `${baseText}; stderr: ${stderrSummary}` : baseText,
     }
-    deps.appendEvent(session, exitEvent)
-    deps.broadcastEvent(session, exitEvent)
+    const exitEnvelope = createClaudeProviderActivityEnvelope(
+      'Claude process exited',
+      { exitCode, signal: signalText, stderr: stderrSummary, detail: exitEvent.text },
+      readClaudeSessionId(session),
+    ) as StreamJsonEvent
+    deps.appendEvent(session, exitEnvelope)
+    deps.broadcastEvent(session, exitEnvelope)
 
     for (const client of session.clients) {
       client.close(1000, 'Session ended')
@@ -658,12 +681,19 @@ export function createClaudeStreamSession(
       return
     }
 
+    const detail = `Process error: ${error.message}`
     const errorEvent: ExitCompletionEvent = {
-      type: 'system',
-      text: `Process error: ${error.message}`,
+      type: 'exit',
+      exitCode: -1,
+      text: detail,
     }
-    deps.appendEvent(session, errorEvent)
-    deps.broadcastEvent(session, errorEvent)
+    const errorEnvelope = createClaudeTurnEndEnvelope(
+      'failed',
+      detail,
+      readClaudeSessionId(session),
+    ) as StreamJsonEvent
+    deps.appendEvent(session, errorEnvelope)
+    deps.broadcastEvent(session, errorEnvelope)
 
     for (const client of session.clients) {
       client.close(1000, 'Session ended')
@@ -687,6 +717,10 @@ export function createClaudeStreamSession(
   })
 
   if (task.length > 0) {
+    for (const userEvent of buildClaudeUserEvents(session, task)) {
+      deps.appendEvent(session, userEvent)
+      deps.broadcastEvent(session, userEvent)
+    }
     const userMsg = JSON.stringify({ type: 'user', message: { role: 'user', content: task } })
     deps.writeToStdin(session, userMsg + '\n')
   }

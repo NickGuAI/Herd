@@ -1,6 +1,6 @@
-# Hervald Docs Directory
+# Herd Docs Directory
 
-This is the complete grouped map for public Hervald product docs.
+This is the complete grouped map for public Herd product docs.
 
 ### Setup
 

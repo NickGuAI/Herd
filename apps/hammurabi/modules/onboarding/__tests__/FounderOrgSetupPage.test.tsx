@@ -123,7 +123,7 @@ function onboardingStatus(overrides: Partial<OnboardingStatus> = {}): Onboarding
   return {
     currentStepId,
     steps: [
-      { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Hervald app and bootstrap admin are available.' },
+      { id: 'instance', label: 'Instance ready', state: 'complete', summary: 'Local Herd app and bootstrap admin are available.' },
       { id: 'founder-org', label: 'Founder + organization', state: founderSetup.setupComplete ? 'complete' : 'current', summary: 'Create the first local operator and org identity.' },
       { id: 'gaia', label: 'Gaia commander', state: gaia.exists ? 'complete' : currentStepId === 'gaia' ? 'current' : 'pending', summary: 'Seed Gaia as the default onboarding commander.' },
       { id: 'starter-workforce', label: 'Starter workforce', state: starterWorkforce.complete ? 'complete' : currentStepId === 'starter-workforce' ? 'current' : 'pending', summary: 'Install the bundled engineering, research, and assistant commanders.' },

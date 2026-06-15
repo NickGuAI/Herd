@@ -1,4 +1,4 @@
-import { mapCodexToTranscriptEnvelopes, normalizeCodexEvent } from '../../event-normalizers/codex.js'
+import { mapCodexToTranscriptEnvelopes } from '../../event-normalizers/codex.js'
 import {
   codexApprovalAdapter,
   sendCodexApprovalReply,
@@ -39,6 +39,12 @@ import {
   isProviderAuthRequiredText,
   type ProviderSpawnAuth,
 } from '../../provider-auth.js'
+import {
+  isTranscriptEnvelope,
+  type TranscriptEnvelope,
+  type TranscriptEnvelopeEvent,
+} from '../../../../src/types/transcript-envelope.js'
+import { createTranscriptId } from '../../transcript-id.js'
 import type {
   AnySession,
   ClaudePermissionMode,
@@ -132,14 +138,14 @@ function resolveCodexTransportPolicy(mode: ClaudePermissionMode): {
   sandbox: string
   approvalPolicy: string | typeof ALWAYS_ON_CODEX_APPROVAL_POLICY
 } {
-  // Hervald owns the canonical action-policy gate (#1186); codex's own
+  // Herd owns the canonical action-policy gate (#1186); codex's own
   // sandbox should not double-gate. workspace-write rejects writes to .git
   // metadata even inside the workspace, which breaks `git worktree add` for
   // dispatched workers and adds zero defense-in-depth (the gate already
   // routes provider-emitted approval events through the unified pipeline,
   // and internal default-allow policies fast-path safe internal actions).
   // Approval policy stays ALWAYS_ON granular so codex still emits the
-  // request events Hervald's gate intercepts.
+  // request events Herd's gate intercepts.
   return {
     sandbox: 'danger-full-access',
     approvalPolicy: ALWAYS_ON_CODEX_APPROVAL_POLICY,
@@ -153,12 +159,13 @@ function resolveCodexSessionModel(options: CodexSessionCreateOptions): string | 
   return explicitModel ?? (options.resumeSessionId ? undefined : DEFAULT_CODEX_MODEL_ID)
 }
 
-function buildCodexTransportRecoveredEvent(reason: string): StreamJsonEvent {
-  return {
-    type: 'system',
-    subtype: 'transport_recovered',
-    text: `Codex transport recovered after disconnect: ${reason}`,
-  }
+function buildCodexTransportRecoveredEvent(session: StreamSession, reason: string): StreamJsonEvent {
+  return buildCodexSessionEnvelope(session, 'hammurabi/codex-transport-recovered', {
+    type: 'provider.activity',
+    title: 'Codex transport recovered',
+    detail: `Codex transport recovered after disconnect: ${reason}`,
+    data: { reason },
+  })
 }
 
 function readCodexTurnId(params: unknown): string | undefined {
@@ -211,28 +218,146 @@ function buildCodexTurnInput(text: string, images?: QueuedMessageImage[]): Codex
   return input
 }
 
-function buildCodexUserEventContent(
-  text: string,
-  images?: QueuedMessageImage[],
-): string | Array<
-  { type: 'text'; text: string } |
-  { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
-> {
-  if (!images || images.length === 0) {
-    return text
+function buildCodexUserEnvelope(
+  threadId: string | undefined,
+  itemId: string,
+  ev: TranscriptEnvelopeEvent,
+  clientSendId?: string,
+): TranscriptEnvelope {
+  return {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: new Date().toISOString(),
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      ...(threadId ? { sessionId: threadId } : {}),
+      rawEventType: 'hammurabi/user',
+      rawEventId: itemId,
+    },
+    itemId,
+    ...(clientSendId ? { clientSendId } : {}),
+    ev,
   }
+}
 
-  return [
-    ...(text ? [{ type: 'text' as const, text }] : []),
-    ...images.map((image) => ({
-      type: 'image' as const,
-      source: {
-        type: 'base64' as const,
-        media_type: image.mediaType,
-        data: image.data,
-      },
-    })),
+function buildCodexApprovalRequestEnvelope(
+  request: CodexPendingApprovalRequest,
+): TranscriptEnvelope {
+  const itemId = request.itemId ?? String(request.requestId)
+  const approvalLabel = request.method.split('/').at(1) ?? 'approval'
+  return {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: request.requestedAt,
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      sessionId: request.threadId,
+      rawEventType: request.method,
+      rawEventId: itemId,
+    },
+    ...(request.turnId ? { turnId: request.turnId } : {}),
+    itemId,
+    ev: {
+      type: 'approval.request',
+      toolCallId: itemId,
+      prompt: `Codex is waiting for ${approvalLabel} approval.`,
+      request,
+    },
+  }
+}
+
+function buildCodexSessionEnvelope(
+  session: StreamSession,
+  rawEventType: string,
+  ev: TranscriptEnvelopeEvent,
+): TranscriptEnvelope {
+  const threadId = readCodexThreadId(session)
+  return {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: new Date().toISOString(),
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      ...(threadId ? { sessionId: threadId } : {}),
+      rawEventType,
+    },
+    ev,
+  }
+}
+
+function buildCodexUserEnvelopeEvents(
+  session: StreamSession,
+  text: string,
+  options: StreamDispatchOptions = {},
+  images?: QueuedMessageImage[],
+): StreamJsonEvent[] {
+  const clientSendId = options.clientSendId?.trim()
+  const itemId = clientSendId || createTranscriptId()
+  const displayText = options.displayText !== undefined
+    ? options.displayText.trim()
+    : undefined
+  const visibleText = displayText !== undefined
+    ? (displayText || (images && images.length > 0 ? '[image]' : '[workspace context]'))
+    : text.trim()
+  const threadId = readCodexThreadId(session)
+  const events: TranscriptEnvelope[] = [
+    buildCodexUserEnvelope(threadId, itemId, { type: 'message.start', role: 'user' }, clientSendId),
   ]
+  if (visibleText) {
+    events.push(buildCodexUserEnvelope(
+      threadId,
+      itemId,
+      { type: 'message.delta', text: visibleText, channel: 'final' },
+      clientSendId,
+    ))
+  }
+  for (const image of images ?? []) {
+    events.push(buildCodexUserEnvelope(
+      threadId,
+      itemId,
+      {
+        type: 'message.image',
+        role: 'user',
+        image: {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: image.mediaType,
+            data: image.data,
+          },
+        },
+      },
+      clientSendId,
+    ))
+  }
+  events.push(buildCodexUserEnvelope(threadId, itemId, { type: 'message.end' }, clientSendId))
+  return events as StreamJsonEvent[]
+}
+
+function hasCodexUserEnvelopeForClientSendId(session: StreamSession, clientSendId: string | undefined): boolean {
+  if (!clientSendId) {
+    return false
+  }
+  return session.events.some((event) => (
+    isTranscriptEnvelope(event)
+    && event.source.provider === 'codex'
+    && event.source.rawEventType === 'hammurabi/user'
+    && event.clientSendId === clientSendId
+  ))
+}
+
+function appendAndBroadcastCodexEvents(
+  session: StreamSession,
+  events: readonly StreamJsonEvent[],
+  deps: Pick<CodexSessionDeps, 'appendEvent' | 'broadcastEvent'>,
+): void {
+  for (const event of events) {
+    deps.appendEvent(session, event)
+    deps.broadcastEvent(session, event)
+  }
 }
 
 function classifyCodexDispatchError(
@@ -485,30 +610,37 @@ export async function failCodexSession(
   }
 
   const message = codexFailureMessage(reason)
-  const systemEvent: StreamJsonEvent = {
-    type: 'system',
-    text: message,
-  }
-  deps.appendEvent(session, systemEvent)
-  deps.broadcastEvent(session, systemEvent)
+  const failureActivity = buildCodexSessionEnvelope(
+    session,
+    'hammurabi/codex-session-failed',
+    {
+      type: 'provider.activity',
+      title: 'Codex session failed',
+      detail: message,
+      data: {
+        exitCode,
+        signal: signal ?? null,
+      },
+    },
+  )
+  deps.appendEvent(session, failureActivity)
+  deps.broadcastEvent(session, failureActivity)
 
-  const resultEvent: StreamJsonEvent = {
-    type: 'result',
-    subtype: 'failed',
-    is_error: true,
-    result: message,
-  }
+  const resultEvent = buildCodexSessionEnvelope(
+    session,
+    'hammurabi/codex-session-ended',
+    {
+      type: 'turn.end',
+      status: 'failed',
+      error: message,
+      result: {
+        exitCode,
+        signal: signal ?? null,
+      },
+    },
+  )
   deps.appendEvent(session, resultEvent)
   deps.broadcastEvent(session, resultEvent)
-
-  const exitEvent: StreamJsonEvent = {
-    type: 'exit',
-    exitCode,
-    signal,
-    text: message,
-  }
-  deps.appendEvent(session, exitEvent)
-  deps.broadcastEvent(session, exitEvent)
 
   deps.setCompletedSession(
     sessionName,
@@ -627,7 +759,7 @@ async function recoverCodexTransport(
       deps.scheduleTurnWatchdog(session)
     }
 
-    const recoveredEvent = buildCodexTransportRecoveredEvent(reason)
+    const recoveredEvent = buildCodexTransportRecoveredEvent(session, reason)
     deps.appendEvent(session, recoveredEvent)
     deps.broadcastEvent(session, recoveredEvent)
     deps.schedulePersistedSessionsWrite()
@@ -643,7 +775,7 @@ async function recoverCodexTransport(
 
 export async function shutdownCodexRuntimes(
   deps: Pick<CodexSessionDeps, 'clearTurnWatchdog' | 'getAllSessions'>,
-  reason = 'Hervald shutdown',
+  reason = 'Herd shutdown',
 ): Promise<void> {
   const codexSessions = [...deps.getAllSessions()].filter((session): session is StreamSession =>
     session.kind === 'stream' && session.agentType === 'codex'
@@ -690,7 +822,16 @@ export async function sendTextToCodexSession(
 
   const activeTurnId = getCodexActiveTurnId(session)
   const dispatchMethod = activeTurnId ? 'turn/steer' : 'turn/start'
+  const clientSendId = options.clientSendId?.trim()
   deps.resetActiveTurnState(session)
+  if (!hasCodexUserEnvelopeForClientSendId(session, clientSendId)) {
+    appendAndBroadcastCodexEvents(
+      session,
+      buildCodexUserEnvelopeEvents(session, text, options, images),
+      deps,
+    )
+    deps.schedulePersistedSessionsWrite()
+  }
   try {
     if (activeTurnId) {
       await steerCodexTurn(session, activeTurnId, text, images)
@@ -726,15 +867,6 @@ export async function sendTextToCodexSession(
   }
 
   deps.scheduleTurnWatchdog(session)
-  const userEvent: StreamJsonEvent = {
-    type: 'user',
-    ...(options.userEventSubtype ? { subtype: options.userEventSubtype } : {}),
-    ...(options.displayText !== undefined ? { displayText: options.displayText.trim() } : {}),
-    ...(options.clientSendId ? { clientSendId: options.clientSendId } : {}),
-    message: { role: 'user', content: buildCodexUserEventContent(text, images) },
-  } as unknown as StreamJsonEvent
-  deps.appendEvent(session, userEvent)
-  deps.broadcastEvent(session, userEvent)
   return { ok: true }
 }
 
@@ -890,10 +1022,12 @@ async function createCodexSessionFromThread(
           threadId,
           method,
         })
-        const missingIdEvent: StreamJsonEvent = {
-          type: 'system',
-          text: 'Codex requested MCP user input, but the request id was missing. This request cannot be resolved from Hervald.',
-        }
+        const missingIdEvent = buildCodexSessionEnvelope(session, `${method}/missing-id`, {
+          type: 'provider.activity',
+          title: 'Codex MCP input request missing id',
+          detail: 'Codex requested MCP user input, but the request id was missing. This request cannot be resolved from Herd.',
+          data: { method, params },
+        })
         deps.appendEvent(session, missingIdEvent)
         deps.broadcastEvent(session, missingIdEvent)
         deps.schedulePersistedSessionsWrite()
@@ -938,10 +1072,12 @@ async function createCodexSessionFromThread(
             requestId,
             toolName: activeToolContext.toolName,
           })
-          const unavailableEvent: StreamJsonEvent = {
-            type: 'system',
-            text: 'Hervald approval gate is unavailable. Codex MCP elicitation request denied.',
-          }
+          const unavailableEvent = buildCodexSessionEnvelope(session, `${method}/approval-gate-unavailable`, {
+            type: 'provider.activity',
+            title: 'Codex MCP input request denied',
+            detail: 'Herd approval gate is unavailable. Codex MCP elicitation request denied.',
+            data: rawEvent,
+          })
           deps.appendEvent(session, unavailableEvent)
           deps.broadcastEvent(session, unavailableEvent)
           deps.schedulePersistedSessionsWrite()
@@ -997,10 +1133,12 @@ async function createCodexSessionFromThread(
         unclassifiedIncomingCount: session.codexUnclassifiedIncomingCount,
       })
 
-      const unhandledEvent: StreamJsonEvent = {
-        type: 'system',
-        text: `Codex requested approval via an unhandled method "${method}". Hervald automatically declined it so the turn can continue.`,
-      }
+      const unhandledEvent = buildCodexSessionEnvelope(session, `${method}/unhandled-approval`, {
+        type: 'provider.activity',
+        title: 'Codex approval request declined',
+        detail: `Codex requested approval via an unhandled method "${method}". Herd automatically declined it so the turn can continue.`,
+        data: { method, params, requestId: typeof requestId === 'number' ? requestId : null },
+      })
       deps.appendEvent(session, unhandledEvent)
       deps.broadcastEvent(session, unhandledEvent)
       deps.schedulePersistedSessionsWrite()
@@ -1054,6 +1192,10 @@ async function createCodexSessionFromThread(
         requestedAt: new Date().toISOString(),
       }
 
+      const approvalRequestEvent = buildCodexApprovalRequestEnvelope(pendingRequest)
+      deps.appendEvent(session, approvalRequestEvent)
+      deps.broadcastEvent(session, approvalRequestEvent)
+
       deps.clearTurnWatchdog(session)
       markCodexTurnHealthy(session)
 
@@ -1066,10 +1208,12 @@ async function createCodexSessionFromThread(
           method,
           ...approvalDetails,
         })
-        const unavailableEvent: StreamJsonEvent = {
-          type: 'system',
-          text: 'Hervald approval gate is unavailable. Codex request denied.',
-        }
+        const unavailableEvent = buildCodexSessionEnvelope(session, `${method}/approval-gate-unavailable`, {
+          type: 'provider.activity',
+          title: 'Codex approval request denied',
+          detail: 'Herd approval gate is unavailable. Codex request denied.',
+          data: pendingRequest,
+        })
         deps.appendEvent(session, unavailableEvent)
         deps.broadcastEvent(session, unavailableEvent)
         deps.schedulePersistedSessionsWrite()
@@ -1130,29 +1274,22 @@ async function createCodexSessionFromThread(
     const transcriptParams = typeof requestId === 'number' && transcriptParamsRecord
       ? { ...transcriptParamsRecord, requestId }
       : params
-    const envelopes = mapCodexToTranscriptEnvelopes(method, transcriptParams)
-    if (envelopes.length > 0) {
-      for (const event of envelopes) {
-        deps.appendEvent(session, event)
-        deps.broadcastEvent(session, event)
-      }
-      return
-    }
-
-    const normalized = normalizeCodexEvent(method, params)
-    if (!normalized) {
-      return
-    }
-    const events = Array.isArray(normalized) ? normalized : [normalized]
-    for (const event of events) {
-      deps.appendEvent(session, event)
-      deps.broadcastEvent(session, event)
-    }
+    appendAndBroadcastCodexEvents(
+      session,
+      mapCodexToTranscriptEnvelopes(method, transcriptParams),
+      deps,
+    )
   })
   ensureCodexProviderContext(session).notificationCleanup = notificationCleanup
 
   if (task.length > 0) {
     deps.resetActiveTurnState(session)
+    appendAndBroadcastCodexEvents(
+      session,
+      buildCodexUserEnvelopeEvents(session, task),
+      deps,
+    )
+    deps.schedulePersistedSessionsWrite()
     try {
       await startCodexTurn(session, task)
     } catch (error) {
@@ -1173,12 +1310,6 @@ async function createCodexSessionFromThread(
     }
 
     deps.scheduleTurnWatchdog(session)
-    const userEvent: StreamJsonEvent = {
-      type: 'user',
-      message: { role: 'user', content: task },
-    } as unknown as StreamJsonEvent
-    deps.appendEvent(session, userEvent)
-    deps.broadcastEvent(session, userEvent)
   }
 
   return session

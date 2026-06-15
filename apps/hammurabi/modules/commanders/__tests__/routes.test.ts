@@ -633,7 +633,7 @@ describe('commanders routes', () => {
       expect(created.contextConfig).toEqual({ fatPinInterval: 2 })
       expect(created.taskSource).toEqual({
         owner: 'NickGuAI',
-        repo: 'Hervald',
+        repo: 'Herd',
         label: 'benchmark',
       })
       expect(created.heartbeat.intervalMs).toBe(30 * 60_000)
@@ -660,7 +660,7 @@ describe('commanders routes', () => {
         contextConfig: { fatPinInterval: 2 },
         taskSource: {
           owner: 'NickGuAI',
-          repo: 'Hervald',
+          repo: 'Herd',
           label: 'benchmark',
         },
         templateId: 'benchmark',

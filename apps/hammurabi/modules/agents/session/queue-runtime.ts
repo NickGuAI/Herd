@@ -174,12 +174,14 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
     displayText?: string,
     clientSendId?: string,
   ): QueuedMessage {
+    const id = `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const normalizedClientSendId = clientSendId?.trim()
     return {
-      id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id,
       text,
       ...(displayText !== undefined ? { displayText: displayText.trim() } : {}),
       images: images && images.length > 0 ? [...images] : undefined,
-      ...(clientSendId ? { clientSendId } : {}),
+      clientSendId: normalizedClientSendId || id,
       priority,
       queuedAt: new Date().toISOString(),
     }

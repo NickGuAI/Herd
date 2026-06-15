@@ -1,6 +1,6 @@
 # API Reference
 
-Hervald exposes an authenticated HTTP and WebSocket API for the browser shell,
+Herd exposes an authenticated HTTP and WebSocket API for the browser shell,
 provider sessions, workspace access, approvals, settings, skills, channels, and
 telemetry.
 

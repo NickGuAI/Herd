@@ -108,7 +108,7 @@ describe('ApiKeyLandingPage native connection validation', () => {
   it('does not persist a malformed native instance URL', async () => {
     const { onApiKeySubmit } = await renderPage()
 
-    await setFieldValue('#instance-url', 'hervald.gehirn.ai')
+    await setFieldValue('#instance-url', 'herd.gehirn.ai')
     await setFieldValue('#api-key', 'hmrb_bad_url')
     await submitForm()
 

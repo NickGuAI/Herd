@@ -92,15 +92,29 @@ describe('codexApprovalAdapter', () => {
     expect(appendEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Accepted Codex command execution approval request 42.',
+        schemaVersion: 2,
+        itemId: 'cmd-send-1',
+        ev: expect.objectContaining({
+          type: 'approval.resolved',
+          toolCallId: 'cmd-send-1',
+          approved: true,
+          result: expect.objectContaining({
+            decision: 'accept',
+            request: expect.objectContaining({ requestId: 42 }),
+          }),
+        }),
       }),
     )
     expect(broadcastEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Accepted Codex command execution approval request 42.',
+        schemaVersion: 2,
+        itemId: 'cmd-send-1',
+        ev: expect.objectContaining({
+          type: 'approval.resolved',
+          toolCallId: 'cmd-send-1',
+          approved: true,
+        }),
       }),
     )
     expect(schedulePersistedSessionsWrite).toHaveBeenCalledTimes(1)
@@ -151,8 +165,17 @@ describe('codexApprovalAdapter', () => {
     expect(appendEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Cancelled Codex command execution approval request 43.',
+        schemaVersion: 2,
+        itemId: 'cmd-cancel-1',
+        ev: expect.objectContaining({
+          type: 'approval.resolved',
+          toolCallId: 'cmd-cancel-1',
+          approved: false,
+          result: expect.objectContaining({
+            decision: 'cancel',
+            request: expect.objectContaining({ requestId: 43 }),
+          }),
+        }),
       }),
     )
     expect(schedulePersistedSessionsWrite).toHaveBeenCalledTimes(1)
@@ -224,8 +247,17 @@ describe('codexApprovalAdapter', () => {
     expect(appendEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Declined Codex MCP elicitation request 77.',
+        schemaVersion: 2,
+        itemId: 'mcp-email-1',
+        ev: expect.objectContaining({
+          type: 'approval.resolved',
+          toolCallId: 'mcp-email-1',
+          approved: false,
+          result: expect.objectContaining({
+            decision: 'decline',
+            requestId: 77,
+          }),
+        }),
       }),
     )
     expect(scheduleTurnWatchdog).toHaveBeenCalledWith(session)
@@ -273,8 +305,17 @@ describe('codexApprovalAdapter', () => {
     expect(appendEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Cancelled Codex MCP elicitation request 79.',
+        schemaVersion: 2,
+        itemId: 'mcp-email-cancel-1',
+        ev: expect.objectContaining({
+          type: 'approval.resolved',
+          toolCallId: 'mcp-email-cancel-1',
+          approved: false,
+          result: expect.objectContaining({
+            decision: 'cancel',
+            requestId: 79,
+          }),
+        }),
       }),
     )
     expect(scheduleTurnWatchdog).not.toHaveBeenCalled()

@@ -121,6 +121,9 @@ exit 0
     path.join(binDir, 'git'),
     `#!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "\${FAKE_GIT_LOG:-}" ]]; then
+  printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
+fi
 if [[ "\${FAKE_GIT_FAIL_IF_USED:-0}" == "1" ]]; then
   echo "git should not be required for fresh installer bootstrap" >&2
   exit 42
@@ -269,7 +272,7 @@ async function assertInstalledSkill(homeDir: string): Promise<void> {
   await expect(readFile(codexSkillPath, 'utf8')).resolves.toBe(expectedSkill)
 }
 
-describe('Hervald installers bundle write-new-skill by default', () => {
+describe('Herd installers bundle write-new-skill by default', () => {
   afterEach(async () => {
     await Promise.all(
       tempDirs.splice(0).map((dir) =>
@@ -329,7 +332,7 @@ describe('Hervald installers bundle write-new-skill by default', () => {
 
     expect(script).toContain('configure_providers "$INSTALL_SETUP_PATH"')
     expect(script).toContain('Quickstart skips provider CLI customization')
-    expect(script).toContain('Choose Advanced setup, or set HERVALD_PROVIDERS=')
+    expect(script).toContain('Choose Advanced setup, or set HERD_PROVIDERS=')
     expect(script).toContain('prompt_provider_selection()')
     expect(script).toContain('Select providers [1,2,3,4]:')
     expect(script).toContain('"Already authenticated - re-check CLI or env auth"')
@@ -391,7 +394,7 @@ describe('Hervald installers bundle write-new-skill by default', () => {
     )
   })
 
-  it('downloads Hervald before running a standalone installer file without git', async () => {
+  it('downloads Herd before running a standalone installer file without git', async () => {
     const workspace = await makeTempDir('hammurabi-install-standalone-')
     const sourceRepo = path.join(workspace, 'source-repo')
     const homeDir = path.join(workspace, 'home')
@@ -438,11 +441,65 @@ describe('Hervald installers bundle write-new-skill by default', () => {
       },
     )
 
-    expect(result.stdout).toContain('Downloading Hervald into')
-    expect(result.stdout).toContain('downloaded Hervald to')
+    expect(result.stdout).toContain('Downloading Herd into')
+    expect(result.stdout).toContain('downloaded Herd to')
     expect(result.stdout).toContain('Installing default skills')
     await access(path.join(checkoutDir, 'apps', 'hammurabi', 'install.sh'))
-    await access(path.join(checkoutDir, '.hervald-installer-checkout'))
+    await access(path.join(checkoutDir, '.herd-installer-checkout'))
+    await assertInstalledSkill(homeDir)
+  })
+
+  it('retargets a reused legacy Herd checkout to the selected Herd repo before fetch', async () => {
+    const workspace = await makeTempDir('hammurabi-install-legacy-checkout-')
+    const homeDir = path.join(workspace, 'home')
+    const fakeBin = path.join(workspace, 'bin')
+    const toolchainDir = path.join(workspace, 'toolchain')
+    const expectedNodeBinDir = path.join(toolchainDir, hermeticNodeStem(), 'bin')
+    const standaloneDir = path.join(workspace, 'standalone')
+    const legacyCheckout = path.join(homeDir, 'Herd')
+    const gitLog = path.join(workspace, 'git.log')
+    const installerRelativePath = path.join('apps', 'hammurabi', 'install.sh')
+
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(fakeBin, { recursive: true })
+    await mkdir(standaloneDir, { recursive: true })
+    await seedSkillRepo(legacyCheckout, installerRelativePath)
+    await mkdir(path.join(legacyCheckout, '.git'), { recursive: true })
+    await seedFakeBin(fakeBin)
+    await seedHermeticToolchain(toolchainDir)
+
+    const scriptPath = path.join(standaloneDir, 'install.sh')
+    await cp(path.join(legacyCheckout, installerRelativePath), scriptPath)
+    await chmod(scriptPath, 0o755)
+
+    const result = await execFile(
+      'bash',
+      [scriptPath],
+      {
+        cwd: standaloneDir,
+        env: {
+          HOME: homeDir,
+          PATH: installerPath(fakeBin),
+          FAKE_GIT_LOG: gitLog,
+          HERVALD_EXPECTED_NODE_BIN_DIR: expectedNodeBinDir,
+          HERVALD_CONFIGURE_PROVIDERS: '0',
+          HAMMURABI_DATA_DIR: path.join(homeDir, '.hammurabi'),
+          HAMMURABI_TOOLCHAIN_DIR: toolchainDir,
+          HAMMURABI_INSTALL_AUTOSTART: '0',
+          HAMMURABI_INSTALL_TIMEOUT_SECONDS: '5',
+        },
+        maxBuffer: 1024 * 1024,
+      },
+    )
+
+    const gitCalls = await readFile(gitLog, 'utf8')
+    const setUrlCall = `-C ${legacyCheckout} remote set-url origin https://github.com/NickGuAI/Herd.git`
+    const fetchCall = `-C ${legacyCheckout} fetch --quiet origin main`
+
+    expect(result.stdout).toContain(`Refreshing existing Herd checkout at ${legacyCheckout}`)
+    expect(gitCalls).toContain(setUrlCall)
+    expect(gitCalls).toContain(fetchCall)
+    expect(gitCalls.indexOf(setUrlCall)).toBeLessThan(gitCalls.indexOf(fetchCall))
     await assertInstalledSkill(homeDir)
   })
 })

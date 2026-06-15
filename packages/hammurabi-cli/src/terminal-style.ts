@@ -32,7 +32,7 @@ export function printHervaldBrand(
   write: (chunk: string) => void = (chunk) => process.stdout.write(chunk),
 ): void {
   write(`${color(WORDMARK.join('\n'), CYAN)}\n`)
-  write(`${color('Hervald', BOLD)} - operator-controlled agent fleet runtime\n`)
+  write(`${color('Herd', BOLD)} - operator-controlled agent fleet runtime\n`)
   write(`${color(label, DIM)}\n\n`)
 }
 

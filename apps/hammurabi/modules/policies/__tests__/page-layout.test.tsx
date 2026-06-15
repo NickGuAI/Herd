@@ -124,10 +124,13 @@ describe('PoliciesPage layout', () => {
   it('lets the Shell own vertical page scrolling', async () => {
     await renderPoliciesPage()
 
-    const page = document.body.querySelector('[data-testid="policies-page"]') as HTMLElement | null
-    expect(page).not.toBeNull()
-    expect(page?.tagName).toBe('SECTION')
-    const pageClasses = page?.className.split(/\s+/) ?? []
+    const page = await vi.waitFor(() => {
+      const element = document.body.querySelector('[data-testid="policies-page"]') as HTMLElement | null
+      expect(element).not.toBeNull()
+      return element as HTMLElement
+    })
+    expect(page.tagName).toBe('SECTION')
+    const pageClasses = page.className.split(/\s+/)
     expect(pageClasses).toContain('w-full')
     expect(pageClasses).toContain('min-w-0')
     expect(pageClasses).not.toContain('h-full')
@@ -142,7 +145,7 @@ describe('PoliciesPage layout', () => {
     expect(contentClasses).not.toContain('min-h-0')
     expect(contentClasses).not.toContain('overflow-y-auto')
 
-    const routeOwnedVerticalScrollers = Array.from(page?.querySelectorAll('*') ?? []).filter((element) =>
+    const routeOwnedVerticalScrollers = Array.from(page.querySelectorAll('*')).filter((element) =>
       String((element as HTMLElement).className).includes('overflow-y-auto')
     )
     expect(routeOwnedVerticalScrollers).toHaveLength(0)

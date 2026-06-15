@@ -84,7 +84,7 @@ describe('ConversationStore', () => {
       status: 'active',
       currentTask: {
         issueNumber: 1216,
-        issueUrl: 'https://github.com/NickGuAI/Hervald/issues/1216',
+        issueUrl: 'https://github.com/NickGuAI/Herd/issues/1216',
         startedAt: '2026-05-01T00:05:00.000Z',
       },
       lastHeartbeat: activeHeartbeatAt,
@@ -103,7 +103,7 @@ describe('ConversationStore', () => {
       lastHeartbeat: activeHeartbeatAt,
       currentTask: {
         issueNumber: 1216,
-        issueUrl: 'https://github.com/NickGuAI/Hervald/issues/1216',
+        issueUrl: 'https://github.com/NickGuAI/Herd/issues/1216',
         startedAt: '2026-05-01T00:05:00.000Z',
       },
     }))

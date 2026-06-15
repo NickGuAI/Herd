@@ -70,6 +70,7 @@ import type {
 import type { TranscriptMeta } from '../transcript-store.js'
 import { isTranscriptTurnEndRecord } from '../transcript-records.js'
 import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
+import { getNextStreamEventSeq } from '../messages/canonical-timeline.js'
 
 export function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null
@@ -538,9 +539,12 @@ export function toCompletedSession(
   const sessionType = parseSessionType(metadata?.sessionType) ?? 'worker'
   if (isTranscriptEnvelope(event) && event.ev.type === 'turn.end') {
     const normalizedStatus = event.ev.status?.trim().toLowerCase()
-    const subtype = normalizedStatus === 'failed' || normalizedStatus === 'error' || normalizedStatus === 'cancelled'
-      ? 'failed'
-      : 'success'
+    const subtype = !normalizedStatus
+      || normalizedStatus === 'ok'
+      || normalizedStatus === 'completed'
+      || normalizedStatus === 'success'
+      ? 'success'
+      : (normalizedStatus === 'interrupted' ? 'interrupted' : 'failed')
     const finalComment = typeof event.ev.result === 'string'
       ? event.ev.result
       : (typeof event.ev.error === 'string' ? event.ev.error : '')
@@ -682,6 +686,7 @@ export function applyRestoredReplayState(
   conversationEntryCount?: number,
 ): void {
   session.events = [...events]
+  session.nextEventSeq = getNextStreamEventSeq(session.events)
   session.usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
   for (const event of session.events) {
     applyUsageEvent(session, event)

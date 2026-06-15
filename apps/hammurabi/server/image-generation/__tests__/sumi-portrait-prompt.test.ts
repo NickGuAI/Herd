@@ -47,7 +47,7 @@ Out of scope.
       displayName: 'Atlas',
       commanderMdExcerpt: extractCommanderMdExcerpt(commanderMd),
     })).toMatchInlineSnapshot(`
-      "Create a portrait of Atlas, a Hervald commander.
+      "Create a portrait of Atlas, a Herd commander.
 
       Portrait style (Sumi-e):
 

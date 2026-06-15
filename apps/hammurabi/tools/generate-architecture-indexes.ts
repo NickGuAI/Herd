@@ -792,7 +792,7 @@ const observations: SourceObservation[] = [
   {
     id: 'ios-domain-doc-drift',
     kind: 'drift',
-    summary: 'iOS README references hervald.gehirn.ai while Capacitor config and native API base target hervald.gehirn.ai.',
+    summary: 'iOS README references herd.gehirn.ai while Capacitor config and native API base target herd.gehirn.ai.',
     userEffect: 'Mobile/iOS setup readers may use the wrong production host if they follow the stale README text.',
     evidence: ['ios/README.md', 'capacitor.config.ts', 'src/lib/api-base.ts'],
     recommendation: 'Use capacitor.config.ts and src/lib/api-base.ts as current runtime truth; update prose docs separately before mobile release work.',

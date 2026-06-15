@@ -1,5 +1,5 @@
 /**
- * SessionsColumn — 232px left panel for the Hervald Command Room.
+ * SessionsColumn — 232px left panel for the Herd Command Room.
  *
  * Layout:
  *   ┌─────────────────────────────┐

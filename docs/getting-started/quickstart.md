@@ -1,19 +1,19 @@
-# Hervald Quickstart
+# Herd Quickstart
 
 This guide takes a clean machine from install to the first useful commander
 interaction. The endpoint is not "the app built"; the endpoint is a commander
-chat or worker action that proves Hervald can operate on your machine.
+chat or worker action that proves Herd can operate on your machine.
 
 ## 1. Install
 
 Run the installer on the machine that will host the control plane:
 
 ```bash
-curl -fsSL https://hervald.gehirn.ai/install.sh | bash
+curl -fsSL https://herd.gehirn.ai/install.sh | bash
 ```
 
 The installer prepares a hermetic Node/pnpm toolchain, clones the public
-Hervald repo, writes the local env file, installs dependencies, builds the app,
+Herd repo, writes the local env file, installs dependencies, builds the app,
 starts the shell once, creates a 24-hour bootstrap API key, and prints the local
 sign-in URL.
 
@@ -24,17 +24,17 @@ Verification:
   Treat the bootstrap key as temporary recovery material: use it for first
   sign-in, create a permanent API key in Settings, then rotate or revoke the
   bootstrap key before its 24-hour expiry.
-- The Hervald process exposes `/api/health`.
+- The Herd process exposes `/api/health`.
 
-## 2. Open Hervald
+## 2. Open Herd
 
-Open the URL printed by the installer. On first boot, Hervald may use the
+Open the URL printed by the installer. On first boot, Herd may use the
 zero-config API-key path if Auth0 is not configured. Hosted or production
 deployments may redirect through Auth0.
 
 Verification:
 
-- The browser reaches the Hervald shell.
+- The browser reaches the Herd shell.
 - The first-run screen appears, or the main Command Room appears if setup was
   already completed.
 - If the browser reports a stale API key, clear the stored key from the landing
@@ -61,8 +61,8 @@ Verification:
 
 ## 4. Connect Provider Auth
 
-Hervald uses provider CLIs on the host where the provider runs. Authenticate the
-original provider tool, then refresh Hervald provider status.
+Herd uses provider CLIs on the host where the provider runs. Authenticate the
+original provider tool, then refresh Herd provider status.
 
 Common paths:
 
@@ -75,7 +75,7 @@ opencode auth status
 
 If a provider is not authenticated, run that provider's native login command on
 the same host. For example, Claude Code authentication belongs to Claude Code;
-Hervald only reports and uses that local status.
+Herd only reports and uses that local status.
 
 Verification:
 
@@ -87,7 +87,7 @@ See [provider auth](../operate/provider-auth.md) for the detailed contract.
 
 ## 5. Attach Or Verify A Machine
 
-For local work, the host that runs Hervald can also run workers. For remote work,
+For local work, the host that runs Herd can also run workers. For remote work,
 attach a machine over SSH or Tailscale after ordinary SSH works.
 
 Verification:
@@ -120,7 +120,7 @@ Verification:
 | Symptom | Check | Recovery |
 |---|---|---|
 | Installer cannot run | `git`, `curl`, `tar`, outbound HTTPS | Install the missing tool and rerun the installer. |
-| Browser cannot reach app | `/api/health`, process logs, port `20001` | Restart Hervald and confirm the printed URL. |
+| Browser cannot reach app | `/api/health`, process logs, port `20001` | Restart Herd and confirm the printed URL. |
 | API key rejected | local browser storage, latest installer output | Clear the stale key and use a current bootstrap key, or create a permanent key from Settings before the bootstrap key expires. |
 | Provider unavailable | native provider auth status on that host | Run the provider login command on the provider host. |
 | Machine unavailable | ordinary SSH, Tailscale status, machine registry | Fix SSH/Tailscale first, then bootstrap the machine. |

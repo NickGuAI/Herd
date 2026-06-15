@@ -13,9 +13,9 @@ interface MobileBottomTabsProps {
 }
 
 /**
- * Canonical Hervald mobile bottom tab bar.
+ * Canonical Herd mobile bottom tab bar.
  *
- * Mounted by `src/surfaces/mobile/MobileShell.tsx` on any Hervald mobile route
+ * Mounted by `src/surfaces/mobile/MobileShell.tsx` on any Herd mobile route
  * and hydrated from backend module graph nav metadata. Self-hides on the
  * immersive chat route `/command-room?commander=<id>`.
  */

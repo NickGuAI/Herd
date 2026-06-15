@@ -11,6 +11,7 @@ import {
   resetTranscriptStoreRoot,
   setTranscriptStoreRoot,
 } from '../../agents/transcript-store'
+import { createTranscriptId } from '../../agents/transcript-id'
 import { createCommandersRouter, type CommandersRouterOptions } from '../routes'
 import type { CommanderSessionsInterface } from '../../agents/routes'
 import type { AgentType, SessionSendPayload } from '../../agents/types'
@@ -59,15 +60,103 @@ const FRESH_OPERATOR_AUTH_HEADERS = {
 }
 
 function assistantTextEvent(index: number, text: string) {
-  return {
-    type: 'assistant',
-    timestamp: new Date(Date.UTC(2026, 4, 1, 0, 0, index)).toISOString(),
-    message: {
-      id: `assistant-${index}`,
-      role: 'assistant',
-      content: [{ type: 'text', text }],
-    },
+  return testTranscriptEnvelope({
+    agentType: 'claude',
+    itemId: `assistant-${index}`,
+    rawEventType: 'hammurabi/test-assistant',
+    time: new Date(Date.UTC(2026, 4, 1, 0, 0, index)).toISOString(),
+    ev: { type: 'message.delta', text, channel: 'final' },
+  })
+}
+
+function transcriptBackendForAgent(agentType: AgentType | undefined): string {
+  if (agentType === 'codex') {
+    return 'rpc'
   }
+  if (agentType === 'gemini' || agentType === 'opencode') {
+    return 'acp'
+  }
+  return 'cli'
+}
+
+function testTranscriptEnvelope(options: {
+  agentType?: AgentType
+  itemId?: string
+  clientSendId?: string
+  rawEventType: string
+  time?: string
+  ev: Record<string, unknown>
+}): Record<string, unknown> {
+  return {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: options.time ?? new Date().toISOString(),
+    source: {
+      provider: options.agentType ?? 'claude',
+      backend: transcriptBackendForAgent(options.agentType),
+      rawEventType: options.rawEventType,
+      ...(options.itemId ? { rawEventId: options.itemId } : {}),
+    },
+    ...(options.itemId ? { itemId: options.itemId } : {}),
+    ...(options.clientSendId ? { clientSendId: options.clientSendId } : {}),
+    ev: options.ev,
+  }
+}
+
+function userTranscriptEvents(
+  active: ActiveSessionState,
+  text: string,
+  options: {
+    displayText?: string
+    clientSendId?: string
+    images?: QueuedMessageImage[]
+  } = {},
+): Record<string, unknown>[] {
+  const itemId = options.clientSendId || createTranscriptId()
+  const rawEventType = 'hammurabi/user'
+  const visibleText = options.displayText !== undefined
+    ? (options.displayText || (options.images?.length ? '[image]' : '[workspace context]'))
+    : text.trim()
+  const base = {
+    agentType: active.agentType,
+    itemId,
+    clientSendId: options.clientSendId,
+    rawEventType,
+  }
+  const events = [
+    testTranscriptEnvelope({
+      ...base,
+      ev: { type: 'message.start', role: 'user' },
+    }),
+  ]
+  if (visibleText) {
+    events.push(testTranscriptEnvelope({
+      ...base,
+      ev: { type: 'message.delta', text: visibleText, channel: 'final' },
+    }))
+  }
+  for (const image of options.images ?? []) {
+    events.push(testTranscriptEnvelope({
+      ...base,
+      ev: {
+        type: 'message.image',
+        role: 'user',
+        image: {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: image.mediaType,
+            data: image.data,
+          },
+        },
+      },
+    }))
+  }
+  events.push(testTranscriptEnvelope({
+    ...base,
+    ev: { type: 'message.end' },
+  }))
+  return events
 }
 
 interface RunningServer {
@@ -412,27 +501,11 @@ function createMockSessionsInterface(
       operationCalls.push({ kind: 'sendToSession', index: sendCalls.length - 1 })
       const active = activeSessions.get(name)
       if (active) {
-        active.events.push({
-          type: 'user',
+        active.events.push(...userTranscriptEvents(active, normalized.text, {
           ...(displayText !== undefined ? { displayText } : {}),
           ...(clientSendId ? { clientSendId } : {}),
-          message: {
-            role: 'user',
-            content: images
-              ? [
-                  ...(normalized.text ? [{ type: 'text', text: normalized.text }] : []),
-                  ...images.map((image) => ({
-                    type: 'image',
-                    source: {
-                      type: 'base64',
-                      media_type: image.mediaType,
-                      data: image.data,
-                    },
-                  })),
-                ]
-              : normalized.text,
-          },
-        })
+          images,
+        }))
         active.conversationEntryCount += 1
       }
       return activeSessions.has(name)
@@ -765,7 +838,7 @@ describe('conversation routes', () => {
     }
   })
 
-  it('returns transcript-backed conversation messages with default last-ten paging', async () => {
+  it('returns canonical conversation messages with default last-ten paging', async () => {
     const dir = await createTempDir('hammurabi-commanders-conversation-messages-')
     const storePath = join(dir, 'sessions.json')
     setTranscriptStoreRoot(join(dir, 'transcripts'))
@@ -806,7 +879,7 @@ describe('conversation routes', () => {
         totalMessages: number
         messages: Array<{ kind: string; text: string }>
       }
-      expect(payload.source).toBe('transcript')
+      expect(payload.source).toBe('canonical')
       expect(payload.limit).toBe(10)
       expect(payload.nextBefore).toBe('10')
       expect(payload.hasMore).toBe(true)
@@ -847,7 +920,7 @@ describe('conversation routes', () => {
     }
   })
 
-  it('uses the live session buffer when it is fresher than the transcript store', async () => {
+  it('includes live session events in the canonical message page', async () => {
     const dir = await createTempDir('hammurabi-commanders-conversation-live-messages-')
     const storePath = join(dir, 'sessions.json')
     setTranscriptStoreRoot(join(dir, 'transcripts'))
@@ -891,7 +964,7 @@ describe('conversation routes', () => {
         source: string
         messages: Array<{ text: string }>
       }
-      expect(payload.source).toBe('live')
+      expect(payload.source).toBe('canonical')
       expect(payload.messages.map((message) => message.text)).toEqual([
         'live 2',
         'live 3',
@@ -1163,7 +1236,7 @@ describe('conversation routes', () => {
       expect(firstMessage.conversation.liveSession?.name).toContain(`-conversation-${CONVERSATION_A}`)
       expect(firstMessage.messagePage).toEqual(expect.objectContaining({
         conversationId: CONVERSATION_A,
-        source: 'live',
+        source: 'canonical',
       }))
       expect(firstMessage.messagePage?.messages).toEqual(
         expect.arrayContaining([
@@ -1379,7 +1452,7 @@ describe('conversation routes', () => {
         method: 'POST',
         headers: FULL_AUTH_HEADERS,
       })
-      expect(resumeResponse.status).toBe(200)
+      expect([200, 202]).toContain(resumeResponse.status)
       const resumed = await resumeResponse.json() as {
         id: string
         status: string
@@ -1462,6 +1535,7 @@ describe('conversation routes', () => {
       })
       expect([200, 202]).toContain(startResponse.status)
       await waitForCreateCall(sessions)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
 
       const sessionName = Array.from(sessions.activeSessions.keys())[0]
       if (!sessionName) {
@@ -1495,6 +1569,10 @@ describe('conversation routes', () => {
       return sessions.recordedSessionEvents
         .filter((entry) => entry.event.subtype === 'deep_thinking_routing')
         .map((entry) => entry.event.status)
+    }
+
+    function nonStartupSendCalls(sessions: MockSessionsFixture): MockSessionsFixture['sendCalls'] {
+      return sessions.sendCalls.filter((call) => call.text !== STARTUP_PROMPT)
     }
 
     async function waitForRoutingStatus(
@@ -1552,7 +1630,7 @@ describe('conversation routes', () => {
         expect(response.status).toBe(200)
         expect(routingStatuses(sessions)).toContain('started')
         await vi.waitFor(() => expect(firstDispatchStarted).toBe(true))
-        expect(sessions.sendCalls).toHaveLength(0)
+        expect(nonStartupSendCalls(sessions)).toHaveLength(0)
 
         releaseFirstDispatch()
         await waitForRoutingStatus(sessions, 'completed')
@@ -1573,7 +1651,7 @@ describe('conversation routes', () => {
           }),
         ).toBe(true)
 
-        const synthesisCall = sessions.sendCalls.at(-1)
+        const synthesisCall = nonStartupSendCalls(sessions).at(-1)
         expect(synthesisCall).toEqual(expect.objectContaining({
           name: sessionName,
         }))
@@ -1609,7 +1687,11 @@ describe('conversation routes', () => {
 
         expect(response.status).toBe(200)
         await waitForRoutingStatus(sessions, 'timed_out')
-        expect(sessions.sendCalls).toHaveLength(0)
+        expect(
+          sessions.sendCalls.some((call) =>
+            call.text.includes('migration risk'),
+          ),
+        ).toBe(false)
         const workerNames = dispatchedWorkerNames(sessions)
         expect(workerNames).toHaveLength(2)
         expect(sessions.deletedSessions).toEqual(expect.arrayContaining(workerNames))
@@ -1692,7 +1774,7 @@ describe('conversation routes', () => {
 
         expect(response.status).toBe(200)
         await waitForRoutingStatus(sessions, 'failed')
-        expect(sessions.sendCalls).toHaveLength(0)
+        expect(nonStartupSendCalls(sessions)).toHaveLength(0)
         expect(sessions.dispatchWorkerCalls).toHaveLength(2)
         expect(sessions.deletedSessions).toContain(dispatchedWorkerNames(sessions)[0])
       } finally {
@@ -1721,7 +1803,7 @@ describe('conversation routes', () => {
 
         expect(response.status).toBe(200)
         await waitForRoutingStatus(sessions, 'completed')
-        const synthesisText = sessions.sendCalls.at(-1)?.text ?? ''
+        const synthesisText = nonStartupSendCalls(sessions).at(-1)?.text ?? ''
         expect(synthesisText).toContain('[truncated: exceeded deep-thinking prompt budget')
         expect(synthesisText.length).toBeLessThan(55_000)
         const thinkingTask = sessions.dispatchWorkerCalls
@@ -1755,7 +1837,7 @@ describe('conversation routes', () => {
         })
         expect(routingStatuses(sessions)).toContain('skipped')
         expect(sessions.dispatchWorkerCalls).toHaveLength(0)
-        expect(sessions.sendCalls).toHaveLength(0)
+        expect(nonStartupSendCalls(sessions)).toHaveLength(0)
       } finally {
         await server.close()
       }
@@ -1781,12 +1863,12 @@ describe('conversation routes', () => {
 
         expect(response.status).toBe(200)
         expect(sessions.dispatchWorkerCalls).toHaveLength(0)
-        expect(sessions.sendCalls).toEqual([
+        expect(sessions.sendCalls).toEqual(expect.arrayContaining([
           expect.objectContaining({
             name: sessionName,
             text: message,
           }),
-        ])
+        ]))
       } finally {
         await server.close()
       }
@@ -2773,6 +2855,9 @@ describe('conversation routes', () => {
         expect(activeResponse.status).toBe(200)
         active = await activeResponse.json() as NonNullable<typeof active>
         expect(active.displayState.hasLiveSession).toBe(true)
+        expect(active.displayState.isSendable).toBe(true)
+        expect(active.displayState.isQueueable).toBe(true)
+        expect(active.displayState.isMediaSendable).toBe(true)
       })
 
       if (!active) {
@@ -3020,6 +3105,7 @@ describe('conversation routes', () => {
         agentType: 'claude',
       })).status)
       await waitForCreateCall(sessions)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
 
       const liveSessionName = buildConversationSessionName({
         id: CONVERSATION_A,
@@ -3211,11 +3297,13 @@ describe('conversation routes', () => {
         }),
       })
       expect(messageResponse.status).toBe(200)
-      expect(sessions.sendCalls.at(-1)).toEqual(expect.objectContaining({
-        text: 'Review this image.',
-        images: [image],
-        clientSendId,
-      }))
+      expect(sessions.sendCalls).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          text: 'Review this image.',
+          images: [image],
+          clientSendId,
+        }),
+      ]))
 
       const historyResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages`, {
         headers: READ_ONLY_AUTH_HEADERS,

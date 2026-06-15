@@ -1,9 +1,9 @@
 /**
- * Hervald — Shared UI primitives.
+ * Herd — Shared UI primitives.
  *
  * Icon · StatusDot · AgentAvatar · Chip · MetaRow · Sparkline
  *
- * All components use Hervald CSS custom properties (--hv-*) from tokens.css.
+ * All components use Herd CSS custom properties (--hv-*) from tokens.css.
  * Import them as named exports wherever needed.
  */
 import type { CSSProperties, ReactNode } from 'react'
@@ -110,7 +110,7 @@ export function StatusDot({
 /* ============================================================
    AgentAvatar
    ============================================================
-   Canonical Hervald commander avatar. Accepts the live
+   Canonical Herd commander avatar. Accepts the live
    `CommanderSession` shape (`avatarUrl`, `displayName`/`name`/`host`)
    and renders either an `<img>` when `avatarUrl` is present OR a neutral
    empty tile. Used on every surface that shows a commander (desktop + mobile)

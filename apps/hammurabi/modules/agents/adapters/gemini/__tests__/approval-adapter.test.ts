@@ -125,15 +125,25 @@ describe('geminiApprovalAdapter', () => {
     expect(rawEvent.replyDeps.appendEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Email to matt.feroz@example.com requires manual approval.',
+        schemaVersion: 2,
+        source: expect.objectContaining({ provider: 'gemini', backend: 'acp' }),
+        ev: {
+          type: 'provider.activity',
+          title: 'Gemini request denied by policy',
+          data: { detail: 'Email to matt.feroz@example.com requires manual approval.' },
+        },
       }),
     )
     expect(rawEvent.replyDeps.broadcastEvent).toHaveBeenCalledWith(
       session,
       expect.objectContaining({
-        type: 'system',
-        text: 'Email to matt.feroz@example.com requires manual approval.',
+        schemaVersion: 2,
+        source: expect.objectContaining({ provider: 'gemini', backend: 'acp' }),
+        ev: {
+          type: 'provider.activity',
+          title: 'Gemini request denied by policy',
+          data: { detail: 'Email to matt.feroz@example.com requires manual approval.' },
+        },
       }),
     )
     expect(rawEvent.replyDeps.schedulePersistedSessionsWrite).toHaveBeenCalledTimes(1)

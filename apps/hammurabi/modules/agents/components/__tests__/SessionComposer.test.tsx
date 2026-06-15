@@ -500,7 +500,11 @@ describe('SessionComposer', () => {
       queueMessageButton.click()
     })
 
-    expect(onQueue).toHaveBeenCalledWith({ text: 'Queue this on mobile', images: undefined })
+    expect(onQueue).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Queue this on mobile',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
     expect(onSend).not.toHaveBeenCalled()
   })
 
@@ -566,7 +570,11 @@ describe('SessionComposer', () => {
       findButtonByLabel('Send message').click()
     })
 
-    expect(onSend).toHaveBeenCalledWith({ text: 'Ship the mobile redesign', images: undefined })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Ship the mobile redesign',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
     expect(onQueue).not.toHaveBeenCalled()
   })
 
@@ -588,7 +596,11 @@ describe('SessionComposer', () => {
       const textarea = document.body.querySelector('textarea') as HTMLTextAreaElement | null
       expect(textarea?.value).toBe('')
     })
-    expect(onSend).toHaveBeenCalledWith({ text: 'Clear this after tapping send', images: undefined })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Clear this after tapping send',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
   })
 
   it('keeps the mobile draft when an async fallback send resolves false', async () => {
@@ -606,7 +618,11 @@ describe('SessionComposer', () => {
     })
 
     await vi.waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith({ text: 'Keep failed fallback draft', images: undefined })
+      expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+        text: 'Keep failed fallback draft',
+        images: undefined,
+        clientSendId: expect.stringMatching(/^send-/u),
+      }))
     })
     const textarea = document.body.querySelector('textarea') as HTMLTextAreaElement | null
     expect(textarea?.value).toBe('Keep failed fallback draft')
@@ -628,7 +644,11 @@ describe('SessionComposer', () => {
 
     const textarea = document.body.querySelector('textarea') as HTMLTextAreaElement | null
     expect(textarea?.value).toBe('Do not clear this')
-    expect(onSend).toHaveBeenCalledWith({ text: 'Do not clear this', images: undefined })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Do not clear this',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
   })
 
   it('sends workspace file, directory, and annotation context as structured payload', async () => {
@@ -655,6 +675,7 @@ describe('SessionComposer', () => {
     expect(onSend).toHaveBeenCalledWith({
       text: 'Review this',
       images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
       context: {
         filePaths: ['docs/spec.md'],
         directoryPaths: ['src'],
@@ -690,7 +711,11 @@ describe('SessionComposer', () => {
       findButtonByLabel('Queue message').click()
     })
 
-    expect(onQueue).toHaveBeenCalledWith({ text: 'Queue this follow-up', images: undefined })
+    expect(onQueue).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Queue this follow-up',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
     expect(onSend).not.toHaveBeenCalled()
   })
 
@@ -716,7 +741,11 @@ describe('SessionComposer', () => {
       findButtonByLabel('Send message').click()
     })
 
-    expect(onSend).toHaveBeenCalledWith({ text: 'Send this directly', images: undefined })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Send this directly',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
     expect(onQueue).not.toHaveBeenCalled()
   })
 
@@ -735,7 +764,11 @@ describe('SessionComposer', () => {
       findButtonByLabel('Send message').click()
     })
 
-    expect(onSend).toHaveBeenCalledWith({ text: 'Keep follow-up send enabled', images: undefined })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Keep follow-up send enabled',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
   })
 
   it('keeps the desktop abilities inside the existing action row', async () => {
@@ -776,7 +809,11 @@ describe('SessionComposer', () => {
     flushSync(() => {
       findButtonByLabel('Send').click()
     })
-    expect(onSend).toHaveBeenCalledWith({ text: 'Try to send text only', images: undefined })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Try to send text only',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
   })
 
   it('configures the quick skill slot from the skills picker', async () => {
@@ -843,6 +880,7 @@ describe('SessionComposer', () => {
     expect(onSend).toHaveBeenCalledWith({
       text: '/create-quests Break this into implementation work',
       images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
       context: {
         filePaths: ['docs/spec.md'],
       },
@@ -877,6 +915,8 @@ describe('SessionComposer', () => {
     expect(onQueue).toHaveBeenCalledWith({
       text: expect.stringContaining('Think Hard: Think ultra hard internally'),
       images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+      context: undefined,
     })
     const payload = onQueue.mock.calls[0]?.[0] as { text: string }
     expect(payload.text).toContain('[User message]\nCompare the options')
@@ -939,7 +979,11 @@ describe('SessionComposer', () => {
       queueDraftButton.click()
     })
 
-    expect(onQueue).toHaveBeenCalledWith({ text: 'Queue from the sheet', images: undefined })
+    expect(onQueue).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Queue from the sheet',
+      images: undefined,
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
     expect(document.body.querySelector('[data-testid="queue-panel"]')).toBeNull()
   })
 })

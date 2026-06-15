@@ -237,7 +237,7 @@ export function createApiKeysRouter(options: ApiKeysRouterOptions = {}): Router 
 
   router.post('/mobile/pairing', masterKeyAuth, async (req, res) => {
     const name = req.body?.name === undefined
-      ? 'Hervald Mobile Pairing'
+      ? 'Herd Mobile Pairing'
       : parseName(req.body.name)
     if (!name) {
       res.status(400).json({ error: 'name must be a non-empty string when provided' })

@@ -50,7 +50,7 @@ describe('doctor', () => {
     })
 
     const output = chunks.join('')
-    expect(output).toContain('Hervald Doctor')
+    expect(output).toContain('Herd Doctor')
     expect(output).toContain('CLI config')
     expect(output).toContain('Browser onboarding API')
     expect(output).toContain('providers=1 ready')

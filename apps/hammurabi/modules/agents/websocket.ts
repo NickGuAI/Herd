@@ -129,7 +129,7 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
 
       wss.handleUpgrade(req, socket, head, (ws) => {
         if (session.kind === 'stream' || session.kind === 'external') {
-          // Stream/external session: send buffered events as JSON array for replay.
+          // Stream/external session: send a canonical projection for replay.
           // Include the accumulated usage so the client can set totals
           // directly rather than re-accumulating from individual deltas.
           if (session.events.length > 0) {
@@ -145,9 +145,8 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
             })
             ws.send(JSON.stringify({
               type: 'replay',
-              ...(projection.envelopes ? { envelopes: projection.envelopes } : {}),
-              messages: projection.messages,
               projection,
+              events: replayEvents,
               more: replayMore,
               ...(session.kind === 'stream'
                 ? { usage: session.usage, queue }

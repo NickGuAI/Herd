@@ -1,5 +1,5 @@
 import type { StreamJsonEvent } from '../types.js'
-import { normalizeClaudeEvent } from '../event-normalizers/claude.js'
+import { createClaudeTranscriptMapper } from '../event-normalizers/claude.js'
 import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import type { MsgItem } from './model.js'
 import {
@@ -8,24 +8,24 @@ import {
   type StreamEventProcessorContext,
 } from './stream-event-machine.js'
 
-function normalizeProjectionEvent(event: StreamJsonEvent): StreamJsonEvent[] {
+function normalizeProjectionEvent(
+  event: StreamJsonEvent,
+  claudeMapper: ReturnType<typeof createClaudeTranscriptMapper>,
+): StreamJsonEvent[] {
   if (isTranscriptEnvelope(event)) {
     return [event]
   }
   if (event.source?.provider !== 'claude') {
     return [event]
   }
-  const normalized = normalizeClaudeEvent(event) as StreamJsonEvent | StreamJsonEvent[] | null
-  if (!normalized) {
-    return []
-  }
-  return Array.isArray(normalized) ? normalized : [normalized]
+  return claudeMapper.map(event)
 }
 
 export function mapStreamEventsToMessages(events: readonly StreamJsonEvent[]): MsgItem[] {
   let idCounter = 0
   let messages: MsgItem[] = []
   const state = createStreamProcessorState()
+  const claudeMapper = createClaudeTranscriptMapper()
 
   const context: StreamEventProcessorContext = {
     state,
@@ -39,7 +39,7 @@ export function mapStreamEventsToMessages(events: readonly StreamJsonEvent[]): M
   }
 
   for (const event of events) {
-    for (const normalizedEvent of normalizeProjectionEvent(event)) {
+    for (const normalizedEvent of normalizeProjectionEvent(event, claudeMapper)) {
       processStreamEvent(context, normalizedEvent, true)
     }
   }

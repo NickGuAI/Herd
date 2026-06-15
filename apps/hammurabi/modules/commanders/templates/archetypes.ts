@@ -72,7 +72,7 @@ export const COMMANDER_ARCHETYPES: CommanderArchetype[] = [
     },
     suggestedTaskSource: {
       owner: 'NickGuAI',
-      repo: 'Hervald',
+      repo: 'Herd',
       label: 'benchmark',
     },
   },

@@ -7,7 +7,7 @@ deny it.
 ## Approval Flow
 
 1. A tool or provider action asks for permission.
-2. Hervald records the pending approval.
+2. Herd records the pending approval.
 3. The UI shows enough context for the operator to decide.
 4. The operator approves or denies.
 5. The provider resumes or aborts the action.

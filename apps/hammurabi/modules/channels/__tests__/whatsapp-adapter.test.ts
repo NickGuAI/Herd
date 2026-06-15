@@ -144,7 +144,7 @@ describe('WhatsAppChannelAdapter', () => {
       displayName: 'PMI WhatsApp',
       config: {
         baileys: {
-          browserName: 'Hervald Test',
+          browserName: 'Herd Test',
           connectTimeoutMs: 5_000,
         },
       },
@@ -179,7 +179,7 @@ describe('WhatsAppChannelAdapter', () => {
       provider: 'whatsapp',
       transport: 'baileys',
       baileys: {
-        browserName: 'Hervald Test',
+        browserName: 'Herd Test',
       },
     })
     expect(transport.runtimeByAccount.get('pm-ai')?.stop).toHaveBeenCalled()

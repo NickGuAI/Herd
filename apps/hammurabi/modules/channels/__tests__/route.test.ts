@@ -160,7 +160,7 @@ describe('commander channels route', () => {
       },
       formDefaults: {
         transport: 'baileys',
-        browserName: 'Hervald',
+        browserName: 'Herd',
         connectTimeoutSeconds: '30',
         dmPolicy: 'allowlist',
         groupPolicy: 'disabled',

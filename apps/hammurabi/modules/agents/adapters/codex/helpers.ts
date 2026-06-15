@@ -4,6 +4,8 @@ import * as path from 'node:path'
 import { CODEX_SIDECAR_LOG_TEXT_LIMIT } from '../../constants.js'
 import { buildRemoteCommand } from '../../machines.js'
 import { asObject } from '../../session/state.js'
+import { createTranscriptId } from '../../transcript-id.js'
+import type { TranscriptEnvelope } from '../../../../src/types/transcript-envelope.js'
 import type {
   CodexApprovalDecision,
   CodexApprovalMethod,
@@ -270,37 +272,88 @@ export function buildCodexApprovalRequestSystemEvent(request: CodexPendingApprov
   const extras = [request.reason ? `Reason: ${request.reason}` : null, request.risk ? `Risk: ${request.risk}` : null]
     .filter((value): value is string => value !== null)
     .join(' ')
-  return {
-    type: 'system',
-    text: `Codex is waiting for ${approvalTarget} approval (request ${request.requestId}). Awaiting accept/decline/cancel decision.${extras ? ` ${extras}` : ''}`,
+  const envelope: TranscriptEnvelope = {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: request.requestedAt,
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      sessionId: request.threadId,
+      rawEventType: request.method,
+      rawEventId: request.itemId ?? String(request.requestId),
+    },
+    ...(request.turnId ? { turnId: request.turnId } : {}),
+    itemId: request.itemId ?? String(request.requestId),
+    ev: {
+      type: 'approval.request',
+      toolCallId: request.itemId ?? String(request.requestId),
+      prompt: `Codex is waiting for ${approvalTarget} approval.${extras ? ` ${extras}` : ''}`,
+      request,
+    },
   }
+  return envelope as StreamJsonEvent
 }
 
 export function buildCodexApprovalMissingIdSystemEvent(method: CodexApprovalMethod, params: unknown): StreamJsonEvent {
   const approvalTarget = getCodexApprovalTargetLabel(method)
-  const { reason, risk } = getCodexApprovalRequestDetails(params)
+  const { threadId, itemId, turnId, reason, risk } = getCodexApprovalRequestDetails(params)
   const extras = [reason ? `Reason: ${reason}` : null, risk ? `Risk: ${risk}` : null]
     .filter((value): value is string => value !== null)
     .join(' ')
-  return {
-    type: 'system',
-    text: `Codex requested ${approvalTarget} approval, but the request id was missing. This approval cannot be resolved from Hervald.${extras ? ` ${extras}` : ''}`,
+  const resolvedItemId = itemId ?? createTranscriptId()
+  const envelope: TranscriptEnvelope = {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: new Date().toISOString(),
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      ...(threadId ? { sessionId: threadId } : {}),
+      rawEventType: `${method}/missing-id`,
+      rawEventId: resolvedItemId,
+    },
+    ...(turnId ? { turnId } : {}),
+    itemId: resolvedItemId,
+    ev: {
+      type: 'provider.activity',
+      title: 'Codex approval request missing id',
+      detail: `Codex requested ${approvalTarget} approval, but the request id was missing. This approval cannot be resolved from Herd.${extras ? ` ${extras}` : ''}`,
+      data: params,
+    },
   }
+  return envelope as StreamJsonEvent
 }
 
 export function buildCodexApprovalDecisionEvent(
   request: CodexPendingApprovalRequest,
   decision: CodexApprovalDecision,
 ): StreamJsonEvent {
-  const approvalTarget = getCodexApprovalTargetLabel(request.method)
-  return {
-    type: 'system',
-    text: decision === 'accept'
-      ? `Accepted Codex ${approvalTarget} approval request ${request.requestId}.`
-      : decision === 'cancel'
-        ? `Cancelled Codex ${approvalTarget} approval request ${request.requestId}.`
-        : `Declined Codex ${approvalTarget} approval request ${request.requestId}.`,
+  const itemId = request.itemId ?? String(request.requestId)
+  const envelope: TranscriptEnvelope = {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: new Date().toISOString(),
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      sessionId: request.threadId,
+      rawEventType: `${request.method}/resolved`,
+      rawEventId: itemId,
+    },
+    ...(request.turnId ? { turnId: request.turnId } : {}),
+    itemId,
+    ev: {
+      type: 'approval.resolved',
+      toolCallId: itemId,
+      approved: decision === 'accept',
+      result: {
+        decision,
+        request,
+      },
+    },
   }
+  return envelope as StreamJsonEvent
 }
 
 export function hasPendingCodexApprovals(session: StreamSession): boolean {

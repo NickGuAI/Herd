@@ -17,7 +17,7 @@ vi.mock('@/hooks/use-font-scale', () => ({
 
 import { SessionsColumn } from '../components/desktop/SessionsColumn'
 
-describe('Hervald SessionsColumn', () => {
+describe('Herd SessionsColumn', () => {
   beforeEach(() => {
     const storage = ensureLocalStorage()
     storage.removeItem('hervald-sessions-collapsed')

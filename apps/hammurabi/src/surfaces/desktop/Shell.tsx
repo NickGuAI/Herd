@@ -1,5 +1,5 @@
 /**
- * Hervald — Desktop shell.
+ * Herd — Desktop shell.
  *
  * Owns the desktop TopBar and viewport frame. Mobile chrome/safe-area policy
  * is delegated to `src/surfaces/mobile/MobileShell`.
@@ -77,7 +77,7 @@ export function Shell({ modules, counts = EMPTY_TOP_BAR_COUNTS, children }: Shel
       </main>
 
       {/*
-        Canonical Hervald mobile tab bar — Org · Sessions · Automations ·
+        Canonical Herd mobile tab bar — Org · Sessions · Automations ·
         Inbox · Settings. Self-hides on immersive chat routes. Rendered here (not
         inside MobileCommandRoom) so every mobile route in the app —
         including non-Command-Room pages — gets the same canonical IA.

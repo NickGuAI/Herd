@@ -288,13 +288,13 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     }
 
     const images = pendingImages.slice()
-    const clientSendId = images.length > 0 ? createClientSendId() : undefined
+    const clientSendId = createClientSendId()
     let sent: boolean | void | Promise<boolean | void>
     try {
       sent = onSend({
         text: applyComposerAbilitiesToText(text, selectedAbilities),
         images: images.length > 0 ? images : undefined,
-        ...(clientSendId ? { clientSendId } : {}),
+        clientSendId,
         context,
       })
     } catch {
@@ -317,7 +317,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     }
 
     const images = pendingImages.slice()
-    const clientSendId = images.length > 0 ? createClientSendId() : undefined
+    const clientSendId = createClientSendId()
     const context = buildContextPayload()
     queueSubmitPendingRef.current = true
     setIsQueueSubmitPending(true)
@@ -325,7 +325,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
       const queued = await onQueue({
         text: applyComposerAbilitiesToText(inputText.trim(), selectedAbilities),
         images: images.length > 0 ? images : undefined,
-        ...(clientSendId ? { clientSendId } : {}),
+        clientSendId,
         context,
       })
       if (queued === false) {

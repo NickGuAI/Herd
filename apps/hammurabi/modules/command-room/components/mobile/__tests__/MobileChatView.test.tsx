@@ -65,7 +65,7 @@ vi.mock('@modules/agents/page-shell/MobileSessionShell', () => ({
 }))
 
 describe('MobileChatView', () => {
-  it('adapts Hervald chat props into the shared mobile shell and forwards theme', () => {
+  it('adapts Herd chat props into the shared mobile shell and forwards theme', () => {
     const html = renderToStaticMarkup(
       createElement(MobileChatView, {
         commander: {

@@ -40,7 +40,7 @@ describe('agents/adapters/codex/process', () => {
       'log_user_prompt = true',
       '',
       '[otel.exporter.otlp-http]',
-      'endpoint = "https://hervald.gehirn.ai/v1/logs"',
+      'endpoint = "https://herd.gehirn.ai/v1/logs"',
       '',
       '[mcp_servers.tavily]',
       'url = "https://mcp.tavily.com/mcp"',
@@ -50,7 +50,7 @@ describe('agents/adapters/codex/process', () => {
     expect(sanitized).toContain('[mcp_servers.tavily]')
     expect(sanitized).not.toContain('[otel]')
     expect(sanitized).not.toContain('otlp-http')
-    expect(sanitized).not.toContain('hervald.gehirn.ai/v1/logs')
+    expect(sanitized).not.toContain('herd.gehirn.ai/v1/logs')
   })
 
   it('prepares a sanitized per-spawn CODEX_HOME without linking global auth', async () => {
@@ -67,7 +67,7 @@ describe('agents/adapters/codex/process', () => {
         'log_user_prompt = true',
         '',
         '[otel.exporter.otlp-http]',
-        'endpoint = "https://hervald.gehirn.ai/v1/logs"',
+        'endpoint = "https://herd.gehirn.ai/v1/logs"',
         '',
         '[mcp_servers.tavily]',
         'url = "https://mcp.tavily.com/mcp"',
@@ -82,7 +82,7 @@ describe('agents/adapters/codex/process', () => {
       const config = await readFile(path.join(runtimeHome, 'config.toml'), 'utf8')
       expect(config).toContain('[mcp_servers.tavily]')
       expect(config).not.toContain('[otel]')
-      expect(config).not.toContain('hervald.gehirn.ai/v1/logs')
+      expect(config).not.toContain('herd.gehirn.ai/v1/logs')
       await expect(readlink(path.join(runtimeHome, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' })
       expect(await readlink(path.join(runtimeHome, 'sessions'))).toBe(path.join(sourceHome, 'sessions'))
     } finally {
