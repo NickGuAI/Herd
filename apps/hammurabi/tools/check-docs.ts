@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -453,6 +454,8 @@ function toHammurabiDataTemplate(filePath: string, dataRoot: string): string {
 async function checkRuntimeManifestReconciliation(): Promise<void> {
   const { loadHammurabiModules } = await import('../server/module-loader.js')
   const { createModules } = await import('../server/module-registry.js')
+  const { openHammurabiSqliteDatabase } = await import('../server/db/connection.js')
+  const { applyHammurabiSqliteSchema } = await import('../server/db/schema.js')
   const { defaultMachineRegistryStorePath } = await import('../modules/agents/machines.js')
   const { resolveAutomationsDataDir } = await import('../modules/data-dir.js')
   const { defaultOrgIdentityStorePath } = await import('../modules/org-identity/store.js')
@@ -460,11 +463,15 @@ async function checkRuntimeManifestReconciliation(): Promise<void> {
   const moduleIndexPath = path.join(docsRoot, 'module-index.xml')
   const moduleIndex = readText(moduleIndexPath)
   const loadedModules = loadHammurabiModules()
+  const sqliteTempDir = mkdtempSync(path.join(tmpdir(), 'hammurabi-docs-check-'))
+  const sqliteDb = openHammurabiSqliteDatabase(path.join(sqliteTempDir, 'hammurabi.sqlite'))
+  applyHammurabiSqliteSchema(sqliteDb)
   const runtime = createModules({
     initializeAgentSessionRuntimes: false,
     initializeAutomationScheduler: false,
     initializeChannelRuntimes: false,
     maxAgentSessions: 1,
+    sqliteDb,
   })
   const { capabilities } = runtime
 
@@ -583,6 +590,9 @@ async function checkRuntimeManifestReconciliation(): Promise<void> {
       fail(`runtime snapshot shutdown failed: ${detail}`)
     }
   }
+
+  sqliteDb.close()
+  rmSync(sqliteTempDir, { recursive: true, force: true })
 }
 
 function walkFiles(start: string, files: string[] = []): string[] {

@@ -5,6 +5,7 @@ import {
   AskUserQuestionBlock,
   PlanningBlock,
   ProviderActivityBlock,
+  ProviderErrorBlock,
   RunningAgentsPanel,
   SystemDivider,
   ThinkingBlock,
@@ -80,6 +81,8 @@ export function SessionMessageList({
             return <AskUserQuestionBlock key={message.id} msg={message} onAnswer={onAnswer} />
           case 'provider':
             return <ProviderActivityBlock key={message.id} msg={message} />
+          case 'error':
+            return <ProviderErrorBlock key={message.id} msg={message} />
           default:
             return null
         }

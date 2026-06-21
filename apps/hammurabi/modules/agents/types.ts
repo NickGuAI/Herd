@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'node:child_process'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
+import type { DatabaseSync } from 'node:sqlite'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { Router } from 'express'
 import type { WebSocket } from 'ws'
@@ -25,8 +26,7 @@ import type { ProviderId } from './adapters/provider-registry-types.js'
 import type { ProviderSessionContext } from './providers/provider-session-context.js'
 import type { ProviderAuthSnapshot, ProviderAuthStore, ProviderSpawnAuth } from './provider-auth.js'
 
-// Session execution now runs in a single approval-on mode.
-export type ClaudePermissionMode = 'default'
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions'
 
 export type AgentType = ProviderId
 export type SessionType = 'commander' | 'worker' | 'cron' | 'sentinel' | 'automation'
@@ -50,9 +50,14 @@ export interface AgentSession {
   created: string
   lastActivityAt?: string
   pid: number
+  state?: AgentRuntimeSessionState
+  machine?: AgentRuntimeSessionMachine
+  allowedActions?: AgentRuntimeSessionAllowedActions
+  disabledReasons?: AgentRuntimeSessionDisabledReasons
   sessionType?: SessionType
   transportType?: SessionTransportType
   agentType?: AgentType
+  mode?: ClaudePermissionMode
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
@@ -90,6 +95,20 @@ export interface WorldAgent {
   lastToolUse: string | null
   lastUpdatedAt: string
   role: WorldAgentRole
+}
+
+export type AgentRuntimeSessionState = 'active' | 'paused' | 'archived'
+export type AgentRuntimeSessionAction = 'send' | 'pause' | 'resume' | 'archive' | 'start'
+export type AgentRuntimeSessionAllowedActions = Record<AgentRuntimeSessionAction, boolean>
+export type AgentRuntimeSessionDisabledReasons = Record<AgentRuntimeSessionAction, string | null>
+
+export interface AgentRuntimeSessionMachine {
+  id: string
+  label: string
+  known: boolean
+  transportType: MachineTransportType
+  launchable: boolean
+  disabledReason: string | null
 }
 
 export interface PtyHandle {
@@ -132,6 +151,7 @@ export interface PtySession {
   clients: Set<WebSocket>
   createdAt: string
   lastEventAt: string
+  approvalBridgeNonce?: string
 }
 
 export type StreamJsonEvent = HammurabiEvent | TranscriptEnvelope
@@ -183,8 +203,8 @@ export interface CodexSessionRuntimeHandle {
   waitForTerminalFailure(timeoutMs: number): Promise<CodexRuntimeTerminalFailure | null>
   addNotificationListener(threadId: string, cb: (message: CodexProtocolMessage) => void): () => void
   log(level: 'info' | 'warn' | 'error', message: string, extra?: Record<string, unknown>): void
-  teardown(options?: { threadId?: string; reason?: string; timeoutMs?: number }): Promise<void>
-  teardownOnProcessExit(threadId?: string): void
+  teardown(options?: { threadId?: string; reason?: string; timeoutMs?: number; archive?: boolean }): Promise<void>
+  teardownOnProcessExit(): void
 }
 
 export interface GeminiAcpRuntimeHandle {
@@ -233,6 +253,7 @@ export interface SessionSendPayload {
   displayText?: string
   images?: QueuedMessageImage[]
   clientSendId?: string
+  userEventSubtype?: string
 }
 
 export interface StreamDispatchOptions {
@@ -301,6 +322,7 @@ export interface StreamSession {
   completedTurnAt?: string
   providerContext: ProviderSessionContext
   providerAuthSnapshot?: ProviderAuthSnapshot
+  approvalBridgeNonce?: string
   activeTurnId?: string
   resumedFrom?: string
   finalResultEvent?: StreamJsonEvent
@@ -429,6 +451,7 @@ export interface StreamSessionCreateOptions {
   creator?: SessionCreator
   conversationId?: string
   currentSkillInvocation?: ActiveSkillInvocation
+  approvalBridgeNonce?: string
   daemonProcess?: PersistedDaemonProcess
   providerAuth?: ProviderSpawnAuth
 }
@@ -492,12 +515,12 @@ export type AnySession = PtySession | StreamSession | ExternalSession
 
 export interface AgentsRouterOptions {
   ptySpawner?: PtySpawner
+  sqliteDb: DatabaseSync
   maxSessions?: number
   taskDelayMs?: number
   wsKeepAliveIntervalMs?: number
   autoRotateEntryThreshold?: number
   codexTurnWatchdogTimeoutMs?: number
-  sessionStorePath?: string
   autoResumeSessions?: boolean
   enableSessionPruner?: boolean
   machinesFilePath?: string
@@ -507,6 +530,7 @@ export interface AgentsRouterOptions {
   auth0ClientId?: string
   verifyAuth0Token?: (token: string) => Promise<AuthUser>
   internalToken?: string
+  approvalBridgeSigningSecret?: string
   getActionPolicyGate?: () => ActionPolicyGate | null
   getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   commanderSessionStore?: Pick<CommanderSessionStore, 'get' | 'list'>
@@ -587,6 +611,7 @@ export interface ApprovalSessionsInterface {
   findSessionContextByClaudeSessionId(sessionId: string): ApprovalSessionContext | null
   getLiveSession(name: string): StreamSession | null
   findLiveSessionByClaudeSessionId(sessionId: string): StreamSession | null
+  validateApprovalBridgeCredential(sessionName: string, nonce: string): boolean
   listPendingCodexApprovals(): PendingCodexApprovalView[]
   resolvePendingCodexApproval(
     approvalId: string,
@@ -662,6 +687,7 @@ export interface CommanderSessionsInterface {
       priority?: 'high' | 'normal' | 'low'
     },
   ): Promise<boolean>
+  verifyWebSocketAccess?(req: IncomingMessage): Promise<boolean>
   recordSessionEvent?(name: string, event: StreamJsonEvent): boolean
   autoResolvePlanApproval?(
     name: string,
@@ -788,6 +814,7 @@ export interface PersistedStreamSession {
   sessionType?: SessionType
   creator?: SessionCreator
   conversationId?: string
+  transportType?: SessionTransportType
   agentType: AgentType
   model?: string
   effort?: ClaudeEffortLevel
@@ -799,6 +826,7 @@ export interface PersistedStreamSession {
   currentSkillInvocation?: ActiveSkillInvocation
   createdAt: string
   providerContext: ProviderSessionContext
+  approvalBridgeNonce?: string
   activeTurnId?: string
   conversationEntryCount?: number
   events?: StreamJsonEvent[]

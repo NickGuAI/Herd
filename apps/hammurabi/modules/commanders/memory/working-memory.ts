@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { readJsonFileFailClosed, writeJsonFileAtomically, writeTextFileAtomically } from '../../json-file.js'
 import { resolveCommanderPaths } from '../paths.js'
@@ -14,6 +14,7 @@ type ExplicitWorkingMemorySource = (typeof EXPLICIT_WORKING_MEMORY_SOURCES)[numb
 
 const INTERNAL_LIFECYCLE_SOURCES = new Set(['start', 'message', 'heartbeat', 'stop', 'flush'])
 const EXPLICIT_WORKING_MEMORY_SOURCE_SET = new Set<string>(EXPLICIT_WORKING_MEMORY_SOURCES)
+const memoryStateVersions = new Map<string, number>()
 
 export type WorkingMemorySource = ExplicitWorkingMemorySource | (string & {})
 
@@ -48,6 +49,13 @@ interface WorkingMemoryOptions {
   now?: () => Date
 }
 
+interface WorkingMemoryStateCache {
+  version: number
+  state: WorkingMemoryState
+  fileMtimeMs: number
+  fileSize: number
+}
+
 function compactText(input: string): string {
   return input.replace(/\s+/g, ' ').trim()
 }
@@ -60,6 +68,27 @@ function defaultState(nowIso: string): WorkingMemoryState {
     filesInFocus: [],
     checkpoints: [],
   }
+}
+
+function cloneState(state: WorkingMemoryState): WorkingMemoryState {
+  return {
+    ...state,
+    filesInFocus: [...state.filesInFocus],
+    checkpoints: state.checkpoints.map((entry) => ({
+      ...entry,
+      tags: [...entry.tags],
+    })),
+  }
+}
+
+function memoryRootVersion(memoryRoot: string): number {
+  return memoryStateVersions.get(memoryRoot) ?? 0
+}
+
+function markMemoryRootMutated(memoryRoot: string): number {
+  const nextVersion = memoryRootVersion(memoryRoot) + 1
+  memoryStateVersions.set(memoryRoot, nextVersion)
+  return nextVersion
 }
 
 function normalizeTags(tags: string[]): string[] {
@@ -92,6 +121,7 @@ export class WorkingMemoryStore {
   private readonly jsonPath: string
   private readonly markdownPath: string
   private readonly now: () => Date
+  private cachedState: WorkingMemoryStateCache | null = null
 
   constructor(
     commanderId: string,
@@ -159,12 +189,30 @@ export class WorkingMemoryStore {
     }
   }
 
+  private async readStateForMutation(): Promise<WorkingMemoryState> {
+    const currentVersion = memoryRootVersion(this.memoryRoot)
+    if (this.cachedState?.version === currentVersion) {
+      try {
+        const currentFile = await stat(this.jsonPath)
+        if (
+          currentFile.mtimeMs === this.cachedState.fileMtimeMs &&
+          currentFile.size === this.cachedState.fileSize
+        ) {
+          return cloneState(this.cachedState.state)
+        }
+      } catch {
+        // Fall through to the fail-closed JSON reader when the file changed.
+      }
+    }
+    return this.readState()
+  }
+
   async update(input: WorkingMemoryUpdate): Promise<void> {
     const summary = compactText(input.summary).slice(0, MAX_SUMMARY_CHARS)
     if (!summary) return
 
     await withMemoryMutationLock(this.memoryRoot, async () => {
-      const state = await this.readState()
+      const state = await this.readStateForMutation()
       const nowIso = this.now().toISOString()
       const checkpoint: WorkingMemoryEntry = {
         timestamp: nowIso,
@@ -196,6 +244,13 @@ export class WorkingMemoryStore {
 
       state.updatedAt = nowIso
       await this.writeState(state)
+      const writtenFile = await stat(this.jsonPath)
+      this.cachedState = {
+        version: markMemoryRootMutated(this.memoryRoot),
+        state: cloneState(state),
+        fileMtimeMs: writtenFile.mtimeMs,
+        fileSize: writtenFile.size,
+      }
     })
   }
 
@@ -224,8 +279,11 @@ export class WorkingMemoryStore {
   }
 
   private async writeState(state: WorkingMemoryState): Promise<void> {
-    await writeJsonFileAtomically(this.jsonPath, state, { trailingNewline: true })
-    await writeTextFileAtomically(this.markdownPath, `${await this.renderFromState(state)}\n`)
+    const markdown = `${await this.renderFromState(state)}\n`
+    await Promise.all([
+      writeJsonFileAtomically(this.jsonPath, state, { trailingNewline: true }),
+      writeTextFileAtomically(this.markdownPath, markdown),
+    ])
   }
 
   private async renderFromState(state: WorkingMemoryState): Promise<string> {
@@ -307,6 +365,7 @@ export class WorkingMemory {
       const state = defaultState(this.now().toISOString())
       await writeJsonFileAtomically(this.jsonPath, state, { trailingNewline: true })
       await writeTextFileAtomically(this.markdownPath, '')
+      markMemoryRootMutated(this.memoryRoot)
     })
   }
 }

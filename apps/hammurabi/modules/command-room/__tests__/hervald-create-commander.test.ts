@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   createMachine: vi.fn(),
   createSession: vi.fn(),
+  verifyMachineLaunch: vi.fn(),
   verifyTailscaleHostname: vi.fn(),
   useAgentSessions: vi.fn(),
   useMachines: vi.fn(),
@@ -21,12 +22,16 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/api', () => ({
   fetchJson: mocks.fetchJson,
+  fetchVoid: mocks.fetchVoid,
+  getAccessToken: mocks.getAccessToken,
+  isAuthRecoveryRequiredError: () => false,
 }))
 
 vi.mock('../../../src/lib/api', () => ({
   fetchJson: mocks.fetchJson,
   fetchVoid: mocks.fetchVoid,
   getAccessToken: mocks.getAccessToken,
+  isAuthRecoveryRequiredError: () => false,
 }))
 
 vi.mock('../../../src/lib/api-base', () => ({
@@ -34,12 +39,14 @@ vi.mock('../../../src/lib/api-base', () => ({
 }))
 
 vi.mock('@/hooks/use-agent-session-stream', () => ({
+  issueAgentSessionStreamTicket: vi.fn(async () => 'ticket-1'),
   useAgentSessionStream: mocks.useAgentSessionStream,
 }))
 
 vi.mock('@/hooks/use-agents', () => ({
   createMachine: mocks.createMachine,
   createSession: mocks.createSession,
+  verifyMachineLaunch: mocks.verifyMachineLaunch,
   verifyTailscaleHostname: mocks.verifyTailscaleHostname,
   useAgentSessions: mocks.useAgentSessions,
   useMachines: mocks.useMachines,
@@ -68,6 +75,41 @@ const reactActEnvironment = globalThis as typeof globalThis & {
 let previousActEnvironment: boolean | undefined
 let mountedRoots: Root[] = []
 let originalMatchMedia: typeof window.matchMedia | undefined
+let originalWebSocket: typeof WebSocket | undefined
+
+class FakeWebSocket {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  static readonly CLOSING = 2
+  static readonly CLOSED = 3
+  static instances: FakeWebSocket[] = []
+
+  readonly url: string
+  readyState = FakeWebSocket.CONNECTING
+  binaryType: BinaryType = 'blob'
+  onopen: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  onclose: ((event: CloseEvent) => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+    window.setTimeout(() => {
+      this.readyState = FakeWebSocket.OPEN
+      this.onopen?.(new Event('open'))
+    }, 0)
+  }
+
+  close() {
+    this.readyState = FakeWebSocket.CLOSED
+    this.onclose?.({ code: 1000, wasClean: true } as CloseEvent)
+  }
+
+  emit(data: unknown) {
+    this.onmessage?.(new MessageEvent('message', { data }))
+  }
+}
 
 function buildCommander(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -159,6 +201,7 @@ describe('Herd create commander workflow', () => {
     mocks.getAccessToken.mockReset()
     mocks.createMachine.mockReset()
     mocks.createSession.mockReset()
+    mocks.verifyMachineLaunch.mockReset()
     mocks.verifyTailscaleHostname.mockReset()
     mocks.useAgentSessions.mockReset()
     mocks.useMachines.mockReset()
@@ -166,6 +209,9 @@ describe('Herd create commander workflow', () => {
     mocks.usePendingApprovals.mockReset()
 
     originalMatchMedia = window.matchMedia
+    originalWebSocket = window.WebSocket
+    window.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+    FakeWebSocket.instances = []
     // Force desktop surface — useIsMobile uses `(max-width: 767px)`; returning
     // matches:false keeps the responsive branch on the desktop CommandRoom tree
     // so the mocked CenterColumn (with data-testid="selected-commander") mounts.
@@ -197,6 +243,10 @@ describe('Herd create commander workflow', () => {
       tailscaleHostname: 'home-mac.tail2bb6ea.ts.net',
       resolvedHost: '100.101.102.103',
     })
+    mocks.verifyMachineLaunch.mockResolvedValue({
+      ok: true,
+      sessionName: 'verify-home-mac',
+    })
     mocks.useAgentSessionStream.mockReturnValue({
       messages: [],
       sendInput: vi.fn(async () => true),
@@ -215,34 +265,29 @@ describe('Herd create commander workflow', () => {
     }
     document.body.innerHTML = ''
     window.matchMedia = originalMatchMedia as typeof window.matchMedia
+    window.WebSocket = originalWebSocket as typeof window.WebSocket
     reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
     vi.restoreAllMocks()
   })
 
-  it('opens, closes, and submits the commander modal from SessionsColumn using the existing POST path', async () => {
+  it('opens, closes, and completes the commander modal through the chat wizard', async () => {
     let commanders = [buildCommander()]
-    const createBodies: Array<Record<string, unknown>> = []
+    const sentMessages: string[] = []
 
     mocks.fetchJson.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/api/commanders' && (!init?.method || init.method === 'GET')) {
         return commanders
       }
-      if (url === '/api/commanders/runtime-config') {
-        return {
-          defaults: { maxTurns: 18 },
-          limits: { maxTurns: 25 },
-        }
+      if (url === '/api/commanders/wizard/start' && init?.method === 'POST') {
+        return { sessionName: 'commander-wizard-alpha', created: true }
       }
-      if (url === '/api/commanders' && init?.method === 'POST') {
-        const payload = JSON.parse(String(init.body)) as { host: string; displayName?: string; maxTurns?: number }
-        createBodies.push(payload as Record<string, unknown>)
-        const createdCommander = buildCommander({
-          id: '7568a67d-abc5-458e-b560-bc94eae4e335',
-          host: payload.host,
-          displayName: payload.displayName ?? payload.host,
-        })
-        commanders = [...commanders, createdCommander]
-        return createdCommander
+      if (url === '/api/agents/auth/stream-ticket' && init?.method === 'POST') {
+        return { ticket: 'ticket-1' }
+      }
+      if (url === '/api/agents/sessions/commander-wizard-alpha/send' && init?.method === 'POST') {
+        const payload = JSON.parse(String(init.body)) as { text?: string }
+        sentMessages.push(payload.text ?? '')
+        return { sent: true }
       }
       if (url === '/api/agents/sessions') {
         return []
@@ -295,83 +340,91 @@ describe('Herd create commander workflow', () => {
       clickButtonByLabel('New commander')
     })
 
-    // The Herd "New Commander" modal renders CreateCommanderWizard. Its
-    // default mode is the choice screen ("Quick Create" / "Talk to Me" /
-    // "Advanced"); the "Advanced" branch is the CreateCommanderForm path,
-    // which matches this test's POST flow (host input + "+ Create" button).
-    const advancedButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent?.includes('Advanced')
-        && button.textContent?.includes('Full form'),
-    )
-    if (!(advancedButton instanceof HTMLButtonElement)) {
-      throw new Error('Could not find wizard Advanced mode button')
-    }
-
-    await act(async () => {
-      advancedButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-
-    const hostInput = document.body.querySelector<HTMLInputElement>(
-      'input[placeholder="host (e.g. my-agent-1)"]',
-    )
-    if (!hostInput) {
-      throw new Error('Could not find commander host input')
-    }
-
-    await act(async () => {
-      setInputValue(hostInput, 'hera')
-    })
-
     await vi.waitFor(() => {
-      expect(document.body.querySelector('input[type="number"][max="25"]')).not.toBeNull()
+      expect(document.body.textContent).toContain('Get your AI worker to work')
+      expect(mocks.fetchJson).toHaveBeenCalledWith('/api/commanders/wizard/start', expect.objectContaining({
+        method: 'POST',
+      }))
     })
 
-    const maxTurnsInput = document.body.querySelector<HTMLInputElement>('input[type="number"][max="25"]')
-    if (!maxTurnsInput) {
-      throw new Error('Could not find max turns input')
-    }
-
-    await act(async () => {
-      setInputValue(maxTurnsInput, '22')
-    })
-
-    const submitButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent?.trim() === '+ Create',
+    const composer = document.body.querySelector<HTMLInputElement>(
+      'input[placeholder="Tell me what this AI worker should own..."]',
     )
-    if (!(submitButton instanceof HTMLButtonElement)) {
-      throw new Error('Could not find create commander submit button')
+    if (!composer) {
+      throw new Error('Could not find wizard chat composer')
     }
 
     await act(async () => {
-      submitButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      setInputValue(composer, 'Create an AI worker named hera for inbox triage.')
+    })
+
+    const sendButton = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Send',
+    )
+    if (!(sendButton instanceof HTMLButtonElement)) {
+      throw new Error('Could not find wizard chat send button')
+    }
+
+    await act(async () => {
+      sendButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
     await vi.waitFor(() => {
       expect(mocks.fetchJson).toHaveBeenCalledWith(
-        '/api/commanders',
+        '/api/agents/sessions/commander-wizard-alpha/send',
         expect.objectContaining({
           method: 'POST',
         }),
       )
     })
+    expect(sentMessages).toEqual(['Create an AI worker named hera for inbox triage.'])
 
-    expect(createBodies).toEqual([
-      expect.objectContaining({
-        host: 'hera',
-        maxTurns: 22,
-      }),
-    ])
+    commanders = [...commanders, buildCommander({
+      id: '7568a67d-abc5-458e-b560-bc94eae4e335',
+      host: 'hera',
+      displayName: 'hera',
+    })]
+
+    await vi.waitFor(() => {
+      expect(FakeWebSocket.instances.length).toBeGreaterThan(0)
+    })
+    await act(async () => {
+      FakeWebSocket.instances.at(-1)?.emit(JSON.stringify({
+        type: 'result',
+        result: 'WIZARD_CREATE_SUCCESS 7568a67d-abc5-458e-b560-bc94eae4e335 hera',
+      }))
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.fetchVoid).toHaveBeenCalledWith('/api/commanders/wizard/commander-wizard-alpha', expect.objectContaining({
+        method: 'DELETE',
+      }))
+    })
 
     await vi.waitFor(() => {
       expect(document.body.querySelector('[role="dialog"][aria-label="New Commander"]')).toBeNull()
     })
 
-    await vi.waitFor(() => {
-      expect(document.body.querySelector('[data-testid="selected-commander"]')?.textContent).toContain('hera')
-    })
+    expect(document.body.querySelector('[data-testid="selected-commander"]')?.textContent).toContain('Test Commander')
   })
 
-  it('opens the add-worker modal, verifies a tailscale hostname, and registers the worker', async () => {
+  it('opens the machine onboarding modal and registers from tailscale status JSON without blocking on launch verification', async () => {
+    const tailscaleStatusJson = JSON.stringify({
+      BackendState: 'Running',
+      TUN: true,
+      Self: {
+        Online: true,
+        DNSName: 'home-mac.tail2bb6ea.ts.net.',
+        HostName: 'home-mac',
+        TailscaleIPs: ['100.101.102.103'],
+        OS: 'macOS',
+      },
+      CurrentTailnet: {
+        Name: 'tail2bb6ea.ts.net',
+        MagicDNSSuffix: 'tail2bb6ea.ts.net',
+      },
+    })
+
     mocks.fetchJson.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/api/commanders' && (!init?.method || init.method === 'GET')) {
         return [buildCommander()]
@@ -398,51 +451,40 @@ describe('Herd create commander workflow', () => {
     })
 
     await act(async () => {
-      clickButtonByLabel('Add worker')
+      clickButtonByLabel('Add machine')
     })
 
     await vi.waitFor(() => {
-      expect(document.body.querySelector('[role="dialog"][aria-label="Add Worker"]')).not.toBeNull()
+      expect(document.body.querySelector('[role="dialog"][aria-label="Add Machine"]')).not.toBeNull()
     })
 
     const idInput = document.body.querySelector<HTMLInputElement>('#worker-id')
     const labelInput = document.body.querySelector<HTMLInputElement>('#worker-label')
-    const hostnameInput = document.body.querySelector<HTMLInputElement>('#worker-tailscale-hostname')
+    const statusJsonInput = document.body.querySelector<HTMLTextAreaElement>('#worker-tailscale-status-json')
     const userInput = document.body.querySelector<HTMLInputElement>('#worker-user')
     const cwdInput = document.body.querySelector<HTMLInputElement>('#worker-cwd')
-    if (!idInput || !labelInput || !hostnameInput || !userInput || !cwdInput) {
-      throw new Error('Expected add-worker fields to be present.')
+    if (!idInput || !labelInput || !statusJsonInput || !userInput || !cwdInput) {
+      throw new Error('Expected machine onboarding fields to be present.')
     }
 
     await act(async () => {
-      setInputValue(idInput, 'home-mac')
-      setInputValue(labelInput, 'Home Mac')
-      setInputValue(hostnameInput, 'home-mac.tail2bb6ea.ts.net')
+      setInputValue(statusJsonInput, tailscaleStatusJson)
       setInputValue(userInput, 'yugu')
       setInputValue(cwdInput, '/Users/yugu')
     })
 
-    const verifyButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent?.trim() === 'Verify',
-    )
-    if (!(verifyButton instanceof HTMLButtonElement)) {
-      throw new Error('Could not find Verify button')
-    }
-
-    await act(async () => {
-      verifyButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-
     await vi.waitFor(() => {
-      expect(mocks.verifyTailscaleHostname).toHaveBeenCalledWith('home-mac.tail2bb6ea.ts.net')
-      expect(document.body.textContent).toContain('Verified. Server can reach')
+      expect(idInput.required).toBe(false)
+      expect(labelInput.required).toBe(false)
+      expect(document.body.textContent).toContain('Derived home-mac')
+      expect(document.body.textContent).toContain('home-mac.tail2bb6ea.ts.net')
     })
 
     const submitButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent?.trim() === 'Register Worker',
+      (button) => button.textContent?.trim() === 'Register machine',
     )
     if (!(submitButton instanceof HTMLButtonElement)) {
-      throw new Error('Could not find Register Worker button')
+      throw new Error('Could not find Register machine button')
     }
 
     await act(async () => {
@@ -452,12 +494,14 @@ describe('Herd create commander workflow', () => {
     await vi.waitFor(() => {
       expect(mocks.createMachine).toHaveBeenCalledWith({
         id: 'home-mac',
-        label: 'Home Mac',
-        tailscaleHostname: 'home-mac.tail2bb6ea.ts.net',
+        label: 'home-mac',
+        tailscaleStatusJson,
         user: 'yugu',
         port: undefined,
         cwd: '/Users/yugu',
       })
+      expect(mocks.verifyMachineLaunch).not.toHaveBeenCalled()
+      expect(document.body.querySelector('[role="dialog"][aria-label="Add Machine"]')).toBeNull()
     })
   })
 

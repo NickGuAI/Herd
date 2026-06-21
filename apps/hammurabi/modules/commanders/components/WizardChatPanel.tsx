@@ -24,6 +24,8 @@ interface WizardLine {
   id: number
   role: WizardLineRole
   text: string
+  completionText?: string
+  completionMode?: 'append'
 }
 
 interface WizardStartResponse {
@@ -80,7 +82,84 @@ function assistantLinesFromPayload(payload: Record<string, unknown>): string[] {
   return lines
 }
 
+function wizardRoleFromMessageKind(kind: MsgItem['kind']): WizardLineRole | null {
+  switch (kind) {
+    case 'agent':
+      return 'assistant'
+    case 'user':
+      return 'user'
+    case 'system':
+    case 'provider':
+    case 'error':
+      return 'system'
+    default:
+      return null
+  }
+}
+
+function isProjectedMessage(value: unknown): value is MsgItem {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.kind === 'string'
+    && typeof value.text === 'string'
+}
+
+function projectionToLines(value: unknown): WizardLine[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.flatMap((message) => {
+    if (!isProjectedMessage(message)) {
+      return []
+    }
+    const role = wizardRoleFromMessageKind(message.kind)
+    const text = normalizeMessageText(message.text)
+    return role && text ? [{ id: 0, role, text }] : []
+  })
+}
+
+function transcriptEnvelopeToLines(envelope: Record<string, unknown>): WizardLine[] {
+  if (envelope.schemaVersion !== 2) {
+    return []
+  }
+  const source = isRecord(envelope.source) ? envelope.source : null
+  const rawEventType = typeof source?.rawEventType === 'string' ? source.rawEventType : ''
+  const isUserEcho = rawEventType === 'hammurabi/user' || typeof envelope.clientSendId === 'string'
+  const ev = isRecord(envelope.ev) ? envelope.ev : null
+  const evType = typeof ev?.type === 'string' ? ev.type : ''
+  if (evType === 'message.delta' && typeof ev?.text === 'string') {
+    if (isUserEcho) {
+      return []
+    }
+    const text = normalizeMessageText(ev.text)
+    return [{
+      id: 0,
+      role: 'assistant',
+      text: text ?? '',
+      completionText: ev.text,
+      completionMode: 'append',
+    }]
+  }
+  if (evType === 'provider.error' && typeof ev?.message === 'string') {
+    const text = normalizeMessageText(ev.message)
+    return text ? [{ id: 0, role: 'system', text }] : []
+  }
+  if (evType === 'provider.activity') {
+    const title = typeof ev?.title === 'string' ? ev.title : ''
+    const detail = typeof ev?.detail === 'string' ? ev.detail : ''
+    const text = normalizeMessageText([title, detail].filter(Boolean).join(': '))
+    return text ? [{ id: 0, role: 'system', text }] : []
+  }
+  return []
+}
+
 function eventToLines(event: Record<string, unknown>): WizardLine[] {
+  const envelopeLines = transcriptEnvelopeToLines(event)
+  if (envelopeLines.length > 0) {
+    return envelopeLines
+  }
+
   const eventType = typeof event.type === 'string' ? event.type : ''
   if (eventType === 'assistant') {
     return assistantLinesFromPayload(event).map((text) => ({ id: 0, role: 'assistant', text }))
@@ -113,7 +192,16 @@ function parseIncomingLines(data: unknown): WizardLine[] {
     return []
   }
 
-  if (parsed.type === 'replay' && Array.isArray(parsed.events)) {
+  if (parsed.type === 'replay') {
+    const projectionLines = projectionToLines(isRecord(parsed.projection) ? parsed.projection.messages : undefined)
+    if (projectionLines.length > 0) {
+      return projectionLines
+    }
+
+    if (!Array.isArray(parsed.events)) {
+      return []
+    }
+
     const lines: WizardLine[] = []
     for (const event of parsed.events) {
       if (isRecord(event)) {
@@ -184,8 +272,8 @@ function wizardLineToMessage(line: WizardLine): MsgItem {
   }
 }
 
-function isWizardCreateSuccessLine(text: string): boolean {
-  return /^WIZARD_CREATE_SUCCESS\s+\S+\s+\S+$/.test(text.trim())
+function hasWizardCreateSuccess(text: string): boolean {
+  return splitLines(text).some((line) => /^WIZARD_CREATE_SUCCESS\s+\S+\s+\S+$/.test(line))
 }
 
 function approvalBelongsToWizardSession(approval: PendingApproval, sessionName: string | null): boolean {
@@ -230,6 +318,7 @@ export function WizardChatPanel({
 
   const nextLineId = useRef(1)
   const completedRef = useRef(false)
+  const assistantDeltaTextRef = useRef('')
   const feedRef = useRef<HTMLDivElement | null>(null)
   const sessionNameRef = useRef<string | null>(null)
 
@@ -256,6 +345,7 @@ export function WizardChatPanel({
     setActionError(null)
     setLines([])
     completedRef.current = false
+    assistantDeltaTextRef.current = ''
 
     let disposed = false
     let startedSessionName: string | null = null
@@ -309,13 +399,25 @@ export function WizardChatPanel({
         return
       }
 
-      const withIds = incoming.map((line) => ({
+      const visibleLines = incoming.filter((line) => line.text.length > 0)
+      const withIds = visibleLines.map((line) => ({
         ...line,
         id: nextLineId.current++,
       }))
 
-      const hasCreateSuccess = withIds.some((line) => isWizardCreateSuccessLine(line.text))
-      setLines((current) => keepLatestLines([...current, ...withIds]))
+      const hasCreateSuccess = incoming.some((line) => {
+        const completionText = line.completionText ?? line.text
+        if (line.role === 'assistant' && line.completionMode === 'append') {
+          assistantDeltaTextRef.current += completionText
+          return hasWizardCreateSuccess(assistantDeltaTextRef.current)
+        }
+
+        assistantDeltaTextRef.current = line.role === 'assistant' ? completionText : ''
+        return hasWizardCreateSuccess(completionText)
+      })
+      if (withIds.length > 0) {
+        setLines((current) => keepLatestLines([...current, ...withIds]))
+      }
 
       if (!hasCreateSuccess || completedRef.current) {
         return
@@ -446,6 +548,7 @@ export function WizardChatPanel({
       return
     }
 
+    assistantDeltaTextRef.current = ''
     setActionError(null)
     setIsSending(true)
     setComposerValue('')
@@ -488,6 +591,7 @@ export function WizardChatPanel({
     approval: PendingApproval,
     decision: 'approve' | 'reject',
   ) => {
+    assistantDeltaTextRef.current = ''
     setActionError(null)
     try {
       await approvalDecision.mutateAsync({ approval, decision })
@@ -497,39 +601,55 @@ export function WizardChatPanel({
     }
   }, [approvalDecision, pendingApprovalsQuery])
 
+  const setupStatusLabel = status === 'starting' ? 'Starting' : status === 'ready' ? 'Ready' : 'Needs attention'
+  const connectionLabel = connectionStatus === 'connected'
+    ? 'Live'
+    : connectionStatus === 'connecting'
+      ? 'Connecting'
+      : 'Offline'
+
   return (
-    <div className="rounded-lg border border-dashed border-ink-border p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="text-sm text-sumi-gray">Talk to Me</p>
-          <p className="text-whisper text-sumi-diluted">
-            Ask for a commander setup and confirm when the preview looks right.
+    <div className="flex min-h-[min(78dvh,46rem)] flex-col gap-4" data-testid="wizard-chat-onboarding">
+      <header className="flex flex-col gap-4 border-b border-[color:var(--hv-border-hair)] pb-4 md:flex-row md:items-start md:justify-between">
+        <div className="max-w-3xl">
+          <h2 className="text-2xl font-semibold leading-tight text-[color:var(--hv-fg)] md:text-3xl">
+            Get your AI worker to work
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[color:var(--hv-fg-subtle)]">
+            Describe the worker you need. The setup chat will collect the details, preview the commander, and create it after you approve.
           </p>
         </div>
         <button
           type="button"
           onClick={() => void handleCancel()}
           disabled={isClosing}
-          className="rounded-lg border border-ink-border px-3 py-1.5 text-xs min-h-[44px] min-w-[44px] hover:bg-ink-wash disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          className="min-h-[44px] min-w-[44px] rounded-lg border border-[color:var(--hv-border-soft)] px-3 py-1.5 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isClosing ? 'Closing...' : 'Cancel'}
+          {isClosing ? 'Closing...' : 'Close'}
         </button>
-      </div>
+      </header>
 
-      <div className="text-whisper text-sumi-diluted">
-        <span className="mr-3">session: {sessionName ?? 'starting...'}</span>
-        <span>socket: {connectionStatus}</span>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--hv-fg-subtle)]">
+        <span className="rounded-full border border-[color:var(--hv-border-hair)] px-2.5 py-1">
+          {setupStatusLabel}
+        </span>
+        <span className="rounded-full border border-[color:var(--hv-border-hair)] px-2.5 py-1">
+          {connectionLabel}
+        </span>
+        <span className="min-w-0 rounded-full border border-[color:var(--hv-border-hair)] px-2.5 py-1 font-mono">
+          session {sessionName ?? 'starting'}
+        </span>
       </div>
 
       {status === 'failed' ? (
-        <div className="rounded-lg border border-accent-vermillion/40 bg-accent-vermillion/5 p-3 space-y-2">
+        <div className="space-y-3 rounded-lg border border-accent-vermillion/40 bg-accent-vermillion/5 p-4">
           <p className="text-sm text-accent-vermillion">
             {actionError ?? 'Failed to start wizard session.'}
           </p>
           <button
             type="button"
             onClick={() => setRetryCount((current) => current + 1)}
-            className="rounded-lg border border-ink-border px-3 py-1.5 text-xs min-h-[44px] min-w-[44px] hover:bg-ink-wash transition-colors"
+            className="min-h-[44px] min-w-[44px] rounded-lg border border-[color:var(--hv-border-soft)] px-3 py-1.5 text-sm transition-colors hover:bg-[var(--hv-surface-hover)]"
           >
             Retry
           </button>
@@ -538,14 +658,14 @@ export function WizardChatPanel({
         <div
           className={
             wizardApprovals.length > 0 || pendingApprovalsQuery.isError
-              ? 'grid gap-3 xl:grid-cols-[minmax(0,1fr)_26rem]'
-              : 'space-y-3'
+              ? 'grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]'
+              : 'flex min-h-0 flex-1 flex-col'
           }
         >
-          <div className="min-w-0 space-y-3">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
             <div
               ref={feedRef}
-              className="h-[min(48dvh,34rem)] min-h-80 overflow-y-auto rounded-lg border border-ink-border bg-washi-white p-3 space-y-3"
+              className="min-h-80 flex-1 overflow-y-auto rounded-lg border border-[color:var(--hv-border-soft)] bg-washi-white p-4"
             >
               {status === 'starting' && lines.length === 0 && (
                 <p className="text-sm text-sumi-diluted">Starting wizard session...</p>
@@ -568,14 +688,14 @@ export function WizardChatPanel({
               <input
                 value={composerValue}
                 onChange={(event) => setComposerValue(event.target.value)}
-                placeholder="Type a message..."
-                className="flex-1 rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-white focus:outline-none focus:ring-1 focus:ring-sumi-black/20 placeholder:text-sumi-mist"
+                placeholder="Tell me what this AI worker should own..."
+                className="min-h-[44px] min-w-0 flex-1 rounded-lg border border-[color:var(--hv-border-soft)] bg-washi-white px-3 py-2 text-[16px] text-[color:var(--hv-fg)] placeholder:text-sumi-mist focus:outline-none focus:ring-1 focus:ring-sumi-black/20 md:text-sm"
                 disabled={!sessionName || isSending || isClosing}
               />
               <button
                 type="submit"
                 disabled={!sessionName || !composerValue.trim() || isSending || isClosing}
-                className="rounded-lg border border-ink-border px-3 py-1.5 text-sm min-h-[44px] min-w-[44px] hover:bg-ink-wash disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                className="min-h-[44px] min-w-[72px] rounded-lg bg-[var(--hv-button-primary-bg)] px-3 py-1.5 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isSending ? 'Sending...' : 'Send'}
               </button>
@@ -584,11 +704,11 @@ export function WizardChatPanel({
 
           {(wizardApprovals.length > 0 || pendingApprovalsQuery.isError) && (
             <aside
-              className="min-w-0 rounded-lg border border-ink-border bg-washi-aged/50 p-3"
+              className="min-w-0 rounded-lg border border-[color:var(--hv-border-soft)] bg-washi-aged/50 p-4"
               data-testid="wizard-inline-approvals"
             >
-              <p className="section-title">Inline Approvals</p>
-              <p className="mt-1 text-xs text-sumi-diluted">
+              <p className="section-title">Approvals</p>
+              <p className="mt-1 text-xs leading-5 text-sumi-diluted">
                 Review requests from this setup chat without closing the panel.
               </p>
               {pendingApprovalsQuery.error instanceof Error ? (

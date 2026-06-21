@@ -1,5 +1,8 @@
 import type { AskQuestion } from '@/types'
-import type { TranscriptEnvelopeSource } from '../../../src/types/transcript-envelope.js'
+import type {
+  ProviderErrorClassification,
+  TranscriptEnvelopeSource,
+} from '../../../src/types/transcript-envelope.js'
 
 export const MAX_CLIENT_MESSAGES = 500
 export const SUBAGENT_WORKING_LABEL = 'subagent working…'
@@ -27,9 +30,16 @@ export interface MessageImageAttachment {
   alt?: string
 }
 
+export interface ProviderErrorMessageMeta {
+  classification: ProviderErrorClassification
+  code?: string
+  hint?: string
+  retryable?: boolean
+}
+
 export interface MsgItem {
   id: string
-  kind: 'system' | 'user' | 'thinking' | 'agent' | 'tool' | 'ask' | 'planning' | 'provider'
+  kind: 'system' | 'user' | 'thinking' | 'agent' | 'tool' | 'ask' | 'planning' | 'provider' | 'error'
   text: string
   clientSendId?: string
   timestamp?: string
@@ -57,6 +67,7 @@ export interface MsgItem {
   planApprovalApproveLabel?: string
   planApprovalRejectLabel?: string
   planApprovalCustomResponseLabel?: string
+  providerError?: ProviderErrorMessageMeta
 }
 
 export function capMessages(msgs: MsgItem[]): MsgItem[] {

@@ -76,7 +76,6 @@ export interface CommandersRouterOptions {
   contextPressureInputTokenThreshold?: number
   now?: () => Date
   githubToken?: string
-  agentsSessionStorePath?: string
   remoteSyncSharedSecret?: string
   channelReplyDispatchers?: Partial<Record<CommanderChannelMeta['provider'], CommanderChannelReplyDispatcher>>
   surfaceBindingStore?: ChannelSurfaceBindingStore
@@ -159,6 +158,7 @@ export interface CommanderConversationRuntimeView {
   currentTask: CommanderCurrentTask | null
   completedTasks: number
   totalCostUsd: number
+  monthlyCostUsd: number
   channelMeta?: CommanderChannelMeta
   lastRoute?: CommanderLastRoute
   providerContext?: ProviderSessionContext

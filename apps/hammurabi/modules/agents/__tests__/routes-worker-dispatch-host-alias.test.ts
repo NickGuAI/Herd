@@ -3,6 +3,7 @@ import {
   AUTH_HEADERS,
   createMockPtySpawner,
   createTempMachinesRegistry,
+  installMockCodexSidecar,
   startServer,
 } from './routes-test-harness'
 
@@ -12,6 +13,7 @@ describe('/api/agents/sessions/dispatch-worker host routing', () => {
   })
 
   it('accepts host as the canonical machine-routing field', async () => {
+    const sidecar = installMockCodexSidecar()
     const { spawner } = createMockPtySpawner()
     const registry = await createTempMachinesRegistry({
       machines: [
@@ -34,7 +36,9 @@ describe('/api/agents/sessions/dispatch-worker host routing', () => {
           'content-type': 'application/json',
         },
         body: JSON.stringify({
+          agentType: 'codex',
           host: 'gpu-1',
+          permissionMode: 'bypassPermissions',
           task: 'Investigate worker routing',
         }),
       })
@@ -43,19 +47,23 @@ describe('/api/agents/sessions/dispatch-worker host routing', () => {
       const dispatchPayload = await dispatchResponse.json() as {
         name: string
         cwd?: string
+        mode?: string
       }
       expect(dispatchPayload.cwd).toBe('/home/builder/workspace')
+      expect(dispatchPayload.mode).toBe('bypassPermissions')
 
       const sessionResponse = await fetch(
         `${server.baseUrl}/api/agents/sessions/${encodeURIComponent(dispatchPayload.name)}`,
         { headers: AUTH_HEADERS },
       )
       expect(sessionResponse.status).toBe(200)
-      const sessionPayload = await sessionResponse.json() as { host?: string }
+      const sessionPayload = await sessionResponse.json() as { host?: string; mode?: string }
       expect(sessionPayload.host).toBe('gpu-1')
+      expect(sessionPayload.mode).toBe('bypassPermissions')
     } finally {
       await server.close()
       await registry.cleanup()
+      await sidecar.closeServer()
     }
   })
 

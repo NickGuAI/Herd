@@ -34,6 +34,48 @@ Recovery:
 - Check reverse proxy or private-network routing if you are not using local
   access.
 
+## SQLite Runtime-Session Store Is Not Ready
+
+Herd stores agent runtime session lifecycle state and provider resume handles in
+the local SQLite runtime-session database. Commander and conversation metadata
+stay in their owning stores. The installer prints the active data directory and
+database path in its receipt; advanced operators can override the database path
+before launch when needed.
+
+Boot fails closed when legacy JSON/JSONL state exists but the SQLite database is
+missing, stale, corrupt, or unwritable:
+
+```text
+╔══════════════╗      ╔═══════════════╗      ╔══════════════╗
+║ JSON stores  ║  →   ║ migrate:sqlite ║  →   ║ SQLite ready ║
+╚══════════════╝      ╚═══════════════╝      ╚══════════════╝
+        │                      │                      │
+        └── backup manifest ───┴── validation marker ─┘
+```
+
+Check:
+
+```bash
+curl -fsS http://localhost:20001/api/health | jq '.database'
+pnpm run db:ready -- --source-root "$HERD_DATA_DIR" --db "$HERD_DATA_DIR/herd.sqlite"
+```
+
+Recovery:
+
+- If `db:ready` prints a migration command, run that exact command.
+- Keep `--backup` enabled for legacy migrations unless you have a separate
+  snapshot.
+- Restart Herd after the migration succeeds.
+
+Manual migration:
+
+```bash
+pnpm run migrate:sqlite -- \
+  --source-root "$HERD_DATA_DIR" \
+  --db "$HERD_DATA_DIR/herd.sqlite" \
+  --backup
+```
+
 ## API Key Is Stale
 
 Recovery:

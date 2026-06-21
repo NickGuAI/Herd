@@ -59,7 +59,9 @@ async function startServer(options: {
     apiKeyStore: options.apiKeyStore,
     dataFilePath: options.storeFilePath,
     now: options.now,
+    localScan: { enabled: false },
     localScanner: options.localScanner,
+    retentionDays: 0,
   })
   app.use(
     '/api/telemetry',

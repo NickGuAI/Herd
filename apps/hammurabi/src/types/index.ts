@@ -6,6 +6,7 @@ import type { ClaudeMaxThinkingTokens } from '../../modules/claude-max-thinking-
 import type { HammurabiUiSurface } from './module-manifest.js'
 export type { HammurabiEvent, HammurabiEventSource } from './hammurabi-events.js'
 export type {
+  ProviderErrorClassification,
   TranscriptEnvelope,
   TranscriptEnvelopeEvent,
   TranscriptEnvelopeSource,
@@ -41,7 +42,7 @@ export type AgentType = ProviderId
 export type SessionType = 'commander' | 'worker' | 'cron' | 'sentinel' | 'automation'
 export type SessionTransportType = 'pty' | 'stream' | 'external'
 export type SessionCreatorKind = 'human' | 'commander' | 'cron' | 'sentinel' | 'automation'
-export type ClaudePermissionMode = 'default'
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions'
 export type MachineAuthProvider = ProviderId
 export type MachineAuthMode = 'setup-token' | 'api-key' | 'device-auth'
 export type MachineAuthMethod = MachineAuthMode | 'login' | 'missing'
@@ -163,6 +164,7 @@ export interface AgentSession {
   sessionType?: SessionType
   transportType?: SessionTransportType
   agentType?: AgentType
+  mode?: ClaudePermissionMode
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
@@ -335,12 +337,22 @@ export interface MachineDaemonRevokeResponse {
 }
 
 export interface CreateMachineInput {
-  id: string
-  label: string
-  host: string
+  id?: string
+  label?: string
+  host?: string
+  tailscaleHostname?: string
+  tailscaleStatusJson?: string
   user?: string
   port?: number
   cwd?: string
+}
+
+export interface MachineLaunchVerificationResponse {
+  ok: true
+  agentType: string
+  host: string
+  machineId: string
+  sessionName: string
 }
 
 export interface MachineProviderAuthStatus {
@@ -371,6 +383,7 @@ export interface MachineAuthSetupInput {
 
 export interface CreateSessionInput {
   name: string
+  mode?: 'default'
   task?: string
   cwd?: string
   transportType?: Exclude<SessionTransportType, 'external'>
@@ -379,7 +392,8 @@ export interface CreateSessionInput {
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
-  host?: string
+  machineId?: string
+  host?: unknown
   resumeFromSession?: string
 }
 

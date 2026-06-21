@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import type { AuthUser } from '@gehirn/auth-providers'
-import { WS_REPLAY_TAIL_LIMIT } from '../websocket'
 import {
   AUTH_HEADERS,
   connectWs,
@@ -297,25 +296,26 @@ describe('agents websocket', () => {
     }
   })
 
-  it('replays a projected tail cursor and sets more when truncated', async () => {
+  it('replays the full in-memory event list with a complete replay cursor', async () => {
     const mock = createMockChildProcess()
     mockedSpawn.mockReturnValueOnce(mock.cp as never)
     const server = await startServer()
+    const eventCount = 225
 
     try {
-      await createStreamSession(server.baseUrl, 'ws-replay-tail')
-      const session = server.agents.sessionsInterface.getSession('ws-replay-tail')
+      await createStreamSession(server.baseUrl, 'ws-replay-full')
+      const session = server.agents.sessionsInterface.getSession('ws-replay-full')
       expect(session?.kind).toBe('stream')
       if (!session || session.kind !== 'stream') {
         throw new Error('Expected stream session for replay test')
       }
 
-      session.events = Array.from({ length: WS_REPLAY_TAIL_LIMIT + 25 }, (_, index) => ({
+      session.events = Array.from({ length: eventCount }, (_, index) => ({
         type: 'system',
         marker: index + 1,
       })) as typeof session.events
 
-      const { ws, replay } = await connectWsWithReplay(server.baseUrl, 'ws-replay-tail')
+      const { ws, replay } = await connectWsWithReplay(server.baseUrl, 'ws-replay-full')
       const replayFrame = replay as typeof replay & {
         more?: boolean
         events?: Array<{ marker: number }>
@@ -328,29 +328,29 @@ describe('agents websocket', () => {
       }
 
       expect(replayFrame.type).toBe('replay')
-      expect(replayFrame.more).toBe(true)
-      expect(replayFrame.events).toHaveLength(WS_REPLAY_TAIL_LIMIT)
-      expect(replayFrame.events?.[0]?.marker).toBe(26)
-      expect(replayFrame.events?.at(-1)?.marker).toBe(WS_REPLAY_TAIL_LIMIT + 25)
+      expect(replayFrame.more).toBe(false)
+      expect(replayFrame.events).toHaveLength(eventCount)
+      expect(replayFrame.events?.[0]?.marker).toBe(1)
+      expect(replayFrame.events?.[replayFrame.events.length - 1]?.marker).toBe(eventCount)
       expect(replayFrame.projection).toEqual(expect.objectContaining({
         schemaVersion: 1,
         replayCursor: {
-          totalEvents: WS_REPLAY_TAIL_LIMIT + 25,
-          returnedEvents: WS_REPLAY_TAIL_LIMIT,
-          more: true,
+          totalEvents: eventCount,
+          returnedEvents: eventCount,
+          more: false,
         },
       }))
       expect(replayFrame.messages).toBeUndefined()
       expect(replayFrame.projection?.messages).toBeDefined()
 
-      const debugResponse = await fetch(`${server.baseUrl}/api/agents/sessions/ws-replay-tail/debug/events`, {
+      const debugResponse = await fetch(`${server.baseUrl}/api/agents/sessions/ws-replay-full/debug/events`, {
         headers: AUTH_HEADERS,
       })
       expect(debugResponse.status).toBe(200)
       const debugPayload = await debugResponse.json() as { events: Array<{ marker: number }> }
-      expect(debugPayload.events).toHaveLength(WS_REPLAY_TAIL_LIMIT + 25)
+      expect(debugPayload.events).toHaveLength(eventCount)
       expect(debugPayload.events[0]?.marker).toBe(1)
-      expect(debugPayload.events.at(-1)?.marker).toBe(WS_REPLAY_TAIL_LIMIT + 25)
+      expect(debugPayload.events[debugPayload.events.length - 1]?.marker).toBe(eventCount)
 
       ws.close()
     } finally {

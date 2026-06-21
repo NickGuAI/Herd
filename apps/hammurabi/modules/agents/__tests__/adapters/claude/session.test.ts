@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildClaudePromptAudit, createClaudeStreamSession, type ClaudeStreamSessionDeps } from '../../../adapters/claude/session'
+import type { StreamJsonEvent, StreamSession } from '../../../types'
 
 const UNSET_CLAUDE_CHILD_ENV = 'unset CLAUDECODE HAMMURABI_INTERNAL_TOKEN ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL'
 
@@ -28,6 +29,13 @@ function createDeps(spawnImpl: NonNullable<ClaudeStreamSessionDeps['spawnImpl']>
     writeToStdin: vi.fn().mockReturnValue(true),
     writeTranscriptMeta: vi.fn(),
   }
+}
+
+function appendSequencedEvent(session: StreamSession, event: StreamJsonEvent): void {
+  const seq = session.nextEventSeq ?? 1
+  session.nextEventSeq = seq + 1
+  ;(event as StreamJsonEvent & { seq?: number }).seq = seq
+  session.events.push(event)
 }
 
 describe('agents/adapters/claude/session', () => {
@@ -217,6 +225,119 @@ describe('agents/adapters/claude/session', () => {
     expect(deps.markProviderAuthRequired).toHaveBeenCalledWith(session, '401 unauthorized')
   })
 
+  it('records visible user envelopes before provider output can append during stdin write', async () => {
+    process.env.SHELL = '/bin/bash'
+
+    const child = createFakeChildProcess()
+    const spawnImpl = vi.fn().mockReturnValue(child)
+    const deps = createDeps(spawnImpl)
+    deps.appendEvent = vi.fn(appendSequencedEvent)
+
+    const session = createClaudeStreamSession(
+      'local-claude-follow-up-order',
+      'default',
+      '',
+      '/tmp/project alpha',
+      undefined,
+      { resumeSessionId: 'claude-session-1' },
+      deps,
+    )
+    deps.writeToStdin = vi.fn((targetSession) => {
+      targetSession.process.stdout?.emit('data', Buffer.from(`${JSON.stringify({
+        type: 'assistant',
+        session_id: 'claude-session-1',
+        timestamp: '2026-06-18T00:00:00.000Z',
+        message: {
+          id: 'assistant-immediate',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Immediate reply' }],
+        },
+      })}\n`))
+      return true
+    })
+
+    await session.adapter?.dispatchSend(session, 'Follow up', 'live', undefined, {
+      clientSendId: 'send-follow-up',
+    })
+
+    const userSeqs = session.events
+      .filter((event) => 'clientSendId' in event && event.clientSendId === 'send-follow-up')
+      .map((event) => ('seq' in event ? event.seq : undefined))
+      .filter((seq): seq is number => typeof seq === 'number')
+    const assistantSeqs = session.events
+      .filter((event) => (
+        'ev' in event
+        && event.ev.type === 'message.delta'
+        && 'text' in event.ev
+        && event.ev.text === 'Immediate reply'
+      ))
+      .map((event) => ('seq' in event ? event.seq : undefined))
+      .filter((seq): seq is number => typeof seq === 'number')
+
+    expect(userSeqs.length).toBeGreaterThan(0)
+    expect(assistantSeqs.length).toBeGreaterThan(0)
+    expect(Math.max(...userSeqs)).toBeLessThan(Math.min(...assistantSeqs))
+  })
+
+  it('does not append visible user envelopes when stdin is busy', async () => {
+    process.env.SHELL = '/bin/bash'
+
+    const child = createFakeChildProcess()
+    const spawnImpl = vi.fn().mockReturnValue(child)
+    const deps = createDeps(spawnImpl)
+
+    const session = createClaudeStreamSession(
+      'local-claude-busy-stdin',
+      'default',
+      '',
+      '/tmp/project alpha',
+      undefined,
+      {},
+      deps,
+    )
+    session.stdinDraining = true
+
+    const result = await session.adapter?.dispatchSend(session, 'Follow up', 'live', undefined, {
+      clientSendId: 'send-while-busy',
+    })
+
+    expect(result).toEqual({ ok: false, retryable: true, reason: 'Process stdin is busy' })
+    expect(deps.appendEvent).not.toHaveBeenCalled()
+    expect(deps.broadcastEvent).not.toHaveBeenCalled()
+    expect(deps.writeToStdin).not.toHaveBeenCalled()
+  })
+
+  it('does not append visible user envelopes when stdin is unavailable', async () => {
+    process.env.SHELL = '/bin/bash'
+
+    const child = createFakeChildProcess()
+    Object.defineProperty(child.stdin, 'writable', {
+      configurable: true,
+      value: false,
+    })
+    const spawnImpl = vi.fn().mockReturnValue(child)
+    const deps = createDeps(spawnImpl)
+
+    const session = createClaudeStreamSession(
+      'local-claude-closed-stdin',
+      'default',
+      '',
+      '/tmp/project alpha',
+      undefined,
+      {},
+      deps,
+    )
+
+    const result = await session.adapter?.dispatchSend(session, 'Follow up', 'live', undefined, {
+      clientSendId: 'send-while-closed',
+    })
+
+    expect(result).toEqual({ ok: false, retryable: false, reason: 'Stream session unavailable' })
+    expect(deps.appendEvent).not.toHaveBeenCalled()
+    expect(deps.broadcastEvent).not.toHaveBeenCalled()
+    expect(deps.writeToStdin).not.toHaveBeenCalled()
+  })
+
   it('rejects oversized append prompt bundles before spawning Claude', () => {
     expect(() =>
       buildClaudePromptAudit('x'.repeat(20), {
@@ -229,13 +350,13 @@ describe('agents/adapters/claude/session', () => {
     const child = createFakeChildProcess()
     const spawnImpl = vi.fn().mockReturnValue(child)
     const deps = createDeps(spawnImpl)
-    deps.internalToken = 'remote-bridge-token'
+    deps.approvalBridgeSigningSecret = 'remote-bridge-signing-secret'
 
     const originalPort = process.env.HAMMURABI_PORT
     process.env.HAMMURABI_PORT = '20001'
 
     try {
-      createClaudeStreamSession(
+      const session = createClaudeStreamSession(
         'remote-claude-bridge',
         'default',
         '',
@@ -251,6 +372,7 @@ describe('agents/adapters/claude/session', () => {
         {},
         deps,
       )
+      expect(session.approvalBridgeNonce).toEqual(expect.any(String))
     } finally {
       if (originalPort === undefined) {
         delete process.env.HAMMURABI_PORT
@@ -273,7 +395,7 @@ describe('agents/adapters/claude/session', () => {
     // Scoped approval bridge token is propagated via SendEnv without leaking either secret into argv.
     expect(args).toContain('SendEnv=HAMMURABI_APPROVAL_BRIDGE_TOKEN')
     expect(args).not.toContain('SendEnv=HAMMURABI_INTERNAL_TOKEN')
-    expect((args as string[]).join(' ')).not.toContain('remote-bridge-token')
+    expect((args as string[]).join(' ')).not.toContain('remote-bridge-signing-secret')
     // Bridge flags appear before the user@host destination so SSH parses them as options.
     const destinationIdx = (args as string[]).indexOf('yugu@yus-mac-mini')
     const sendEnvIdx = (args as string[]).findIndex((arg: string) =>
@@ -292,9 +414,9 @@ describe('agents/adapters/claude/session', () => {
     const child = createFakeChildProcess()
     const spawnImpl = vi.fn().mockReturnValue(child)
     const deps = createDeps(spawnImpl)
-    deps.internalToken = 'local-token'
+    deps.approvalBridgeSigningSecret = 'local-bridge-signing-secret'
 
-    createClaudeStreamSession(
+    const session = createClaudeStreamSession(
       'local-claude-no-bridge',
       'default',
       '',
@@ -303,6 +425,7 @@ describe('agents/adapters/claude/session', () => {
       {},
       deps,
     )
+    expect(session.approvalBridgeNonce).toEqual(expect.any(String))
 
     expect(spawnImpl).toHaveBeenCalledTimes(1)
     const [, args, spawnOptions] = spawnImpl.mock.calls[0]!

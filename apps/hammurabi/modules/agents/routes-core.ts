@@ -4,7 +4,6 @@ import * as path from 'node:path'
 import type { Duplex } from 'node:stream'
 import { DEFAULT_COMMANDER_MAX_TURNS } from '../commanders/store.js'
 import { loadCommanderRuntimeConfig } from '../commanders/runtime-config.js'
-import { resolveModuleDataDir } from '../data-dir.js'
 import type { PlanApprovalDecision } from '../../src/types/hammurabi-events.js'
 import { secureTokenEqual } from '../../server/middleware/secure-compare.js'
 import { createAgentsAuthContext } from './router-context.js'
@@ -48,6 +47,7 @@ import {
 import {
   createMachineLaunchRuntime,
 } from './session/machine-launch.js'
+import { createMachineLaunchVerifier } from './session/machine-launch-verification.js'
 import {
   createProviderSessionRuntime,
   type ProviderSessionRuntime,
@@ -121,7 +121,11 @@ export { parseCodexApprovalId }
 
 type QueueRuntime = ReturnType<typeof createSessionQueueRuntime>
 
-export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRouterResult {
+export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterResult {
+  if (!options.sqliteDb) {
+    throw new Error('SQLite runtime-session database is required for agents routes')
+  }
+
   const router = Router()
   const sessions = new Map<string, AnySession>()
   registerCodexProcessExitSessionMap(sessions)
@@ -143,15 +147,14 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
   )
   const codexTurnWatchdogTimeoutMs = parseCodexTurnWatchdogTimeoutMs(options.codexTurnWatchdogTimeoutMs)
   const internalToken = options.internalToken
+  const approvalBridgeSigningSecret = options.approvalBridgeSigningSecret ?? internalToken
   const getActionPolicyGate = options.getActionPolicyGate
   const autoResumeSessions = options.autoResumeSessions ?? true
-  const sessionStorePath = options.sessionStorePath
-    ? path.resolve(options.sessionStorePath)
-    : path.join(resolveModuleDataDir('agents'), 'stream-sessions.json')
   const machinesFilePath = options.machinesFilePath
     ? path.resolve(options.machinesFilePath)
     : defaultMachineRegistryStorePath()
   const machineRegistry = createMachineRegistryStore(machinesFilePath)
+  const sqliteDb = options.sqliteDb
   const daemonRegistry = new MachineDaemonRegistry()
   const providerAuthStore = options.providerAuthStore ?? new ProviderAuthStore()
   const runtimeConfig = loadCommanderRuntimeConfig()
@@ -343,6 +346,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     wsKeepAliveIntervalMs,
     codexTurnWatchdogTimeoutMs,
     internalToken,
+    approvalBridgeSigningSecret,
     getActionPolicyGate,
     appendStreamEvent,
     broadcastStreamEvent,
@@ -362,7 +366,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
   })
 
   persistenceHelpers = createPersistenceHelpers({
-    sessionStorePath,
+    sqliteDb,
     maxSessions,
     machineRegistry,
     sessions,
@@ -413,6 +417,17 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     requirePersistenceHelpers().pruneStaleCronSessions(nowMs)
     await requirePersistenceHelpers().pruneStaleNonHumanSessions(prunerConfig, nowMs)
   }
+
+  const verifyMachineLaunch = createMachineLaunchVerifier({
+    maxSessions,
+    sessions,
+    completedSessions,
+    exitedStreamSessions,
+    sessionEventHandlers,
+    machineLaunchRuntime,
+    getProviderRuntime: requireProviderRuntime,
+    getPersistenceHelpers: requirePersistenceHelpers,
+  })
 
   const sessionPrunerTimer = prunerConfig.enabled
     ? setInterval(() => {
@@ -480,6 +495,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     readMachineRegistry,
     resolveTailscaleHostname,
     validateMachineConfig,
+    verifyMachineLaunch,
     withMachineRegistryWriteLock,
     writeMachineRegistry,
     daemonRegistry,
@@ -510,6 +526,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     router,
     requireReadAccess,
     getCommanderLabels,
+    readMachineRegistry,
     sessions,
     completedSessions,
     exitedStreamSessions,
@@ -543,6 +560,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     readMachineRegistry,
     readPersistedSessionsState: () => requirePersistenceHelpers().readPersistedSessionsState(),
     resolveResumableSessionSource: resumeRuntime.resolveResumableSessionSource,
+    archivePersistedSession: (...args) => requirePersistenceHelpers().archivePersistedSession(...args),
     retireLiveSessionForResume: resumeRuntime.retireLiveSessionForResume,
     schedulePersistedSessionsWrite,
     sendImmediateTextToStreamSession: (...args) => requireQueueRuntime().sendImmediateTextToStreamSession(...args),
@@ -571,7 +589,7 @@ export function createAgentsRouter(options: AgentsRouterOptions = {}): AgentsRou
     sessions,
     maxSessions,
     taskDelayMs,
-    internalToken,
+    approvalBridgeSigningSecret,
     daemonRegistry,
     isInternalSessionRequest,
     sessionCreatorIdFromUser,

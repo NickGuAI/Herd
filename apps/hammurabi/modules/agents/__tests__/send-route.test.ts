@@ -2,8 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import express from 'express'
 import { createServer, type Server } from 'node:http'
 import { EventEmitter } from 'node:events'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema'
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
@@ -64,12 +69,18 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
 async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<RunningServer> {
   const app = express()
   app.use(express.json())
+  const sqliteDir = options.sqliteDb ? null : await mkdtemp(join(tmpdir(), 'hammurabi-send-route-sqlite-'))
+  const sqliteDb = options.sqliteDb ?? openHammurabiSqliteDatabase(join(sqliteDir!, 'hammurabi.sqlite'))
+  if (!options.sqliteDb) {
+    applyHammurabiSqliteSchema(sqliteDb)
+  }
 
   const agents = createAgentsRouter({
     apiKeyStore: createTestApiKeyStore(),
     autoResumeSessions: false,
     commanderSessionStorePath: '/tmp/nonexistent-send-route-test.json',
     ...options,
+    sqliteDb,
   })
   app.use('/api/agents', agents.router)
 
@@ -95,6 +106,7 @@ async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<
     baseUrl: `http://127.0.0.1:${address.port}`,
     httpServer,
     close: async () => {
+      await agents.sessionsInterface.shutdown?.()
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (error) {
@@ -104,6 +116,12 @@ async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<
           resolve()
         })
       })
+      if (!options.sqliteDb) {
+        sqliteDb.close()
+      }
+      if (sqliteDir) {
+        await rm(sqliteDir, { recursive: true, force: true })
+      }
     },
   }
 }

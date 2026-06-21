@@ -45,6 +45,12 @@ export interface SessionComposerSubmitPayload {
   context?: Pick<WorkspaceContextRequest, 'filePaths' | 'directoryPaths' | 'fileAnnotations'>
 }
 
+export interface SessionComposerContextAttachments {
+  filePaths: string[]
+  directoryPaths: string[]
+  fileAnnotations: WorkspacePendingFileAnnotation[]
+}
+
 interface SessionComposerProps {
   sessionName: string
   agentType?: AgentType
@@ -62,6 +68,7 @@ interface SessionComposerProps {
   onRemoveContextDirectoryPath?: (directoryPath: string) => void
   onRemoveContextFileAnnotation?: (annotationId: string) => void
   onClearContextFilePaths?: () => void
+  onRestoreContextAttachments?: (context: SessionComposerContextAttachments) => void
   onOpenWorkspace?: () => void
   onOpenAddToChat?: () => void
   showWorkspaceShortcut?: boolean
@@ -117,6 +124,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   onRemoveContextDirectoryPath,
   onRemoveContextFileAnnotation,
   onClearContextFilePaths,
+  onRestoreContextAttachments,
   onOpenWorkspace,
   onOpenAddToChat,
   showWorkspaceShortcut = false,
@@ -136,11 +144,13 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     focusTextarea,
     textareaRef,
     clearDraft,
+    restoreDraft,
     pendingImages,
     setPendingImages,
   } = useSessionDraft(sessionName)
   const [imageError, setImageError] = useState<string | null>(null)
   const [isQueueSubmitPending, setIsQueueSubmitPending] = useState(false)
+  const [isSendSubmitPending, setIsSendSubmitPending] = useState(false)
   const [skillsPickerMode, setSkillsPickerMode] = useState<SkillsPickerMode | null>(null)
   const [showQueuePanel, setShowQueuePanel] = useState(false)
   const [selectedAbilityIds, setSelectedAbilityIds] = useState<string[]>([])
@@ -149,6 +159,9 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   const [customAbilityPrompt, setCustomAbilityPrompt] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const queueSubmitPendingRef = useRef(false)
+  const sendSubmitPendingRef = useRef(false)
+  const isComposingRef = useRef(false)
+  const justEndedCompositionRef = useRef(false)
   const {
     abilities: composerAbilities,
     customAbilitiesEnabled,
@@ -195,7 +208,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   const canOpenQueuePanel = !disabled && queueMaxSize > 0
   const showMobileQueueButton = isMobileVariant && canOpenQueuePanel
   const showMobileQueueDraftButton = isMobileVariant && canOpenQueuePanel && queueDraftsSupported
-  const isQueueDraftBlocked = isQueueSubmitPending || isQueueMutating
+  const isQueueDraftBlocked = isQueueSubmitPending || isQueueMutating || isSendSubmitPending
   const queueButtonLabel = queueMaxSize > 0
     ? `Queue ${totalQueuedCount}/${queueMaxSize}`
     : 'Queue'
@@ -205,7 +218,13 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     && !isQueueDraftBlocked
     && (inputText.trim().length > 0 || pendingImages.length > 0 || hasContextAttachments)
   )
-  const canSend = !disabled && !isQueueSubmitPending && sendReady && (inputText.trim().length > 0 || pendingImages.length > 0 || hasContextAttachments)
+  const canSend = (
+    !disabled
+    && !isQueueSubmitPending
+    && !isSendSubmitPending
+    && sendReady
+    && (inputText.trim().length > 0 || pendingImages.length > 0 || hasContextAttachments)
+  )
   const primaryActionDisabled = !canSend
   const primaryActionLabel = isMobileVariant ? 'Send message' : 'Send'
   const primaryActionTitle = !sendReady && !disabled ? 'Connecting…' : primaryActionLabel
@@ -216,6 +235,8 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
       : 'Queue unavailable'
   const footerHint = disabled
     ? (disabledMessage ?? 'Composer unavailable')
+    : isSendSubmitPending
+      ? 'Sending message...'
     : isQueueSubmitPending
       ? 'Queuing message...'
     : queueDraftsSupported
@@ -259,6 +280,18 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     clearDraft()
   }
 
+  function restoreComposer(snapshot: {
+    inputText: string
+    pendingImages: SessionComposerImage[]
+    selectedAbilityIds: string[]
+    context: SessionComposerContextAttachments
+  }) {
+    restoreDraft(snapshot.inputText, snapshot.pendingImages)
+    setImageError(null)
+    setSelectedAbilityIds(snapshot.selectedAbilityIds)
+    onRestoreContextAttachments?.(snapshot.context)
+  }
+
   function buildContextPayload(): SessionComposerSubmitPayload['context'] | undefined {
     const filePaths = contextFilePaths.filter((filePath) => filePath.trim().length > 0)
     const directoryPaths = contextDirectoryPaths.filter((directoryPath) => directoryPath.trim().length > 0)
@@ -280,35 +313,75 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     }
   }
 
+  function isCompositionShortcutEvent(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+    const nativeEvent = event.nativeEvent as KeyboardEvent<HTMLTextAreaElement>['nativeEvent'] & {
+      isComposing?: boolean
+      keyCode?: number
+    }
+    return Boolean(
+      nativeEvent.isComposing ||
+      isComposingRef.current ||
+      justEndedCompositionRef.current ||
+      event.key === 'Process' ||
+      nativeEvent.keyCode === 229,
+    )
+  }
+
   async function handleSend() {
     const text = inputText.trim()
     const context = buildContextPayload()
-    if ((!text && pendingImages.length === 0 && !context) || disabled || !sendReady) {
+    if (
+      (!text && pendingImages.length === 0 && !context) ||
+      disabled ||
+      !sendReady ||
+      sendSubmitPendingRef.current
+    ) {
       return
     }
 
     const images = pendingImages.slice()
     const clientSendId = createClientSendId()
-    let sent: boolean | void | Promise<boolean | void>
-    try {
-      sent = onSend({
-        text: applyComposerAbilitiesToText(text, selectedAbilities),
-        images: images.length > 0 ? images : undefined,
-        clientSendId,
-        context,
-      })
-    } catch {
-      return
+    const snapshot = {
+      inputText,
+      pendingImages: images,
+      selectedAbilityIds: selectedAbilityIds.slice(),
+      context: {
+        filePaths: contextFilePaths.slice(),
+        directoryPaths: contextDirectoryPaths.slice(),
+        fileAnnotations: contextFileAnnotations.slice(),
+      },
     }
+    const payload: SessionComposerSubmitPayload = {
+      text: applyComposerAbilitiesToText(text, selectedAbilities),
+      images: images.length > 0 ? images : undefined,
+      clientSendId,
+      context,
+    }
+    let shouldRestoreComposer = false
+    sendSubmitPendingRef.current = true
+    setIsSendSubmitPending(true)
+    clearComposer()
     try {
+      const sent = onSend(payload)
+      if (sent === false) {
+        shouldRestoreComposer = true
+        return
+      }
       const resolved = await Promise.resolve(sent)
       if (resolved === false) {
+        shouldRestoreComposer = true
         return
       }
     } catch {
+      shouldRestoreComposer = true
       return
+    } finally {
+      sendSubmitPendingRef.current = false
+      setIsSendSubmitPending(false)
+      if (shouldRestoreComposer) {
+        restoreComposer(snapshot)
+      }
     }
-    clearComposer()
   }
 
   async function handleQueueDraft() {
@@ -407,6 +480,10 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (isCompositionShortcutEvent(event)) {
+      return
+    }
+
     if (queueDraftsSupported && event.key === 'Tab' && !event.shiftKey && canQueueDraft) {
       event.preventDefault()
       void handleQueueDraft()
@@ -417,6 +494,19 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
       event.preventDefault()
       void handleSend()
     }
+  }
+
+  function handleCompositionStart() {
+    isComposingRef.current = true
+    justEndedCompositionRef.current = false
+  }
+
+  function handleCompositionEnd() {
+    isComposingRef.current = false
+    justEndedCompositionRef.current = true
+    window.setTimeout(() => {
+      justEndedCompositionRef.current = false
+    }, 0)
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -619,6 +709,20 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   }
 
   function renderComposerField() {
+    if (isSendSubmitPending) {
+      return (
+        <div
+          className="composer-queueing-overlay"
+          role="status"
+          aria-live="polite"
+          aria-label="Sending message"
+        >
+          <ArrowUp size={16} aria-hidden="true" />
+          <span>Sending message...</span>
+        </div>
+      )
+    }
+
     if (isQueueSubmitPending) {
       return (
         <div
@@ -642,6 +746,8 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
         value={inputText}
         onChange={handleTextareaInput}
         onKeyDown={handleKeyDown}
+        onCompositionStart={handleCompositionStart}
+        onCompositionEnd={handleCompositionEnd}
         onPaste={handlePaste}
         disabled={disabled}
       />

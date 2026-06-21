@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchJson } from '@/lib/api'
+import { formatCost } from '@/lib/utils'
 import {
   CLAUDE_ADAPTIVE_THINKING_MODES,
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -27,6 +28,9 @@ import { HeartbeatMonitor } from './HeartbeatMonitor'
 
 interface CommanderDetailPayload {
   contextMode?: 'thin' | 'fat' | null
+  costCapUsd?: number | null
+  monthlyCostUsd?: number
+  totalCostUsd?: number
   workflowMd?: string | null
   cwd?: string | null
   currentTask?: {
@@ -72,6 +76,7 @@ async function updateCommanderRuntime(
     contextConfig: {
       fatPinInterval?: number
     }
+    costCapUsd: number | null
     effort: ClaudeEffortLevel
     adaptiveThinking: ClaudeAdaptiveThinkingMode
     maxThinkingTokens: number
@@ -181,6 +186,9 @@ export function CommanderIdentityTab({
     commander.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   ))
   const [maxTurns, setMaxTurns] = useState(String(commander.maxTurns ?? FALLBACK_RUNTIME_CONFIG.defaults.maxTurns))
+  const [costCapUsd, setCostCapUsd] = useState(
+    commander.costCapUsd != null ? String(commander.costCapUsd) : '',
+  )
   const [runtimeContextMode, setRuntimeContextMode] = useState<'thin' | 'fat'>(commander.contextMode ?? 'fat')
   const [fatPinInterval, setFatPinInterval] = useState('')
   const [actionError, setActionError] = useState<string | null>(null)
@@ -198,6 +206,7 @@ export function CommanderIdentityTab({
       contextConfig: {
         fatPinInterval?: number
       }
+      costCapUsd: number | null
       effort: ClaudeEffortLevel
       adaptiveThinking: ClaudeAdaptiveThinkingMode
       maxThinkingTokens: number
@@ -219,6 +228,10 @@ export function CommanderIdentityTab({
       ?? detailQuery.data?.runtimeConfig?.defaults.maxTurns
       ?? FALLBACK_RUNTIME_CONFIG.defaults.maxTurns,
     ))
+    const effectiveCostCapUsd = detailQuery.data?.costCapUsd !== undefined
+      ? detailQuery.data.costCapUsd
+      : commander.costCapUsd
+    setCostCapUsd(effectiveCostCapUsd != null ? String(effectiveCostCapUsd) : '')
     setRuntimeContextMode(detailQuery.data?.contextMode ?? commander.contextMode ?? 'fat')
     setFatPinInterval(
       detailQuery.data?.contextConfig?.fatPinInterval
@@ -233,6 +246,8 @@ export function CommanderIdentityTab({
     commander.id,
     commander.maxThinkingTokens,
     commander.maxTurns,
+    commander.costCapUsd,
+    detailQuery.data?.costCapUsd,
     detailQuery.data?.contextConfig?.fatPinInterval,
     detailQuery.data?.contextMode,
     detailQuery.data?.runtimeConfig?.defaults.maxTurns,
@@ -263,6 +278,17 @@ export function CommanderIdentityTab({
       return
     }
 
+    const parsedCostCapUsd = costCapUsd.trim()
+      ? Number(costCapUsd.trim())
+      : null
+    if (
+      parsedCostCapUsd !== null
+      && (!Number.isFinite(parsedCostCapUsd) || parsedCostCapUsd <= 0)
+    ) {
+      setActionError('Monthly spend cap must be a positive dollar amount, or blank for unlimited.')
+      return
+    }
+
     const parsedMaxThinkingTokens = Number.parseInt(maxThinkingTokens.trim(), 10)
     if (
       !Number.isFinite(parsedMaxThinkingTokens)
@@ -283,6 +309,7 @@ export function CommanderIdentityTab({
         contextConfig: runtimeContextMode === 'fat' && parsedFatPinInterval !== undefined
           ? { fatPinInterval: parsedFatPinInterval }
           : {},
+        costCapUsd: parsedCostCapUsd,
         effort,
         adaptiveThinking,
         maxThinkingTokens: parsedMaxThinkingTokens,
@@ -303,6 +330,20 @@ export function CommanderIdentityTab({
   const heartbeatCount = detail.runtime?.heartbeatCount
   const terminalState = detail.runtime?.terminalState ?? null
   const configuredMaxTurns = commander.maxTurns ?? runtimeConfig.defaults.maxTurns
+  const effectiveCostCapUsd = detail.costCapUsd !== undefined
+    ? detail.costCapUsd
+    : commander.costCapUsd ?? null
+  const monthlyCostUsd = Number.isFinite(detail.monthlyCostUsd)
+    ? detail.monthlyCostUsd ?? 0
+    : commander.monthlyCostUsd ?? 0
+  const spendProgressPercent = effectiveCostCapUsd && effectiveCostCapUsd > 0
+    ? Math.min(100, (monthlyCostUsd / effectiveCostCapUsd) * 100)
+    : 0
+  const spendStatus = effectiveCostCapUsd && effectiveCostCapUsd > 0
+    ? monthlyCostUsd >= effectiveCostCapUsd
+      ? 'Blocked'
+      : `${formatCost(Math.max(0, effectiveCostCapUsd - monthlyCostUsd))} remaining`
+    : 'Unlimited'
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4">
@@ -343,6 +384,36 @@ export function CommanderIdentityTab({
               Heartbeats observed in this runtime: {heartbeatCount}
             </p>
           )}
+          <div
+            className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-3"
+            data-testid="commander-monthly-spend"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Month-to-date spend</p>
+                <p className="mt-1 text-lg font-medium text-[color:var(--hv-fg)]">{formatCost(monthlyCostUsd)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Cap</p>
+                <p className="mt-1 text-sm font-medium text-[color:var(--hv-fg)]">
+                  {effectiveCostCapUsd && effectiveCostCapUsd > 0 ? formatCost(effectiveCostCapUsd) : 'Unlimited'}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--hv-border-hair)]">
+              <div
+                className={`h-full rounded-full ${
+                  effectiveCostCapUsd && monthlyCostUsd >= effectiveCostCapUsd
+                    ? 'bg-[var(--hv-accent-danger)]'
+                    : 'bg-[var(--hv-accent)]'
+                }`}
+                style={{ width: `${spendProgressPercent}%` }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-[color:var(--hv-fg-subtle)]">
+              {spendStatus} · UTC calendar month
+            </p>
+          </div>
           {terminalState?.kind === 'max_turns' && (
             <div className="rounded-lg border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2.5">
               <p className="text-sm text-[color:var(--hv-accent-danger)]">
@@ -384,6 +455,17 @@ export function CommanderIdentityTab({
                 </select>
               </label>
             </div>
+            <label className="block">
+              <span className="section-title block mb-2">Monthly spend cap (USD, blank = unlimited)</span>
+              <input
+                type="number"
+                min={0.01}
+                step="0.01"
+                value={costCapUsd}
+                onChange={(event) => setCostCapUsd(event.target.value)}
+                className={FIELD_CLASS}
+              />
+            </label>
             {runtimeContextMode === 'fat' && (
               <label className="block">
                 <span className="section-title block mb-2">Fat context every N heartbeats</span>

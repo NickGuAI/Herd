@@ -421,6 +421,295 @@ describe("agents routes", () => {
       }
     })
 
+  it('derives machine registration fields from full tailscale status JSON and atomically launch-verifies creation', async () => {
+      const registry = await createTempMachinesRegistry({
+        machines: [
+          { id: 'local', label: 'Local', host: null },
+        ],
+      })
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        mockedSpawn.mockImplementationOnce(() => {
+          const mock = createMockChildProcess()
+          queueMicrotask(() => {
+            mock.emitStdout('pong from home-mac.tail2bb6ea.ts.net (100.101.102.103) via DERP(sea) in 18ms\n')
+            mock.emitExit(0)
+          })
+          return mock.cp as never
+        })
+        const processMock = createMockChildProcess()
+        mockedSpawn.mockImplementationOnce(() => {
+          setTimeout(() => {
+            processMock.emitStdout('{"type":"system","subtype":"init","session_id":"verify-home-mac"}\n')
+          }, 0)
+          return processMock.cp as never
+        })
+
+        const response = await fetch(`${server.baseUrl}/api/agents/machines`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            tailscaleStatusJson: JSON.stringify({
+              BackendState: 'Running',
+              TUN: true,
+              CurrentTailnet: {
+                Name: 'gehirn.ai',
+                MagicDNSSuffix: 'tail2bb6ea.ts.net',
+              },
+              Self: {
+                HostName: "Nick's Mac Mini",
+                DNSName: 'nicks-mac-mini.tail2bb6ea.ts.net.',
+                Online: true,
+                TailscaleIPs: ['100.101.102.103', 'fd7a:115c:a1e0::abcd:1234'],
+                OS: 'macOS',
+              },
+              Peer: {
+                'nodekey:offline': {
+                  HostName: 'Offline Peer',
+                  DNSName: 'offline.tail2bb6ea.ts.net.',
+                  Online: false,
+                  TailscaleIPs: ['100.64.0.2'],
+                },
+              },
+            }),
+            user: 'yugu',
+            cwd: '/Users/yugu/workspace',
+            verifyLaunch: true,
+          }),
+        })
+
+        expect(response.status).toBe(201)
+        expect(await response.json()).toEqual({
+          id: 'nicks-mac-mini',
+          label: "Nick's Mac Mini",
+          host: '100.101.102.103',
+          tailscaleHostname: 'nicks-mac-mini.tail2bb6ea.ts.net',
+          user: 'yugu',
+          cwd: '/Users/yugu/workspace',
+          verification: {
+            agentType: 'claude',
+            host: 'nicks-mac-mini',
+            machineId: 'nicks-mac-mini',
+            ok: true,
+            sessionName: expect.stringMatching(/^verify-nicks-mac-mini-/),
+          },
+        })
+        expect(processMock.cp.kill).toHaveBeenCalled()
+      } finally {
+        await server.close()
+        await registry.cleanup()
+      }
+    })
+
+  it('does not persist a raw POST /machines candidate when atomic launch verification fails', async () => {
+      const registry = await createTempMachinesRegistry({
+        machines: [
+          { id: 'local', label: 'Local', host: null },
+        ],
+      })
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        const response = await fetch(`${server.baseUrl}/api/agents/machines`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: 'gpu-2',
+            label: 'GPU 2',
+            host: '10.0.1.60',
+            verifyLaunch: true,
+          }),
+        })
+
+        expect(response.status).toBe(400)
+        expect(await response.json()).toEqual({
+          stage: 'machine-config',
+          error: 'Machine launch verification requires the machine to have a workspace cwd',
+        })
+
+        const stored = JSON.parse(await readFile(registry.filePath, 'utf8')) as { machines: unknown[] }
+        expect(stored.machines).toEqual([
+          { id: 'local', label: 'Local', host: null },
+        ])
+      } finally {
+        await server.close()
+        await registry.cleanup()
+      }
+    })
+
+  it('launch-verifies a machine using a temporary worker session and cleans it up', async () => {
+      const registry = await createTempMachinesRegistry({
+        machines: [
+          {
+            id: 'gpu-1',
+            label: 'GPU 1',
+            host: '10.0.1.50',
+            user: 'builder',
+            cwd: '/srv/workspace',
+          },
+        ],
+      })
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        const processMock = createMockChildProcess()
+        mockedSpawn.mockImplementationOnce(() => {
+          setTimeout(() => {
+            processMock.emitStdout('{"type":"system","subtype":"init","session_id":"verify-gpu-1"}\n')
+          }, 0)
+          return processMock.cp as never
+        })
+
+        const response = await fetch(`${server.baseUrl}/api/agents/machines/gpu-1/verify-launch`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ agentType: 'claude' }),
+        })
+
+        expect(response.status).toBe(200)
+        const payload = await response.json() as {
+          agentType: string
+          host: string
+          machineId: string
+          sessionName: string
+        }
+        expect(payload).toEqual({
+          agentType: 'claude',
+          host: 'gpu-1',
+          machineId: 'gpu-1',
+          ok: true,
+          sessionName: expect.stringMatching(/^verify-gpu-1-/),
+        })
+        expect(processMock.cp.kill).toHaveBeenCalled()
+
+        const sessionsResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(sessionsResponse.status).toBe(200)
+        expect(await sessionsResponse.json()).toEqual([])
+      } finally {
+        await server.close()
+        await registry.cleanup()
+      }
+    })
+
+  it('launch-verifies the local machine when the provider session leaves host unset', async () => {
+      const registry = await createTempMachinesRegistry({
+        machines: [
+          {
+            id: 'local',
+            label: 'Local',
+            host: null,
+            cwd: '/srv/local-workspace',
+          },
+        ],
+      })
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        const processMock = createMockChildProcess()
+        mockedSpawn.mockImplementationOnce(() => {
+          setTimeout(() => {
+            processMock.emitStdout('{"type":"system","subtype":"init","session_id":"verify-local"}\n')
+          }, 0)
+          return processMock.cp as never
+        })
+
+        const response = await fetch(`${server.baseUrl}/api/agents/machines/local/verify-launch`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ agentType: 'claude' }),
+        })
+
+        expect(response.status).toBe(200)
+        const payload = await response.json() as {
+          agentType: string
+          host: string
+          machineId: string
+          sessionName: string
+        }
+        expect(payload).toEqual({
+          agentType: 'claude',
+          host: 'local',
+          machineId: 'local',
+          ok: true,
+          sessionName: expect.stringMatching(/^verify-local-/),
+        })
+        expect(processMock.cp.kill).toHaveBeenCalled()
+
+        const sessionsResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(sessionsResponse.status).toBe(200)
+        expect(await sessionsResponse.json()).toEqual([])
+      } finally {
+        await server.close()
+        await registry.cleanup()
+      }
+    })
+
+  it('rejects launch verification when the provider exits before readiness', async () => {
+      const registry = await createTempMachinesRegistry({
+        machines: [
+          {
+            id: 'gpu-1',
+            label: 'GPU 1',
+            host: '10.0.1.50',
+            user: 'builder',
+            cwd: '/srv/workspace',
+          },
+        ],
+      })
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        const processMock = createMockChildProcess()
+        mockedSpawn.mockImplementationOnce(() => {
+          setTimeout(() => {
+            processMock.emitExit(127)
+          }, 0)
+          return processMock.cp as never
+        })
+
+        const response = await fetch(`${server.baseUrl}/api/agents/machines/gpu-1/verify-launch`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ agentType: 'claude' }),
+        })
+
+        expect(response.status).toBe(502)
+        expect(await response.json()).toEqual({
+          stage: 'launch',
+          error: 'Process exited with code 127',
+        })
+
+        const sessionsResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(sessionsResponse.status).toBe(200)
+        expect(await sessionsResponse.json()).toEqual([])
+      } finally {
+        await server.close()
+        await registry.cleanup()
+      }
+    })
+
   it('verifies a tailscale hostname through the dedicated machine route', async () => {
       const server = await startServer()
 

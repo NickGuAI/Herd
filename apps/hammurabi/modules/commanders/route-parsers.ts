@@ -1,8 +1,10 @@
 import type { Request } from 'express'
 import { parseProviderId } from '../agents/providers/registry.js'
-import { parseOptionalClaudePermissionMode } from '../agents/session/input.js'
 import { parseOptionalClaudeEffort, type ClaudeEffortLevel } from '../claude-effort.js'
-import { DEFAULT_COMMANDER_CONTEXT_MODE } from './store.js'
+import {
+  DEFAULT_COMMANDER_CONTEXT_MODE,
+  parseCommanderCostCapUsd,
+} from './store.js'
 import type {
   CommanderContextMode,
   CommanderChannelMeta,
@@ -66,6 +68,13 @@ export function parseTrimmedString(value: unknown): string | null {
 
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+function parseOptionalDefaultPermissionMode(raw: unknown): 'default' | null | undefined {
+  if (raw === undefined || raw === null || raw === '') {
+    return undefined
+  }
+  return raw === 'default' ? 'default' : null
 }
 
 export function parseSessionId(raw: unknown): string | null {
@@ -205,6 +214,24 @@ export function parseOptionalCommanderMaxTurns(
   }
 
   return { valid: true, value: raw }
+}
+
+export function parseOptionalCommanderCostCapUsd(
+  raw: unknown,
+): { valid: boolean; value: number | null | undefined } {
+  if (raw === undefined) {
+    return { valid: true, value: undefined }
+  }
+  if (raw === null) {
+    return { valid: true, value: null }
+  }
+
+  const parsed = parseCommanderCostCapUsd(raw)
+  if (parsed === null) {
+    return { valid: false, value: undefined }
+  }
+
+  return { valid: true, value: parsed }
 }
 
 export function parseOptionalCommanderContextMode(
@@ -593,7 +620,7 @@ export function parseQuestContract(raw: unknown): CommanderQuestContract | null 
   }
 
   const cwd = parseMessage(raw.cwd) ?? process.cwd()
-  const permissionMode = parseOptionalClaudePermissionMode(raw.permissionMode)
+  const permissionMode = parseOptionalDefaultPermissionMode(raw.permissionMode)
   const agentType = parseProviderId(raw.agentType) ?? 'claude'
   const model = raw.model === null
     ? null

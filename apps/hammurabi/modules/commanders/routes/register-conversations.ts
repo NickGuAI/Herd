@@ -31,6 +31,7 @@ import {
 } from '../route-parsers.js'
 import type { CommanderChannelMeta } from '../store.js'
 import type { Conversation } from '../conversation-store.js'
+import { enforceCommanderCostCap } from '../cost-control.js'
 import {
   ConversationProviderSwapConflictError,
   ConversationProviderSwapUnavailableError,
@@ -59,8 +60,8 @@ import type { CommanderRoutesContext } from './types.js'
 type ConversationStatusAction = 'pause' | 'resume' | 'archive'
 
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 10
-const MAX_CONVERSATION_MESSAGES_LIMIT = 50
+const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 50
+const MAX_CONVERSATION_MESSAGES_LIMIT = 100
 const CONVERSATION_BOOTSTRAP_FAST_PATH_MS = 25
 
 function parseConversationId(raw: unknown): string | null {
@@ -263,6 +264,16 @@ async function awaitBootstrapFastPath(
   ])
 }
 
+function fireImmediateResumeHeartbeat(
+  context: CommanderRoutesContext,
+  conversation: Pick<Conversation, 'id'>,
+): void {
+  if (!context.heartbeatManager.isRunning(conversation.id)) {
+    return
+  }
+  context.heartbeatManager.fireManual(conversation.id, context.now().toISOString())
+}
+
 function launchConversationBootstrap(
   context: CommanderRoutesContext,
   conversation: Conversation,
@@ -318,6 +329,9 @@ function launchConversationBootstrap(
       }
 
       completeConversationBootstrap(conversation.id, generation)
+      if (operation === 'resume') {
+        fireImmediateResumeHeartbeat(context, started.conversation)
+      }
       const refreshed = await context.conversationStore.get(conversation.id)
       return {
         ok: true,
@@ -918,6 +932,12 @@ export function registerConversationRoutes(
         return
       }
 
+      const costCap = await enforceCommanderCostCap(context, conversation.commanderId)
+      if (!costCap.ok) {
+        res.status(costCap.status).json(costCap.body)
+        return
+      }
+
       const commander = await context.sessionStore.get(conversation.commanderId)
       const agentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? 'claude'
       const provider = getProvider(agentType)
@@ -1125,7 +1145,14 @@ export function registerConversationRoutes(
             commander.heartbeat,
           )
         }
+        fireImmediateResumeHeartbeat(context, conversation)
         res.json(withLiveSession(context, updated ?? conversation))
+        return
+      }
+
+      const costCap = await enforceCommanderCostCap(context, conversation.commanderId)
+      if (!costCap.ok) {
+        res.status(costCap.status).json(costCap.body)
         return
       }
 

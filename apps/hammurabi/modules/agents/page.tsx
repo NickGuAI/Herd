@@ -73,7 +73,7 @@ export default function AgentsPage() {
   const [resumeFromSession, setResumeFromSession] = useState('')
   const [agentType, setAgentType] = useState<AgentType>('claude')
   const [transportType, setTransportType] = useState<Exclude<SessionTransportType, 'external'>>('stream')
-  const [selectedHost, setSelectedHost] = useState('')
+  const [selectedMachineId, setSelectedMachineId] = useState('')
   const [isCreating, setIsCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [sessionActionError, setSessionActionError] = useState<string | null>(null)
@@ -188,11 +188,11 @@ export default function AgentsPage() {
       setMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
     }
 
-    const nextHost = resumeSource.host ?? ''
-    if (selectedHost !== nextHost) {
-      setSelectedHost(nextHost)
+    const nextMachineId = resumeSource.host ?? ''
+    if (selectedMachineId !== nextMachineId) {
+      setSelectedMachineId(nextMachineId)
     }
-  }, [adaptiveThinking, agentType, cwd, effort, maxThinkingTokens, providers, resumeSource, selectedHost, transportType])
+  }, [adaptiveThinking, agentType, cwd, effort, maxThinkingTokens, providers, resumeSource, selectedMachineId, transportType])
 
   async function refreshSessions() {
     await queryClient.invalidateQueries({ queryKey: ['agents', 'sessions'] })
@@ -218,7 +218,7 @@ export default function AgentsPage() {
         resumeFromSession: resumeFromSession || undefined,
         transportType,
         agentType,
-        host: selectedHost || undefined,
+        machineId: selectedMachineId || undefined,
       })
 
       setName('')
@@ -230,7 +230,7 @@ export default function AgentsPage() {
       setResumeFromSession('')
       setAgentType(defaultAgentType)
       setTransportType('stream')
-      setSelectedHost('')
+      setSelectedMachineId('')
       setShowNewSessionForm(false)
       setSelectedSession(result.sessionName)
       await refreshSessions()
@@ -248,7 +248,7 @@ export default function AgentsPage() {
     maxThinkingTokens,
     name,
     resumeFromSession,
-    selectedHost,
+    selectedMachineId,
     defaultAgentType,
     transportType,
     task,
@@ -377,8 +377,8 @@ export default function AgentsPage() {
                     transportType={transportType}
                     setTransportType={setTransportType}
                     machines={machineList}
-                    selectedHost={selectedHost}
-                    setSelectedHost={setSelectedHost}
+                    selectedMachineId={selectedMachineId}
+                    setSelectedMachineId={setSelectedMachineId}
                     isCreating={isCreating}
                     createError={createError}
                     onSubmit={handleCreateSession}
@@ -410,8 +410,8 @@ export default function AgentsPage() {
                   transportType={transportType}
                   setTransportType={setTransportType}
                   machines={machineList}
-                  selectedHost={selectedHost}
-                  setSelectedHost={setSelectedHost}
+                  selectedMachineId={selectedMachineId}
+                  setSelectedMachineId={setSelectedMachineId}
                   isCreating={isCreating}
                   createError={createError}
                   onSubmit={handleCreateSession}

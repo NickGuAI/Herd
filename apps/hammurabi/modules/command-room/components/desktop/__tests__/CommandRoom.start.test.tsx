@@ -50,6 +50,14 @@ vi.mock('@modules/commanders/hooks/useCommander', () => ({
   useCommander: mocks.useCommander,
 }))
 
+vi.mock('@modules/commanders/components/CreateCommanderWizard', () => ({
+  CreateCommanderWizard: () => (
+    <div data-testid="chat-only-create-wizard">
+      <h2>Get your AI worker to work</h2>
+    </div>
+  ),
+}))
+
 import { CommandRoom } from '@modules/command-room/components/CommandRoom'
 
 let root: Root | null = null
@@ -269,7 +277,7 @@ describe('CommandRoom desktop conversation selection', () => {
     expect(document.body.textContent).toContain('worker-owned-1')
   })
 
-  it('opens the CreateCommanderWizard choice screen when the New Commander button is clicked', async () => {
+  it('opens the chat-only CreateCommanderWizard when the New Commander button is clicked', async () => {
     await renderAt('/command-room')
 
     const newCommanderButton = document.body.querySelector(
@@ -282,11 +290,12 @@ describe('CommandRoom desktop conversation selection', () => {
       newCommanderButton?.click()
     })
 
-    // Wizard's `choice` mode renders these strings; the plain CreateCommanderForm does not.
     const text = document.body.textContent ?? ''
-    expect(text).toContain('Choose a creation path')
-    expect(text).toContain('Quick Create')
-    expect(text).toContain('Talk to Me')
-    expect(text).toContain('Advanced')
+    expect(document.body.querySelector('[data-testid="chat-only-create-wizard"]')).not.toBeNull()
+    expect(text).toContain('Get your AI worker to work')
+    expect(text).not.toContain('Choose a creation path')
+    expect(text).not.toContain('Quick Create')
+    expect(text).not.toContain('Talk to Me')
+    expect(text).not.toContain('Advanced')
   })
 })

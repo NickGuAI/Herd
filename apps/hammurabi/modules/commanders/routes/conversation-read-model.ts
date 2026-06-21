@@ -171,6 +171,10 @@ export function buildConversationSummaryDTO(
           : 'idle'
   const websocketReady = runtimeState === 'active' && hasLiveSession
   const hasActiveStream = websocketReady && transportType === 'stream'
+  const canRecoverActiveNoLiveSession = conversation.status === 'active'
+    && runtimeState === 'idle'
+    && !hasLiveSession
+    && !isArchived
   const canStartOrResume = (
     (conversation.status === 'idle' || runtimeState === 'failed')
     && runtimeState !== 'starting'
@@ -186,7 +190,7 @@ export function buildConversationSummaryDTO(
     sendReason = 'Conversation is starting'
   } else if (runtimeState === 'failed') {
     sendReason = 'Conversation start failed'
-  } else if (!hasActiveStream) {
+  } else if (!hasActiveStream && !canRecoverActiveNoLiveSession) {
     sendReason = conversation.status !== 'active'
       ? 'Conversation must be active before sending'
       : transportType === null
@@ -201,7 +205,7 @@ export function buildConversationSummaryDTO(
       : noActiveStreamReason
 
   const allowedActions: ConversationAllowedActions = {
-    send: hasActiveStream,
+    send: hasActiveStream || canRecoverActiveNoLiveSession,
     queue: hasActiveStream,
     media: canSendMedia,
     start: canStartOrResume,

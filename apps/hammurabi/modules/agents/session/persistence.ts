@@ -1,12 +1,6 @@
-import { readFile } from 'node:fs/promises'
-import * as path from 'node:path'
 import {
-  migrateProviderContext,
-  migratedProviderContextChanged,
   sanitizeProviderContextForPersistence,
 } from '../providers/provider-context-migration.js'
-import { writeJsonFileAtomically } from '../../json-file.js'
-import { resolveModuleDataDir } from '../../data-dir.js'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
 } from '../../claude-adaptive-thinking.js'
@@ -25,7 +19,6 @@ import {
   buildPersistedEntryFromLiveStreamSession,
   countCompletedTurnEntries,
   mergePersistedSessionWithTranscriptMeta,
-  parsePersistedSessionsState,
   snapshotExitedStreamSession,
   toCompletedSession,
 } from './state.js'
@@ -66,17 +59,13 @@ export interface PersistedRestoreDeps {
   completedSessions: Map<string, CompletedSession>
   exitedStreamSessions: Map<string, ExitedStreamSessionState>
   maxSessions: number
-  sessionStorePath?: string
+  persistedState: PersistedSessionsState
   machineRegistry: MachineRegistryStore
   applyUsageEvent: (session: StreamSession, event: StreamJsonEvent) => void
   restoreProviderSession: (
     entry: PersistedStreamSession,
     machine?: MachineConfig,
   ) => StreamSession | Promise<StreamSession>
-}
-
-function defaultSessionStorePath(): string {
-  return path.join(resolveModuleDataDir('agents'), 'stream-sessions.json')
 }
 
 export function sanitizeTranscriptFileKey(raw: string): string {
@@ -243,91 +232,10 @@ export function serializePersistedSessionsState(
   return { sessions: restoredSessions }
 }
 
-export async function writePersistedSessionsState(
-  sessionStorePath: string,
-  payload: PersistedSessionsState,
-  options: { backup?: boolean } = {},
-): Promise<void> {
-  await writeJsonFileAtomically(sessionStorePath, payload, { backup: options.backup })
-}
-
-export async function readPersistedSessionsState(
-  sessionStorePath?: string,
-): Promise<PersistedSessionsState> {
-  const resolvedPath = sessionStorePath
-    ? path.resolve(sessionStorePath)
-    : defaultSessionStorePath()
-  let raw: string
-  try {
-    raw = await readFile(resolvedPath, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { sessions: [] }
-    }
-    throw error
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw) as unknown
-  } catch {
-    return { sessions: [] }
-  }
-
-  const payload = asObject(parsed)
-  if (!Array.isArray(payload?.sessions)) {
-    return parsePersistedSessionsState(parsed)
-  }
-
-  let migratedCount = 0
-  let migratedSessions: unknown[] | null = null
-  for (const [index, entry] of payload.sessions.entries()) {
-    if (!asObject(entry)) {
-      if (migratedSessions) {
-        migratedSessions.push(entry)
-      }
-      continue
-    }
-
-    const { cleaned } = migrateProviderContext(entry)
-    const changed = migratedProviderContextChanged(entry, cleaned)
-    if (!changed) {
-      if (migratedSessions) {
-        migratedSessions.push(entry)
-      }
-      continue
-    }
-
-    if (!migratedSessions) {
-      migratedSessions = payload.sessions.slice(0, index)
-    }
-    migratedSessions.push(cleaned)
-    migratedCount += 1
-  }
-
-  if (migratedCount === 0 || !migratedSessions) {
-    return parsePersistedSessionsState(parsed)
-  }
-
-  const migratedPayload = {
-    ...payload,
-    sessions: migratedSessions,
-  }
-
-  if (migratedCount > 0) {
-    await writeJsonFileAtomically(resolvedPath, migratedPayload, { backup: true })
-    console.warn(
-      `[agents][migration] Migrated providerContext in ${migratedCount} stream session record(s)`,
-    )
-  }
-
-  return parsePersistedSessionsState(migratedPayload)
-}
-
 export async function restorePersistedSessions(
   deps: PersistedRestoreDeps,
 ): Promise<void> {
-  const persisted = await readPersistedSessionsState(deps.sessionStorePath)
+  const persisted = deps.persistedState
   if (persisted.sessions.length === 0) return
 
   const machines = await deps.machineRegistry.readMachineRegistry()
@@ -360,6 +268,7 @@ export async function restorePersistedSessions(
           sessionType: entry.sessionType,
           creator: entry.creator,
           agentType: entry.agentType,
+          model: entry.model,
           mode: entry.mode,
           cwd: entry.cwd,
           host: entry.host,

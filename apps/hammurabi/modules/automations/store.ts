@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseProviderId } from '../agents/providers/registry.js'
-import { parseOptionalClaudePermissionMode } from '../agents/session/input.js'
 import type { AgentType } from '../agents/types.js'
 import { resolveCommanderDataDir } from '../commanders/paths.js'
 import { resolveAutomationsDataDir } from '../data-dir.js'
@@ -169,6 +168,13 @@ function parseHistoryEntry(entry: unknown): AutomationHistoryEntry | null {
   }
 }
 
+function parseOptionalPermissionMode(raw: unknown): 'default' | null | undefined {
+  if (raw === undefined || raw === null || raw === '') {
+    return undefined
+  }
+  return raw === 'default' ? 'default' : null
+}
+
 function formatSeedMemory(name: string, seedMemory: string): string {
   const normalizedSeedMemory = seedMemory.trim().length > 0
     ? seedMemory.trim()
@@ -212,7 +218,7 @@ function normalizeAutomation(raw: unknown): Automation | null {
   const trigger = asTrigger(raw.trigger)
   const instruction = asTrimmedString(raw.instruction)
   const agentType = asAgentType(raw.agentType)
-  const permissionMode = parseOptionalClaudePermissionMode(raw.permissionMode)
+  const permissionMode = parseOptionalPermissionMode(raw.permissionMode)
   const status = asStatus(raw.status)
   if (!id || !operatorId || !name || !trigger || !instruction || !agentType || permissionMode === null || !status) {
     return null

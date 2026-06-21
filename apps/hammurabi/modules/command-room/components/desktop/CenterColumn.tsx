@@ -13,7 +13,11 @@ import type { ReactNode } from 'react'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { usePendingApprovals, useApprovalDecision, type PendingApproval } from '@/hooks/use-approvals'
 import type { AgentType, ProviderRegistryEntry, SessionQueueSnapshot } from '@/types'
-import { SessionComposer, type SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
+import {
+  SessionComposer,
+  type SessionComposerContextAttachments,
+  type SessionComposerSubmitPayload,
+} from '@modules/agents/components/SessionComposer'
 import { TerminalView } from '@modules/agents/page-shell/TerminalView'
 import type { MsgItem } from '@modules/agents/messages/model'
 import type {
@@ -32,6 +36,8 @@ import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-work
 import { STATE_COLOR } from '@modules/components/hervald'
 
 /* ---- local types ---- */
+
+type CommandRoomStreamStatus = 'connecting' | 'connected' | 'disconnected' | 'closed' | null
 
 export interface HervaldCommander extends Partial<CommanderSession> {
   id: string
@@ -52,6 +58,7 @@ export interface CenterColumnProps {
   commander: HervaldCommander
   isGlobalScope?: boolean
   hasSelectedConversation?: boolean
+  streamStatus?: CommandRoomStreamStatus
   conversationLoadError?: string | null
   onRetryConversations?: () => void
   activeChatSession?: ChatSession | null
@@ -120,6 +127,7 @@ export interface CenterColumnProps {
   onRemoveContextDirectoryPath?: (directoryPath: string) => void
   onRemoveContextFileAnnotation?: (commentId: string) => void
   onClearContextFilePaths?: () => void
+  onRestoreContextAttachments?: (context: SessionComposerContextAttachments) => void
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   composerSessionName: string
   composerEnabled: boolean
@@ -176,12 +184,39 @@ function ConversationErrorPanel({
   )
 }
 
+function ConversationStreamStatusNotice({ status }: { status: Exclude<CommandRoomStreamStatus, null | 'connected'> }) {
+  const message = status === 'connecting'
+    ? 'Conversation stream reconnecting...'
+    : 'Conversation stream unavailable. Reconnecting to the live session.'
+
+  return (
+    <div
+      className="font-mono"
+      data-testid="conversation-stream-status"
+      role="status"
+      style={{
+        marginBottom: 8,
+        border: '1px solid var(--hv-border-soft)',
+        borderRadius: 4,
+        background: 'var(--hv-bg-raised)',
+        color: 'var(--hv-fg-muted)',
+        fontSize: 11,
+        lineHeight: 1.5,
+        padding: '6px 10px',
+      }}
+    >
+      {message}
+    </div>
+  )
+}
+
 /* ---- main export ---- */
 
 export function CenterColumn({
   commander,
   isGlobalScope = false,
   hasSelectedConversation = false,
+  streamStatus = null,
   conversationLoadError = null,
   onRetryConversations,
   activeChatSession = null,
@@ -226,6 +261,7 @@ export function CenterColumn({
   onRemoveContextDirectoryPath,
   onRemoveContextFileAnnotation,
   onClearContextFilePaths,
+  onRestoreContextAttachments,
   onAnswer,
   activeTab,
   composerSessionName,
@@ -271,6 +307,12 @@ export function CenterColumn({
     || (activeChatSession?.sessionType as string | undefined) === 'pty'
   const showTerminalSession = activeChatIsPty
   const showGlobalAutomationPanel = isGlobalScope && activeTab === 'automation' && Boolean(globalAutomationPanel)
+  const showConversationStreamStatus = Boolean(
+    hasSelectedConversation
+    && !activeChatSession
+    && streamStatus
+    && streamStatus !== 'connected',
+  )
 
   async function handleApprove(approval: PendingApproval): Promise<void> {
     try {
@@ -451,6 +493,9 @@ export function CenterColumn({
             background: 'var(--hv-bg)',
           }}
         >
+          {showConversationStreamStatus && streamStatus && streamStatus !== 'connected' && (
+            <ConversationStreamStatusNotice status={streamStatus} />
+          )}
           <div
             data-testid="compact-chat-composer"
             data-test-id="compact-chat-composer"
@@ -482,6 +527,7 @@ export function CenterColumn({
               onRemoveContextDirectoryPath={onRemoveContextDirectoryPath}
               onRemoveContextFileAnnotation={onRemoveContextFileAnnotation}
               onClearContextFilePaths={onClearContextFilePaths}
+              onRestoreContextAttachments={onRestoreContextAttachments}
               onQueue={onQueue}
               onSend={onSend ?? (() => undefined)}
               queueSnapshot={queueSnapshot}

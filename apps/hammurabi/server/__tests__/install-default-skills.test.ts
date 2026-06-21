@@ -145,7 +145,7 @@ async function createRepoArchive(repoDir: string, archivePath: string): Promise<
 function hermeticNodeStem(): string {
   const platform = process.platform === 'darwin' ? 'darwin' : process.platform === 'linux' ? 'linux' : process.platform
   const arch = process.arch === 'x64' ? 'x64' : process.arch === 'arm64' ? 'arm64' : process.arch
-  return `node-v22.12.0-${platform}-${arch}`
+  return `node-v22.16.0-${platform}-${arch}`
 }
 
 function installerPath(fakeBin: string): string {
@@ -162,11 +162,11 @@ async function seedHermeticToolchain(toolchainDir: string): Promise<void> {
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "-p" && "\${2:-}" == "process.versions.node" ]]; then
-  printf '22.12.0\\n'
+  printf '22.16.0\\n'
   exit 0
 fi
 if [[ "\${1:-}" == "--version" ]]; then
-  printf 'v22.12.0\\n'
+  printf 'v22.16.0\\n'
   exit 0
 fi
 if [[ "\${1:-}" == */hammurabi.mjs ]]; then

@@ -34,6 +34,7 @@ import {
 import type { QueuedMessage } from '../message-queue.js'
 import {
   parseActiveSkillInvocation,
+  parseClaudePermissionMode,
   parseOptionalHost,
   parseSessionCreator,
   parseSessionType,
@@ -42,6 +43,10 @@ import type { ProviderSessionContext } from '../providers/provider-session-conte
 import { getProvider, parseProviderId } from '../providers/registry.js'
 import type {
   ActiveSkillInvocation,
+  AgentRuntimeSessionAllowedActions,
+  AgentRuntimeSessionDisabledReasons,
+  AgentRuntimeSessionMachine,
+  AgentRuntimeSessionState,
   AgentSession,
   AgentSessionConnectionState,
   AgentSessionProcessState,
@@ -51,6 +56,7 @@ import type {
   CompletedSession,
   CompletedSessionMetadata,
   ExitedStreamSessionState,
+  MachineConfig,
   PersistedSessionsState,
   PersistedDaemonProcess,
   PersistedStreamSession,
@@ -148,6 +154,9 @@ function parseQueuedMessage(value: unknown): QueuedMessage | null {
   const clientSendId = typeof message.clientSendId === 'string'
     ? message.clientSendId.trim()
     : undefined
+  const userEventSubtype = typeof message.userEventSubtype === 'string'
+    ? message.userEventSubtype.trim()
+    : undefined
   const priority = message.priority === 'high' || message.priority === 'low'
     ? message.priority
     : (message.priority === 'normal' ? 'normal' : null)
@@ -179,6 +188,7 @@ function parseQueuedMessage(value: unknown): QueuedMessage | null {
     ...(displayText !== undefined ? { displayText } : {}),
     images: images.length > 0 ? images : undefined,
     ...(clientSendId ? { clientSendId } : {}),
+    ...(userEventSubtype ? { userEventSubtype } : {}),
     priority,
     queuedAt,
   }
@@ -280,7 +290,7 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
   const model = typeof entry.model === 'string' && entry.model.trim().length > 0
     ? entry.model.trim()
     : undefined
-  const mode = 'default'
+  const mode = parseClaudePermissionMode(entry.mode) ?? 'default'
   const cwd = typeof entry.cwd === 'string' && entry.cwd.trim().length > 0
     ? entry.cwd.trim()
     : undefined
@@ -340,6 +350,10 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
   const activeTurnId = typeof entry.activeTurnId === 'string' && entry.activeTurnId.trim().length > 0
     ? entry.activeTurnId.trim()
     : undefined
+  const approvalBridgeNonce = typeof entry.approvalBridgeNonce === 'string'
+    && entry.approvalBridgeNonce.trim().length > 0
+    ? entry.approvalBridgeNonce.trim()
+    : undefined
   const daemonProcess = parsePersistedDaemonProcess(entry.daemonProcess)
   const supportsEffort = providerSupportsEffort(agentType)
   const supportsAdaptiveThinking = providerSupportsAdaptiveThinking(agentType)
@@ -368,6 +382,7 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     currentSkillInvocation,
     createdAt,
     providerContext,
+    approvalBridgeNonce,
     activeTurnId,
     conversationEntryCount,
     events,
@@ -1024,9 +1039,147 @@ export function getResumeState(resumeAvailable: boolean | undefined): AgentSessi
   return resumeAvailable ? 'available' : 'unavailable'
 }
 
+function runtimeSessionDisabledReason(state: AgentRuntimeSessionState): string {
+  return state === 'active'
+    ? 'Runtime session is active'
+    : state === 'paused'
+      ? 'Runtime session is paused'
+      : 'Runtime session is archived'
+}
+
+function resolveMachineTransport(machine: MachineConfig | undefined, machineId: string): AgentRuntimeSessionMachine['transportType'] {
+  if (machine?.transport) {
+    return machine.transport
+  }
+  return machineId === 'local' ? 'local' : 'ssh'
+}
+
+function resolveMachineDisabledReason(machine: MachineConfig | undefined, machineId: string): string | null {
+  if (!machine) {
+    return `Machine "${machineId}" is not registered`
+  }
+  if (machine.daemon?.revokedAt) {
+    return `Machine "${machineId}" is revoked`
+  }
+  return null
+}
+
+function unsupportedRuntimeActionTransportReason(transportType: SessionTransportType): string {
+  return `Runtime session transport "${transportType}" does not support this action`
+}
+
+function activeRuntimeActionDisabledReason(
+  state: AgentRuntimeSessionState,
+  transportType: SessionTransportType,
+  available: boolean,
+  options: { requiresAvailable: boolean; unavailableReason: string },
+): string | null {
+  if (state !== 'active') {
+    return runtimeSessionDisabledReason(state)
+  }
+  if (transportType !== 'stream') {
+    return unsupportedRuntimeActionTransportReason(transportType)
+  }
+  if (options.requiresAvailable && !available) {
+    return options.unavailableReason
+  }
+  return null
+}
+
+function resumeRuntimeActionDisabledReason(input: {
+  state: AgentRuntimeSessionState
+  transportType: SessionTransportType
+  resumeAvailable: boolean
+  machine?: AgentRuntimeSessionMachine
+}): string | null {
+  if (input.state !== 'paused') {
+    return runtimeSessionDisabledReason(input.state)
+  }
+  if (input.transportType !== 'stream') {
+    return unsupportedRuntimeActionTransportReason(input.transportType)
+  }
+  if (!input.resumeAvailable) {
+    return 'Provider resume handle is unavailable'
+  }
+  if (input.machine?.launchable === false) {
+    return input.machine.disabledReason ?? 'Machine is not launchable'
+  }
+  return null
+}
+
+export function resolveRuntimeSessionMachine(
+  machineId: string | undefined,
+  machines: readonly MachineConfig[],
+): AgentRuntimeSessionMachine {
+  const id = machineId?.trim() || 'local'
+  const machine = machines.find((entry) => entry.id === id)
+  const disabledReason = resolveMachineDisabledReason(machine, id)
+
+  return {
+    id,
+    label: machine?.label?.trim() || (id === 'local' ? 'Local (this server)' : id),
+    known: Boolean(machine),
+    transportType: resolveMachineTransport(machine, id),
+    launchable: disabledReason === null,
+    disabledReason,
+  }
+}
+
+export function buildRuntimeSessionActions(input: {
+  state: AgentRuntimeSessionState
+  transportType?: SessionTransportType
+  resumeAvailable?: boolean
+  pauseAvailable?: boolean
+  machine?: AgentRuntimeSessionMachine
+}): {
+  allowedActions: AgentRuntimeSessionAllowedActions
+  disabledReasons: AgentRuntimeSessionDisabledReasons
+} {
+  const { state } = input
+  const transportType = input.transportType ?? 'stream'
+  const isStreamTransport = transportType === 'stream'
+  const resumeAvailable = input.resumeAvailable === true
+  const pauseAvailable = input.pauseAvailable ?? resumeAvailable
+  const machineReady = input.machine?.launchable ?? true
+  const sendDisabledReason = activeRuntimeActionDisabledReason(state, transportType, resumeAvailable, {
+    requiresAvailable: false,
+    unavailableReason: 'Stream session is unavailable',
+  })
+  const pauseDisabledReason = activeRuntimeActionDisabledReason(state, transportType, pauseAvailable, {
+    requiresAvailable: true,
+    unavailableReason: 'Provider pause snapshot is unavailable',
+  })
+  const resumeDisabledReason = resumeRuntimeActionDisabledReason({
+    state,
+    transportType,
+    resumeAvailable,
+    ...(input.machine ? { machine: input.machine } : {}),
+  })
+
+  const allowedActions: AgentRuntimeSessionAllowedActions = {
+    send: state === 'active' && isStreamTransport,
+    pause: state === 'active' && isStreamTransport && pauseAvailable,
+    resume: state === 'paused' && isStreamTransport && resumeAvailable && machineReady,
+    archive: state !== 'archived',
+    start: false,
+  }
+
+  const disabledReasons: AgentRuntimeSessionDisabledReasons = {
+    send: allowedActions.send ? null : sendDisabledReason,
+    pause: allowedActions.pause ? null : pauseDisabledReason,
+    resume: allowedActions.resume ? null : resumeDisabledReason,
+    archive: allowedActions.archive ? null : runtimeSessionDisabledReason(state),
+    start: state === 'archived'
+      ? 'Archived runtime sessions cannot be started'
+      : 'Existing runtime sessions resume instead of start',
+  }
+
+  return { allowedActions, disabledReasons }
+}
+
 export function liveSessionToApiPayload(
   session: StreamSession,
-  options: { resumeAvailable?: boolean } = {},
+  options: { resumeAvailable?: boolean; pauseAvailable?: boolean; machine?: AgentRuntimeSessionMachine } = {},
 ): AgentSession {
   const created = typeof session.createdAt === 'string' && session.createdAt.length > 0
     ? session.createdAt
@@ -1038,6 +1191,15 @@ export function liveSessionToApiPayload(
   const processState = streamProcessState(session)
   const turnState = getLiveSessionTurnState(session)
   const resumeAvailable = options.resumeAvailable ?? canResumeLiveStreamSession(session)
+  const pauseAvailable = options.pauseAvailable ?? canPauseLiveStreamSession(session)
+  const runtimeState: AgentRuntimeSessionState = 'active'
+  const { allowedActions, disabledReasons } = buildRuntimeSessionActions({
+    state: runtimeState,
+    transportType: 'stream',
+    resumeAvailable,
+    pauseAvailable,
+    machine: options.machine,
+  })
 
   const payload: AgentSession = {
     name: session.name,
@@ -1050,6 +1212,10 @@ export function liveSessionToApiPayload(
     connectionState: getConnectionState(session),
     resumeState: getResumeState(resumeAvailable),
     processAlive: processState === 'running',
+    state: runtimeState,
+    ...(options.machine ? { machine: options.machine } : {}),
+    allowedActions,
+    disabledReasons,
     hadResult: Boolean(session.finalResultEvent),
     status: processState === 'exited' ? 'exited' : getWorldAgentStatus({
       ...session,
@@ -1063,6 +1229,7 @@ export function liveSessionToApiPayload(
   if (session.sessionType) payload.sessionType = session.sessionType
   if (session.creator) payload.creator = session.creator
   if (session.agentType) payload.agentType = session.agentType
+  if (session.mode) payload.mode = session.mode
   if (session.effort) payload.effort = session.effort
   if (session.adaptiveThinking) payload.adaptiveThinking = session.adaptiveThinking
   if (session.maxThinkingTokens) payload.maxThinkingTokens = session.maxThinkingTokens
@@ -1192,6 +1359,25 @@ export function hasResumeIdentifier(entry: PersistedStreamSession): boolean {
 
 export function canResumeLiveStreamSession(session: StreamSession): boolean {
   return getProvider(session.agentType)?.canResumeLiveSession(session) ?? false
+}
+
+export function canPauseLiveStreamSession(session: StreamSession): boolean {
+  const provider = getProvider(session.agentType)
+  if (!provider) {
+    return false
+  }
+
+  try {
+    const persisted = provider.snapshotForPersist(session)
+    return Boolean(persisted && provider.hasResumeIdentifier(persisted))
+  } catch {
+    // Some read-model test doubles expose provider context without every live
+    // runtime array required by provider-owned snapshot builders.
+    return Boolean(provider.getResumeId({
+      providerContext: session.providerContext,
+      name: session.name,
+    }))
+  }
 }
 
 export function snapshotExitedStreamSession(session: StreamSession): ExitedStreamSessionState {
@@ -1339,6 +1525,7 @@ export function buildPersistedEntryFromLiveStreamSession(
       adaptiveThinking: session.adaptiveThinking,
       maxThinkingTokens: session.maxThinkingTokens,
     }) ?? session.providerContext,
+    approvalBridgeNonce: session.approvalBridgeNonce,
     activeTurnId: session.activeTurnId,
     spawnedBy: session.spawnedBy,
     spawnedWorkers: [...session.spawnedWorkers],

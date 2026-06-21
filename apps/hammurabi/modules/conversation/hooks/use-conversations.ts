@@ -314,6 +314,7 @@ export async function fetchCommanderActiveConversation(
 }
 
 export const ACTIVE_CONVERSATION_FETCH_STALE_MS = ACTIVE_CONVERSATION_STALE_MS
+export const CONVERSATION_MESSAGES_PAGE_SIZE = 50
 
 async function fetchConversation(conversationId: string): Promise<ConversationRecord> {
   return fetchJson<ConversationRecord>(
@@ -625,6 +626,7 @@ export function useConversationMessages(
     queryFn: ({ pageParam }) => fetchConversationMessagesPage({
       conversationId: safeConversationId ?? '',
       before: pageParam,
+      limit: CONVERSATION_MESSAGES_PAGE_SIZE,
     }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextBefore ?? undefined,

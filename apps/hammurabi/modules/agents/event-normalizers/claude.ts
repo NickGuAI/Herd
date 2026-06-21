@@ -1,4 +1,5 @@
 import type { TranscriptEnvelope, TranscriptEnvelopeEvent } from '../../../src/types/transcript-envelope.js'
+import { classifyProviderError } from '../provider-errors.js'
 import { createTranscriptId } from '../transcript-id.js'
 
 interface ClaudeStreamEvent {
@@ -44,6 +45,13 @@ function readTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : undefined
+}
+
+function readCodeString(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  return readTrimmedString(value)
 }
 
 function readTimestamp(event: ClaudeStreamEvent): string {
@@ -178,6 +186,28 @@ export function createClaudeProviderActivityEnvelope(
   )
 }
 
+export function createClaudeProviderErrorEnvelope(
+  message: string,
+  data: unknown,
+  sessionId?: string,
+  code?: string,
+  hint?: string,
+): TranscriptEnvelope {
+  return createClaudeSyntheticEnvelope(
+    'hammurabi/provider-error',
+    {
+      type: 'provider.error',
+      message,
+      classification: classifyProviderError(message, code),
+      ...(code ? { code } : {}),
+      ...(hint ? { hint } : {}),
+      retryable: false,
+      data,
+    },
+    { sessionId },
+  )
+}
+
 export function createClaudeTurnEndEnvelope(
   status: ClaudeTurnEndStatus,
   result: unknown,
@@ -293,6 +323,11 @@ function normalizeTurnStatus(
   }
 }
 
+function isTerminalTurnEndStatus(status: ClaudeTurnEndStatus): boolean {
+  const normalized = status?.trim().toLowerCase()
+  return normalized === 'error' || normalized === 'failed' || normalized === 'failure'
+}
+
 function normalizeTextPayload(value: unknown): string | undefined {
   if (typeof value === 'string') {
     const trimmed = value.trim()
@@ -311,6 +346,21 @@ function normalizeTextPayload(value: unknown): string | undefined {
     })
     .filter((entry): entry is string => Boolean(entry))
   return parts.length > 0 ? parts.join('\n').trim() : undefined
+}
+
+function readClaudeResultErrorMessage(event: ClaudeStreamEvent): string {
+  return normalizeTextPayload(event.result)
+    ?? normalizeTextPayload(event.error)
+    ?? readTrimmedString(event.message)
+    ?? `Claude turn ended with ${readTrimmedString(event.subtype) ?? 'an error'}`
+}
+
+function readClaudeResultErrorCode(event: ClaudeStreamEvent): string | undefined {
+  return readCodeString(event.api_error_status)
+    ?? readCodeString(event.api_error_code)
+    ?? readCodeString(event.error_code)
+    ?? readCodeString(event.code)
+    ?? readCodeString(event.subtype)
 }
 
 function parseToolResultPayload(content: unknown): Record<string, unknown> | null {
@@ -844,8 +894,14 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
     case 'message_stop':
       return [envelope(event, { type: 'message.end' })]
     case 'result':
-      return [
-        ...(event.usage || typeof event.total_cost_usd === 'number' || typeof event.cost_usd === 'number'
+      {
+        const status = normalizeTurnStatus(readTrimmedString(event.subtype), event.is_error === true)
+        const errorMessage = isTerminalTurnEndStatus(status)
+          ? readClaudeResultErrorMessage(event)
+          : undefined
+        const errorCode = errorMessage ? readClaudeResultErrorCode(event) : undefined
+        return [
+          ...(event.usage || typeof event.total_cost_usd === 'number' || typeof event.cost_usd === 'number'
           ? [envelope(event, {
               type: 'provider.activity',
               title: 'Usage updated',
@@ -857,14 +913,25 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
               },
             })]
           : []),
-        envelope(event, {
-          type: 'turn.end',
-          status: normalizeTurnStatus(readTrimmedString(event.subtype), event.is_error === true),
-          result: event.result,
-          error: event.is_error === true ? event.result : undefined,
-          usage: event.usage as never,
-        }),
-      ]
+          ...(errorMessage
+            ? [envelope(event, {
+                type: 'provider.error',
+                message: errorMessage,
+                classification: classifyProviderError(errorMessage, errorCode),
+                ...(errorCode ? { code: errorCode } : {}),
+                retryable: false,
+                data: event,
+              })]
+            : []),
+          envelope(event, {
+            type: 'turn.end',
+            status,
+            result: event.result,
+            error: isTerminalTurnEndStatus(status) ? event.result : undefined,
+            usage: event.usage as never,
+          }),
+        ]
+      }
     case 'system':
       return mapSystemEvent(event)
     case 'agent':

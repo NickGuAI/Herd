@@ -300,7 +300,7 @@ async function resolveExternalLocalWorkspaceReference(
   return {
     ...selection,
     targetId: target.targetId,
-    targetLabel: redactWorkspaceLabel(target.label, target.host, retargeted.workspace.rootPath),
+    targetLabel: redactWorkspaceLabel(target.label, target.host, target.rootPath),
     targetReadOnly: target.readOnly,
   }
 }

@@ -1,7 +1,7 @@
 import { getProvider } from '../providers/registry.js'
 import { SessionMessageQueue } from '../message-queue.js'
 import { getNextStreamEventSeq } from '../messages/canonical-timeline.js'
-import type { ProviderCreateOptions } from '../providers/provider-adapter.js'
+import type { ProviderCreateOptions, ProviderTeardownOptions } from '../providers/provider-adapter.js'
 import type {
   AnySession,
   ClaudePermissionMode,
@@ -37,7 +37,7 @@ interface SessionAutoRotationRuntimeDeps {
     agentType?: StreamSession['agentType'],
     options?: ProviderStreamSessionOptions,
   ): Promise<StreamSession>
-  teardownProviderSession(session: StreamSession, reason: string): Promise<void>
+  teardownProviderSession(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void>
   appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void
   broadcastStreamEvent(session: StreamSession, event: StreamJsonEvent): void
   schedulePersistedSessionsWrite(): void

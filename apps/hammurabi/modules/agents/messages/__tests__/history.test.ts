@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import type { TranscriptEnvelope } from '../../../../src/types/transcript-envelope'
+import { mapClaudeToTranscriptEnvelopes } from '../../event-normalizers/claude'
+import { mapCodexToTranscriptEnvelopes } from '../../event-normalizers/codex'
 import type { StreamJsonEvent } from '../../types'
 import { mapStreamEventsToMessages } from '../history'
 import { MAX_CLIENT_MESSAGES } from '../model'
@@ -12,6 +15,52 @@ function assistantTextEvent(index: number): StreamJsonEvent {
       content: [{ type: 'text', text: `message ${index}` }],
     },
   }
+}
+
+function codexEnvelope(
+  id: string,
+  input: Omit<TranscriptEnvelope, 'schemaVersion' | 'id' | 'time' | 'source'> & {
+    rawEventType: string
+    rawEventId?: string
+  },
+): StreamJsonEvent {
+  const { rawEventType, rawEventId, ...rest } = input
+  return {
+    schemaVersion: 2,
+    id,
+    time: '2026-06-15T17:08:16.923Z',
+    source: {
+      provider: 'codex',
+      backend: 'rpc',
+      sessionId: 'thread-stable-history',
+      rawEventType,
+      rawEventId: rawEventId ?? rest.itemId ?? id,
+    },
+    ...rest,
+  } satisfies TranscriptEnvelope
+}
+
+function claudeEnvelope(
+  id: string,
+  input: Omit<TranscriptEnvelope, 'schemaVersion' | 'id' | 'time' | 'source'> & {
+    rawEventType: string
+    rawEventId?: string
+  },
+): StreamJsonEvent {
+  const { rawEventType, rawEventId, ...rest } = input
+  return {
+    schemaVersion: 2,
+    id,
+    time: '2026-06-15T17:08:16.923Z',
+    source: {
+      provider: 'claude',
+      backend: 'cli',
+      sessionId: 'claude-stable-history',
+      rawEventType,
+      rawEventId: rawEventId ?? rest.itemId ?? id,
+    },
+    ...rest,
+  } satisfies TranscriptEnvelope
 }
 
 describe('mapStreamEventsToMessages', () => {
@@ -100,6 +149,127 @@ describe('mapStreamEventsToMessages', () => {
       }),
     ])
     expect(messages[0]?.text).not.toContain('<workspace-')
+  })
+
+  it('does not project internal commander startup user prompts as visible chat messages', () => {
+    const messages = mapStreamEventsToMessages([
+      {
+        type: 'user',
+        subtype: 'commander_startup',
+        message: {
+          role: 'user',
+          content: 'Commander runtime started. Acknowledge readiness and await instructions.',
+        },
+      },
+      {
+        type: 'user',
+        subtype: 'queued_message',
+        message: {
+          role: 'user',
+          content: 'visible follow-up',
+        },
+      },
+    ] as StreamJsonEvent[])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        text: 'visible follow-up',
+      }),
+    ])
+  })
+
+  it('does not project internal heartbeat user prompts as visible chat messages', () => {
+    const messages = mapStreamEventsToMessages([
+      {
+        type: 'user',
+        subtype: 'heartbeat',
+        message: {
+          role: 'user',
+          content: 'You are Commander, the orchestration agent.\n\n[HEARTBEAT 2026-06-15]',
+        },
+      },
+      {
+        type: 'user',
+        subtype: 'queued_message',
+        message: {
+          role: 'user',
+          content: 'visible follow-up',
+        },
+      },
+    ] as StreamJsonEvent[])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        text: 'visible follow-up',
+      }),
+    ])
+  })
+
+  it('does not replay legacy Claude heartbeat transcript envelopes as user chat', () => {
+    const messages = mapStreamEventsToMessages([
+      claudeEnvelope('legacy-heartbeat-start', {
+        rawEventType: 'hammurabi/user',
+        itemId: 'queue-legacy-heartbeat',
+        ev: { type: 'message.start', role: 'user' },
+      }),
+      claudeEnvelope('legacy-heartbeat-delta', {
+        rawEventType: 'hammurabi/user',
+        itemId: 'queue-legacy-heartbeat',
+        ev: {
+          type: 'message.delta',
+          channel: 'final',
+          text: [
+            'You are Commander, the orchestration agent for GitHub task execution.',
+            '',
+            '[HEARTBEAT 2026-06-15T17:08:16.923Z]',
+            '',
+            '## Claude Code Reasoning Policy',
+          ].join('\n'),
+        },
+      }),
+      claudeEnvelope('legacy-heartbeat-end', {
+        rawEventType: 'hammurabi/user',
+        itemId: 'queue-legacy-heartbeat',
+        ev: { type: 'message.end' },
+      }),
+      {
+        type: 'user',
+        subtype: 'queued_message',
+        message: {
+          role: 'user',
+          content: 'real user message',
+        },
+      },
+    ] as StreamJsonEvent[])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        text: 'real user message',
+      }),
+    ])
+  })
+
+  it('preserves real queued user messages that only mention heartbeat text', () => {
+    const messages = mapStreamEventsToMessages([
+      {
+        type: 'user',
+        subtype: 'queued_message',
+        message: {
+          role: 'user',
+          content: 'Please search for "[HEARTBEAT]" in the docs.',
+        },
+      },
+    ] as StreamJsonEvent[])
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        text: 'Please search for "[HEARTBEAT]" in the docs.',
+      }),
+    ])
   })
 
   it('dedupes queued user echoes separated by provider status activity', () => {
@@ -208,6 +378,82 @@ describe('mapStreamEventsToMessages', () => {
         text: 'Final completed reasoning',
       }),
     ])
+  })
+
+  it('projects terminal Codex provider errors as visible error messages', () => {
+    const events = mapCodexToTranscriptEnvelopes('error', {
+      threadId: 'thread-codex-quota',
+      turnId: 'turn-codex-quota',
+      willRetry: false,
+      error: {
+        message: 'You have hit your usage limit. Upgrade to Pro or try again later.',
+        codexErrorInfo: 'usageLimitExceeded',
+      },
+    })
+
+    const messages = mapStreamEventsToMessages(events)
+
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'provider',
+        text: 'Codex error',
+      }),
+      expect.objectContaining({
+        kind: 'error',
+        text: 'You have hit your usage limit. Upgrade to Pro or try again later.',
+        providerError: expect.objectContaining({
+          classification: 'usage_limit',
+          code: 'usageLimitExceeded',
+        }),
+      }),
+    ]))
+  })
+
+  it('does not project retryable Codex provider errors as terminal failures', () => {
+    const events = mapCodexToTranscriptEnvelopes('error', {
+      threadId: 'thread-codex-retry',
+      turnId: 'turn-codex-retry',
+      willRetry: true,
+      error: {
+        message: 'Temporary provider disconnect',
+        code: 'temporary',
+      },
+    })
+
+    const messages = mapStreamEventsToMessages(events)
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        kind: 'provider',
+        text: 'Codex error',
+      }),
+    ])
+    expect(messages.some((message) => message.kind === 'error')).toBe(false)
+  })
+
+  it('projects terminal Claude provider errors through the same visible error message kind', () => {
+    const events = mapClaudeToTranscriptEnvelopes({
+      type: 'result',
+      subtype: 'failed',
+      is_error: true,
+      api_error_status: 401,
+      result: 'Error: auth token expired',
+    })
+
+    const messages = mapStreamEventsToMessages(events)
+
+    expect(messages.filter((message) => message.kind === 'error')).toEqual([
+      expect.objectContaining({
+        text: 'Error: auth token expired',
+        providerError: expect.objectContaining({
+          classification: 'auth_required',
+          code: '401',
+        }),
+      }),
+    ])
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'system', text: 'Awaiting input' }),
+    ]))
   })
 
   it('renders Gemini and OpenCode canonical stream events without provider branching', () => {
@@ -358,6 +604,132 @@ describe('mapStreamEventsToMessages', () => {
         }),
       }),
     ])
+  })
+
+  it('reconciles completed Codex agentMessage text without duplicating live deltas', () => {
+    const messages = mapStreamEventsToMessages([
+      codexEnvelope('env-message-start', {
+        rawEventType: 'item/started',
+        rawEventId: 'msg-recovered',
+        turnId: 'turn-recovered',
+        itemId: 'msg-recovered',
+        ev: { type: 'message.start', role: 'assistant' },
+      }),
+      codexEnvelope('env-live-delta', {
+        rawEventType: 'item/agentMessage/delta',
+        rawEventId: 'msg-recovered',
+        turnId: 'turn-recovered',
+        itemId: 'msg-recovered',
+        ev: { type: 'message.delta', text: 'Recovered final', channel: 'final' },
+      }),
+      codexEnvelope('env-completed-start', {
+        rawEventType: 'item/completed',
+        rawEventId: 'msg-recovered',
+        turnId: 'turn-recovered',
+        itemId: 'msg-recovered',
+        ev: { type: 'message.start', role: 'assistant' },
+      }),
+      codexEnvelope('env-completed-delta', {
+        rawEventType: 'item/completed',
+        rawEventId: 'msg-recovered',
+        turnId: 'turn-recovered',
+        itemId: 'msg-recovered',
+        ev: { type: 'message.delta', text: 'Recovered final answer', channel: 'final' },
+      }),
+      codexEnvelope('env-completed-end', {
+        rawEventType: 'item/completed',
+        rawEventId: 'msg-recovered',
+        turnId: 'turn-recovered',
+        itemId: 'msg-recovered',
+        ev: { type: 'message.end' },
+      }),
+    ])
+
+    const assistantMessages = messages.filter((message) => message.kind === 'agent')
+    expect(assistantMessages).toHaveLength(1)
+    expect(assistantMessages[0]?.text).toBe('Recovered final answer')
+  })
+
+  it('derives stable ids for persisted Codex messages across sliding transcript windows', () => {
+    const clientSendId = 'send-stable-window'
+    const assistantItemId = 'msg-stable-window-answer'
+    const sharedTurnEvents = [
+      codexEnvelope('env-user-start', {
+        rawEventType: 'hammurabi/user',
+        rawEventId: clientSendId,
+        itemId: clientSendId,
+        clientSendId,
+        seq: 20,
+        ev: { type: 'message.start', role: 'user' },
+      }),
+      codexEnvelope('env-user-delta', {
+        rawEventType: 'hammurabi/user',
+        rawEventId: clientSendId,
+        itemId: clientSendId,
+        clientSendId,
+        seq: 21,
+        ev: { type: 'message.delta', text: 'Run the stable id check', channel: 'final' },
+      }),
+      codexEnvelope('env-user-end', {
+        rawEventType: 'hammurabi/user',
+        rawEventId: clientSendId,
+        itemId: clientSendId,
+        clientSendId,
+        seq: 22,
+        ev: { type: 'message.end' },
+      }),
+      codexEnvelope('env-assistant-start', {
+        rawEventType: 'item/started',
+        rawEventId: assistantItemId,
+        turnId: 'turn-stable-window',
+        itemId: assistantItemId,
+        seq: 23,
+        ev: { type: 'message.start', role: 'assistant' },
+      }),
+      codexEnvelope('env-assistant-delta', {
+        rawEventType: 'item/agentMessage/delta',
+        rawEventId: assistantItemId,
+        turnId: 'turn-stable-window',
+        itemId: assistantItemId,
+        seq: 24,
+        ev: { type: 'message.delta', text: 'Stable answer', channel: 'final' },
+      }),
+    ] as StreamJsonEvent[]
+
+    const firstWindow = mapStreamEventsToMessages([
+      codexEnvelope('env-provider-a', {
+        rawEventType: 'thread/status/changed',
+        rawEventId: 'status-a',
+        seq: 1,
+        ev: { type: 'provider.activity', title: 'Thread status changed' },
+      }),
+      codexEnvelope('env-provider-b', {
+        rawEventType: 'thread/status/changed',
+        rawEventId: 'status-b',
+        seq: 2,
+        ev: { type: 'provider.activity', title: 'Thread status changed' },
+      }),
+      ...sharedTurnEvents,
+    ])
+    const shiftedWindow = mapStreamEventsToMessages([
+      codexEnvelope('env-provider-b', {
+        rawEventType: 'thread/status/changed',
+        rawEventId: 'status-b',
+        seq: 2,
+        ev: { type: 'provider.activity', title: 'Thread status changed' },
+      }),
+      ...sharedTurnEvents,
+    ])
+
+    const firstUser = firstWindow.find((message) => message.clientSendId === clientSendId)
+    const shiftedUser = shiftedWindow.find((message) => message.clientSendId === clientSendId)
+    const firstAssistant = firstWindow.find((message) => message.transcript?.itemId === assistantItemId)
+    const shiftedAssistant = shiftedWindow.find((message) => message.transcript?.itemId === assistantItemId)
+
+    expect(firstUser?.id).toBe(shiftedUser?.id)
+    expect(firstAssistant?.id).toBe(shiftedAssistant?.id)
+    expect(firstUser?.id).toMatch(/^hist-user-/)
+    expect(firstAssistant?.id).toMatch(/^hist-agent-/)
   })
 
   it('keeps persisted Codex raw delta envelopes as provider activity', () => {

@@ -127,12 +127,19 @@ import {
   type WorkspaceSourceRecovery,
 } from '@modules/workspace/use-workspace'
 import type { WorkspaceContextPayload, WorkspaceTreeNode } from '@modules/workspace/types'
-import type { SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
+import type {
+  SessionComposerContextAttachments,
+  SessionComposerSubmitPayload,
+} from '@modules/agents/components/SessionComposer'
 import {
-  appendPendingOptimisticMessagesToTranscript,
   appendQueuedMessagesToTranscript,
-  hasPendingOptimisticMessages,
+  createPendingConversationMessage,
+  hasPendingConversationMessages,
   mapSessionMessagesToTranscript,
+  mergeConversationLiveTranscript,
+  mergeConversationTranscriptSources,
+  pruneConfirmedPendingConversationMessages,
+  type PendingConversationMessage,
 } from './transcript'
 import { MobileCommandRoom } from './mobile/MobileCommandRoom'
 
@@ -547,6 +554,7 @@ export function CommandRoom() {
   const [requestedNewChatCommanderId, setRequestedNewChatCommanderId] = useState<string | null>(null)
   const [conversationLoadError, setConversationLoadError] = useState<unknown>(null)
   const [queueSnapshot, setQueueSnapshot] = useState<SessionQueueSnapshot>(EMPTY_QUEUE_SNAPSHOT)
+  const [pendingConversationMessages, setPendingConversationMessages] = useState<PendingConversationMessage[]>([])
   const [queueError, setQueueError] = useState<string | null>(null)
   const [isQueueMutating, setIsQueueMutating] = useState(false)
 
@@ -591,7 +599,7 @@ export function CommandRoom() {
   const [sessionAgentType, setSessionAgentType] = useState<AgentType>('claude')
   const [sessionTransportType, setSessionTransportType] =
     useState<Exclude<SessionTransportType, 'external'>>('stream')
-  const [sessionSelectedHost, setSessionSelectedHost] = useState('')
+  const [sessionSelectedMachineId, setSessionSelectedMachineId] = useState('')
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [createSessionError, setCreateSessionError] = useState<string | null>(null)
 
@@ -904,35 +912,62 @@ export function CommandRoom() {
   const selectedConversationHasLiveTranscript = Boolean(
     selectedConversationIdForTranscript && liveTranscript.length > 0,
   )
-  const selectedConversationHasPendingOptimisticMessages = selectedConversation
-    ? hasPendingOptimisticMessages(historicalConversationMessages, liveTranscript)
+  const selectedConversationConfirmedTranscript = useMemo(() => (
+    selectedConversation
+      ? mergeConversationLiveTranscript(historicalConversationMessages, liveTranscript)
+      : liveTranscript
+  ), [historicalConversationMessages, liveTranscript, selectedConversation])
+  const selectedConversationHasPendingMessages = selectedConversation
+    ? hasPendingConversationMessages(
+        selectedConversationConfirmedTranscript,
+        pendingConversationMessages,
+        selectedConversationIdForTranscript,
+      )
     : false
-  const selectedConversationShouldPollTranscript = selectedConversationHasLiveTranscript && (
-    isStreaming || selectedConversationHasPendingOptimisticMessages
-  )
   useEffect(() => {
-    if (!selectedConversationHasLiveTranscript) {
-      return undefined
+    if (!selectedConversationIdForTranscript) {
+      return
     }
 
-    void conversationMessagesQuery.refetch()
+    setPendingConversationMessages((previous) => {
+      const next = pruneConfirmedPendingConversationMessages(
+        previous,
+        selectedConversationConfirmedTranscript,
+        selectedConversationIdForTranscript,
+      )
+      return next.length === previous.length ? previous : next
+    })
+  }, [selectedConversationConfirmedTranscript, selectedConversationIdForTranscript])
+  const selectedConversationShouldPollTranscript = Boolean(
+    selectedConversationIdForTranscript
+    && !selectedConversationHasLiveTranscript
+    && (selectedConversationHasPendingMessages || isStreaming),
+  )
+  useEffect(() => {
     if (!selectedConversationShouldPollTranscript) {
       return undefined
     }
 
+    void conversationMessagesQuery.refetch()
     const interval = window.setInterval(() => {
       void conversationMessagesQuery.refetch()
-    }, 250)
+    }, 1000)
     return () => {
       window.clearInterval(interval)
     }
   }, [
     conversationMessagesQuery.refetch,
-    selectedConversationHasLiveTranscript,
+    isStreaming,
+    selectedConversationHasPendingMessages,
     selectedConversationShouldPollTranscript,
   ])
   const transcript = selectedConversation
-    ? appendPendingOptimisticMessagesToTranscript(historicalConversationMessages, liveTranscript)
+    ? mergeConversationTranscriptSources({
+        canonicalMessages: historicalConversationMessages,
+        liveMessages: liveTranscript,
+        pendingMessages: pendingConversationMessages,
+        conversationId: selectedConversationIdForTranscript,
+      })
     : liveTranscript
   const chatTranscript = appendQueuedMessagesToTranscript(transcript, queueSnapshot)
   const hasOlderConversationMessages = Boolean(
@@ -1425,6 +1460,12 @@ export function CommandRoom() {
     setContextFileAnnotations([])
   }, [])
 
+  const handleRestoreContextAttachments = useCallback((context: SessionComposerContextAttachments) => {
+    setContextFilePaths(context.filePaths)
+    setContextDirectoryPaths(context.directoryPaths)
+    setContextFileAnnotations(context.fileAnnotations)
+  }, [])
+
   useEffect(() => {
     if (!commanderParam) {
       return
@@ -1876,6 +1917,51 @@ export function CommandRoom() {
     () => createHttpConversationDispatcher({ submitConversationMessage }),
     [submitConversationMessage],
   )
+  const paintPendingConversationMessage = useCallback((
+    text: string,
+    images?: Array<{ mediaType: string; data: string }>,
+    clientSendId?: string,
+  ) => {
+    const pendingMessage = createPendingConversationMessage({
+      conversationId: selectedConversation?.id,
+      text,
+      images,
+      clientSendId,
+      timestamp: new Date().toISOString(),
+    })
+    if (!pendingMessage) {
+      return
+    }
+
+    setPendingConversationMessages((previous) => {
+      const existingIndex = previous.findIndex((message) => (
+        message.conversationId === pendingMessage.conversationId
+        && message.clientSendId === pendingMessage.clientSendId
+      ))
+      if (existingIndex === -1) {
+        return [...previous, pendingMessage]
+      }
+
+      const next = [...previous]
+      next[existingIndex] = pendingMessage
+      return next
+    })
+  }, [selectedConversation?.id])
+  const removePendingConversationMessage = useCallback((
+    conversationId?: string | null,
+    clientSendId?: string,
+  ) => {
+    const safeConversationId = conversationId?.trim()
+    const safeClientSendId = clientSendId?.trim()
+    if (!safeConversationId || !safeClientSendId) {
+      return
+    }
+
+    setPendingConversationMessages((previous) => previous.filter((message) => (
+      message.conversationId !== safeConversationId
+      || message.clientSendId !== safeClientSendId
+    )))
+  }, [])
 
   const applyQueueMutation = useCallback(async (
     request: () => Promise<unknown>,
@@ -1952,25 +2038,41 @@ export function CommandRoom() {
       )
       return false
     }
-    const sendDispatcher = selectedConversation
-      ? conversationSendDispatcher
-      : streamSendDispatcher
-
     if (!selectedConversation) {
       if (!streamSessionName) {
         return false
       }
     }
 
-    return sendDispatcher.send({
+    const sendInput = {
       text: trimmed,
       images: attachedImages,
       clientSendId: payload.clientSendId,
       workspaceContext,
-    }, pushOptimisticUserMessage)
+    }
+
+    if (selectedConversation) {
+      const conversationId = selectedConversation.id
+      const clientSendId = payload.clientSendId
+      return conversationSendDispatcher
+        .send(sendInput, paintPendingConversationMessage)
+        .then((accepted) => {
+          if (!accepted) {
+            removePendingConversationMessage(conversationId, clientSendId)
+          }
+          return accepted
+        }, (caughtError) => {
+          removePendingConversationMessage(conversationId, clientSendId)
+          throw caughtError
+        })
+    }
+
+    return streamSendDispatcher.send(sendInput, pushOptimisticUserMessage)
   }, [
     buildWorkspaceContextPayload,
     conversationSendDispatcher,
+    paintPendingConversationMessage,
+    removePendingConversationMessage,
     selectedConversation,
     streamSessionName,
     streamSendDispatcher,
@@ -2322,7 +2424,7 @@ export function CommandRoom() {
         maxThinkingTokens: sessionMaxThinkingTokens,
         agentType: sessionAgentType,
         transportType: sessionTransportType,
-        host: sessionSelectedHost.trim() || undefined,
+        machineId: sessionSelectedMachineId.trim() || undefined,
       })
       await queryClient.invalidateQueries({ queryKey: ['agents', 'sessions'] })
       handleSelectStandaloneChat(created.sessionName)
@@ -2334,7 +2436,7 @@ export function CommandRoom() {
       setSessionMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
       setSessionAgentType('claude')
       setSessionTransportType('stream')
-      setSessionSelectedHost('')
+      setSessionSelectedMachineId('')
       setShowCreateSessionForm(false)
     } catch (error) {
       setCreateSessionError(error instanceof Error ? error.message : 'Failed to create session.')
@@ -2350,7 +2452,7 @@ export function CommandRoom() {
     sessionEffort,
     sessionMaxThinkingTokens,
     sessionName,
-    sessionSelectedHost,
+    sessionSelectedMachineId,
     sessionTask,
     sessionTransportType,
   ])
@@ -2523,6 +2625,7 @@ export function CommandRoom() {
         contextFileAnnotations={contextFileAnnotations}
         onRemoveContextFileAnnotation={handleRemoveContextFileAnnotation}
         onClearContextFileAnnotations={handleClearContextFilePaths}
+        onRestoreContextAttachments={handleRestoreContextAttachments}
         onOpenWorkspaceFile={handleOpenWorkspaceFilePath}
         workspaceRequestedPath={workspaceRequestedPath?.path ?? null}
         workspaceRequestedPathToken={workspaceRequestedPath?.token ?? 0}
@@ -2592,6 +2695,7 @@ export function CommandRoom() {
           commander={centerCommander}
           isGlobalScope={isGlobalScope}
           hasSelectedConversation={Boolean(selectedConversation)}
+          streamStatus={selectedConversation ? streamStatus : null}
           conversationLoadError={conversationErrorMessage}
           onRetryConversations={handleRetryConversationLoad}
           activeChatSession={activeChatSession}
@@ -2647,8 +2751,9 @@ export function CommandRoom() {
           onRemoveContextDirectoryPath={handleRemoveContextDirectoryPath}
           onRemoveContextFileAnnotation={handleRemoveContextFileAnnotation}
           onClearContextFilePaths={handleClearContextFilePaths}
-          onQueue={(payload) => { void handleQueue(payload) }}
-          onSend={(payload) => { void handleSend(payload) }}
+          onRestoreContextAttachments={handleRestoreContextAttachments}
+          onQueue={handleQueue}
+          onSend={handleSend}
           onOpenWorkspaceFile={handleOpenWorkspaceFilePath}
           queueSnapshot={queueSnapshot}
           queueError={queueError}
@@ -2747,8 +2852,8 @@ export function CommandRoom() {
           transportType={sessionTransportType}
           setTransportType={setSessionTransportType}
           machines={machineList}
-          selectedHost={sessionSelectedHost}
-          setSelectedHost={setSessionSelectedHost}
+          selectedMachineId={sessionSelectedMachineId}
+          setSelectedMachineId={setSessionSelectedMachineId}
           isCreating={isCreatingSession}
           createError={createSessionError}
           onSubmit={handleCreateSession}
@@ -2773,7 +2878,7 @@ export function CommandRoom() {
       </ModalFormContainer>
       <ModalFormContainer
         open={showAddWorkerForm}
-        title="Add Worker"
+        title="Add Machine"
         onClose={handleCloseAddWorker}
       >
         <AddWorkerWizard

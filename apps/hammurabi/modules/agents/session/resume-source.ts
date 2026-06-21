@@ -8,6 +8,7 @@ import {
   clearCodexResumeMetadata as clearCodexResumeMetadataForStore,
   retireLiveCodexSessionForResume as retireLiveCodexSessionForResumeForStore,
 } from './persistence.js'
+import type { ProviderTeardownOptions } from '../providers/provider-adapter.js'
 import {
   buildPersistedEntryFromExitedSession,
   buildPersistedEntryFromLiveStreamSession,
@@ -30,7 +31,7 @@ interface SessionResumeRuntimeDeps {
   exitedStreamSessions: Map<string, ExitedStreamSessionState>
   sessionEventHandlers: Map<string, Set<(event: StreamJsonEvent) => void>>
   schedulePersistedSessionsWrite(): void
-  teardownProviderSession(session: StreamSession, reason: string): Promise<void>
+  teardownProviderSession(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void>
 }
 
 export interface SessionResumeRuntime {

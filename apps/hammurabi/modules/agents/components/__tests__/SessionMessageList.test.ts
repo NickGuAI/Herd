@@ -92,6 +92,63 @@ describe('SessionMessageList queued transcript turns', () => {
   })
 })
 
+describe('SessionMessageList provider errors', () => {
+  it('renders provider errors as visible danger blocks outside raw activity collapse', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+
+    const messages: MsgItem[] = [
+      {
+        id: 'provider-raw-error',
+        kind: 'provider',
+        text: 'Codex error',
+        transcript: {
+          source: { provider: 'codex', backend: 'rpc' },
+          providerEventType: 'error',
+          providerPayload: { raw: 'raw RPC blob marker' },
+        },
+      },
+      {
+        id: 'provider-visible-error',
+        kind: 'error',
+        text: 'You have hit your usage limit. Upgrade to Pro or try again later.',
+        providerError: {
+          classification: 'usage_limit',
+          code: 'usageLimitExceeded',
+          hint: 'Try again after reset.',
+        },
+        transcript: {
+          source: { provider: 'codex', backend: 'rpc' },
+          providerEventType: 'error',
+        },
+      },
+    ]
+
+    flushSync(() => {
+      root.render(createElement(SessionMessageList, { messages, onAnswer: () => undefined }))
+    })
+
+    const errorBlock = container.querySelector<HTMLElement>('.msg-provider-error')
+    if (!errorBlock) {
+      throw new Error('expected visible provider error block')
+    }
+    expect(errorBlock.textContent).toContain('Usage limit')
+    expect(errorBlock.textContent).toContain('usage_limit')
+    expect(errorBlock.textContent).toContain('usageLimitExceeded')
+    expect(errorBlock.textContent).toContain('You have hit your usage limit')
+    expect(errorBlock.textContent).toContain('Try again after reset.')
+
+    expect(container.querySelector('.msg-agent-activity-toggle')).not.toBeNull()
+    expect(container.textContent).not.toContain('raw RPC blob marker')
+
+    flushSync(() => {
+      root.unmount()
+    })
+    container.remove()
+  })
+})
+
 describe('SessionMessageList inline image panes', () => {
   it('renders assistant Markdown and structured images in desktop and mobile chat panes', () => {
     const messages: MsgItem[] = [

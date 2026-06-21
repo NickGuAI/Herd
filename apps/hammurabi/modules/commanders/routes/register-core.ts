@@ -10,6 +10,7 @@ import { DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE } from '../../claude-adaptive-thi
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
 import { DEFAULT_CLAUDE_MAX_THINKING_TOKENS } from '../../claude-max-thinking-tokens.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
+import { COMMANDER_STARTUP_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes.js'
 import {
   parseClaudeAdaptiveThinking,
   parseClaudeEffort,
@@ -41,6 +42,7 @@ import {
   parseMessageMode,
   parseOptionalCommanderAgentType,
   parseOptionalCommanderContextMode,
+  parseOptionalCommanderCostCapUsd,
   parseOptionalCommanderEffort,
   parseOptionalCommanderMaxTurns,
   parseOptionalCurrentTask,
@@ -115,6 +117,7 @@ import {
   getCommanderPackageInstallState,
   installCommanderPackage,
 } from '../packages/install.js'
+import { enforceCommanderCostCap } from '../cost-control.js'
 import type {
   CommanderPackageDefinition,
   CommanderPackageResponse,
@@ -655,7 +658,11 @@ export function registerCoreRoutes(
     }
 
     const stats = await context.getCommanderSessionStats(created.id)
-    const base = await toCommanderSessionResponse(created, context.conversationStore, undefined, stats)
+    const base = await toCommanderSessionResponse(created, context.conversationStore, undefined, stats, {
+      commanderDataDir: context.commanderDataDir,
+      now: context.now,
+      sessionsInterface: context.sessionsInterface,
+    })
     return await context.attachCommanderPublicUi(created.id, base)
   }
 
@@ -690,7 +697,11 @@ export function registerCoreRoutes(
     displayName: string,
   ): Promise<unknown> => {
     const stats = await context.getCommanderSessionStats(session.id)
-    const base = await toCommanderSessionResponse(session, context.conversationStore, undefined, stats)
+    const base = await toCommanderSessionResponse(session, context.conversationStore, undefined, stats, {
+      commanderDataDir: context.commanderDataDir,
+      now: context.now,
+      sessionsInterface: context.sessionsInterface,
+    })
     const withUi = await context.attachCommanderPublicUi(session.id, base)
     return displayName !== session.host
       ? { ...withUi, displayName }
@@ -703,7 +714,11 @@ export function registerCoreRoutes(
     const response = await Promise.all(
       sessions.map(async (session) => {
         const stats = await context.getCommanderSessionStats(session.id)
-        const base = await toCommanderSessionResponse(session, context.conversationStore, undefined, stats)
+        const base = await toCommanderSessionResponse(session, context.conversationStore, undefined, stats, {
+          commanderDataDir: context.commanderDataDir,
+          now: context.now,
+          sessionsInterface: context.sessionsInterface,
+        })
         const withUi = await context.attachCommanderPublicUi(session.id, base)
         const displayName = displayNames[session.id]
         return displayName && displayName !== session.host
@@ -995,7 +1010,11 @@ export function registerCoreRoutes(
     const commanderMd = await readCommanderWorkflowMarkdown(commanderId, context.commanderBasePath)
     const { commanderRoot, memoryRoot } = resolveCommanderPaths(commanderId, context.commanderBasePath)
     const stats = await context.getCommanderSessionStats(commanderId)
-    const base = await toCommanderSessionResponse(session, context.conversationStore, runtime, stats)
+    const base = await toCommanderSessionResponse(session, context.conversationStore, runtime, stats, {
+      commanderDataDir: context.commanderDataDir,
+      now: context.now,
+      sessionsInterface: context.sessionsInterface,
+    })
     const displayNames = await readCommanderDisplayNames(context.commanderDataDir)
     res.json({
       ...(await context.attachCommanderPublicUi(commanderId, base)),
@@ -1848,6 +1867,12 @@ export function registerCoreRoutes(
       return
     }
 
+    const costCap = await enforceCommanderCostCap(context, commanderId)
+    if (!costCap.ok) {
+      res.status(costCap.status).json(costCap.body)
+      return
+    }
+
     const parsedCurrentTask = parseOptionalCurrentTask(req.body?.currentTask, context.now().toISOString())
     if (!parsedCurrentTask.valid) {
       res.status(400).json({ error: 'Invalid currentTask payload' })
@@ -2066,7 +2091,12 @@ export function registerCoreRoutes(
       if (explicitStartMessage == null) {
         queueInternalUserMessage(runtime, startPrompt)
       }
-      const startupSent = await context.sessionsInterface.sendToSession(sessionName, startPrompt)
+      const startupSent = await context.sessionsInterface.sendToSession(
+        sessionName,
+        explicitStartMessage == null
+          ? { text: startPrompt, userEventSubtype: COMMANDER_STARTUP_USER_EVENT_SUBTYPE }
+          : startPrompt,
+      )
       if (!startupSent) {
         console.warn(
           `[commanders] Startup message failed for "${commanderId}" (${selectedAgentType}); resetting runtime state`,
@@ -2418,6 +2448,12 @@ export function registerCoreRoutes(
       return
     }
 
+    const parsedCostCapUsd = parseOptionalCommanderCostCapUsd(req.body?.costCapUsd)
+    if (!parsedCostCapUsd.valid) {
+      res.status(400).json({ error: 'costCapUsd must be a positive finite number or null' })
+      return
+    }
+
     const effortProvided = req.body?.effort !== undefined
     const parsedEffort = parseClaudeEffort(req.body?.effort)
     if (effortProvided && parsedEffort === null) {
@@ -2443,6 +2479,7 @@ export function registerCoreRoutes(
       parsedMaxTurns.value === undefined
       && parsedContextMode.value === undefined
       && parsedContextConfig.value === undefined
+      && parsedCostCapUsd.value === undefined
       && !effortProvided
       && !adaptiveThinkingProvided
       && !maxThinkingTokensProvided
@@ -2462,6 +2499,7 @@ export function registerCoreRoutes(
       return {
         ...current,
         ...(parsedMaxTurns.value !== undefined ? { maxTurns: parsedMaxTurns.value } : {}),
+        ...(parsedCostCapUsd.value !== undefined ? { costCapUsd: parsedCostCapUsd.value } : {}),
         ...(parsedContextMode.value !== undefined ? { contextMode: parsedContextMode.value } : {}),
         ...(effortProvided ? { effort: parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL } : {}),
         ...(adaptiveThinkingProvided
@@ -2493,6 +2531,7 @@ export function registerCoreRoutes(
     res.json({
       id: updated.id,
       maxTurns: updated.maxTurns,
+      costCapUsd: updated.costCapUsd ?? null,
       contextMode: updated.contextMode,
       contextConfig: updated.contextConfig ?? null,
       effort: updated.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,

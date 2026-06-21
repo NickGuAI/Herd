@@ -27,7 +27,7 @@ export function createPoliciesFoundation(context: ModuleRuntimeContext): null {
 }
 
 export function createPoliciesRuntime(context: ModuleRuntimeContext): ModuleRouteRegistration {
-  const { capabilities, internalToken, options } = context
+  const { approvalBridgeSigningSecret, capabilities, internalToken, options } = context
   const approvalCoordinator = capabilities.consume('policies.approval-coordinator', 'policies')
 
   const policies = createPoliciesRouter({
@@ -36,6 +36,7 @@ export function createPoliciesRuntime(context: ModuleRuntimeContext): ModuleRout
     auth0Audience: options.auth0Audience,
     auth0ClientId: options.auth0ClientId,
     internalToken,
+    approvalBridgeSigningSecret,
     policyStore: capabilities.consume('policies.store', 'policies'),
     approvalCoordinator,
     approvalSessionsInterface: capabilities.consume('agents.approval-sessions-interface', 'policies'),

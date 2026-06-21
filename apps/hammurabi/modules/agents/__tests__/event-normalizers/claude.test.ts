@@ -302,4 +302,52 @@ describe('agents/event-normalizers/claude', () => {
       }),
     ])
   })
+
+  it('emits a structured terminal provider error for Claude result failures', () => {
+    const result = mapClaudeToTranscriptEnvelopes({
+      type: 'result',
+      subtype: 'failed',
+      is_error: true,
+      api_error_status: 429,
+      result: 'rate_limit (429)',
+    })
+
+    expect(result.map((event) => event.ev.type)).toEqual(['provider.error', 'turn.end'])
+    expect(result[0]).toEqual(expect.objectContaining({
+      ev: {
+        type: 'provider.error',
+        message: 'rate_limit (429)',
+        classification: 'usage_limit',
+        code: '429',
+        retryable: false,
+        data: expect.objectContaining({ api_error_status: 429 }),
+      },
+    }))
+    expect(result[1]).toEqual(expect.objectContaining({
+      ev: expect.objectContaining({
+        type: 'turn.end',
+        status: 'error',
+        error: 'rate_limit (429)',
+      }),
+    }))
+  })
+
+  it('classifies Claude auth failures through the same provider error event', () => {
+    const result = mapClaudeToTranscriptEnvelopes({
+      type: 'result',
+      subtype: 'error',
+      is_error: true,
+      error_code: 'authentication_error',
+      result: 'Error: auth token expired',
+    })
+
+    expect(result[0]).toEqual(expect.objectContaining({
+      ev: expect.objectContaining({
+        type: 'provider.error',
+        message: 'Error: auth token expired',
+        classification: 'auth_required',
+        code: 'authentication_error',
+      }),
+    }))
+  })
 })

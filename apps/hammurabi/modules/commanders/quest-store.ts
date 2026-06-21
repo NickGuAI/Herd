@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import {
-  parseClaudePermissionMode,
-} from '../agents/session/input.js'
 import { readJsonFileFailClosed, writeJsonFileAtomically } from '../json-file.js'
 import { resolveCommanderDataDir } from './paths.js'
 import type { AutomationQuestEventBus } from '../automations/quest-event-bus.js'
@@ -236,6 +233,13 @@ function coerceStoredPermissionMode(
   }
 }
 
+function parseDefaultPermissionMode(raw: unknown): 'default' | null {
+  if (raw === undefined || raw === null || raw === '') {
+    return 'default'
+  }
+  return raw === 'default' ? 'default' : null
+}
+
 function normalizeContract(
   raw: unknown,
 ): { contract: CommanderQuestContract | null; aliasLiteral?: string } {
@@ -249,7 +253,7 @@ function normalizeContract(
   }
 
   const cwd = asTrimmedString(raw.cwd)
-  const permissionMode = parseClaudePermissionMode(raw.permissionMode)
+  const permissionMode = parseDefaultPermissionMode(raw.permissionMode)
   const agentType = asTrimmedString(raw.agentType)
   const model = raw.model === null
     ? null

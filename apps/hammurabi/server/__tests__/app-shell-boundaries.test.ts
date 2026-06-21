@@ -8,6 +8,7 @@ const indexSource = readFileSync(path.join(serverRoot, 'index.ts'), 'utf8')
 const moduleRegistrySource = readFileSync(path.join(serverRoot, 'module-registry.ts'), 'utf8')
 const moduleRuntimeSource = readFileSync(path.join(serverRoot, 'module-runtime.ts'), 'utf8')
 const moduleRuntimeFactoriesSource = readFileSync(path.join(serverRoot, 'module-runtime-factories.ts'), 'utf8')
+const agentsRoutesCoreSource = readFileSync(path.resolve(serverRoot, '../modules/agents/routes-core.ts'), 'utf8')
 
 describe('server app shell boundaries', () => {
   it('does not mount feature API routes directly from server/index.ts', () => {
@@ -114,5 +115,13 @@ describe('server app shell boundaries', () => {
         `WebSocket path ${websocketPath} must stay under a proxy-owned root`,
       ).toBe(true)
     }
+  })
+
+  it('flushes agent runtime snapshots before provider teardown during shutdown', () => {
+    const shutdownBody = agentsRoutesCoreSource.match(/async shutdown\(\) \{(?<body>[\s\S]*?)\n    \},/)?.groups?.body
+    expect(shutdownBody).toBeTruthy()
+    expect(shutdownBody!.indexOf('flushPersistedSessionsWrite()')).toBeLessThan(
+      shutdownBody!.indexOf('sessionsInterface.shutdown?.()'),
+    )
   })
 })

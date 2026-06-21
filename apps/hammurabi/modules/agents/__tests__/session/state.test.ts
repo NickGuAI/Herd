@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   aggregateCommanderWorldAgentSource,
+  buildRuntimeSessionActions,
+  canPauseLiveStreamSession,
   liveSessionToApiPayload,
   parsePersistedStreamSessionEntry,
   toCommanderWorldAgent,
@@ -61,6 +63,24 @@ describe('agents/session/state', () => {
       name: 'worker-model-01',
       agentType: 'codex',
       model: 'gpt-5.4',
+    }))
+  })
+
+  it('preserves persisted approval bridge nonce for restored live stream sessions', () => {
+    expect(parsePersistedStreamSessionEntry({
+      name: 'worker-bridge-01',
+      agentType: 'claude',
+      mode: 'default',
+      cwd: '/tmp/worktree',
+      createdAt: '2026-04-24T00:00:00.000Z',
+      approvalBridgeNonce: 'nonce-restored-live-session',
+      providerContext: {
+        providerId: 'claude',
+        sessionId: 'claude-session-bridge',
+      },
+    })).toEqual(expect.objectContaining({
+      name: 'worker-bridge-01',
+      approvalBridgeNonce: 'nonce-restored-live-session',
     }))
   })
 
@@ -231,11 +251,27 @@ describe('agents/session/state', () => {
         processAlive: true,
         hadResult: false,
         status: 'active',
+        state: 'active',
         resumeAvailable: false,
+        allowedActions: {
+          send: true,
+          pause: true,
+          resume: false,
+          start: false,
+          archive: true,
+        },
+        disabledReasons: {
+          send: null,
+          pause: null,
+          resume: 'Runtime session is active',
+          start: 'Existing runtime sessions resume instead of start',
+          archive: null,
+        },
         queuedMessageCount: 2,
         sessionType: 'commander',
         creator: { kind: 'commander', id: 'cmdr-atlas' },
         agentType: 'codex',
+        mode: 'default',
         effort: 'max',
         adaptiveThinking: 'disabled',
         model: 'gpt-5.4',
@@ -253,6 +289,97 @@ describe('agents/session/state', () => {
     } finally {
       clearTimeout(watchdog)
     }
+  })
+
+  it('gates active runtime actions by transport and pause snapshot availability', () => {
+    expect(buildRuntimeSessionActions({
+      state: 'active',
+      transportType: 'stream',
+      resumeAvailable: true,
+    }).allowedActions).toMatchObject({
+      send: true,
+      pause: true,
+      resume: false,
+      archive: true,
+      start: false,
+    })
+
+    const nonResumableStream = buildRuntimeSessionActions({
+      state: 'active',
+      transportType: 'stream',
+      resumeAvailable: false,
+    })
+    expect(nonResumableStream.allowedActions).toMatchObject({
+      send: true,
+      pause: false,
+      resume: false,
+      archive: true,
+      start: false,
+    })
+    expect(nonResumableStream.disabledReasons.send).toBeNull()
+    expect(nonResumableStream.disabledReasons.pause).toBe('Provider pause snapshot is unavailable')
+
+    const pauseableStream = buildRuntimeSessionActions({
+      state: 'active',
+      transportType: 'stream',
+      resumeAvailable: false,
+      pauseAvailable: true,
+    })
+    expect(pauseableStream.allowedActions).toMatchObject({
+      send: true,
+      pause: true,
+      resume: false,
+      archive: true,
+      start: false,
+    })
+    expect(pauseableStream.disabledReasons.pause).toBeNull()
+
+    const ptySession = buildRuntimeSessionActions({
+      state: 'active',
+      transportType: 'pty',
+      resumeAvailable: true,
+    })
+    expect(ptySession.allowedActions).toMatchObject({
+      send: false,
+      pause: false,
+      resume: false,
+      archive: true,
+      start: false,
+    })
+    expect(ptySession.disabledReasons.pause).toBe('Runtime session transport "pty" does not support this action')
+  })
+
+  it('falls back to provider resume id when a partial live session cannot produce a pause snapshot', () => {
+    const session = {
+      name: 'partial-claude-live-session',
+      agentType: 'claude',
+      providerContext: {
+        providerId: 'claude',
+        sessionId: 'claude-session-id',
+      },
+      lastTurnCompleted: true,
+    } as unknown as StreamSession
+
+    expect(canPauseLiveStreamSession(session)).toBe(true)
+  })
+
+  it('does not fall back when a provider deliberately has no pause snapshot', () => {
+    const session = {
+      name: 'claude-mid-turn',
+      agentType: 'claude',
+      providerContext: {
+        providerId: 'claude',
+        sessionId: 'claude-session-id',
+      },
+      lastTurnCompleted: false,
+      process: {},
+      spawnedWorkers: [],
+      events: [],
+      messageQueue: new SessionMessageQueue(),
+      pendingDirectSendMessages: [],
+    } as unknown as StreamSession
+
+    expect(canPauseLiveStreamSession(session)).toBe(false)
   })
 
   describe('toCommanderWorldAgent / aggregateCommanderWorldAgentSource', () => {

@@ -1,8 +1,9 @@
 # Herd Docs
 
-Herd is the operating system for a personal agent fleet: commanders,
-workers, channels, workspace context, approvals, provider credentials, and
-memory in one operator-controlled runtime.
+Herd is the meta-harness for a personal agent fleet: it coordinates
+commanders, workers, channels, workspace context, approvals, provider
+credentials, and memory above agent harnesses such as Codex, Claude Code,
+Gemini CLI, and OpenCode.
 
 Use these docs in this order when you are setting up or operating the product.
 

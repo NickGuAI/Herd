@@ -13,6 +13,7 @@ import {
 } from '../../../claude-max-thinking-tokens.js'
 import {
   createClaudeProviderActivityEnvelope,
+  createClaudeProviderErrorEnvelope,
   createClaudeTranscriptMapper,
   createClaudeTurnEndEnvelope,
   createClaudeUserTranscriptEnvelopes,
@@ -47,6 +48,7 @@ import {
   SessionMessageQueue,
   type QueuedMessageImage,
 } from '../../message-queue.js'
+import { isHiddenInternalUserEventSubtype } from '../../user-event-subtypes.js'
 import type {
   AnySession,
   ClaudePermissionMode,
@@ -67,7 +69,10 @@ import {
   buildClaudeStreamArgs,
   resolveClaudeApprovalPort,
 } from './helpers.js'
-import { createApprovalBridgeToken } from '../../../policies/approval-bridge-token.js'
+import {
+  createApprovalBridgeNonce,
+  createApprovalBridgeToken,
+} from '../../../policies/approval-bridge-token.js'
 
 export interface ClaudeStreamSessionDeps {
   appendEvent(session: StreamSession, event: StreamJsonEvent): void
@@ -82,6 +87,7 @@ export interface ClaudeStreamSessionDeps {
   spawnImpl?: typeof spawn
   daemonRegistry?: Pick<MachineDaemonRegistry, 'attachProcess' | 'spawnProcess'>
   internalToken?: string
+  approvalBridgeSigningSecret?: string
   writeToStdin(session: StreamSession, data: string): boolean
   writeTranscriptMeta(session: StreamSession): void
   markProviderAuthRequired?(session: StreamSession, detail: string): Promise<unknown> | unknown
@@ -140,6 +146,20 @@ function buildClaudeUserEvents(
     clientSendId,
     images,
   }) as StreamJsonEvent[]
+}
+
+function readStdinPreflightFailure(session: StreamSession): { retryable: boolean; reason: string } | null {
+  const stdin = session.process.stdin
+  if (!stdin) {
+    return { retryable: false, reason: 'Stream session unavailable' }
+  }
+  if ('writable' in stdin && stdin.writable === false) {
+    return { retryable: false, reason: 'Stream session unavailable' }
+  }
+  if (session.stdinDraining) {
+    return { retryable: true, reason: 'Process stdin is busy' }
+  }
+  return null
 }
 
 const DEFAULT_CLAUDE_APPEND_PROMPT_MAX_BYTES = 96 * 1024
@@ -229,21 +249,29 @@ export function createClaudeSessionAdapter(
           displayText: options?.displayText,
           images: normalizedImages,
           clientSendId: options?.clientSendId,
+          userEventSubtype: options?.userEventSubtype,
           priority: 'normal',
         })
         return { ok: true, delivered: 'queued', message, position }
       }
 
-      const userEvent = buildUserEvent(text, normalizedImages, options?.userEventSubtype)
-      const sent = deps.writeToStdin(session, `${JSON.stringify(userEvent)}\n`)
-      if (!sent) {
-        if (session.stdinDraining) {
-          return { ok: false, retryable: true, reason: 'Process stdin is busy' }
-        }
-        return { ok: false, retryable: false, reason: 'Stream session unavailable' }
+      const stdinFailure = readStdinPreflightFailure(session)
+      if (stdinFailure) {
+        return { ok: false, retryable: stdinFailure.retryable, reason: stdinFailure.reason }
       }
 
       deps.resetActiveTurnState(session)
+      if (isHiddenInternalUserEventSubtype(options?.userEventSubtype)) {
+        const userEvent = buildUserEvent(text, normalizedImages, options?.userEventSubtype)
+        const sent = deps.writeToStdin(session, `${JSON.stringify(userEvent)}\n`)
+        if (!sent) {
+          if (session.stdinDraining) {
+            return { ok: false, retryable: true, reason: 'Process stdin is busy' }
+          }
+          return { ok: false, retryable: false, reason: 'Stream session unavailable' }
+        }
+        return { ok: true, delivered: 'live' }
+      }
       const displayEvents = buildClaudeUserEvents(
         session,
         text,
@@ -254,6 +282,15 @@ export function createClaudeSessionAdapter(
       for (const displayEvent of displayEvents) {
         deps.appendEvent(session, displayEvent)
         deps.broadcastEvent(session, displayEvent)
+      }
+
+      const userEvent = buildUserEvent(text, normalizedImages, options?.userEventSubtype)
+      const sent = deps.writeToStdin(session, `${JSON.stringify(userEvent)}\n`)
+      if (!sent) {
+        if (session.stdinDraining) {
+          return { ok: false, retryable: true, reason: 'Process stdin is busy' }
+        }
+        return { ok: false, retryable: false, reason: 'Stream session unavailable' }
       }
       return { ok: true, delivered: 'live' }
     },
@@ -333,8 +370,13 @@ export function createClaudeStreamSession(
   // Token may be undefined when the local server has not minted one — we still
   // open the tunnel so the hook can reach the daemon (auth fails with a clear
   // 401, not a `fetch failed`). See the upstream session-launch issue.
-  const approvalBridgeToken = deps.internalToken
-    ? createApprovalBridgeToken({ internalToken: deps.internalToken, sessionName })
+  const approvalBridgeNonce = options.approvalBridgeNonce?.trim() || createApprovalBridgeNonce()
+  const approvalBridgeToken = deps.approvalBridgeSigningSecret
+    ? createApprovalBridgeToken({
+        signingSecret: deps.approvalBridgeSigningSecret,
+        sessionName,
+        nonce: approvalBridgeNonce,
+      })
     : undefined
   const remoteApprovalBridge = remote
     ? {
@@ -409,6 +451,7 @@ export function createClaudeStreamSession(
     promptAudit,
     maxTurns: options.maxTurns,
     model: options.model,
+    approvalBridgeNonce,
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
     stdoutBuffer: '',
     stdinDraining: false,
@@ -614,6 +657,14 @@ export function createClaudeStreamSession(
     deps.appendEvent(session, stderrEvent)
     deps.broadcastEvent(session, stderrEvent)
     if (isProviderAuthRequiredText(text)) {
+      const authErrorEvent = createClaudeProviderErrorEnvelope(
+        text,
+        { detail: `stderr: ${text}`, text },
+        readClaudeSessionId(session),
+        'auth_required',
+      ) as StreamJsonEvent
+      deps.appendEvent(session, authErrorEvent)
+      deps.broadcastEvent(session, authErrorEvent)
       void deps.markProviderAuthRequired?.(session, text)
     }
   })

@@ -1,16 +1,10 @@
 import { performance } from 'node:perf_hooks'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../json-file.js', () => ({
-  writeJsonFileAtomically: vi.fn(async () => undefined),
-}))
-
-import { writeJsonFileAtomically } from '../../../json-file.js'
 import {
-  readPersistedSessionsState,
   restorePersistedSessions,
   serializePersistedSessionsState,
 } from '../persistence.js'
@@ -25,8 +19,6 @@ import type {
   StreamJsonEvent,
   StreamSession,
 } from '../../types.js'
-
-const writeJsonFileAtomicallyMock = vi.mocked(writeJsonFileAtomically)
 
 function buildPersistedSession(name: string): PersistedStreamSession {
   return {
@@ -86,7 +78,6 @@ describe('session persistence quick wins', () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'hammurabi-persistence-test-'))
     setTranscriptStoreRoot(join(tempDir, 'transcripts'))
-    writeJsonFileAtomicallyMock.mockClear()
   })
 
   afterEach(async () => {
@@ -101,8 +92,6 @@ describe('session persistence quick wins', () => {
       buildPersistedSession('restore-beta'),
       buildPersistedSession('restore-gamma'),
     ]
-    const sessionStorePath = join(tempDir, 'stream-sessions.json')
-    await writeFile(sessionStorePath, JSON.stringify({ sessions: entries }, null, 2), 'utf8')
 
     const machineRegistry = {
       readMachineRegistry: vi.fn(async () => []),
@@ -115,7 +104,7 @@ describe('session persistence quick wins', () => {
     const startedAt = performance.now()
     const sessions = new Map<string, StreamSession>()
     await restorePersistedSessions({
-      sessionStorePath,
+      persistedState: { sessions: entries },
       sessions,
       completedSessions: new Map<string, CompletedSession>(),
       exitedStreamSessions: new Map<string, ExitedStreamSessionState>(),
@@ -132,32 +121,12 @@ describe('session persistence quick wins', () => {
     expect(elapsedMs).toBeLessThan(180)
   })
 
-  it('skips rewriting persisted session state when providerContext migration is a no-op', async () => {
-    const sessionStorePath = join(tempDir, 'stream-sessions.json')
-    const payload = {
-      sessions: [buildPersistedSession('canonical-session')],
-    }
-    await writeFile(sessionStorePath, JSON.stringify(payload, null, 2), 'utf8')
-
-    const parsed = await readPersistedSessionsState(sessionStorePath)
-
-    expect(parsed.sessions).toHaveLength(1)
-    expect(parsed.sessions[0]?.providerContext).toEqual(expect.objectContaining({
-      providerId: 'claude',
-      sessionId: 'canonical-session-resume',
-    }))
-    expect(parsed.sessions[0]?.model).toBe('claude-sonnet-4-6')
-    expect(writeJsonFileAtomicallyMock).not.toHaveBeenCalled()
-  })
-
   it('round-trips model through restore and serialization', async () => {
     const entries = [buildPersistedSession('restore-model')]
-    const sessionStorePath = join(tempDir, 'stream-sessions.json')
-    await writeFile(sessionStorePath, JSON.stringify({ sessions: entries }, null, 2), 'utf8')
 
     const sessions = new Map<string, StreamSession>()
     await restorePersistedSessions({
-      sessionStorePath,
+      persistedState: { sessions: entries },
       sessions,
       completedSessions: new Map<string, CompletedSession>(),
       exitedStreamSessions: new Map<string, ExitedStreamSessionState>(),
@@ -174,6 +143,38 @@ describe('session persistence quick wins', () => {
     const serialized = serializePersistedSessionsState({
       sessions: new Map(sessions),
       exitedStreamSessions: new Map<string, ExitedStreamSessionState>(),
+    })
+    expect(serialized.sessions[0]?.model).toBe('claude-sonnet-4-6')
+  })
+
+  it('keeps model on restored exited sessions', async () => {
+    const entries: PersistedStreamSession[] = [{
+      ...buildPersistedSession('restore-exited-model'),
+      sessionState: 'exited',
+      hadResult: false,
+      conversationEntryCount: 4,
+      events: [],
+    }]
+
+    const exitedStreamSessions = new Map<string, ExitedStreamSessionState>()
+    await restorePersistedSessions({
+      persistedState: { sessions: entries },
+      sessions: new Map<string, StreamSession>(),
+      completedSessions: new Map<string, CompletedSession>(),
+      exitedStreamSessions,
+      maxSessions: 10,
+      machineRegistry: {
+        readMachineRegistry: vi.fn(async () => []),
+      } as never,
+      applyUsageEvent: vi.fn(),
+      restoreProviderSession: vi.fn(async (entry: PersistedStreamSession) => buildRestoredSession(entry)),
+    })
+
+    expect(exitedStreamSessions.get('restore-exited-model')?.model).toBe('claude-sonnet-4-6')
+
+    const serialized = serializePersistedSessionsState({
+      sessions: new Map<string, StreamSession>(),
+      exitedStreamSessions,
     })
     expect(serialized.sessions[0]?.model).toBe('claude-sonnet-4-6')
   })
@@ -230,8 +231,6 @@ describe('session persistence quick wins', () => {
         events: [turnEnd],
       }
     })
-    const sessionStorePath = join(tempDir, 'stream-sessions.json')
-    await writeFile(sessionStorePath, JSON.stringify({ sessions: entries }, null, 2), 'utf8')
 
     const completedSessions = new Map<string, CompletedSession>()
     const restoreProviderSession = vi.fn(async (persistedEntry: PersistedStreamSession) =>
@@ -239,7 +238,7 @@ describe('session persistence quick wins', () => {
     )
 
     await restorePersistedSessions({
-      sessionStorePath,
+      persistedState: { sessions: entries },
       sessions: new Map<string, StreamSession>(),
       completedSessions,
       exitedStreamSessions: new Map<string, ExitedStreamSessionState>(),

@@ -21,7 +21,7 @@ DIM='\033[2m'
 NC='\033[0m'
 
 PRODUCT_NAME="Herd"
-NODE_VERSION="${HERD_NODE_VERSION:-${HERVALD_NODE_VERSION:-22.12.0}}"
+NODE_VERSION="${HERD_NODE_VERSION:-${HERVALD_NODE_VERSION:-22.16.0}}"
 PNPM_VERSION="${HERD_PNPM_VERSION:-${HERVALD_PNPM_VERSION:-10.23.0}}"
 INSTALLER_MARKER=".herd-installer-checkout"
 LEGACY_INSTALLER_MARKER=".hervald-installer-checkout"
@@ -529,6 +529,16 @@ build_hammurabi() {
     -u VITE_AUTH0_AUDIENCE \
     -u VITE_AUTH0_CLIENT_ID \
     "$PNPM_BIN" --dir "$REPO_ROOT" --filter hammurabi run build
+}
+
+ensure_sqlite_control_plane() {
+  step "Checking SQLite runtime-session store"
+  if ! env \
+    HAMMURABI_DATA_DIR="$DATA_DIR" \
+    HAMMURABI_DB_PATH="$DATA_DIR/hammurabi.sqlite" \
+    "$PNPM_BIN" --dir "$REPO_ROOT" --filter hammurabi run db:ready -- --source-root "$DATA_DIR" --db "$DATA_DIR/hammurabi.sqlite"; then
+    fail "SQLite runtime-session store is not ready. Run the migration command printed above, then rerun install.sh."
+  fi
 }
 
 ensure_default_master_key_env() {
@@ -1256,6 +1266,7 @@ ok "installed $SHIM_PATH"
 
 install_default_skills
 configure_providers "$INSTALL_SETUP_PATH"
+ensure_sqlite_control_plane
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ok "$BIN_DIR already on PATH" ;;

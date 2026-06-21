@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema'
 import {
   createMockChildProcess,
   mockedSpawn,
@@ -12,6 +15,28 @@ import type { RunningServer } from './routes-test-harness'
 const COMMANDER_ID = '00000000-0000-4000-a000-0000000000aa'
 const CONVERSATION_ID = '11111111-1111-4111-8111-111111111111'
 
+type RuntimeSessionRow = {
+  conversation_id: string | null
+  session_type: string
+  creator_kind: string
+  creator_id: string | null
+  provider_resume_json: string
+}
+
+function openTestRuntimeDb(dir: string): DatabaseSync {
+  const db = openHammurabiSqliteDatabase(join(dir, 'hammurabi.sqlite'))
+  applyHammurabiSqliteSchema(db)
+  return db
+}
+
+function readRuntimeSession(db: DatabaseSync, name: string): RuntimeSessionRow | undefined {
+  return db.prepare(
+    `SELECT conversation_id, session_type, creator_kind, creator_id, provider_resume_json
+     FROM agent_runtime_sessions
+     WHERE name = ?`,
+  ).get(name) as RuntimeSessionRow | undefined
+}
+
 describe('stream session conversation links', () => {
   function installMockProcess() {
     const mock = createMockChildProcess()
@@ -21,7 +46,7 @@ describe('stream session conversation links', () => {
 
   it('carries conversationId in live sessions and persists it across restart restore', async () => {
     const sessionStoreDir = await mkdtemp(join(tmpdir(), 'hammurabi-stream-conversation-link-'))
-    const sessionStorePath = join(sessionStoreDir, 'stream-sessions.json')
+    const sqliteDb = openTestRuntimeDb(sessionStoreDir)
     let firstServer: RunningServer | null = null
     let secondServer: RunningServer | null = null
     const firstMock = installMockProcess()
@@ -29,7 +54,7 @@ describe('stream session conversation links', () => {
     try {
       firstServer = await startServer({
         autoResumeSessions: false,
-        sessionStorePath,
+        sqliteDb,
       })
 
       const created = await firstServer.agents.sessionsInterface.createCommanderSession({
@@ -53,29 +78,14 @@ describe('stream session conversation links', () => {
       )
 
       await vi.waitFor(async () => {
-        const raw = await readFile(sessionStorePath, 'utf8')
-        const parsed = JSON.parse(raw) as {
-          sessions: Array<{
-            name: string
-            conversationId?: string
-            sessionType?: string
-            creator?: {
-              kind: string
-              id?: string
-            }
-            providerContext?: { sessionId?: string }
-          }>
-        }
-        const saved = parsed.sessions.find((session) => session.name === 'commander-conversation-link-01')
+        const saved = readRuntimeSession(sqliteDb, 'commander-conversation-link-01')
         expect(saved).toEqual(expect.objectContaining({
-          conversationId: CONVERSATION_ID,
-          sessionType: 'commander',
-          creator: {
-            kind: 'commander',
-            id: COMMANDER_ID,
-          },
+          conversation_id: CONVERSATION_ID,
+          session_type: 'commander',
+          creator_kind: 'commander',
+          creator_id: COMMANDER_ID,
         }))
-        expect(saved?.providerContext?.sessionId).toBe('claude-conversation-link-123')
+        expect(JSON.parse(saved!.provider_resume_json).sessionId).toBe('claude-conversation-link-123')
       })
 
       await firstServer.close()
@@ -86,7 +96,7 @@ describe('stream session conversation links', () => {
 
       secondServer = await startServer({
         autoResumeSessions: true,
-        sessionStorePath,
+        sqliteDb,
       })
 
       await vi.waitFor(() => {
@@ -105,6 +115,7 @@ describe('stream session conversation links', () => {
       if (firstServer) {
         await firstServer.close()
       }
+      sqliteDb.close()
       await rm(sessionStoreDir, { recursive: true, force: true })
     }
   })
@@ -122,14 +133,14 @@ describe('stream session conversation links', () => {
     })
 
     const sessionStoreDir = await mkdtemp(join(tmpdir(), 'hammurabi-stream-conversation-rotation-'))
-    const sessionStorePath = join(sessionStoreDir, 'stream-sessions.json')
+    const sqliteDb = openTestRuntimeDb(sessionStoreDir)
     let server: RunningServer | null = null
 
     try {
       server = await startServer({
         autoRotateEntryThreshold: 1,
         autoResumeSessions: false,
-        sessionStorePath,
+        sqliteDb,
       })
 
       const sessionName = 'commander-conversation-rotation-01'
@@ -166,24 +177,17 @@ describe('stream session conversation links', () => {
       processMocks[1].emitStdout('{"type":"system","subtype":"init","session_id":"claude-rotation-new"}\n')
 
       await vi.waitFor(async () => {
-        const raw = await readFile(sessionStorePath, 'utf8')
-        const parsed = JSON.parse(raw) as {
-          sessions: Array<{
-            name: string
-            conversationId?: string
-            providerContext?: { sessionId?: string }
-          }>
-        }
-        const saved = parsed.sessions.find((session) => session.name === sessionName)
+        const saved = readRuntimeSession(sqliteDb, sessionName)
         expect(saved).toEqual(expect.objectContaining({
-          conversationId: CONVERSATION_ID,
+          conversation_id: CONVERSATION_ID,
         }))
-        expect(saved?.providerContext?.sessionId).toBe('claude-rotation-new')
+        expect(JSON.parse(saved!.provider_resume_json).sessionId).toBe('claude-rotation-new')
       })
     } finally {
       if (server) {
         await server.close()
       }
+      sqliteDb.close()
       await rm(sessionStoreDir, { recursive: true, force: true })
     }
   })

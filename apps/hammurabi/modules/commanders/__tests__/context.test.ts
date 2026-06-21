@@ -8,6 +8,7 @@ import {
 } from '../routes/context'
 import type { CommanderRuntime } from '../routes/types'
 import type { CommanderSessionsInterface } from '../../agents/routes'
+import { HEARTBEAT_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes'
 import { mergeHeartbeatConfig, createDefaultHeartbeatConfig } from '../heartbeat'
 import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope'
 
@@ -85,6 +86,26 @@ describe('sendQueuedInternalUserMessage', () => {
     ).resolves.toBe(false)
 
     expect(consumeInternalUserMessage(runtime, '[HEARTBEAT]')).toBe(false)
+  })
+
+  it('passes internal heartbeat subtype without changing the provider-bound text', async () => {
+    const runtime = createRuntime()
+    const sessionsInterface = createSessionsInterface(true)
+
+    await expect(
+      sendQueuedInternalUserMessage(runtime, sessionsInterface, 'commander-alpha', '[HEARTBEAT]', {
+        queue: true,
+        priority: 'low',
+        userEventSubtype: HEARTBEAT_USER_EVENT_SUBTYPE,
+      }),
+    ).resolves.toBe(true)
+
+    expect(sessionsInterface.sendToSession).toHaveBeenCalledWith(
+      'commander-alpha',
+      { text: '[HEARTBEAT]', userEventSubtype: HEARTBEAT_USER_EVENT_SUBTYPE },
+      { queue: true, priority: 'low' },
+    )
+    expect(consumeInternalUserMessage(runtime, '[HEARTBEAT]')).toBe(true)
   })
 })
 

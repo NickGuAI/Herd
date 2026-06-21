@@ -1,55 +1,55 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AUTH_HEADERS, installMockCodexSidecar, startServer } from './routes-test-harness'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema'
+import { AUTH_HEADERS, startServer } from './routes-test-harness'
 
-describe('agent session creator/sessionType migration replay', () => {
+describe('agent runtime session SQLite replay', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('backfills a legacy persisted session on first restore and replays cleanly on restart', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-migration-replay-'))
-    const sessionStorePath = join(dir, 'stream-sessions.json')
-    const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+  it('restores a paused worker runtime session from agent_runtime_sessions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-sqlite-replay-'))
+    const sqliteDb = openHammurabiSqliteDatabase(join(dir, 'hammurabi.sqlite'))
     const createdAt = new Date(Date.now() - 5 * 60_000).toISOString()
-    const completedAt = new Date(Date.now() - 4 * 60_000).toISOString()
 
     try {
-      await writeFile(
-        sessionStorePath,
+      applyHammurabiSqliteSchema(sqliteDb)
+      sqliteDb.prepare(
+        `INSERT INTO agent_runtime_sessions (
+           name,
+           session_type,
+           creator_kind,
+           creator_id,
+           conversation_id,
+           spawned_by,
+           transport_type,
+           machine_id,
+           state,
+           provider,
+           provider_resume_json,
+           cwd,
+           created_at,
+           updated_at,
+           archived_at
+         ) VALUES (?, 'worker', 'commander', ?, NULL, ?, 'stream', 'local', 'paused', 'claude', ?, ?, ?, ?, NULL)`,
+      ).run(
+        'worker-1710000000000',
+        'cmdr-atlas',
+        'commander-cmdr-atlas',
         JSON.stringify({
-          sessions: [
-            {
-              name: 'worker-1710000000000',
-              agentType: 'claude',
-              mode: 'default',
-              cwd: '/tmp/legacy-worker',
-              createdAt,
-              sessionState: 'exited',
-              hadResult: true,
-              providerContext: {
-                providerId: 'claude',
-                sessionId: 'claude-worker-legacy',
-              },
-              parentSession: 'commander-cmdr-atlas',
-              sessionCategory: 'regular',
-              events: [
-                {
-                  type: 'result',
-                  subtype: 'success',
-                  timestamp: completedAt,
-                  total_cost_usd: 0.01,
-                },
-              ],
-            },
-          ],
-        }, null, 2),
-        'utf8',
+          providerId: 'claude',
+          sessionId: 'claude-worker-paused',
+        }),
+        '/tmp/legacy-worker',
+        createdAt,
+        createdAt,
       )
 
-      const server = await startServer({ sessionStorePath, autoResumeSessions: true })
+      const server = await startServer({ sqliteDb, autoResumeSessions: true })
       try {
         const response = await fetch(`${server.baseUrl}/api/agents/sessions`, {
           headers: AUTH_HEADERS,
@@ -58,119 +58,25 @@ describe('agent session creator/sessionType migration replay', () => {
         expect(await response.json()).toEqual(expect.arrayContaining([
           expect.objectContaining({
             name: 'worker-1710000000000',
+            state: 'paused',
             sessionType: 'worker',
             creator: { kind: 'commander', id: 'cmdr-atlas' },
             spawnedBy: 'commander-cmdr-atlas',
+            machine: expect.objectContaining({
+              id: 'local',
+              known: true,
+            }),
+            allowedActions: expect.objectContaining({
+              resume: true,
+              archive: true,
+            }),
           }),
         ]))
       } finally {
         await server.close()
       }
-
-      const upgradedRaw = await readFile(sessionStorePath, 'utf8')
-      expect(JSON.parse(upgradedRaw)).toEqual({
-        sessions: [
-          expect.objectContaining({
-            name: 'worker-1710000000000',
-            sessionType: 'worker',
-            creator: { kind: 'commander', id: 'cmdr-atlas' },
-            spawnedBy: 'commander-cmdr-atlas',
-          }),
-        ],
-      })
-      expect(consoleInfo).toHaveBeenCalledTimes(1)
-
-      consoleInfo.mockClear()
-
-      const replayServer = await startServer({ sessionStorePath, autoResumeSessions: true })
-      try {
-        const response = await fetch(`${replayServer.baseUrl}/api/agents/sessions`, {
-          headers: AUTH_HEADERS,
-        })
-        expect(response.status).toBe(200)
-        expect(await response.json()).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            name: 'worker-1710000000000',
-            sessionType: 'worker',
-            creator: { kind: 'commander', id: 'cmdr-atlas' },
-          }),
-        ]))
-      } finally {
-        await replayServer.close()
-      }
-
-      expect(await readFile(sessionStorePath, 'utf8')).toBe(upgradedRaw)
-      expect(consoleInfo).not.toHaveBeenCalled()
     } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  it('replays persisted currentSkillInvocation on restore', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'hammurabi-skill-trust-replay-'))
-    const sessionStorePath = join(dir, 'stream-sessions.json')
-    installMockCodexSidecar()
-
-    try {
-      const firstServer = await startServer({ sessionStorePath, autoResumeSessions: false })
-      const workerName = 'skill-trust-worker'
-      try {
-        const createResponse = await fetch(`${firstServer.baseUrl}/api/agents/sessions`, {
-          method: 'POST',
-          headers: {
-            ...AUTH_HEADERS,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: workerName,
-            mode: 'default',
-            transportType: 'stream',
-            agentType: 'codex',
-            cwd: '/tmp/skill-trust-worker',
-            currentSkillInvocation: {
-              skillId: 'send-weekly-update',
-              displayName: '/send-weekly-update',
-              startedAt: '2026-04-26T12:00:00.000Z',
-              toolUseId: 'toolu_skill_123',
-            },
-          }),
-        })
-
-        expect(createResponse.status).toBe(201)
-      } finally {
-        await firstServer.close()
-      }
-
-      expect(JSON.parse(await readFile(sessionStorePath, 'utf8'))).toEqual({
-        sessions: [
-          expect.objectContaining({
-            name: workerName,
-            currentSkillInvocation: {
-              skillId: 'send-weekly-update',
-              displayName: '/send-weekly-update',
-              startedAt: '2026-04-26T12:00:00.000Z',
-              toolUseId: 'toolu_skill_123',
-            },
-          }),
-        ],
-      })
-
-      const replayServer = await startServer({ sessionStorePath, autoResumeSessions: true })
-      try {
-        await vi.waitFor(() => {
-          expect(
-            replayServer.agents.approvalSessionsInterface.getSessionContext(workerName)?.currentSkillInvocation,
-          ).toEqual({
-            skillId: 'send-weekly-update',
-            displayName: '/send-weekly-update',
-            startedAt: '2026-04-26T12:00:00.000Z',
-            toolUseId: 'toolu_skill_123',
-          })
-        })
-      } finally {
-        await replayServer.close()
-      }
-    } finally {
+      sqliteDb.close()
       await rm(dir, { recursive: true, force: true })
     }
   })

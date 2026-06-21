@@ -147,6 +147,8 @@ async function startServer(options: StartServerOptions = {}): Promise<RunningSer
       apiKeyStore,
       verifyAuth0Token,
       now: options.now,
+      localScan: { enabled: false },
+      retentionDays: 0,
     }).router,
   )
 

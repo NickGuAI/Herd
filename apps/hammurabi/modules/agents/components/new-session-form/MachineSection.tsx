@@ -4,26 +4,26 @@ import { AddWorkerWizard } from './AddWorkerWizard'
 import { getMachineConnectionHost, getMachineDisplayValue } from './helpers'
 
 interface MachineSectionProps {
-  selectedHost: string
-  setSelectedHost: (value: string) => void
+  selectedMachineId: string
+  setSelectedMachineId: (value: string) => void
   machines: Machine[]
   resumeLocked: boolean
   resumeSource: AgentSession | null
 }
 
 export function MachineSection({
-  selectedHost,
-  setSelectedHost,
+  selectedMachineId,
+  setSelectedMachineId,
   machines,
   resumeLocked,
   resumeSource,
 }: MachineSectionProps) {
-  const [showAddWorkerWizard, setShowAddWorkerWizard] = useState(false)
+  const [showAddMachineWizard, setShowAddMachineWizard] = useState(false)
   const [showAuthWizard, setShowAuthWizard] = useState(false)
   const localMachine = machines.find((machine) => machine.id === 'local' || machine.host === null) ?? null
   const remoteMachines = machines.filter((machine) => machine.host)
-  const selectedMachine = selectedHost
-    ? machines.find((machine) => machine.id === selectedHost) ?? null
+  const selectedMachine = selectedMachineId
+    ? machines.find((machine) => machine.id === selectedMachineId) ?? null
     : localMachine
 
   return (
@@ -43,10 +43,10 @@ export function MachineSection({
             ) : null}
             <button
               type="button"
-              onClick={() => setShowAddWorkerWizard(true)}
+              onClick={() => setShowAddMachineWizard(true)}
               className="text-xs uppercase tracking-wide text-[color:var(--hv-fg-subtle)] underline underline-offset-2"
             >
-              Add worker
+              Add machine
             </button>
           </div>
         ) : null}
@@ -58,8 +58,8 @@ export function MachineSection({
       ) : (
         <>
           <select
-            value={selectedHost}
-            onChange={(event) => setSelectedHost(event.target.value)}
+            value={selectedMachineId}
+            onChange={(event) => setSelectedMachineId(event.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]"
           >
             <option value="">{localMachine?.label ?? 'Local (this server)'}</option>
@@ -71,11 +71,11 @@ export function MachineSection({
           </select>
 
           <AddWorkerWizard
-            open={showAddWorkerWizard}
-            onClose={() => setShowAddWorkerWizard(false)}
+            open={showAddMachineWizard}
+            onClose={() => setShowAddMachineWizard(false)}
             onMachineReady={(machine) => {
-              setSelectedHost(machine.id)
-              setShowAddWorkerWizard(false)
+              setSelectedMachineId(machine.id)
+              setShowAddMachineWizard(false)
             }}
           />
 
@@ -84,7 +84,7 @@ export function MachineSection({
             onClose={() => setShowAuthWizard(false)}
             initialMachine={selectedMachine}
             onMachineReady={(machine) => {
-              setSelectedHost(machine.host ? machine.id : '')
+              setSelectedMachineId(machine.host ? machine.id : '')
               setShowAuthWizard(false)
             }}
           />

@@ -50,7 +50,7 @@ Use them to parallelize implementation work or keep a long-lived task moving.
 
 \`\`\`
 hammurabi workers list
-hammurabi workers dispatch --session [COMMANDER_ID] [--task "<initial task>"] [--cwd <path>] [--machine <id>]
+hammurabi workers dispatch --session [COMMANDER_ID] [--task "<initial task>"] [--cwd <path>] [--machine <id>] [--permission-mode <default|acceptEdits|bypassPermissions>]
 hammurabi workers status <session-name>
 hammurabi workers send <session-name> "<task>"
 hammurabi workers kill <session-name>

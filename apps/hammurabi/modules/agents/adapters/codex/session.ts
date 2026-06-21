@@ -18,6 +18,7 @@ import {
   SessionMessageQueue,
   type QueuedMessageImage,
 } from '../../message-queue.js'
+import { isHiddenInternalUserEventSubtype } from '../../user-event-subtypes.js'
 import type { ActionPolicyGate } from '../../../policies/action-policy-gate.js'
 import { handleProviderApproval } from '../../../policies/provider-approval-adapter.js'
 import {
@@ -39,6 +40,7 @@ import {
   isProviderAuthRequiredText,
   type ProviderSpawnAuth,
 } from '../../provider-auth.js'
+import type { ProviderTeardownOptions } from '../../providers/provider-adapter.js'
 import {
   isTranscriptEnvelope,
   type TranscriptEnvelope,
@@ -134,7 +136,7 @@ const ALWAYS_ON_CODEX_APPROVAL_POLICY = {
   },
 } as const
 
-function resolveCodexTransportPolicy(mode: ClaudePermissionMode): {
+export function resolveCodexTransportPolicy(mode: ClaudePermissionMode): {
   sandbox: string
   approvalPolicy: string | typeof ALWAYS_ON_CODEX_APPROVAL_POLICY
 } {
@@ -146,6 +148,13 @@ function resolveCodexTransportPolicy(mode: ClaudePermissionMode): {
   // and internal default-allow policies fast-path safe internal actions).
   // Approval policy stays ALWAYS_ON granular so codex still emits the
   // request events Herd's gate intercepts.
+  if (mode === 'bypassPermissions') {
+    return {
+      sandbox: 'danger-full-access',
+      approvalPolicy: 'never',
+    }
+  }
+
   return {
     sandbox: 'danger-full-access',
     approvalPolicy: ALWAYS_ON_CODEX_APPROVAL_POLICY,
@@ -542,6 +551,7 @@ export function applyCodexApprovalDecision(
 export async function teardownCodexSessionRuntime(
   session: StreamSession,
   reason: string,
+  options: ProviderTeardownOptions = {},
 ): Promise<void> {
   if (readCodexRuntimeTeardownPromise(session)) {
     await readCodexRuntimeTeardownPromise(session)
@@ -565,6 +575,7 @@ export async function teardownCodexSessionRuntime(
   const teardownPromise = runtime.teardown({
     threadId: readCodexThreadId(session),
     reason,
+    archive: options.archive,
   })
   ensureCodexProviderContext(session).runtimeTeardownPromise = teardownPromise
   try {
@@ -824,7 +835,7 @@ export async function sendTextToCodexSession(
   const dispatchMethod = activeTurnId ? 'turn/steer' : 'turn/start'
   const clientSendId = options.clientSendId?.trim()
   deps.resetActiveTurnState(session)
-  if (!hasCodexUserEnvelopeForClientSendId(session, clientSendId)) {
+  if (!isHiddenInternalUserEventSubtype(options.userEventSubtype) && !hasCodexUserEnvelopeForClientSendId(session, clientSendId)) {
     appendAndBroadcastCodexEvents(
       session,
       buildCodexUserEnvelopeEvents(session, text, options, images),
@@ -900,6 +911,7 @@ export function createCodexSessionAdapter(
           displayText: options?.displayText,
           images: normalizedImages,
           clientSendId: options?.clientSendId,
+          userEventSubtype: options?.userEventSubtype,
           priority: 'normal',
         })
         return { ok: true, delivered: 'queued', message, position }

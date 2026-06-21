@@ -42,10 +42,10 @@ describe('agents/session/input', () => {
 
   it('parses permission and approval enums', () => {
     expect(parseClaudePermissionMode('default')).toBe('default')
+    expect(parseClaudePermissionMode('acceptEdits')).toBe('acceptEdits')
+    expect(parseClaudePermissionMode('bypassPermissions')).toBe('bypassPermissions')
     expect(parseClaudePermissionMode('nope')).toBeNull()
-    expect(parseClaudePermissionMode('bypassPermissions')).toBeNull()
     expect(parseClaudePermissionMode('dangerouslySkipPermissions')).toBeNull()
-    expect(parseClaudePermissionMode('acceptEdits')).toBeNull()
 
     expect(parseCodexApprovalDecision('accept')).toBe('accept')
     expect(parseCodexApprovalDecision('decline')).toBe('decline')

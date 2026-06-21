@@ -7,7 +7,7 @@ import {
   resolveEffectiveBasePrompt,
   type ResolvedCommanderWorkflow,
 } from '../workflow-resolution.js'
-import { CommanderAgent } from './prompt.js'
+import { CommanderAgent, type PriorConversationPointer } from './prompt.js'
 import type { PromptTask } from './prompt-task.js'
 
 export interface CommanderSessionSeedParams {
@@ -17,6 +17,7 @@ export interface CommanderSessionSeedParams {
   taskSource: CommanderTaskSource | null
   maxTurns: number
   memoryBasePath?: string
+  priorConversation?: PriorConversationPointer
 }
 
 function toPromptTaskFromTaskContext(
@@ -51,6 +52,7 @@ export async function buildCommanderSessionSeedFromResolvedWorkflow(
       currentTask: toPromptTaskFromTaskContext(params.currentTask, params.taskSource),
       recentConversation: [],
       mode: 'startup',
+      priorConversation: params.priorConversation,
     },
   )
 

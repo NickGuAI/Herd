@@ -109,6 +109,8 @@ describe('runWorkersCli', () => {
         '/tmp/worktree-a',
         '--machine',
         'gpu-1',
+        '--permission-mode',
+        'bypassPermissions',
       ],
       {
         fetchImpl,
@@ -133,8 +135,9 @@ describe('runWorkersCli', () => {
         body: JSON.stringify({
           spawnedBy: 'commander-main',
           task: 'Handle edge cases',
-          machine: 'gpu-1',
+          host: 'gpu-1',
           cwd: '/tmp/worktree-a',
+          permissionMode: 'bypassPermissions',
         }),
       }),
     )
@@ -379,6 +382,44 @@ describe('runWorkersCli', () => {
         'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
         expect.objectContaining({
           body: JSON.stringify({ task: 'No parent expected' }),
+        }),
+      )
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('does not send a rejected creator body when HAMMURABI_COMMANDER_ID is set', async () => {
+    vi.stubEnv('HAMMURABI_COMMANDER_ID', 'cmdr-atlas')
+    try {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({ name: 'worker-commander-env', cwd: '/tmp/worktree-env' }),
+          {
+            status: 202,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
+      )
+      const stdout = createBufferWriter()
+      const stderr = createBufferWriter()
+
+      const exitCode = await runWorkersCli(
+        ['dispatch', '--task', 'Avoid rejected creator body'],
+        {
+          fetchImpl,
+          readConfig: async () => config,
+          stdout: stdout.writer,
+          stderr: stderr.writer,
+        },
+      )
+
+      expect(exitCode).toBe(0)
+      expect(stderr.read()).toBe('')
+      expect(fetchImpl).toHaveBeenCalledWith(
+        'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
+        expect.objectContaining({
+          body: JSON.stringify({ task: 'Avoid rejected creator body' }),
         }),
       )
     } finally {

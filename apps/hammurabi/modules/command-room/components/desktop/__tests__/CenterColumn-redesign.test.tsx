@@ -258,6 +258,21 @@ describe('CenterColumn redesign', () => {
     expect(document.body.textContent).toContain('⌘K workspace')
   })
 
+  it('surfaces selected conversation stream reconnect failures above the composer', async () => {
+    await render(
+      <CenterColumn
+        {...buildProps({
+          hasSelectedConversation: true,
+          activeChatSession: null,
+          streamStatus: 'disconnected',
+        })}
+      />,
+    )
+
+    const notice = document.querySelector('[data-testid="conversation-stream-status"]')
+    expect(notice?.textContent).toContain('Conversation stream unavailable')
+  })
+
   it('shows commander-local automations in the delegated overview strip', async () => {
     await render(
       <CenterColumn

@@ -1,14 +1,5 @@
-import { Fragment, useState } from 'react'
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  Clock3,
-  RefreshCw,
-  ShieldCheck,
-  Sparkles,
-} from 'lucide-react'
-import { StringArrayInput } from '@/components/string-array-input'
+import { useState } from 'react'
+import { AlertTriangle, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import {
   useActionPolicies,
   usePolicySettings,
@@ -22,8 +13,12 @@ import {
 } from '@/hooks/use-action-policies'
 import { useSkills } from '@/hooks/use-skills'
 import { cn } from '@/lib/utils'
+import {
+  PolicyDetailPanel,
+  type PolicyDetailRow,
+} from './components/PolicyDetailPanel'
 
-type PolicyGroup = 'Channels' | 'Code & Infra' | 'Skills' | 'Default'
+type PolicyGroup = PolicyDetailRow['group']
 
 interface BasePolicyRow {
   actionId: string
@@ -35,6 +30,8 @@ interface BasePolicyRow {
   allowPlaceholder?: string
   blockPlaceholder?: string
   supportsLists: boolean
+  supportedProviders?: string[]
+  source?: string
 }
 
 interface DisplayPolicyRow extends BasePolicyRow {
@@ -44,14 +41,6 @@ interface DisplayPolicyRow extends BasePolicyRow {
   sourceScope?: string
   scope?: string
 }
-
-const POLICY_OPTIONS: Array<{ value: ActionPolicyMode; label: string }> = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'review', label: 'Review' },
-  { value: 'block', label: 'Block' },
-] as const
-
-const TIMEOUT_MINUTE_OPTIONS = [5, 10, 15, 30, 60] as const
 
 const BUILT_IN_ACTIONS: BasePolicyRow[] = [
   {
@@ -144,6 +133,12 @@ const FALLBACK_ROW: BasePolicyRow = {
   supportsLists: false,
 }
 
+const POLICY_BADGE_CLASSES: Record<ActionPolicyMode, string> = {
+  auto: 'badge-active',
+  review: 'bg-accent-gold/15 text-sumi-black',
+  block: 'bg-accent-vermillion/10 text-accent-vermillion',
+}
+
 function parseApiErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) {
     return 'Unexpected error'
@@ -196,7 +191,15 @@ function buildBuiltInRows(records: ActionPolicyRecord[]): DisplayPolicyRow[] {
   })
 }
 
-function buildSkillRows(records: ActionPolicyRecord[], skills: Array<{ name: string; description: string }>): DisplayPolicyRow[] {
+function buildSkillRows(
+  records: ActionPolicyRecord[],
+  skills: Array<{
+    name: string
+    description: string
+    supportedProviders?: string[]
+    source?: string
+  }>,
+): DisplayPolicyRow[] {
   return [...skills]
     .sort((left, right) => left.name.localeCompare(right.name))
     .map((skill) => {
@@ -209,6 +212,8 @@ function buildSkillRows(records: ActionPolicyRecord[], skills: Array<{ name: str
         group: 'Skills',
         kind: 'skill',
         supportsLists: false,
+        supportedProviders: skill.supportedProviders,
+        source: skill.source,
       }
       const record =
         findPolicyRecord(records, baseRow) ??
@@ -277,11 +282,17 @@ function rulesSummaryLabel(row: DisplayPolicyRow): string {
   return `${totalRules} rule${totalRules === 1 ? '' : 's'}`
 }
 
+function inheritedLabel(row: DisplayPolicyRow, scope: ActionPolicyScope): string {
+  const inherited = isInheritedRow(row, scope)
+  if (inherited) {
+    return 'Inherited from Global'
+  }
+  return scope === 'global' ? 'Global Default' : 'Commander Override'
+}
+
 export default function PoliciesPage() {
   const [scope, setScope] = useState<ActionPolicyScope>('global')
-  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({
-    'send-email': true,
-  })
+  const [selectedActionId, setSelectedActionId] = useState<string | null>(null)
 
   const commandersQuery = usePolicyCommanders()
   const policiesQuery = useActionPolicies(scope)
@@ -296,6 +307,8 @@ export default function PoliciesPage() {
     .map((skill) => ({
       name: skill.name,
       description: skill.description,
+      supportedProviders: skill.supportedProviders,
+      source: skill.source,
     }))
   const records = policiesQuery.data ?? []
   const settings = settingsQuery.data ?? {
@@ -304,17 +317,25 @@ export default function PoliciesPage() {
     standingApprovalExpiryDays: 30,
   }
 
-  const channelsRows = buildBuiltInRows(records).filter((row) => row.group === 'Channels')
-  const codeInfraRows = buildBuiltInRows(records).filter((row) => row.group === 'Code & Infra')
+  const builtInRows = buildBuiltInRows(records)
+  const channelsRows = builtInRows.filter((row) => row.group === 'Channels')
+  const codeInfraRows = builtInRows.filter((row) => row.group === 'Code & Infra')
   const skillRows = buildSkillRows(records, skills)
   const fallbackRow = buildFallbackRow(records)
 
   const groups: Array<{ label: PolicyGroup; rows: DisplayPolicyRow[] }> = [
+    { label: 'Skills', rows: skillRows },
     { label: 'Channels', rows: channelsRows },
     { label: 'Code & Infra', rows: codeInfraRows },
-    { label: 'Skills', rows: skillRows },
     { label: 'Default', rows: [fallbackRow] },
   ]
+  const policyRows = groups.flatMap((group) => group.rows)
+  const hasSelectedRow = Boolean(
+    selectedActionId && policyRows.some((row) => row.actionId === selectedActionId),
+  )
+  const activeActionId = hasSelectedRow ? selectedActionId : policyRows[0]?.actionId ?? null
+  const selectedRow = policyRows.find((row) => row.actionId === activeActionId) ?? null
+  const showDetailOnMobile = hasSelectedRow
 
   const pageError =
     (policiesQuery.error instanceof Error ? parseApiErrorMessage(policiesQuery.error) : null) ??
@@ -324,13 +345,6 @@ export default function PoliciesPage() {
   const mutationError =
     (updatePolicy.error instanceof Error ? parseApiErrorMessage(updatePolicy.error) : null) ??
     (updateSettings.error instanceof Error ? parseApiErrorMessage(updateSettings.error) : null)
-
-  function toggleExpanded(actionId: string) {
-    setExpandedRows((current) => ({
-      ...current,
-      [actionId]: !current[actionId],
-    }))
-  }
 
   function handlePolicyUpdate(
     row: DisplayPolicyRow,
@@ -355,309 +369,192 @@ export default function PoliciesPage() {
     <section
       aria-labelledby="policies-page-title"
       data-testid="policies-page"
-      className="min-h-full w-full min-w-0 bg-washi-white"
+      className="flex h-full min-h-0 w-full min-w-0 flex-col bg-washi-white"
     >
-      <header className="border-b border-ink-border bg-washi-aged/40 px-4 py-5 md:px-6">
-        <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div className="flex items-start gap-3">
-            <ShieldCheck size={20} className="mt-0.5 text-sumi-diluted" />
-            <div>
-              <h2 id="policies-page-title" className="font-display text-display text-sumi-black">Action Policies</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-relaxed text-sumi-diluted">
-                Configure which external actions run automatically, require review, or stay blocked.
-                Built-in actions use allowlists and blocklists, and user-invocable skills are discovered automatically.
-              </p>
-            </div>
-          </div>
+      {(pageError || mutationError) && (
+        <div className="flex shrink-0 items-start gap-2 border-b border-ink-border bg-accent-vermillion/10 px-4 py-2 text-sm text-accent-vermillion">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span>{mutationError ?? pageError}</span>
+        </div>
+      )}
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="w-full sm:min-w-[17rem]">
-              <label className="section-title mb-1.5 block" htmlFor="policies-scope-select">
-                Scope
-              </label>
-              <div className="inline-flex w-full rounded-full border border-ink-border bg-washi-aged p-1">
-                <select
-                  id="policies-scope-select"
-                  value={scope}
-                  onChange={(event) => setScope(event.target.value as ActionPolicyScope)}
-                  className="w-full rounded-full bg-transparent px-4 py-2 text-sm text-sumi-black focus:outline-none"
-                >
-                  <option value="global">Global</option>
-                  {commanders.map((commander) => (
-                    <option key={commander.id} value={`commander:${commander.id}`}>
-                      Commander: {commander.displayName?.trim() || commander.host}
-                    </option>
-                  ))}
-                </select>
+      <div data-testid="policies-page-content" className="flex min-h-0 flex-1 overflow-hidden">
+        <div
+          data-testid="policy-list-pane"
+          className={cn(
+            'flex flex-col overflow-hidden border-r border-ink-border bg-washi-aged/10',
+            showDetailOnMobile ? 'hidden md:flex' : 'flex',
+            'w-full shrink-0 md:w-64 lg:w-72',
+          )}
+        >
+          <header className="shrink-0 border-b border-ink-border bg-washi-aged/30 px-4 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={18} className="text-sumi-diluted" />
+                  <h2 id="policies-page-title" className="font-display text-lg text-sumi-black">
+                    Policies
+                  </h2>
+                </div>
+                <p className="mt-1 truncate text-xs text-sumi-diluted">
+                  {scopeLabel(scope, commanders)}
+                </p>
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  void Promise.all([
+                    policiesQuery.refetch(),
+                    settingsQuery.refetch(),
+                    commandersQuery.refetch(),
+                    skillsQuery.refetch(),
+                  ])
+                }}
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-ink-border text-sumi-diluted transition-colors hover:bg-ink-wash hover:text-sumi-black"
+                aria-label="Refresh policies"
+              >
+                <RefreshCw
+                  size={14}
+                  className={
+                    policiesQuery.isFetching || commandersQuery.isFetching || skillsQuery.isFetching
+                    || settingsQuery.isFetching
+                      ? 'animate-spin'
+                      : ''
+                  }
+                />
+              </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                void Promise.all([
-                  policiesQuery.refetch(),
-                  settingsQuery.refetch(),
-                  commandersQuery.refetch(),
-                  skillsQuery.refetch(),
-                ])
+            <label className="section-title mt-4 block" htmlFor="policies-scope-select">
+              Scope
+            </label>
+            <select
+              id="policies-scope-select"
+              value={scope}
+              onChange={(event) => {
+                setScope(event.target.value as ActionPolicyScope)
+                setSelectedActionId(null)
               }}
-              className="card-sumi inline-flex w-full items-center justify-center gap-2 px-4 py-3 text-sm text-sumi-black transition-colors hover:bg-ink-wash sm:w-auto"
+              className="mt-1.5 w-full rounded-lg border border-ink-border bg-washi-white px-3 py-2 text-sm text-sumi-black focus:outline-none focus:ring-1 focus:ring-sumi-mist"
             >
-              <RefreshCw
-                size={14}
-                className={
-                  policiesQuery.isFetching || commandersQuery.isFetching || skillsQuery.isFetching
-                    || settingsQuery.isFetching
-                    ? 'animate-spin'
-                    : ''
-                }
-              />
-              Refresh
-            </button>
+              <option value="global">Global</option>
+              {commanders.map((commander) => (
+                <option key={commander.id} value={`commander:${commander.id}`}>
+                  Commander: {commander.displayName?.trim() || commander.host}
+                </option>
+              ))}
+            </select>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            <div className="space-y-4">
+              {groups.map(({ label, rows }) => (
+                <section key={label} aria-labelledby={`policy-group-${label.replace(/\W+/g, '-').toLowerCase()}`}>
+                  <div className="mb-2 flex items-center gap-2 px-1">
+                    {label === 'Skills' ? (
+                      <Sparkles size={13} className="text-sumi-diluted" />
+                    ) : (
+                      <ShieldCheck size={13} className="text-sumi-diluted" />
+                    )}
+                    <h3
+                      id={`policy-group-${label.replace(/\W+/g, '-').toLowerCase()}`}
+                      className="section-title"
+                    >
+                      {label}
+                    </h3>
+                  </div>
+
+                  {rows.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-ink-border px-3 py-4 text-sm text-sumi-diluted">
+                      No user-invocable skills discovered.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {rows.map((row) => {
+                        const selected = row.actionId === activeActionId
+                        const inherited = isInheritedRow(row, scope)
+                        const savingThisRow =
+                          updatePolicy.isPending &&
+                          updatePolicy.variables?.actionId === row.actionId
+
+                        return (
+                          <button
+                            key={row.actionId}
+                            type="button"
+                            data-testid={`policy-row-${row.actionId}`}
+                            aria-current={selected ? 'true' : undefined}
+                            onClick={() => setSelectedActionId(row.actionId)}
+                            className={cn(
+                              'w-full rounded-lg border px-3 py-3 text-left transition-colors',
+                              selected
+                                ? 'border-sumi-mist bg-white shadow-sm'
+                                : 'border-transparent hover:border-ink-border hover:bg-white/60',
+                            )}
+                          >
+                            <div className="flex min-w-0 items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate font-mono text-sm text-sumi-black">{row.name}</p>
+                                <p className="mt-1 truncate text-xs text-sumi-diluted">
+                                  {rulesSummaryLabel(row)}
+                                </p>
+                              </div>
+                              <span
+                                className={cn(
+                                  'badge-sumi shrink-0',
+                                  POLICY_BADGE_CLASSES[row.policy],
+                                )}
+                              >
+                                {row.policy}
+                              </span>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              <span
+                                className={cn(
+                                  'badge-sumi',
+                                  inherited ? 'bg-ink-wash text-sumi-diluted' : 'badge-active',
+                                )}
+                              >
+                                {inherited ? 'Inherited' : scope === 'global' ? 'Global' : 'Override'}
+                              </span>
+                              {savingThisRow ? <span className="badge-sumi">Saving...</span> : null}
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </section>
+              ))}
+            </div>
           </div>
         </div>
-      </header>
 
-      <div data-testid="policies-page-content" className="w-full max-w-full p-4 md:p-6">
-        <div className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,32rem)]">
-            <div className="card-sumi flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="section-title">Active Scope</p>
-                <p className="mt-2 text-sm text-sumi-black">{scopeLabel(scope, commanders)}</p>
-                <p className="mt-1 text-sm text-sumi-diluted">
-                  Default action policy is <span className="font-medium text-sumi-black">Review</span>.
-                  Allowlists override to Auto and blocklists override to Block.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <span className="badge-sumi">{channelsRows.length} channel actions</span>
-                <span className="badge-sumi">{codeInfraRows.length} code &amp; infra actions</span>
-                <span className="badge-sumi">{skillRows.length} discovered skills</span>
-                <span className="badge-sumi">Fallback policy</span>
-              </div>
-            </div>
-
-            <div className="card-sumi flex flex-col gap-4 p-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Clock3 size={16} className="text-sumi-diluted" />
-                  <p className="section-title">Queue Defaults</p>
-                </div>
-                <p className="mt-2 max-w-2xl text-sm leading-relaxed text-sumi-diluted">
-                  Configure what happens when a queued approval sits without a human response.
-                </p>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                <div>
-                  <label className="section-title mb-1.5 block" htmlFor="approval-timeout-minutes">
-                    Timeout Window
-                  </label>
-                  <select
-                    id="approval-timeout-minutes"
-                    value={settings.timeoutMinutes}
-                    onChange={(event) =>
-                      updateSettings.mutate({
-                        ...settings,
-                        timeoutMinutes: Number.parseInt(event.target.value, 10) || settings.timeoutMinutes,
-                      })
-                    }
-                    className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-sm text-sumi-black focus:outline-none focus:ring-1 focus:ring-sumi-mist"
-                  >
-                    {TIMEOUT_MINUTE_OPTIONS.map((minutes) => (
-                      <option key={minutes} value={minutes}>
-                        {minutes} minute{minutes === 1 ? '' : 's'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="section-title mb-1.5 block" htmlFor="approval-timeout-action">
-                    No-Response Action
-                  </label>
-                  <select
-                    id="approval-timeout-action"
-                    value={settings.timeoutAction}
-                    onChange={(event) =>
-                      updateSettings.mutate({
-                        ...settings,
-                        timeoutAction: event.target.value === 'auto' ? 'auto' : 'block',
-                      })
-                    }
-                    className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-sm text-sumi-black focus:outline-none focus:ring-1 focus:ring-sumi-mist"
-                  >
-                    <option value="block">Reject after timeout</option>
-                    <option value="auto">Auto-approve after timeout</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {(pageError || mutationError) && (
-            <div className="flex items-start gap-2 rounded-lg bg-accent-vermillion/10 px-3 py-2 text-sm text-accent-vermillion">
-              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-              <span>{mutationError ?? pageError}</span>
-            </div>
+        <div
+          data-testid="policy-detail-shell"
+          className={cn(
+            'min-w-0 flex-1',
+            showDetailOnMobile ? 'flex' : 'hidden md:flex',
           )}
-
-          <div className="card-sumi overflow-hidden">
-            <div data-testid="policies-table-scroll" className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-left text-sm">
-                <thead className="bg-washi-aged text-xs uppercase tracking-[0.18em] text-sumi-mist">
-                  <tr>
-                    <th className="w-14 px-4 py-3"> </th>
-                    <th className="px-4 py-3">Action</th>
-                    <th className="px-4 py-3">Scope State</th>
-                    <th className="w-[180px] px-4 py-3">Policy</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groups.map(({ label, rows }) => (
-                    <Fragment key={label}>
-                      <tr className="border-t border-ink-border/60 bg-white/40">
-                        <td colSpan={4} className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            {label === 'Skills' ? (
-                              <Sparkles size={14} className="text-sumi-diluted" />
-                            ) : (
-                              <ShieldCheck size={14} className="text-sumi-diluted" />
-                            )}
-                            <span className="section-title">{label}</span>
-                          </div>
-                        </td>
-                      </tr>
-
-                      {rows.length === 0 ? (
-                        <tr className="border-t border-ink-border/40">
-                          <td colSpan={4} className="px-4 py-5 text-sm text-sumi-diluted">
-                            {label === 'Skills'
-                              ? 'No user-invocable skills were discovered yet.'
-                              : 'No policy rows are available in this group.'}
-                          </td>
-                        </tr>
-                      ) : (
-                        rows.map((row) => {
-                          const expanded = Boolean(expandedRows[row.actionId])
-                          const savingThisRow =
-                            updatePolicy.isPending &&
-                            updatePolicy.variables?.actionId === row.actionId
-                          const inherited = isInheritedRow(row, scope)
-
-                          return (
-                            <Fragment key={row.actionId}>
-                              <tr className="border-t border-ink-border/60">
-                                <td className="px-4 py-3 align-top">
-                                  {row.supportsLists ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleExpanded(row.actionId)}
-                                      className="rounded-lg p-1 text-sumi-diluted transition-colors hover:bg-ink-wash hover:text-sumi-black"
-                                      aria-label={expanded ? `Collapse ${row.name} rules` : `Expand ${row.name} rules`}
-                                    >
-                                      {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                    </button>
-                                  ) : (
-                                    <span className="badge-sumi">Skill</span>
-                                  )}
-                                </td>
-
-                                <td className="px-4 py-3 align-top">
-                                  <div className="min-w-0">
-                                    <div className="font-mono text-sm text-sumi-black">{row.name}</div>
-                                    <p className="mt-1 max-w-2xl text-sm leading-relaxed text-sumi-diluted">
-                                      {row.description}
-                                    </p>
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                      {row.targetLabel ? (
-                                        <span className="badge-sumi">{row.targetLabel}</span>
-                                      ) : null}
-                                      <span className="badge-sumi">{rulesSummaryLabel(row)}</span>
-                                      {savingThisRow ? <span className="badge-sumi">Saving...</span> : null}
-                                    </div>
-                                  </div>
-                                </td>
-
-                                <td className="px-4 py-3 align-top">
-                                  <div className="flex flex-wrap gap-2">
-                                    <span
-                                      className={cn(
-                                        'badge-sumi',
-                                        inherited ? 'bg-ink-wash text-sumi-diluted' : 'badge-active',
-                                      )}
-                                    >
-                                      {inherited ? 'Inherited from Global' : scope === 'global' ? 'Global Default' : 'Commander Override'}
-                                    </span>
-                                  </div>
-                                </td>
-
-                                <td className="px-4 py-3 align-top">
-                                  <label className="sr-only" htmlFor={`policy-select-${row.actionId}`}>
-                                    {row.name} policy
-                                  </label>
-                                  <select
-                                    id={`policy-select-${row.actionId}`}
-                                    value={row.policy}
-                                    onChange={(event) =>
-                                      handlePolicyUpdate(row, {
-                                        policy: event.target.value as ActionPolicyMode,
-                                      })
-                                    }
-                                    className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-sm text-sumi-black focus:outline-none focus:ring-1 focus:ring-sumi-mist"
-                                  >
-                                    {POLICY_OPTIONS.map((option) => (
-                                      <option key={option.value} value={option.value}>
-                                        {option.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </td>
-                              </tr>
-
-                              {row.supportsLists && expanded ? (
-                                <tr className="border-t border-ink-border/40 bg-white/40">
-                                  <td colSpan={4} className="px-4 pb-4 pt-1">
-                                    <div className="grid gap-4 lg:grid-cols-2">
-                                      <StringArrayInput
-                                        label={`Auto-approve when ${row.targetLabel} matches`}
-                                        description={`Patterns here bypass review for ${row.name.toLowerCase()} when the ${row.targetLabel} matches.`}
-                                        values={row.allowlist}
-                                        placeholder={row.allowPlaceholder}
-                                        emptyMessage={`No auto-approve patterns for ${row.name.toLowerCase()} yet.`}
-                                        addLabel="Add allow rule"
-                                        onChange={(nextAllowlist) =>
-                                          handlePolicyUpdate(row, { allowlist: nextAllowlist })
-                                        }
-                                      />
-
-                                      <StringArrayInput
-                                        label={`Always block when ${row.targetLabel} matches`}
-                                        description={`Patterns here force ${row.name.toLowerCase()} to block before it reaches an external target.`}
-                                        values={row.blocklist}
-                                        placeholder={row.blockPlaceholder}
-                                        emptyMessage={`No block patterns for ${row.name.toLowerCase()} yet.`}
-                                        addLabel="Add block rule"
-                                        onChange={(nextBlocklist) =>
-                                          handlePolicyUpdate(row, { blocklist: nextBlocklist })
-                                        }
-                                      />
-                                    </div>
-                                  </td>
-                                </tr>
-                              ) : null}
-                            </Fragment>
-                          )
-                        })
-                      )}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+        >
+          <PolicyDetailPanel
+            row={selectedRow}
+            settings={settings}
+            inherited={selectedRow ? isInheritedRow(selectedRow, scope) : false}
+            inheritedLabel={selectedRow ? inheritedLabel(selectedRow, scope) : ''}
+            isSaving={Boolean(
+              selectedRow &&
+              updatePolicy.isPending &&
+              updatePolicy.variables?.actionId === selectedRow.actionId,
+            )}
+            settingsSaving={updateSettings.isPending}
+            onBack={() => setSelectedActionId(null)}
+            onUpdatePolicy={(nextValues) => {
+              if (selectedRow) {
+                handlePolicyUpdate(selectedRow, nextValues)
+              }
+            }}
+            onUpdateSettings={(nextSettings) => updateSettings.mutate(nextSettings)}
+          />
         </div>
       </div>
     </section>

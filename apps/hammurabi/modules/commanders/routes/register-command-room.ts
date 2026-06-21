@@ -1,7 +1,6 @@
 import cron from 'node-cron'
 import { getProvider, parseProviderId } from '../../agents/providers/registry.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
-import { parseOptionalClaudePermissionMode } from '../../agents/session/input.js'
 import {
   buildGitHubHeaders,
   readGitHubError,
@@ -69,6 +68,13 @@ function parseOptionalQuestTrigger(
     event: 'completed',
     ...(commanderId ? { commanderId } : {}),
   }
+}
+
+function parseOptionalDefaultPermissionMode(raw: unknown): 'default' | null | undefined {
+  if (raw === undefined || raw === null || raw === '') {
+    return undefined
+  }
+  return raw === 'default' ? 'default' : null
 }
 
 function parseOptionalSkillList(raw: unknown): string[] | null | undefined {
@@ -430,7 +436,7 @@ export function registerCommandRoomRoutes(
       res.status(400).json({ error: 'sessionType must be stream or pty when provided' })
       return
     }
-    const permissionMode = parseOptionalClaudePermissionMode(req.body?.permissionMode)
+    const permissionMode = parseOptionalDefaultPermissionMode(req.body?.permissionMode)
     if (permissionMode === null) {
       res.status(400).json({ error: 'permissionMode must be default when provided' })
       return
@@ -649,7 +655,7 @@ export function registerCommandRoomRoutes(
       }
     }
     if ('permissionMode' in body) {
-      const permissionMode = parseOptionalClaudePermissionMode(body.permissionMode)
+      const permissionMode = parseOptionalDefaultPermissionMode(body.permissionMode)
       if (permissionMode === null) {
         res.status(400).json({ error: 'permissionMode must be default when provided' })
         return

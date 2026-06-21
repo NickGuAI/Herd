@@ -142,10 +142,14 @@ export function registerWorkerDispatchRoutes(deps: WorkerDispatchRouteDeps): voi
 
     res.status(202).json({
       name: parsed.request.sessionName,
+      mode: parsed.request.mode,
       sessionType: launched.session.sessionType,
       creator: launched.session.creator,
+      transportType: 'stream',
+      agentType: parsed.request.agentType,
       spawnedBy: launched.session.spawnedBy,
       cwd: launched.session.cwd,
+      host: launched.session.host,
     })
   })
 }

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/herd-architecture.svg" alt="Herd routes operator intent through Command Room, mission state, approvals, workers, provider CLIs, and user-controlled machines." width="920" />
+  <img src="./assets/herd-architecture.svg" alt="Herd is a meta-harness above Codex, Claude Code, Gemini CLI, OpenCode, and user-controlled machines." width="920" />
 </p>
 
 <p align="center">
@@ -17,11 +17,11 @@
   <a href="https://herd.gehirn.ai/install.sh"><img src="https://img.shields.io/badge/install-one%20line-10212a" alt="One-line installer" /></a>
 </p>
 
-# Herd is the agent orchestration OS.
+# Herd is the meta-harness for agent interaction.
 
-Cursor is obsolete. Pair-programming with one chatbot is a dead end; the next interface is a fleet of agents running on machines you control, holding persistent memory, and answering to an approval system you own.
+Cursor is obsolete. Pair-programming with one chatbot is a dead end; the next interface is Herd: a meta-harness above Codex, Claude Code, Gemini CLI, OpenCode, and the machines where they run.
 
-Herd owns mission state, worker orchestration, memory, approvals, and the command-room surface. Connectivity is delegated to infrastructure you already trust: SSH, Tailscale, hosted runtimes, and your own reverse proxy. The mission graph and execution rules stay stable even when the underlying transport changes.
+Herd owns mission state, worker orchestration, memory, approvals, and the command-room surface. Connectivity and execution stay delegated to harnesses and infrastructure you already trust: provider CLIs, SSH, Tailscale, hosted runtimes, and your own reverse proxy. The mission graph and execution rules stay stable even when the underlying harness or transport changes.
 
 **Manage agent work, not terminal tabs.**
 
@@ -33,17 +33,17 @@ Herd owns mission state, worker orchestration, memory, approvals, and the comman
 
 ## What Herd Is
 
-Herd is a source-available control plane for personal agent fleets.
+Herd is a source-available meta-harness for personal agent fleets.
 
-It looks like an operating room for agent work. Under the hood: commanders, workers, persistent memory, provider readiness, machine routing, action policies, approvals, public docs, and an install path that keeps the runtime on infrastructure you own.
+It looks like an operating room for agent work. Under the hood: commanders, workers, persistent memory, agent-harness readiness, machine routing, action policies, approvals, public docs, and an install path that keeps the runtime on infrastructure you own.
 
 ```text
-operator intent -> command room -> mission state -> approval policy -> worker fleet -> provider CLI -> your machine
+operator intent -> Herd meta-harness -> agent harnesses -> your machines -> durable mission state
 ```
 
 ## Herd Is Right For You If
 
-- You coordinate more than one AI agent and need a persistent command surface.
+- You coordinate more than one AI agent harness and need a persistent command surface above them.
 - You run work on a Mac mini, VPS, EC2 box, or tailnet machine and want the control plane there too.
 - You want agents to keep mission memory across provider sessions, browser tabs, and worker restarts.
 - You need sensitive actions to be reviewable instead of blindly executed.
@@ -51,7 +51,7 @@ operator intent -> command room -> mission state -> approval policy -> worker fl
 
 ## Quickstart
 
-The installer is hermetic for the Node toolchain. It needs `git`, `curl`, `tar`, and outbound HTTPS; it installs Node `22.12.0` and pnpm `10.23.0` in a local toolchain directory without replacing or relying on your system Node.
+The installer is hermetic for the Node toolchain. It needs `git`, `curl`, `tar`, and outbound HTTPS; it installs Node `22.16.0` and pnpm `10.23.0` in a local toolchain directory without replacing or relying on your system Node. Herd uses Node's built-in SQLite driver for the local runtime-session database, so older Node 22 builds that require `--experimental-sqlite` are not supported.
 
 ```bash
 curl -fsSL https://herd.gehirn.ai/install.sh | bash
@@ -70,7 +70,7 @@ Continue with the [full quickstart](./docs/getting-started/quickstart.md) to com
 <td width="33%"><strong>Approvals</strong><br/>Action policy can auto-run, queue for review, or block external actions.</td>
 </tr>
 <tr>
-<td><strong>Provider Auth</strong><br/>Uses provider CLIs where they already run instead of hiding credentials in a black box.</td>
+<td><strong>Agent Harnesses</strong><br/>Uses provider CLIs where they already run instead of hiding credentials in a black box.</td>
 <td><strong>Workspace Context</strong><br/>Commanders operate in real repos with file context, route-aware prompts, and durable traces.</td>
 <td><strong>Public Docs</strong><br/>Human docs plus `llms.txt` cover setup, concepts, operations, references, and troubleshooting.</td>
 </tr>

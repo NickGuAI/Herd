@@ -5,11 +5,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  CONVERSATION_MESSAGES_PAGE_SIZE,
   commanderConversationsQueryKey,
   conversationDetailQueryKey,
   conversationMessagesQueryKey,
   type ConversationMessagesPage,
   type ConversationRecord,
+  useConversationMessages,
   useConversationMessage,
   useStartConversation,
   useStopConversation,
@@ -29,6 +31,7 @@ let queryClient: QueryClient | null = null
 let latestStartMutation: ReturnType<typeof useStartConversation> | null = null
 let latestStopMutation: ReturnType<typeof useStopConversation> | null = null
 let latestMessageMutation: ReturnType<typeof useConversationMessage> | null = null
+let latestMessagesQuery: ReturnType<typeof useConversationMessages> | null = null
 const reactActEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 let originalActEnvironment = reactActEnvironment.IS_REACT_ACT_ENVIRONMENT
 
@@ -47,7 +50,12 @@ function MessageHookHarness() {
   return null
 }
 
-async function renderHook(mode: 'start' | 'stop' | 'message'): Promise<void> {
+function MessagesHookHarness() {
+  latestMessagesQuery = useConversationMessages('conv-page', true)
+  return null
+}
+
+async function renderHook(mode: 'start' | 'stop' | 'message' | 'messages'): Promise<void> {
   queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -68,7 +76,9 @@ async function renderHook(mode: 'start' | 'stop' | 'message'): Promise<void> {
             ? StartHookHarness
             : mode === 'stop'
               ? StopHookHarness
-              : MessageHookHarness,
+              : mode === 'message'
+                ? MessageHookHarness
+                : MessagesHookHarness,
         ),
       ),
     )
@@ -92,8 +102,51 @@ afterEach(async () => {
   latestStartMutation = null
   latestStopMutation = null
   latestMessageMutation = null
+  latestMessagesQuery = null
   reactActEnvironment.IS_REACT_ACT_ENVIRONMENT = originalActEnvironment
   vi.clearAllMocks()
+})
+
+describe('useConversationMessages', () => {
+  it('requests the selected-conversation page size for initial and older pages', async () => {
+    mocks.fetchJson.mockResolvedValue({
+      conversationId: 'conv-page',
+      sessionName: 'commander-atlas-conversation-conv-page',
+      source: 'canonical',
+      limit: CONVERSATION_MESSAGES_PAGE_SIZE,
+      before: null,
+      nextBefore: '50',
+      hasMore: true,
+      totalMessages: 51,
+      messages: [],
+    } satisfies ConversationMessagesPage)
+
+    await renderHook('messages')
+
+    await vi.waitFor(() => {
+      expect(mocks.fetchJson).toHaveBeenCalledWith('/api/conversations/conv-page/messages?limit=50')
+    })
+
+    mocks.fetchJson.mockResolvedValue({
+      conversationId: 'conv-page',
+      sessionName: 'commander-atlas-conversation-conv-page',
+      source: 'canonical',
+      limit: CONVERSATION_MESSAGES_PAGE_SIZE,
+      before: '50',
+      nextBefore: null,
+      hasMore: false,
+      totalMessages: 51,
+      messages: [],
+    } satisfies ConversationMessagesPage)
+
+    await act(async () => {
+      await latestMessagesQuery?.fetchNextPage()
+    })
+
+    await vi.waitFor(() => {
+      expect(mocks.fetchJson).toHaveBeenCalledWith('/api/conversations/conv-page/messages?limit=50&before=50')
+    })
+  })
 })
 
 describe('useStartConversation', () => {
@@ -296,7 +349,7 @@ describe('useConversationMessage', () => {
       conversationId: conversation.id,
       sessionName: 'commander-atlas-conversation-conv-active',
       source: 'canonical',
-      limit: 10,
+      limit: CONVERSATION_MESSAGES_PAGE_SIZE,
       before: null,
       nextBefore: null,
       hasMore: false,

@@ -1,4 +1,4 @@
-import type { ProviderCreateOptions } from '../providers/provider-adapter.js'
+import type { ProviderCreateOptions, ProviderTeardownOptions } from '../providers/provider-adapter.js'
 import {
   COMMANDER_WORKER_LAUNCH_BODY_KEYS,
   launchProviderWorkerSession,
@@ -39,7 +39,7 @@ interface CommanderWorkerDispatcherDeps {
     agentType?: AgentType,
     options?: ProviderStreamSessionOptions,
   ): Promise<StreamSession>
-  teardownProviderSession(session: StreamSession, reason: string): Promise<void>
+  teardownProviderSession(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void>
   schedulePersistedSessionsWrite(): void
 }
 

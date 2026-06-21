@@ -103,6 +103,10 @@ describe("agents routes", () => {
             'processAlive',
             'status',
             'resumeAvailable',
+            'state',
+            'machine',
+            'allowedActions',
+            'disabledReasons',
           ]
           for (const field of lifecycleFields) {
             expect(detail[field]).toEqual(listed?.[field])
@@ -115,10 +119,93 @@ describe("agents routes", () => {
             processAlive: true,
             status: 'completed',
             resumeAvailable: false,
+            state: 'active',
+            machine: {
+              id: 'local',
+              known: true,
+              transportType: 'local',
+              launchable: true,
+              disabledReason: null,
+            },
+            allowedActions: {
+              send: true,
+              pause: false,
+              resume: false,
+              archive: true,
+              start: false,
+            },
+            disabledReasons: {
+              send: null,
+              pause: 'Provider pause snapshot is unavailable',
+              resume: 'Runtime session is active',
+              archive: null,
+              start: 'Existing runtime sessions resume instead of start',
+            },
           })
         })
       } finally {
         await server.close()
+      }
+    })
+
+  it('keeps the machine DTO on external session detail responses', async () => {
+      const registry = await createTempMachinesRegistry({
+        machines: [
+          {
+            id: 'home-mac',
+            label: 'Home Mac',
+            host: '10.0.1.20',
+            user: 'nick',
+          },
+        ],
+      })
+      const server = await startServer({ machinesFilePath: registry.filePath })
+
+      try {
+        const registerResponse = await fetch(`${server.baseUrl}/api/agents/sessions/register`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'external-machine-detail',
+            agentType: 'codex',
+            machine: 'home-mac',
+            cwd: '/tmp/worktree',
+            metadata: {
+              source: 'external-runner',
+            },
+          }),
+        })
+        expect(registerResponse.status).toBe(201)
+
+        const detailResponse = await fetch(`${server.baseUrl}/api/agents/sessions/external-machine-detail`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(detailResponse.status).toBe(200)
+        const detail = await detailResponse.json() as Record<string, unknown>
+
+        expect(detail).toMatchObject({
+          name: 'external-machine-detail',
+          transportType: 'external',
+          host: 'home-mac',
+          externalMachineId: 'home-mac',
+          machine: {
+            id: 'home-mac',
+            label: 'Home Mac',
+            known: true,
+            transportType: 'ssh',
+            launchable: true,
+            disabledReason: null,
+          },
+          metadata: {
+            source: 'external-runner',
+          },
+        })
+      } finally {
+        await server.close()
+        await registry.cleanup()
       }
     })
 
@@ -491,6 +578,18 @@ describe("agents routes", () => {
 
         const sshArgs = vi.mocked(spawner.spawn).mock.calls[0][1]
         const remoteCommand = sshArgs[sshArgs.length - 1]
+        const remoteSpawnOptions = vi.mocked(spawner.spawn).mock.calls[0][2]
+        const sendEnvIdx = sshArgs.findIndex((arg) => arg === 'SendEnv=HAMMURABI_APPROVAL_BRIDGE_TOKEN')
+        const destinationIdx = sshArgs.indexOf('builder@10.0.1.50')
+        expect(sshArgs).toContain('-R')
+        expect(sshArgs).toContain('SendEnv=HAMMURABI_APPROVAL_BRIDGE_TOKEN')
+        expect(sshArgs).not.toContain('SendEnv=HAMMURABI_INTERNAL_TOKEN')
+        expect(sendEnvIdx).toBeGreaterThan(-1)
+        expect(destinationIdx).toBeGreaterThan(-1)
+        expect(sendEnvIdx).toBeLessThan(destinationIdx)
+        expect(remoteSpawnOptions.env?.HAMMURABI_INTERNAL_TOKEN).toBeUndefined()
+        expect(remoteSpawnOptions.env?.HAMMURABI_APPROVAL_BRIDGE_TOKEN).toEqual(expect.any(String))
+        expect(sshArgs.join(' ')).not.toContain(remoteSpawnOptions.env!.HAMMURABI_APPROVAL_BRIDGE_TOKEN!)
         expect(remoteCommand).toContain('cd ')
         expect(remoteCommand).toContain('/home/builder/workspace')
         expect(remoteCommand).toContain('exec "${SHELL:-/bin/bash}" -l')
@@ -579,6 +678,10 @@ describe("agents routes", () => {
         cols: 120,
         rows: 40,
       }))
+      const spawnOptions = vi.mocked(spawner.spawn).mock.calls[0][2]
+      expect(spawnOptions.env?.HAMMURABI_SESSION_NAME).toBe('agent-create-01')
+      expect(spawnOptions.env?.HAMMURABI_INTERNAL_TOKEN).toBeUndefined()
+      expect(spawnOptions.env?.HAMMURABI_APPROVAL_BRIDGE_TOKEN).toEqual(expect.any(String))
       expect(lastHandle()!.write).toHaveBeenCalledWith(
         'export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 MAX_THINKING_TOKENS=128000 && unset CLAUDECODE HAMMURABI_INTERNAL_TOKEN ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL && claude --effort max\r',
       )
@@ -720,30 +823,31 @@ describe("agents routes", () => {
       await server.close()
     })
 
-  it('ignores invalid mode values on create and falls back to default mode', async () => {
+  it('rejects invalid mode values on create', async () => {
       const { spawner } = createMockPtySpawner()
       const server = await startServer({ ptySpawner: spawner })
 
-      const response = await fetch(`${server.baseUrl}/api/agents/sessions`, {
-        method: 'POST',
-        headers: {
-          ...AUTH_HEADERS,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: 'agent-create-01',
-          mode: 'plan',
-        }),
-      })
+      try {
+        const response = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'agent-create-01',
+            mode: 'plan',
+          }),
+        })
 
-      expect(response.status).toBe(201)
-      expect(await response.json()).toEqual(expect.objectContaining({
-        sessionName: 'agent-create-01',
-        mode: 'default',
-      }))
-      expect(spawner.spawn).toHaveBeenCalledTimes(1)
-
-      await server.close()
+        expect(response.status).toBe(400)
+        expect(await response.json()).toEqual({
+          error: 'Invalid permissionMode. Expected one of: default, acceptEdits, bypassPermissions',
+        })
+        expect(spawner.spawn).not.toHaveBeenCalled()
+      } finally {
+        await server.close()
+      }
     })
 
   it('requires authentication for create session', async () => {
@@ -1048,7 +1152,62 @@ describe("agents routes", () => {
       }
     })
 
-  it('preserves a resumable stream as exited on first delete, then removes it on exited cleanup delete', async () => {
+    it('pauses a resumable stream without archiving its provider thread', async () => {
+      const sidecar = installMockCodexSidecar()
+      const server = await startServer()
+
+      try {
+        const createResponse = await fetch(`${server.baseUrl}/api/agents/sessions`, {
+          method: 'POST',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: 'codex-pause-worker',
+            mode: 'acceptEdits',
+            transportType: 'stream',
+            agentType: 'codex',
+            model: 'gpt-5.4',
+            task: 'Pause without archive',
+          }),
+        })
+
+        expect(createResponse.status).toBe(201)
+
+        const pauseResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-pause-worker/pause`, {
+          method: 'POST',
+          headers: AUTH_HEADERS,
+        })
+
+        expect(pauseResponse.status).toBe(200)
+        expect(await pauseResponse.json()).toEqual({ paused: true })
+        expect(server.agents.sessionsInterface.getSession('codex-pause-worker')).toBeUndefined()
+
+        const detailResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-pause-worker`, {
+          headers: AUTH_HEADERS,
+        })
+        expect(detailResponse.status).toBe(200)
+        expect(await detailResponse.json()).toMatchObject({
+          name: 'codex-pause-worker',
+          state: 'paused',
+          mode: 'acceptEdits',
+          model: 'gpt-5.4',
+          processState: 'exited',
+        })
+
+        const archiveRequests = sidecar.getRequests('thread/archive').filter((request) => {
+          const params = (request.params ?? {}) as { threadId?: unknown }
+          return params.threadId === 'thread-1'
+        })
+        expect(archiveRequests).toHaveLength(0)
+      } finally {
+        await sidecar.closeServer()
+        await server.close()
+      }
+    })
+
+    it('archives a resumable stream on delete and keeps normal session lists clean', async () => {
       const sidecar = installMockCodexSidecar()
       const server = await startServer()
 
@@ -1092,12 +1251,7 @@ describe("agents routes", () => {
           status: string
         }>
 
-        expect(afterFirstDeletePayload).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            name: 'codex-dismiss-worker',
-            status: 'exited',
-          }),
-        ]))
+        expect(afterFirstDeletePayload.find((entry) => entry.name === 'codex-dismiss-worker')).toBeUndefined()
 
         const secondDeleteResponse = await fetch(`${server.baseUrl}/api/agents/sessions/codex-dismiss-worker`, {
           method: 'DELETE',

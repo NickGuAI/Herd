@@ -1,41 +1,62 @@
-import path from 'node:path'
-import {
-  readPersistedSessionsState,
-  writePersistedSessionsState,
-} from '../modules/agents/session/persistence.js'
-import type { PersistedStreamSession } from '../modules/agents/types.js'
+import type { DatabaseSync } from 'node:sqlite'
 import type { QueuedMessage } from '../modules/agents/message-queue.js'
-import { resolveModuleDataDir } from '../modules/data-dir.js'
-import { ConversationStore } from '../modules/commanders/conversation-store.js'
 import { CommanderSessionStore } from '../modules/commanders/store.js'
-import {
-  resolveCommanderDataDir,
-  resolveCommanderSessionStorePath,
-} from '../modules/commanders/paths.js'
+import type { CommanderSession } from '../modules/commanders/store.js'
 
 export interface LaunchStateResetOptions {
-  sessionStorePath?: string
-  commanderDataDir?: string
-  commanderSessionStorePath?: string
+  sqliteDb: DatabaseSync
+  commanderSessionStore?: Pick<CommanderSessionStore, 'list' | 'update'>
 }
 
 export interface LaunchStateResetResult {
-  streamSessionsStopped: number
-  conversationsStopped: number
-  commanderSessionsStopped: number
+  runtimeSessionsPaused: number
+  commanderSessionsIdled: number
   errors: string[]
 }
 
-type CountKey = Exclude<keyof LaunchStateResetResult, 'errors'>
-
-function resolveSessionStorePath(sessionStorePath?: string): string {
-  return sessionStorePath
-    ? path.resolve(sessionStorePath)
-    : path.join(resolveModuleDataDir('agents'), 'stream-sessions.json')
+type ActiveRuntimeRow = {
+  name: string
+  provider_resume_json: string
+  runtime_state_json: string
 }
 
-function shouldStopSession(entry: PersistedStreamSession): boolean {
-  return entry.sessionState !== 'exited'
+function parseRecordJson(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return typeof parsed === 'object' && parsed !== null
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function parseQueuedMessage(value: unknown): QueuedMessage | null {
+  if (typeof value !== 'object' || value === null) {
+    return null
+  }
+  const record = value as Record<string, unknown>
+  if (
+    typeof record.id !== 'string'
+    || typeof record.text !== 'string'
+    || typeof record.queuedAt !== 'string'
+    || (record.priority !== 'high' && record.priority !== 'normal' && record.priority !== 'low')
+  ) {
+    return null
+  }
+  return {
+    ...record,
+    id: record.id,
+    text: record.text,
+    priority: record.priority,
+    queuedAt: record.queuedAt,
+  } as QueuedMessage
+}
+
+function parseQueuedMessages(value: unknown): QueuedMessage[] {
+  return Array.isArray(value)
+    ? value.map(parseQueuedMessage).filter((message): message is QueuedMessage => message !== null)
+    : []
 }
 
 function dedupeQueuedMessages(messages: QueuedMessage[]): QueuedMessage[] {
@@ -49,97 +70,111 @@ function dedupeQueuedMessages(messages: QueuedMessage[]): QueuedMessage[] {
   })
 }
 
-function stopPersistedStreamSession(entry: PersistedStreamSession): PersistedStreamSession {
-  const queuedMessages = [...(entry.queuedMessages ?? [])]
-  const pendingDirectSendMessages = [...(entry.pendingDirectSendMessages ?? [])]
+function clearBootRuntimeState(value: string): string {
+  const payload = parseRecordJson(value) ?? {}
+  const queuedMessages = parseQueuedMessages(payload.queuedMessages)
+  const pendingDirectSendMessages = parseQueuedMessages(payload.pendingDirectSendMessages)
+  const currentQueuedMessage = parseQueuedMessage(payload.currentQueuedMessage)
 
-  if (entry.currentQueuedMessage) {
-    if (entry.currentQueuedMessage.priority === 'high') {
-      pendingDirectSendMessages.unshift(entry.currentQueuedMessage)
+  if (currentQueuedMessage) {
+    if (currentQueuedMessage.priority === 'high') {
+      pendingDirectSendMessages.unshift(currentQueuedMessage)
     } else {
-      queuedMessages.unshift(entry.currentQueuedMessage)
+      queuedMessages.unshift(currentQueuedMessage)
     }
   }
 
-  return {
-    ...entry,
-    sessionState: 'exited',
-    hadResult: false,
-    activeTurnId: undefined,
-    daemonProcess: undefined,
-    currentQueuedMessage: undefined,
-    queuedMessages: dedupeQueuedMessages(queuedMessages),
-    pendingDirectSendMessages: dedupeQueuedMessages(pendingDirectSendMessages),
+  delete payload.activeTurnId
+  delete payload.currentQueuedMessage
+  payload.hadResult = false
+
+  const dedupedQueuedMessages = dedupeQueuedMessages(queuedMessages)
+  const dedupedPendingDirectSendMessages = dedupeQueuedMessages(pendingDirectSendMessages)
+  if (dedupedQueuedMessages.length > 0) {
+    payload.queuedMessages = dedupedQueuedMessages
+  } else {
+    delete payload.queuedMessages
   }
+  if (dedupedPendingDirectSendMessages.length > 0) {
+    payload.pendingDirectSendMessages = dedupedPendingDirectSendMessages
+  } else {
+    delete payload.pendingDirectSendMessages
+  }
+
+  return JSON.stringify(payload)
 }
 
-async function stopPersistedStreamSessions(sessionStorePath?: string): Promise<number> {
-  const resolvedPath = resolveSessionStorePath(sessionStorePath)
-  const state = await readPersistedSessionsState(resolvedPath)
-  let stoppedCount = 0
+function clearBootProviderResume(value: string): string {
+  const payload = parseRecordJson(value)
+  if (!payload) {
+    return value
+  }
+  delete payload.daemonProcess
+  return JSON.stringify(payload)
+}
 
-  const sessions = state.sessions.map((entry) => {
-    if (!shouldStopSession(entry)) {
-      return entry
-    }
-    stoppedCount += 1
-    return stopPersistedStreamSession(entry)
-  })
-
-  if (stoppedCount === 0) {
+function pauseSqliteRuntimeSessions(sqliteDb: DatabaseSync): number {
+  const now = new Date().toISOString()
+  const rows = sqliteDb.prepare(
+    `SELECT name, provider_resume_json, runtime_state_json
+     FROM agent_runtime_sessions
+     WHERE state = 'active'
+     ORDER BY name ASC`,
+  ).all() as ActiveRuntimeRow[]
+  if (rows.length === 0) {
     return 0
   }
 
-  await writePersistedSessionsState(resolvedPath, { sessions }, { backup: true })
-  return stoppedCount
-}
-
-async function stopActiveConversations(commanderDataDir?: string): Promise<number> {
-  const store = new ConversationStore(commanderDataDir ?? resolveCommanderDataDir())
-  const conversations = await store.listAll()
-  let stoppedCount = 0
-
-  for (const conversation of conversations) {
-    if (conversation.status !== 'active') {
-      continue
-    }
-    const updated = await store.update(conversation.id, (current) => ({
-      ...current,
-      status: 'idle',
-    }))
-    if (updated) {
-      stoppedCount += 1
-    }
-  }
-
-  return stoppedCount
-}
-
-async function stopRunningCommanderSessions(
-  commanderDataDir?: string,
-  commanderSessionStorePath?: string,
-): Promise<number> {
-  const resolvedDataDir = commanderDataDir ?? resolveCommanderDataDir()
-  const store = new CommanderSessionStore(
-    commanderSessionStorePath ?? resolveCommanderSessionStorePath(resolvedDataDir),
+  const update = sqliteDb.prepare(
+    `UPDATE agent_runtime_sessions
+     SET state = 'paused',
+         provider_resume_json = ?,
+         runtime_state_json = ?,
+         updated_at = ?,
+         archived_at = NULL
+     WHERE name = ? AND state = 'active'`,
   )
-  const sessions = await store.list()
-  let stoppedCount = 0
 
+  sqliteDb.exec('BEGIN IMMEDIATE')
+  try {
+    let paused = 0
+    for (const row of rows) {
+      const result = update.run(
+        clearBootProviderResume(row.provider_resume_json),
+        clearBootRuntimeState(row.runtime_state_json),
+        now,
+        row.name,
+      )
+      paused += Number(result.changes)
+    }
+    sqliteDb.exec('COMMIT')
+    return paused
+  } catch (error) {
+    sqliteDb.exec('ROLLBACK')
+    throw error
+  }
+}
+
+async function idleRunningCommanderSessions(
+  store: Pick<CommanderSessionStore, 'list' | 'update'>,
+): Promise<number> {
+  const sessions = await store.list()
+  let idled = 0
   for (const session of sessions) {
     if (session.state !== 'running') {
       continue
     }
-    const updated = await store.update(session.id, (current) => ({
-      ...current,
-      state: 'idle',
-    }))
-    if (updated) {
-      stoppedCount += 1
+    const updated = await store.update(
+      session.id,
+      (current: CommanderSession): CommanderSession => current.state === 'running'
+        ? { ...current, state: 'idle' }
+        : current,
+    )
+    if (updated?.state === 'idle') {
+      idled += 1
     }
   }
-
-  return stoppedCount
+  return idled
 }
 
 function formatResetError(label: string, error: unknown): string {
@@ -153,43 +188,26 @@ export function shouldStopActiveSessionsOnBoot(value: string | undefined): boole
 }
 
 export async function resetActiveRuntimeStateForLaunch(
-  options: LaunchStateResetOptions = {},
+  options: LaunchStateResetOptions,
 ): Promise<LaunchStateResetResult> {
   const result: LaunchStateResetResult = {
-    streamSessionsStopped: 0,
-    conversationsStopped: 0,
-    commanderSessionsStopped: 0,
+    runtimeSessionsPaused: 0,
+    commanderSessionsIdled: 0,
     errors: [],
   }
 
-  const tasks: Array<{ key: CountKey; label: string; run: () => Promise<number> }> = [
-    {
-      key: 'streamSessionsStopped',
-      label: 'stream sessions',
-      run: () => stopPersistedStreamSessions(options.sessionStorePath),
-    },
-    {
-      key: 'conversationsStopped',
-      label: 'commander conversations',
-      run: () => stopActiveConversations(options.commanderDataDir),
-    },
-    {
-      key: 'commanderSessionsStopped',
-      label: 'commander sessions',
-      run: () => stopRunningCommanderSessions(
-        options.commanderDataDir,
-        options.commanderSessionStorePath,
-      ),
-    },
-  ]
+  try {
+    result.runtimeSessionsPaused = pauseSqliteRuntimeSessions(options.sqliteDb)
+  } catch (error) {
+    result.errors.push(formatResetError('agent runtime sessions', error))
+  }
 
-  for (const task of tasks) {
-    try {
-      result[task.key] = await task.run()
-    } catch (error) {
-      result.errors.push(formatResetError(task.label, error))
-      break
-    }
+  try {
+    result.commanderSessionsIdled = await idleRunningCommanderSessions(
+      options.commanderSessionStore ?? new CommanderSessionStore(),
+    )
+  } catch (error) {
+    result.errors.push(formatResetError('commander sessions', error))
   }
 
   return result

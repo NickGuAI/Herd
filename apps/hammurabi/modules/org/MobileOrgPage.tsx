@@ -298,7 +298,7 @@ export function MobileOrgPage({
             <div className="space-y-2">
               <p className="text-sm text-[color:var(--hv-fg)]">Hire your first commander.</p>
               <p className="text-xs leading-5 text-[color:var(--hv-fg-subtle)]">
-                Pick Quick Create for a guided template, Talk to Me to spin up a wizard agent, or Advanced for the full form.
+                Chat with the setup wizard to define the AI worker you need and create it after preview.
               </p>
             </div>
             <button
@@ -307,7 +307,7 @@ export function MobileOrgPage({
               onClick={onHire}
               className="mt-4 rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)]"
             >
-              Open wizard
+              Start setup chat
             </button>
           </div>
         ) : (

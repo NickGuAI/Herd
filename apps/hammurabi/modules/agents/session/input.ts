@@ -70,8 +70,12 @@ export function parseOptionalClaudePermissionMode(
     return undefined
   }
 
-  if (normalized === 'default') {
-    return 'default'
+  if (
+    normalized === 'default' ||
+    normalized === 'acceptEdits' ||
+    normalized === 'bypassPermissions'
+  ) {
+    return normalized
   }
 
   return null

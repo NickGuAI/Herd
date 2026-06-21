@@ -35,6 +35,7 @@ export interface PoliciesRouterOptions {
   auth0ClientId?: string
   verifyAuth0Token?: (token: string) => Promise<AuthUser>
   internalToken?: string
+  approvalBridgeSigningSecret?: string
   policyStore: PolicyStore
   approvalCoordinator: ApprovalCoordinator
   approvalSessionsInterface: ApprovalSessionsInterface
@@ -196,7 +197,7 @@ function rejectApprovalBridgeOutsideCheck(): RequestHandler {
 }
 
 function createApprovalCheckAuth(
-  options: Pick<PoliciesRouterOptions, 'internalToken'>,
+  options: Pick<PoliciesRouterOptions, 'approvalBridgeSigningSecret' | 'approvalSessionsInterface'>,
   fallback: RequestHandler,
 ): RequestHandler {
   return (req, res, next) => {
@@ -207,9 +208,15 @@ function createApprovalCheckAuth(
     }
 
     const verification = verifyApprovalBridgeToken(bridgeToken, {
-      internalToken: options.internalToken,
+      signingSecret: options.approvalBridgeSigningSecret,
     })
-    if (!verification.ok) {
+    if (
+      !verification.ok ||
+      !options.approvalSessionsInterface.validateApprovalBridgeCredential(
+        verification.sessionName,
+        verification.nonce,
+      )
+    ) {
       res.status(401).json({ error: 'Invalid approval bridge token' })
       return
     }

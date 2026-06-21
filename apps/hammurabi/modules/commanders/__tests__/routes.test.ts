@@ -12,6 +12,8 @@ import {
   CommanderSessionStore,
   DEFAULT_COMMANDER_MAX_TURNS,
 } from '../store'
+import { appendCommanderCostRecord } from '../cost-control'
+import { ConversationStore } from '../conversation-store'
 import { toCommanderSessionName } from '../routes/context'
 import { HeartbeatLog } from '../heartbeat-log'
 import { QuestStore } from '../quest-store'
@@ -20,7 +22,7 @@ import {
   DEFAULT_HEARTBEAT_MESSAGE,
 } from '../heartbeat'
 import type { ClaudeEffortLevel } from '../../claude-effort'
-import type { AgentType, StreamJsonEvent } from '../../agents/types'
+import type { AgentType, SessionSendPayload, StreamJsonEvent } from '../../agents/types'
 import type { PlanApprovalDecision } from '../../../src/types/hammurabi-events'
 import { COMMANDER_WIZARD_START_MESSAGE } from '../templates/wizard-prompt'
 import { AutomationStore } from '../../automations/store'
@@ -65,6 +67,10 @@ interface MockSendCall {
     queue?: boolean
     priority?: 'high' | 'normal' | 'low'
   }
+}
+
+function sentText(payload: string | SessionSendPayload): string {
+  return typeof payload === 'string' ? payload : payload.text
 }
 
 interface MockSessionsInterface {
@@ -198,7 +204,8 @@ function createMockSessionsInterface(opts: {
         body: { error: 'dispatchWorkerForCommander is not stubbed for this test fixture' },
       }
     },
-    async sendToSession(name, text, options) {
+    async sendToSession(name, payload, options) {
+      const text = sentText(payload)
       const call = options ? { name, text, options } : { name, text }
       sendCalls.push(call)
       const callResult = opts.sendResultForCall?.({
@@ -399,6 +406,80 @@ describe('commanders routes', () => {
           id: '00000000-0000-4000-a000-000000000002',
           host: 'host-a',
           state: 'idle',
+        }),
+      ])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('includes month-to-date commander spend from ledger and live sessions', async () => {
+    const dir = await createTempDir('hammurabi-commanders-monthly-cost-')
+    const storePath = join(dir, 'sessions.json')
+    const commanderId = '00000000-0000-4000-a000-000000000002'
+    const conversationId = buildDefaultCommanderConversationId(commanderId)
+    const conversationStore = new ConversationStore(dir)
+    await writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          sessions: [
+            {
+              id: commanderId,
+              host: 'host-a',
+              pid: null,
+              state: 'idle',
+              created: '2026-05-20T00:00:00.000Z',
+              lastHeartbeat: null,
+              taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
+              currentTask: null,
+              completedTasks: 0,
+              totalCostUsd: 0,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await appendCommanderCostRecord({ commanderDataDir: dir }, {
+      commanderId,
+      conversationId,
+      costUsd: 7,
+      occurredAt: '2026-05-31T23:59:59.000Z',
+    })
+    await appendCommanderCostRecord({ commanderDataDir: dir }, {
+      commanderId,
+      conversationId,
+      costUsd: 2,
+      occurredAt: '2026-06-18T12:00:00.000Z',
+    })
+    await conversationStore.ensureDefaultConversation({
+      commanderId,
+      createdAt: '2026-05-20T00:00:00.000Z',
+    })
+    const mock = createMockSessionsInterface({
+      initialActiveSessions: [defaultCommanderConversationSessionName(commanderId)],
+      sessionCostUsd: 3,
+    })
+
+    const server = await startServer({
+      sessionStorePath: storePath,
+      conversationStore,
+      sessionsInterface: mock.interface,
+      now: () => new Date('2026-06-18T16:00:00.000Z'),
+    })
+    try {
+      const response = await fetch(`${server.baseUrl}/api/commanders`, {
+        headers: AUTH_HEADERS,
+      })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual([
+        expect.objectContaining({
+          id: commanderId,
+          monthlyCostUsd: 5,
         }),
       ])
     } finally {
@@ -1118,6 +1199,7 @@ describe('commanders routes', () => {
       expect(await patchResponse.json()).toEqual({
         id: created.id,
         maxTurns: DEFAULT_COMMANDER_MAX_TURNS,
+        costCapUsd: null,
         contextMode: 'thin',
         contextConfig: null,
         effort: 'max',
@@ -1135,6 +1217,73 @@ describe('commanders routes', () => {
       const updated = persisted.sessions?.find((session) => session.id === created.id)
       expect(updated?.contextMode).toBe('thin')
       expect(updated?.contextConfig).toBeUndefined()
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('PATCH /:id/runtime accepts and persists nullable costCapUsd', async () => {
+    const dir = await createTempDir('hammurabi-commanders-runtime-cost-cap-')
+    const storePath = join(dir, 'sessions.json')
+    const memoryBasePath = join(dir, 'memory')
+    const server = await startServer({
+      sessionStorePath: storePath,
+      memoryBasePath,
+    })
+
+    try {
+      const createResponse = await fetch(`${server.baseUrl}/api/commanders`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          host: 'worker-runtime-cost-cap',
+          taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
+        }),
+      })
+      expect(createResponse.status).toBe(201)
+      const created = (await createResponse.json()) as { id: string }
+
+      const setResponse = await fetch(
+        `${server.baseUrl}/api/commanders/${created.id}/runtime`,
+        {
+          method: 'PATCH',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ costCapUsd: 17.25 }),
+        },
+      )
+      expect(setResponse.status).toBe(200)
+      expect(await setResponse.json()).toEqual(expect.objectContaining({
+        id: created.id,
+        costCapUsd: 17.25,
+      }))
+
+      const clearResponse = await fetch(
+        `${server.baseUrl}/api/commanders/${created.id}/runtime`,
+        {
+          method: 'PATCH',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ costCapUsd: null }),
+        },
+      )
+      expect(clearResponse.status).toBe(200)
+      expect(await clearResponse.json()).toEqual(expect.objectContaining({
+        id: created.id,
+        costCapUsd: null,
+      }))
+
+      const persisted = JSON.parse(await readFile(storePath, 'utf8')) as {
+        sessions?: Array<{ id?: string; costCapUsd?: number | null }>
+      }
+      expect(persisted.sessions?.find((session) => session.id === created.id)?.costCapUsd).toBeNull()
     } finally {
       await server.close()
     }
@@ -2231,13 +2380,11 @@ describe('commanders routes', () => {
     }
   })
 
-  it('rehydrates heartbeat prompt after restart reconciliation without runtime state', async () => {
+  it('rehydrates heartbeat prompt after restart reconciliation without legacy agent session JSON', async () => {
     const dir = await createTempDir('hammurabi-commanders-restart-rehydrate-')
     const storePath = join(dir, 'sessions.json')
     const memoryBasePath = join(dir, 'memory')
-    const agentsSessionStorePath = join(dir, 'agents-sessions.json')
     const commanderId = '00000000-0000-4000-a000-0000000e4d8a'
-    const defaultConversationId = buildDefaultCommanderConversationId(commanderId)
     const commanderSessionName = defaultCommanderConversationSessionName(commanderId)
 
     await writeFile(
@@ -2259,20 +2406,6 @@ describe('commanders routes', () => {
             currentTask: null,
             completedTasks: 0,
             totalCostUsd: 0,
-          },
-        ],
-      }),
-      'utf8',
-    )
-    await writeFile(
-      agentsSessionStorePath,
-      JSON.stringify({
-        sessions: [
-          {
-            name: commanderSessionName,
-            sessionType: 'commander',
-            creator: { kind: 'commander', id: commanderId },
-            conversationId: defaultConversationId,
           },
         ],
       }),
@@ -2301,7 +2434,6 @@ describe('commanders routes', () => {
       sessionStorePath: storePath,
       memoryBasePath,
       sessionsInterface: mock.interface,
-      agentsSessionStorePath,
     })
 
     try {
@@ -2333,13 +2465,14 @@ describe('commanders routes', () => {
     }
   })
 
-  it('ignores malformed persisted agent session JSON during startup reconciliation', async () => {
-    const dir = await createTempDir('hammurabi-commanders-restart-malformed-agents-store-')
+  it('keeps SQLite-restored commander sessions running without legacy agent session JSON', async () => {
+    const dir = await createTempDir('hammurabi-commanders-restart-no-agents-store-')
     const storePath = join(dir, 'sessions.json')
-    const agentsSessionStorePath = join(dir, 'agents-sessions.json')
     const commanderId = '00000000-0000-4000-a000-0000000e4d8b'
     const commanderSessionName = defaultCommanderConversationSessionName(commanderId)
+    const previousDataDir = process.env.HAMMURABI_DATA_DIR
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    process.env.HAMMURABI_DATA_DIR = join(dir, 'data')
 
     await writeFile(
       storePath,
@@ -2347,7 +2480,7 @@ describe('commanders routes', () => {
         sessions: [
           {
             id: commanderId,
-            host: 'worker-malformed-store',
+            host: 'worker-no-agents-store',
             pid: null,
             state: 'running',
             created: '2026-03-01T00:00:00.000Z',
@@ -2365,18 +2498,18 @@ describe('commanders routes', () => {
       }),
       'utf8',
     )
-    await writeFile(agentsSessionStorePath, '{"sessions":[', 'utf8')
     const mock = createMockSessionsInterface({
       initialActiveSessions: [commanderSessionName],
     })
 
-    const server = await startServer({
-      sessionStorePath: storePath,
-      agentsSessionStorePath,
-      sessionsInterface: mock.interface,
-    })
+    let server: RunningServer | undefined
 
     try {
+      server = await startServer({
+        sessionStorePath: storePath,
+        sessionsInterface: mock.interface,
+      })
+
       await sleep(50)
       expect(consoleErrorSpy).not.toHaveBeenCalledWith(
         '[commanders] Startup reconciliation failed:',
@@ -2395,7 +2528,14 @@ describe('commanders routes', () => {
       ])
     } finally {
       consoleErrorSpy.mockRestore()
-      await server.close()
+      if (server) {
+        await server.close()
+      }
+      if (previousDataDir === undefined) {
+        delete process.env.HAMMURABI_DATA_DIR
+      } else {
+        process.env.HAMMURABI_DATA_DIR = previousDataDir
+      }
     }
   })
 
@@ -2403,7 +2543,6 @@ describe('commanders routes', () => {
     const dir = await createTempDir('hammurabi-commanders-restart-thin-cadence-')
     const storePath = join(dir, 'sessions.json')
     const memoryBasePath = join(dir, 'memory')
-    const agentsSessionStorePath = join(dir, 'agents-sessions.json')
     const commanderId = '00000000-0000-4000-a000-0000007e4d8a'
     const defaultConversationId = buildDefaultCommanderConversationId(commanderId)
     const commanderSessionName = defaultCommanderConversationSessionName(commanderId)
@@ -2431,20 +2570,6 @@ describe('commanders routes', () => {
             currentTask: null,
             completedTasks: 0,
             totalCostUsd: 0,
-          },
-        ],
-      }),
-      'utf8',
-    )
-    await writeFile(
-      agentsSessionStorePath,
-      JSON.stringify({
-        sessions: [
-          {
-            name: commanderSessionName,
-            sessionType: 'commander',
-            creator: { kind: 'commander', id: commanderId },
-            conversationId: defaultConversationId,
           },
         ],
       }),
@@ -2479,7 +2604,6 @@ describe('commanders routes', () => {
       sessionStorePath: storePath,
       memoryBasePath,
       sessionsInterface: mock.interface,
-      agentsSessionStorePath,
     })
 
     try {
@@ -2845,6 +2969,114 @@ describe('commanders routes', () => {
         providerId: 'claude',
         sessionId: 'claude-test-session-id',
       })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('blocks over-cap explicit conversation starts while allowing under-cap and unlimited commanders', async () => {
+    const dir = await createTempDir('hammurabi-commanders-cost-cap-start-')
+    const storePath = join(dir, 'sessions.json')
+    const memoryBasePath = join(dir, 'memory')
+    const mock = createMockSessionsInterface({
+      sessionCostUsd: 1.5,
+    })
+    const server = await startServer({
+      sessionStorePath: storePath,
+      memoryBasePath,
+      sessionsInterface: mock.interface,
+      now: () => new Date('2026-05-15T12:00:00.000Z'),
+    })
+
+    const createCommander = async (host: string): Promise<string> => {
+      const createResponse = await fetch(`${server.baseUrl}/api/commanders`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          host,
+          taskSource: { owner: 'NickGuAI', repo: 'example-repo', label: 'commander' },
+        }),
+      })
+      expect(createResponse.status).toBe(201)
+      return ((await createResponse.json()) as { id: string }).id
+    }
+
+    const setCostCap = async (commanderId: string, costCapUsd: number | null): Promise<void> => {
+      const patchResponse = await fetch(
+        `${server.baseUrl}/api/commanders/${commanderId}/runtime`,
+        {
+          method: 'PATCH',
+          headers: {
+            ...AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ costCapUsd }),
+        },
+      )
+      expect(patchResponse.status).toBe(200)
+    }
+
+    const spendOnce = async (commanderId: string): Promise<void> => {
+      const startResponse = await fetch(`${server.baseUrl}/api/commanders/${commanderId}/start`, {
+        method: 'POST',
+        headers: { ...AUTH_HEADERS, 'content-type': 'application/json' },
+      })
+      expect(startResponse.status).toBe(200)
+
+      const stopResponse = await fetch(`${server.baseUrl}/api/commanders/${commanderId}/stop`, {
+        method: 'POST',
+        headers: { ...AUTH_HEADERS, 'content-type': 'application/json' },
+      })
+      expect(stopResponse.status).toBe(200)
+    }
+
+    const startDefaultConversation = async (commanderId: string): Promise<Response> => {
+      const conversationId = buildDefaultCommanderConversationId(commanderId)
+      return fetch(`${server.baseUrl}/api/conversations/${conversationId}/start`, {
+        method: 'POST',
+        headers: {
+          ...AUTH_HEADERS,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ agentType: 'claude' }),
+      })
+    }
+
+    try {
+      const overCapCommanderId = await createCommander('worker-cost-cap-over')
+      await setCostCap(overCapCommanderId, 1)
+      await spendOnce(overCapCommanderId)
+
+      const listResponse = await fetch(`${server.baseUrl}/api/commanders`, {
+        headers: AUTH_HEADERS,
+      })
+      expect(listResponse.status).toBe(200)
+      const sessions = (await listResponse.json()) as Array<{
+        id: string
+        monthlyCostUsd?: number
+      }>
+      expect(sessions.find((session) => session.id === overCapCommanderId)?.monthlyCostUsd).toBe(1.5)
+
+      const overCapStartResponse = await startDefaultConversation(overCapCommanderId)
+      expect(overCapStartResponse.status).toBe(402)
+      expect(await overCapStartResponse.json()).toEqual(expect.objectContaining({
+        reason: 'budget_blocked',
+        costCapUsd: 1,
+        monthlyCostUsd: 1.5,
+        window: 'calendar_month_utc',
+      }))
+
+      const underCapCommanderId = await createCommander('worker-cost-cap-under')
+      await setCostCap(underCapCommanderId, 2)
+      await spendOnce(underCapCommanderId)
+      expect([200, 202]).toContain((await startDefaultConversation(underCapCommanderId)).status)
+
+      const unlimitedCommanderId = await createCommander('worker-cost-cap-unlimited')
+      await spendOnce(unlimitedCommanderId)
+      expect([200, 202]).toContain((await startDefaultConversation(unlimitedCommanderId)).status)
     } finally {
       await server.close()
     }
@@ -4455,7 +4687,6 @@ describe('commanders routes', () => {
       const server = await startServer({
         sessionStorePath: storePath,
         memoryBasePath,
-        agentsSessionStorePath: join(dir, 'agents-sessions.json'),
         ...routerOptions,
       })
       return { server, commanderId, memoryBasePath }

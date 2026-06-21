@@ -39,6 +39,7 @@ function defaultTranscriptRoot(): string {
 }
 
 let transcriptRoot: string | null = null
+const transcriptRootsBySession = new Map<string, string>()
 const writeQueues = new Map<string, Promise<void>>()
 
 function assertSessionName(sessionName: string): string {
@@ -50,7 +51,11 @@ function assertSessionName(sessionName: string): string {
 }
 
 function resolveSessionDir(sessionName: string): string {
-  return path.join(transcriptRoot ?? defaultTranscriptRoot(), assertSessionName(sessionName))
+  const normalizedSessionName = assertSessionName(sessionName)
+  return path.join(
+    transcriptRootsBySession.get(normalizedSessionName) ?? transcriptRoot ?? defaultTranscriptRoot(),
+    normalizedSessionName,
+  )
 }
 
 function resolveTranscriptPath(sessionName: string): string {
@@ -117,6 +122,10 @@ export function setTranscriptStoreRoot(rootDir: string): void {
   transcriptRoot = path.resolve(rootDir)
 }
 
+export function setTranscriptStoreRootForSession(sessionName: string, rootDir: string): void {
+  transcriptRootsBySession.set(assertSessionName(sessionName), path.resolve(rootDir))
+}
+
 export function resetTranscriptStoreRoot(): void {
   transcriptRoot = null
 }
@@ -129,9 +138,17 @@ export async function deleteSessionTranscript(sessionName: string): Promise<void
   await rm(resolveSessionDir(sessionName), { recursive: true, force: true })
 }
 
+function serializeTranscriptEventLine(event: TranscriptEvent): string {
+  const serialized = JSON.stringify(event)
+  if (serialized.includes('\n') || serialized.includes('\r')) {
+    throw new Error('Transcript event serialization produced a multi-line JSONL record')
+  }
+  return `${serialized}\n`
+}
+
 export async function appendTranscriptEvent(sessionName: string, event: TranscriptEvent): Promise<void> {
   const transcriptPath = resolveTranscriptPath(sessionName)
-  const line = `${JSON.stringify(event)}\n`
+  const line = serializeTranscriptEventLine(event)
 
   await queueWrite(transcriptPath, async () => {
     await mkdir(path.dirname(transcriptPath), { recursive: true })

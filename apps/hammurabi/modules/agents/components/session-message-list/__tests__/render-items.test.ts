@@ -80,4 +80,34 @@ describe('groupMessages', () => {
       },
     ])
   })
+
+  it('keeps provider errors out of the collapsed operational activity group', () => {
+    const messages: MsgItem[] = [
+      makeProvider('rpc-error-raw', 'error'),
+      {
+        id: 'provider-error',
+        kind: 'error',
+        text: 'You have hit your usage limit.',
+        providerError: { classification: 'usage_limit', code: 'usageLimitExceeded' },
+      },
+      makeProvider('status-1', 'thread/status/changed'),
+    ]
+
+    expect(groupMessages(messages)).toEqual([
+      {
+        type: 'activity-group',
+        id: 'ag-rpc-error-raw',
+        messages: [messages[0]],
+      },
+      {
+        type: 'single',
+        msg: messages[1],
+      },
+      {
+        type: 'activity-group',
+        id: 'ag-status-1',
+        messages: [messages[2]],
+      },
+    ])
+  })
 })

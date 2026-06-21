@@ -1,6 +1,7 @@
 import type { Request, RequestHandler, Router } from 'express'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import { parseTailscaleStatusJson } from '@gehirn/hammurabi-cli/tailscale-status'
 import type { CommanderSessionStore } from '../../commanders/store.js'
 import {
   buildMachineProbeScript,
@@ -67,9 +68,33 @@ interface MachineWorldRouteDeps {
     resolvedHost: string
   }>
   validateMachineConfig(value: unknown, options?: { requireHost?: boolean }): MachineConfig
+  verifyMachineLaunch?(
+    machineId: string,
+    options?: { agentType?: string; candidateMachine?: MachineConfig },
+  ): Promise<
+    | {
+        ok: true
+        agentType: string
+        host: string
+        machineId: string
+        sessionName: string
+      }
+    | { ok: false; status: number; stage: string; error: string }
+  >
   withMachineRegistryWriteLock<T>(operation: () => Promise<T>): Promise<T>
   writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]>
   daemonRegistry: MachineDaemonRegistry
+}
+
+class MachineCreateLaunchVerificationError extends Error {
+  constructor(
+    readonly status: number,
+    readonly stage: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'MachineCreateLaunchVerificationError'
+  }
 }
 
 export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
@@ -93,10 +118,20 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
   router.post('/machines', requireWriteAccess, async (req, res) => {
     let machine: MachineConfig
     try {
-      machine = deps.validateMachineConfig(req.body, { requireHost: true })
+      machine = deps.validateMachineConfig(normalizeMachineCreatePayload(req.body), { requireHost: true })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid machine payload'
       res.status(400).json({ error: message })
+      return
+    }
+
+    const createOptions = parseMachineCreateOptions(req.body)
+    if (!createOptions.ok) {
+      res.status(400).json({ error: createOptions.error })
+      return
+    }
+    if (createOptions.verifyLaunch && !deps.verifyMachineLaunch) {
+      res.status(501).json({ error: 'Machine launch verification is not available' })
       return
     }
 
@@ -122,18 +157,68 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
           throw new Error(`Machine "${machine.id}" already exists`)
         }
 
+        let verification: Awaited<ReturnType<NonNullable<MachineWorldRouteDeps['verifyMachineLaunch']>>> | undefined
+        if (createOptions.verifyLaunch && deps.verifyMachineLaunch) {
+          const result = await deps.verifyMachineLaunch(machine.id, {
+            ...(createOptions.agentType ? { agentType: createOptions.agentType } : {}),
+            candidateMachine: machine,
+          })
+          if (!result.ok) {
+            throw new MachineCreateLaunchVerificationError(result.status, result.stage, result.error)
+          }
+          verification = result
+        }
+
         const next = await deps.writeMachineRegistry([...current, machine])
-        return next.find((entry) => entry.id === machine.id) ?? machine
+        const createdMachine = next.find((entry) => entry.id === machine.id) ?? machine
+        return { machine: createdMachine, verification }
       })
-      res.status(201).json(serializeMachineForResponse(created))
+      res.status(201).json({
+        ...serializeMachineForResponse(created.machine),
+        ...(created.verification ? { verification: created.verification } : {}),
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to update machines registry'
+      if (error instanceof MachineCreateLaunchVerificationError) {
+        res.status(error.status).json({
+          stage: error.stage,
+          error: message,
+        })
+        return
+      }
       if (message.includes('already exists')) {
         res.status(409).json({ error: message })
         return
       }
       res.status(500).json({ error: message })
     }
+  })
+
+  router.post('/machines/:id/verify-launch', requireWriteAccess, async (req, res) => {
+    if (!deps.verifyMachineLaunch) {
+      res.status(501).json({ error: 'Machine launch verification is not available' })
+      return
+    }
+
+    const machineId = deps.parseSessionName(req.params.id)
+    if (!machineId) {
+      res.status(400).json({ error: 'Invalid machine ID' })
+      return
+    }
+
+    const agentType = typeof req.body?.agentType === 'string' && req.body.agentType.trim().length > 0
+      ? req.body.agentType.trim()
+      : undefined
+    const result = await deps.verifyMachineLaunch(machineId, { agentType })
+    if (!result.ok) {
+      res.status(result.status).json({
+        stage: result.stage,
+        error: result.error,
+      })
+      return
+    }
+
+    res.json(result)
   })
 
   router.post('/machines/verify-tailscale', requireWriteAccess, async (req, res) => {
@@ -632,6 +717,65 @@ function parseDaemonPairRequest(
       label,
       cwd,
     },
+  }
+}
+
+function parseMachineCreateOptions(
+  value: unknown,
+): { ok: true; verifyLaunch: boolean; agentType?: string } | { ok: false; error: string } {
+  const record = typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : {}
+
+  let verifyLaunch = false
+  if (record.verifyLaunch !== undefined) {
+    if (typeof record.verifyLaunch !== 'boolean') {
+      return { ok: false, error: 'verifyLaunch must be a boolean when provided' }
+    }
+    verifyLaunch = record.verifyLaunch
+  }
+
+  const agentType = typeof record.agentType === 'string' && record.agentType.trim().length > 0
+    ? record.agentType.trim()
+    : undefined
+
+  return {
+    ok: true,
+    verifyLaunch,
+    ...(agentType ? { agentType } : {}),
+  }
+}
+
+function normalizeMachineCreatePayload(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) {
+    return value
+  }
+  const record = value as Record<string, unknown>
+
+  const tailscaleStatusJson = typeof record.tailscaleStatusJson === 'string'
+    ? record.tailscaleStatusJson.trim()
+    : ''
+  if (!tailscaleStatusJson) {
+    return record
+  }
+
+  const parsed = parseTailscaleStatusJson(tailscaleStatusJson)
+  if (!parsed.ok) {
+    throw new Error(parsed.error)
+  }
+
+  return {
+    ...record,
+    id: typeof record.id === 'string' && record.id.trim().length > 0
+      ? record.id
+      : parsed.status.machineId,
+    label: typeof record.label === 'string' && record.label.trim().length > 0
+      ? record.label
+      : parsed.status.label,
+    host: typeof record.host === 'string' && record.host.trim().length > 0
+      ? record.host
+      : parsed.status.primaryTailscaleIp,
+    tailscaleHostname: parsed.status.dnsName,
   }
 }
 

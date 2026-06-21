@@ -8,6 +8,7 @@ import type {
   ProviderAdapter,
   ProviderAdapterDeps,
   ProviderCreateOptions,
+  ProviderTeardownOptions,
 } from '../../providers/provider-adapter.js'
 import type {
   ExitedStreamSessionState,
@@ -154,6 +155,16 @@ export const codexProvider: ProviderAdapter = registerProvider({
         label: 'default',
         description: 'Codex approval requests route through Hammurabi action policies',
       },
+      {
+        value: 'acceptEdits',
+        label: 'acceptEdits',
+        description: 'Codex approval requests route through Hammurabi action policies',
+      },
+      {
+        value: 'bypassPermissions',
+        label: 'bypassPermissions',
+        description: 'Codex runs without approval prompts for explicitly autonomous workers',
+      },
     ],
   },
   skillScanPaths: ['~/.codex/skills'],
@@ -235,8 +246,8 @@ export const codexProvider: ProviderAdapter = registerProvider({
   transcriptId(session) {
     return this.getResumeId(session) ?? session.name
   },
-  teardown(session, reason) {
-    return teardownCodexSessionRuntime(session, reason)
+  teardown(session, reason, options?: ProviderTeardownOptions) {
+    return teardownCodexSessionRuntime(session, reason, options)
   },
   async shutdownFleet(sessions, reason) {
     await Promise.allSettled(

@@ -9,6 +9,7 @@ import {
   createMissingMachinesRegistryPath,
   startServer,
 } from './routes-test-harness'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
 
 async function waitForOpen(ws: WebSocket): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -730,21 +731,36 @@ describe('daemon machine routes', () => {
       serverClosed = true
       await waitForClose(daemonWs)
 
-      const persisted = JSON.parse(await readFile(sessionStorePath, 'utf8')) as {
-        sessions: Array<{
+      const sqliteDb = openHammurabiSqliteDatabase(join(sessionDir, 'hammurabi.sqlite'))
+      try {
+        const row = sqliteDb.prepare(
+          `SELECT name, machine_id, state, provider, provider_resume_json
+           FROM agent_runtime_sessions
+           WHERE name = ?`,
+        ).get('daemon-stream-server-restart') as {
           name: string
-          daemonProcess?: { processId?: string; mode?: string }
-        }>
-      }
-      expect(persisted.sessions).toEqual([
-        expect.objectContaining({
+          machine_id: string
+          state: string
+          provider: string
+          provider_resume_json: string
+        } | undefined
+
+        expect(row).toEqual(expect.objectContaining({
           name: 'daemon-stream-server-restart',
+          machine_id: 'mac-1',
+          state: 'active',
+          provider: 'claude',
+        }))
+        expect(JSON.parse(row!.provider_resume_json)).toMatchObject({
+          providerId: 'claude',
           daemonProcess: {
             processId: spawnMessage.processId,
             mode: 'pipe',
           },
-        }),
-      ])
+        })
+      } finally {
+        sqliteDb.close()
+      }
 
       const restartedServer = await startServer({
         autoResumeSessions: true,

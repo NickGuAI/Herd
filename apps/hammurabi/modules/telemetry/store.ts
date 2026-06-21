@@ -366,43 +366,60 @@ export class TelemetryJsonlStore {
 
       const tmpPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`
       const fileStream = createReadStream(this.filePath, { encoding: 'utf8' })
-      const rl = createInterface({ input: fileStream, crlfDelay: Infinity })
       const localRollups = new Map<string, LocalIngestRollup>()
       const tmpHandle = await open(tmpPath, 'w')
       let renamedTmp = false
       let inputClosed = false
+      let tmpClosed = false
       const closeInput = () => {
         if (inputClosed) return
         inputClosed = true
-        rl.close()
         fileStream.destroy()
+      }
+      const closeTmpHandle = async () => {
+        if (tmpClosed) return
+        tmpClosed = true
+        await tmpHandle.close().catch(() => undefined)
       }
       const writeEntry = async (entry: TelemetryStoreEntry) => {
         await tmpHandle.writeFile(`${JSON.stringify(entry)}\n`, 'utf8')
       }
+      const processLine = async (line: string) => {
+        if (!line.trim()) return
+        const entry = parseEntry(line.endsWith('\r') ? line.slice(0, -1) : line)
+        if (!entry) {
+          return
+        }
+        if (entry.recordedAt < cutoffISO) {
+          return
+        }
+        if (entry.type === 'ingest' && isLocalIngestRecord(entry.payload)) {
+          addLocalIngestRollup(localRollups, entry)
+          return
+        }
+        if (
+          (entry.type === 'otel_log' || entry.type === 'otel_metric') &&
+          !normalizedHasUsage(entry.payload.normalized)
+        ) {
+          return
+        }
+        await writeEntry(entry)
+      }
 
       try {
         try {
-          for await (const line of rl) {
-            if (!line.trim()) continue
-            const entry = parseEntry(line)
-            if (!entry) {
-              continue
+          let buffered = ''
+          for await (const chunk of fileStream) {
+            buffered += chunk
+            let newlineIndex = buffered.indexOf('\n')
+            while (newlineIndex !== -1) {
+              await processLine(buffered.slice(0, newlineIndex))
+              buffered = buffered.slice(newlineIndex + 1)
+              newlineIndex = buffered.indexOf('\n')
             }
-            if (entry.recordedAt < cutoffISO) {
-              continue
-            }
-            if (entry.type === 'ingest' && isLocalIngestRecord(entry.payload)) {
-              addLocalIngestRollup(localRollups, entry)
-              continue
-            }
-            if (
-              (entry.type === 'otel_log' || entry.type === 'otel_metric') &&
-              !normalizedHasUsage(entry.payload.normalized)
-            ) {
-              continue
-            }
-            await writeEntry(entry)
+          }
+          if (buffered.length > 0) {
+            await processLine(buffered)
           }
         } finally {
           closeInput()
@@ -420,24 +437,20 @@ export class TelemetryJsonlStore {
         }
 
         await tmpHandle.sync()
-        await tmpHandle.close()
+        await closeTmpHandle()
         await rename(tmpPath, this.filePath)
         renamedTmp = true
         await fsyncDirectory(path.dirname(this.filePath))
       } catch (err) {
         if (!renamedTmp) {
-          try {
-            await tmpHandle.close()
-          } catch {
-            // Ignore close errors while cleaning up a failed compaction.
-          }
+          await closeTmpHandle()
         }
         await unlink(tmpPath).catch(() => undefined)
         throw err
       } finally {
         closeInput()
         if (!renamedTmp) {
-          await tmpHandle.close().catch(() => undefined)
+          await closeTmpHandle()
         }
       }
     })

@@ -103,6 +103,65 @@ describe('runWorkersCli command surface', () => {
     expect(fetchImpl).toHaveBeenCalled()
   })
 
+  it('allows dispatch with an autonomous permission mode', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ name: 'worker-1710000000001' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const stderr = createBufferWriter()
+
+    const exitCode = await runWorkersCli(
+      [
+        'dispatch',
+        '--session',
+        'commander-main',
+        '--agent',
+        'codex',
+        '--permission-mode',
+        'bypassPermissions',
+        '--skip-validation',
+      ],
+      {
+        fetchImpl,
+        readConfig: async () => config,
+        stderr: stderr.writer,
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://herd.gehirn.ai/api/agents/sessions/dispatch-worker',
+      expect.objectContaining({
+        body: JSON.stringify({
+          spawnedBy: 'commander-main',
+          agentType: 'codex',
+          permissionMode: 'bypassPermissions',
+        }),
+      }),
+    )
+  })
+
+  it('rejects invalid permission modes before dispatching', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+    const stdout = createBufferWriter()
+
+    const exitCode = await runWorkersCli(
+      ['dispatch', '--task', 'Investigate flaky tests', '--permission-mode', 'dangerouslySkipPermissions'],
+      {
+        fetchImpl,
+        readConfig: async () => config,
+        stdout: stdout.writer,
+      },
+    )
+
+    expect(exitCode).toBe(1)
+    expect(stdout.read()).toContain('Usage:')
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
   it('rejects legacy prefab flags', async () => {
     const fetchImpl = vi.fn<typeof fetch>()
     const stdout = createBufferWriter()

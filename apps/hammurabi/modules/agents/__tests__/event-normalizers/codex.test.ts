@@ -114,6 +114,17 @@ describe('agents/event-normalizers/codex', () => {
           },
           expectedEventTypes: ['provider.activity'],
         },
+        {
+          method: 'account/rateLimits/updated',
+          params: {
+            rateLimits: {
+              primary: { usedPercent: 99, resetsAt: 1781798203 },
+              secondary: { usedPercent: 21 },
+              planType: 'pro',
+            },
+          },
+          expectedEventTypes: ['provider.activity'],
+        },
       ]
 
       for (const testCase of cases) {
@@ -199,6 +210,67 @@ describe('agents/event-normalizers/codex', () => {
         threadId: 'thread-user-reflection',
         turnId: 'turn-user-reflection',
         item: userMessageItem,
+      })).toEqual([])
+    })
+
+    it('surfaces high Codex account rate limit notifications as readable activity', () => {
+      const envelopes = mapCodexToTranscriptEnvelopes('account/rateLimits/updated', {
+        rateLimits: {
+          primary: { usedPercent: 98.7, resetsAt: 1781798203 },
+          secondary: { usedPercent: 21 },
+          planType: 'pro',
+          rateLimitReachedType: null,
+        },
+      })
+
+      expect(envelopes).toHaveLength(1)
+      expect(envelopes[0]).toEqual(expect.objectContaining({
+        source: expect.objectContaining({
+          provider: 'codex',
+          backend: 'rpc',
+          rawEventType: 'account/rateLimits/updated',
+        }),
+        ev: expect.objectContaining({
+          type: 'provider.activity',
+          title: 'Codex quota nearly exhausted',
+          detail: expect.stringContaining('primary quota 99% used'),
+          data: expect.objectContaining({
+            rateLimit: expect.objectContaining({
+              primaryUsedPercent: 98.7,
+              secondaryUsedPercent: 21,
+              planType: 'pro',
+            }),
+          }),
+        }),
+      }))
+    })
+
+    it('surfaces high secondary Codex account rate limit notifications', () => {
+      const envelopes = mapCodexToTranscriptEnvelopes('account/rateLimits/updated', {
+        rateLimits: {
+          primary: { usedPercent: 18, resetsAt: 1781798203 },
+          secondary: { usedPercent: 94.2 },
+          planType: 'pro',
+        },
+      })
+
+      expect(envelopes).toHaveLength(1)
+      expect(envelopes[0]).toEqual(expect.objectContaining({
+        ev: expect.objectContaining({
+          type: 'provider.activity',
+          title: 'Codex quota nearly exhausted',
+          detail: expect.stringContaining('weekly quota 94% used'),
+        }),
+      }))
+    })
+
+    it('suppresses low Codex account rate limit notifications', () => {
+      expect(mapCodexToTranscriptEnvelopes('account/rateLimits/updated', {
+        rateLimits: {
+          primary: { usedPercent: 18, resetsAt: 1781798203 },
+          secondary: { usedPercent: 21 },
+          planType: 'pro',
+        },
       })).toEqual([])
     })
 
@@ -304,6 +376,38 @@ describe('agents/event-normalizers/codex', () => {
             text: 'Final answer chunk',
             channel: 'final',
           },
+        }),
+      ])
+    })
+
+    it('maps completed Codex agent messages with accumulated text into assistant text envelopes', () => {
+      expect(mapCodexToTranscriptEnvelopes('item/completed', {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'msg-1',
+          type: 'agentMessage',
+          text: 'Recovered final answer',
+        },
+      })).toEqual([
+        expect.objectContaining({
+          turnId: 'turn-1',
+          itemId: 'msg-1',
+          ev: { type: 'message.start', role: 'assistant' },
+        }),
+        expect.objectContaining({
+          turnId: 'turn-1',
+          itemId: 'msg-1',
+          ev: {
+            type: 'message.delta',
+            text: 'Recovered final answer',
+            channel: 'final',
+          },
+        }),
+        expect.objectContaining({
+          turnId: 'turn-1',
+          itemId: 'msg-1',
+          ev: { type: 'message.end' },
         }),
       ])
     })
@@ -433,6 +537,50 @@ describe('agents/event-normalizers/codex', () => {
           data: expect.objectContaining({ review: { id: 'r1' } }),
         },
       }))
+    })
+
+    it('emits a structured terminal provider error for non-retryable Codex quota failures', () => {
+      const envelopes = mapCodexToTranscriptEnvelopes('error', {
+        threadId: 'thread-quota',
+        turnId: 'turn-quota',
+        willRetry: false,
+        error: {
+          message: 'You have hit your usage limit. Upgrade to Pro or try again later.',
+          codexErrorInfo: 'usageLimitExceeded',
+          additionalDetails: 'Try again after reset.',
+        },
+      })
+
+      expect(envelopes.map((envelope) => envelope.ev.type)).toEqual([
+        'provider.activity',
+        'provider.error',
+      ])
+      expect(envelopes[1]).toEqual(expect.objectContaining({
+        turnId: 'turn-quota',
+        ev: {
+          type: 'provider.error',
+          message: 'You have hit your usage limit. Upgrade to Pro or try again later.',
+          classification: 'usage_limit',
+          code: 'usageLimitExceeded',
+          hint: 'Try again after reset.',
+          retryable: false,
+          data: expect.objectContaining({ willRetry: false }),
+        },
+      }))
+    })
+
+    it('keeps retryable Codex errors as provider activity without terminal error surfacing', () => {
+      const envelopes = mapCodexToTranscriptEnvelopes('error', {
+        threadId: 'thread-retryable',
+        turnId: 'turn-retryable',
+        willRetry: true,
+        error: {
+          message: 'Temporary transport failure',
+          code: 'temporary',
+        },
+      })
+
+      expect(envelopes.map((envelope) => envelope.ev.type)).toEqual(['provider.activity'])
     })
   })
 })

@@ -56,6 +56,41 @@ describe('transcript-store', () => {
     expect(raw.trim().split('\n').map((line) => JSON.parse(line) as { marker: number })).toEqual(events)
   })
 
+  it('stores newline-heavy Codex command output as one parseable JSONL row per event', async () => {
+    const sessionName = 'codex-output-jsonl-session'
+    const event = {
+      schemaVersion: 2,
+      id: 'codex-output-delta',
+      time: '2026-06-15T00:00:00.000Z',
+      source: {
+        provider: 'codex',
+        backend: 'rpc',
+        sessionId: 'thread-jsonl',
+        rawEventType: 'item/commandExecution/outputDelta',
+        rawEventId: 'call-jsonl',
+      },
+      turnId: 'turn-jsonl',
+      itemId: 'call-jsonl',
+      ev: {
+        type: 'tool.delta',
+        toolCallId: 'call-jsonl',
+        output: `first line
+second line with "quotes"
+third line with apostrophe ' and backslash \\`,
+        status: 'running',
+      },
+    } as const
+
+    await appendTranscriptEvent(sessionName, event)
+
+    const transcriptPath = join(transcriptRoot, sessionName, 'transcript.v1.jsonl')
+    const raw = await readFile(transcriptPath, 'utf8')
+    const lines = raw.trimEnd().split('\n')
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0])).toEqual(event)
+    await expect(readTranscriptEvents(sessionName)).resolves.toEqual([event])
+  })
+
   it('returns the last N completed turns plus trailing partial events', async () => {
     const sessionName = 'tail-session'
     const events = [

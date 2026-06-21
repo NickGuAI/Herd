@@ -204,6 +204,7 @@ describe('runMachinesCli', () => {
     expect(exitCode).toBe(0)
     expect(stderr.read()).toBe('')
     expect(stdout.read()).toContain('Registered machine: gpu-2')
+    expect(stdout.read()).not.toContain('Launch verified:')
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://herd.gehirn.ai/api/agents/machines',
       expect.objectContaining({
@@ -219,6 +220,59 @@ describe('runMachinesCli', () => {
           user: 'builder',
           port: 2222,
           cwd: '/srv/workspace',
+        }),
+      }),
+    )
+  })
+
+  it('launch-verifies an added machine only when requested', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'gpu-2',
+          label: 'GPU 2',
+          host: '10.0.1.60',
+          cwd: '/srv/workspace',
+          verification: {
+            ok: true,
+            machineId: 'gpu-2',
+            sessionName: 'verify-gpu-2-mock',
+            host: 'gpu-2',
+            agentType: 'claude',
+          },
+        }),
+        {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    const exitCode = await runMachinesCli(
+      ['add', '--id', 'gpu-2', '--label', 'GPU 2', '--host', '10.0.1.60', '--cwd', '/srv/workspace', '--verify-launch'],
+      {
+        fetchImpl,
+        readConfig: async () => config,
+        stdout: stdout.writer,
+        stderr: stderr.writer,
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(stdout.read()).toContain('Launch verified: verify-gpu-2-mock used machine gpu-2')
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://herd.gehirn.ai/api/agents/machines',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'gpu-2',
+          label: 'GPU 2',
+          host: '10.0.1.60',
+          cwd: '/srv/workspace',
+          verifyLaunch: true,
         }),
       }),
     )
@@ -259,6 +313,7 @@ describe('runMachinesCli', () => {
     expect(stdout.read()).toContain('Registered machine: home-mac')
     expect(stdout.read()).toContain('Host: home-mac.tail2bb6ea.ts.net')
     expect(stdout.read()).toContain('Resolved IP: 100.101.102.103')
+    expect(stdout.read()).not.toContain('Launch verified:')
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://herd.gehirn.ai/api/agents/machines',
       expect.objectContaining({
@@ -272,6 +327,76 @@ describe('runMachinesCli', () => {
         }),
       }),
     )
+  })
+
+  it('onboards from local tailscale status JSON with atomic launch verification in the create request', async () => {
+    const statusJson = JSON.stringify({
+      BackendState: 'Running',
+      TUN: true,
+      CurrentTailnet: {
+        Name: 'gehirn.ai',
+        MagicDNSSuffix: 'tail2bb6ea.ts.net',
+      },
+      Self: {
+        HostName: 'Home Mac',
+        DNSName: 'home-mac.tail2bb6ea.ts.net.',
+        Online: true,
+        TailscaleIPs: ['100.101.102.103'],
+        OS: 'macOS',
+      },
+    })
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'home-mac',
+        label: 'Home Mac',
+        host: '100.101.102.103',
+        tailscaleHostname: 'home-mac.tail2bb6ea.ts.net',
+        cwd: '/Users/yugu/workspace',
+        verification: {
+          ok: true,
+          machineId: 'home-mac',
+          sessionName: 'verify-home-mac-mock',
+          host: 'home-mac',
+          agentType: 'claude',
+        },
+      }))
+    const runCommand = vi.fn().mockResolvedValue({
+      stdout: statusJson,
+      stderr: '',
+      code: 0,
+    })
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    const exitCode = await runMachinesCli(
+      ['onboard', '--from-tailscale-status', '--cwd', '/Users/yugu/workspace'],
+      {
+        fetchImpl,
+        readConfig: async () => config,
+        runCommand,
+        stdout: stdout.writer,
+        stderr: stderr.writer,
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(runCommand).toHaveBeenCalledWith('tailscale', ['status', '--json'], { timeoutMs: 15000 })
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      'https://herd.gehirn.ai/api/agents/machines',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          tailscaleStatusJson: statusJson,
+          cwd: '/Users/yugu/workspace',
+          verifyLaunch: true,
+        }),
+      }),
+    )
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(stdout.read()).toContain('Derived machine ID: home-mac')
+    expect(stdout.read()).toContain('Launch verified: verify-home-mac-mock used machine home-mac')
   })
 
   it('prints machine health for check', async () => {
@@ -406,7 +531,8 @@ describe('runMachinesCli', () => {
     expect(remoteCommand).toContain('@anthropic-ai/claude-code')
     expect(remoteCommand).toContain('@openai/codex')
     expect(remoteCommand).toContain('@google/gemini-cli')
-    expect(remoteCommand).toContain('AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*')
+    expect(remoteCommand).toContain('AcceptEnv HAMMURABI_APPROVAL_BRIDGE_TOKEN HAMMURABI_MACHINE_ENV_*')
+    expect(remoteCommand).not.toContain('AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*')
     expect(remoteCommand).toContain('MaxStartups 20:30:200')
     expect(stdout.read()).toContain('Service health after bootstrap:')
     expect(stdout.read()).toContain('Machine: gpu-1')
@@ -418,7 +544,7 @@ describe('runMachinesCli', () => {
   it('surfaces a loud post-bootstrap warning when sshd hardening was skipped due to no passwordless sudo', async () => {
     // Codex audit on PR #1269: when the bootstrap script's `configure_sshd_hardening`
     // hits `sudo -n true` failure it emits `sshd:skipped:no-sudo` and continues.
-    // Without remote `AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*`,
+    // Without remote `AcceptEnv HAMMURABI_APPROVAL_BRIDGE_TOKEN HAMMURABI_MACHINE_ENV_*`,
     // the Claude approval bridge breaks downstream — operator must see this loudly.
     const fetchImpl = createProviderAwareFetch({
       'https://herd.gehirn.ai/api/agents/machines': jsonResponse([
@@ -474,7 +600,8 @@ describe('runMachinesCli', () => {
     expect(out).toContain('Claude approval-bridge token cannot reach the PreToolUse hook')
     expect(out).toContain('approval service unreachable')
     // Manual sshd_config remediation is provided verbatim so operator can copy-paste.
-    expect(out).toContain('AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*')
+    expect(out).toContain('AcceptEnv HAMMURABI_APPROVAL_BRIDGE_TOKEN HAMMURABI_MACHINE_ENV_*')
+    expect(out).not.toContain('AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*')
     expect(out).toContain('MaxStartups 20:30:200')
     expect(out).toContain('hammurabi machine bootstrap gpu-1')
   })

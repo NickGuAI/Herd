@@ -134,8 +134,17 @@ describe('runOnboardCli', () => {
 
   it('extracts the normalized DNS name from tailscale status json', () => {
     expect(extractTailscaleDnsName(JSON.stringify({
+      BackendState: 'Running',
+      TUN: true,
+      CurrentTailnet: {
+        Name: 'gehirn.ai',
+        MagicDNSSuffix: 'tail2bb6ea.ts.net',
+      },
       Self: {
+        HostName: 'Home Mac',
         DNSName: 'home-mac.tail2bb6ea.ts.net.',
+        Online: true,
+        TailscaleIPs: ['100.101.102.103'],
       },
     }))).toBe('home-mac.tail2bb6ea.ts.net')
   })
@@ -386,8 +395,17 @@ describe('runOnboardCli', () => {
       .mockResolvedValueOnce({ stdout: '/usr/local/bin/tailscale\n', stderr: '', code: 0 })
       .mockResolvedValueOnce({
         stdout: JSON.stringify({
+          BackendState: 'Running',
+          TUN: true,
+          CurrentTailnet: {
+            Name: 'gehirn.ai',
+            MagicDNSSuffix: 'tail2bb6ea.ts.net',
+          },
           Self: {
+            HostName: 'Home Mac',
             DNSName: 'home-mac.tail2bb6ea.ts.net.',
+            Online: true,
+            TailscaleIPs: ['100.101.102.103'],
           },
         }),
         stderr: '',
@@ -408,9 +426,8 @@ describe('runOnboardCli', () => {
     const out = stdoutSpy?.mock.calls.map(([chunk]) => String(chunk)).join('')
     expect(out).toContain('Checking Tailscale CLI')
     expect(out).toContain('Reading Tailscale status')
-    expect(out).toContain(
-      'hammurabi machine add --id <id> --label <label> --tailscale-hostname home-mac.tail2bb6ea.ts.net',
-    )
+    expect(out).toContain('Tailscale machine: Home Mac (home-mac)')
+    expect(out).toContain('hammurabi machine onboard --from-tailscale-status --cwd <absolute-workspace-path>')
   })
 
   it('creates the founder operator when operators.json is missing', async () => {

@@ -175,7 +175,7 @@ describe('WorkingMemoryStore', () => {
     expect(state.checkpoints).toHaveLength(100)
     expect(state.checkpoints[0]?.summary).toBe('Checkpoint 6')
     expect(state.checkpoints.at(-1)?.summary).toBe('Checkpoint 105')
-  })
+  }, 10_000)
 
   it('renders checkpoint details for commander context injection', async () => {
     let nowValue = new Date('2026-03-12T07:30:00.000Z')

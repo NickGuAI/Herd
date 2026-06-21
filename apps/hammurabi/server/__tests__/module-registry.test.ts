@@ -1,30 +1,55 @@
 import express from 'express'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { DatabaseSync } from 'node:sqlite'
 import type { ApiKeyRecord, ApiKeyStoreLike } from '../api-keys/store.js'
+import { openHammurabiSqliteDatabase } from '../db/connection.js'
+import { applyHammurabiSqliteSchema } from '../db/schema.js'
 import type { HammurabiModule } from '../module-runtime.js'
-import { createModules, resolveCommandRoomMonitorOptions } from '../module-registry.js'
+import {
+  createModules,
+  resolveApprovalBridgeSigningSecret,
+  resolveCommandRoomMonitorOptions,
+} from '../module-registry.js'
 
 const API_KEY_HEADERS = {
   'x-hammurabi-api-key': 'test-key',
 }
 
 const tempDirs: string[] = []
+const runtimeSqliteDbs: DatabaseSync[] = []
 const previousEnv = {
   HAMMURABI_DATA_DIR: process.env.HAMMURABI_DATA_DIR,
   COMMANDER_DATA_DIR: process.env.COMMANDER_DATA_DIR,
+  HAMMURABI_APPROVAL_BRIDGE_SIGNING_SECRET: process.env.HAMMURABI_APPROVAL_BRIDGE_SIGNING_SECRET,
 }
 
-function restoreEnvVar(key: 'HAMMURABI_DATA_DIR' | 'COMMANDER_DATA_DIR', value: string | undefined) {
+type RestoredEnvKey = keyof typeof previousEnv
+
+function restoreEnvVar(key: RestoredEnvKey, value: string | undefined) {
   if (value === undefined) {
     delete process.env[key]
     return
   }
 
   process.env[key] = value
+}
+
+async function useTempHammurabiDataDir(prefix = 'hammurabi-module-registry-'): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix))
+  tempDirs.push(dir)
+  process.env.HAMMURABI_DATA_DIR = dir
+  return dir
+}
+
+function createRuntimeSqliteDb(dataDir: string): DatabaseSync {
+  const db = openHammurabiSqliteDatabase(join(dataDir, 'hammurabi.sqlite'))
+  applyHammurabiSqliteSchema(db)
+  runtimeSqliteDbs.push(db)
+  return db
 }
 
 function createTestApiKeyStore(): ApiKeyStoreLike {
@@ -82,6 +107,7 @@ function defaultModuleFilter(module: HammurabiModule): boolean {
 async function startRegistryServer(
   moduleFilter: (module: HammurabiModule) => boolean = defaultModuleFilter,
 ): Promise<RunningServer> {
+  const dataDir = await useTempHammurabiDataDir('hammurabi-module-registry-server-')
   const app = express()
   app.use(express.json())
 
@@ -90,7 +116,10 @@ async function startRegistryServer(
     initializeAgentSessionRuntimes: false,
     initializeAutomationScheduler: false,
     initializeChannelRuntimes: false,
+    initializeTelemetryLocalScan: false,
+    telemetryRetentionDays: 0,
     maxAgentSessions: 1,
+    sqliteDb: createRuntimeSqliteDb(dataDir),
   })
   for (const module of modules) {
     if (moduleFilter(module)) {
@@ -123,8 +152,15 @@ async function startRegistryServer(
 }
 
 afterEach(async () => {
+  for (const db of runtimeSqliteDbs.splice(0)) {
+    db.close()
+  }
   restoreEnvVar('HAMMURABI_DATA_DIR', previousEnv.HAMMURABI_DATA_DIR)
   restoreEnvVar('COMMANDER_DATA_DIR', previousEnv.COMMANDER_DATA_DIR)
+  restoreEnvVar(
+    'HAMMURABI_APPROVAL_BRIDGE_SIGNING_SECRET',
+    previousEnv.HAMMURABI_APPROVAL_BRIDGE_SIGNING_SECRET,
+  )
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
@@ -156,13 +192,17 @@ describe('resolveCommandRoomMonitorOptions', () => {
 })
 
 describe('createModules', () => {
-  it('exposes declared runtime capabilities and the loader-backed module graph', () => {
+  it('exposes declared runtime capabilities and the loader-backed module graph', async () => {
+    const dataDir = await useTempHammurabiDataDir()
     const { capabilities, moduleGraph, modules } = createModules({
       apiKeyStore: createTestApiKeyStore(),
       initializeAgentSessionRuntimes: false,
       initializeAutomationScheduler: false,
       initializeChannelRuntimes: false,
+      initializeTelemetryLocalScan: false,
+      telemetryRetentionDays: 0,
       maxAgentSessions: 1,
+      sqliteDb: createRuntimeSqliteDb(dataDir),
     })
 
     expect(capabilities.providers.get('auth.api-keys')).toBe('api-keys')
@@ -181,6 +221,17 @@ describe('createModules', () => {
       moduleGraph.mountPlan.routes.find((route) => route.id === 'module-graph.api')?.mount,
     )
     expect(modulesByName.has('sentinels')).toBe(false)
+  })
+
+  it('persists the approval bridge signing secret across registry restarts', async () => {
+    const dataDir = await useTempHammurabiDataDir('hammurabi-approval-bridge-secret-')
+
+    const first = resolveApprovalBridgeSigningSecret()
+    const second = resolveApprovalBridgeSigningSecret()
+
+    expect(second).toBe(first)
+    await expect(readFile(join(dataDir, 'policies', 'approval-bridge-signing-secret'), 'utf8'))
+      .resolves.toBe(`${first}\n`)
   })
 
   it('serves graph metadata without exposing provider secrets or storage roots', async () => {

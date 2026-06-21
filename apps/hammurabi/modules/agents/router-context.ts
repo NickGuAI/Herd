@@ -14,7 +14,7 @@ import {
   type TransportAuthTicket,
 } from '../../server/auth/transport-tickets.js'
 import type { MachineRegistryStore } from './machines.js'
-import type { ProviderCreateOptions } from './providers/provider-adapter.js'
+import type { ProviderCreateOptions, ProviderTeardownOptions } from './providers/provider-adapter.js'
 import type {
   AnySession,
   AgentsRouterOptions,
@@ -59,7 +59,7 @@ export interface AgentsSessionCallbacks {
     agentType?: StreamSession['agentType'],
     options?: Omit<ProviderCreateOptions, 'sessionName' | 'mode' | 'task' | 'cwd' | 'machine'>,
   ): Promise<StreamSession>
-  teardownProviderSession(session: StreamSession, reason: string): Promise<void>
+  teardownProviderSession(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void>
   shutdownProviderRuntimes(reason?: string): Promise<void>
   applyCodexApprovalDecision(
     session: StreamSession,

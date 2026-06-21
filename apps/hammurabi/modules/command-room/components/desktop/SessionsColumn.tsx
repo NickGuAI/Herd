@@ -1465,7 +1465,7 @@ export function SessionsColumn({
                 <button
                   style={tinyIconBtn}
                   type="button"
-                  aria-label="Add worker"
+                  aria-label="Add machine"
                   onClick={onCreateWorker}
                 >
                   <Icon name="terminal" size={13} />

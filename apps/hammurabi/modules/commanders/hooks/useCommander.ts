@@ -53,6 +53,7 @@ export interface CommanderSession {
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   cwd?: string
   maxTurns?: number
+  costCapUsd?: number | null
   contextMode?: CommanderContextMode
   heartbeat: CommanderHeartbeatConfig
   lastHeartbeat: string | null
@@ -62,6 +63,7 @@ export interface CommanderSession {
   questCount: number
   scheduleCount: number
   totalCostUsd: number
+  monthlyCostUsd?: number
   /** From `.memory/profile.json` — border / chat accent / tone */
   ui?: CommanderUiFields | null
   /** Present when `profile.json` references an on-disk avatar image */

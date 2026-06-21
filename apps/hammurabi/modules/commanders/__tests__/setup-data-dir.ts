@@ -2,7 +2,10 @@ import { afterAll, beforeAll } from 'vitest'
 
 const isBrowserLike = typeof document !== 'undefined'
 
-if (!isBrowserLike) {
+if (isBrowserLike) {
+  const { ensureLocalStorage } = await import('../../command-room/__tests__/ensureLocalStorage')
+  ensureLocalStorage()
+} else {
   const { mkdtemp, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')

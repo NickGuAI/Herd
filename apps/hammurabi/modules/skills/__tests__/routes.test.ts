@@ -126,6 +126,7 @@ describe('skills route discovery', () => {
         'description: Direct installed skill',
         'user-invocable: true',
         'argument-hint: <report>',
+        'supported-providers: codex, claude code, opencode',
         '---',
         '',
         '# Publish Report',
@@ -155,6 +156,7 @@ describe('skills route discovery', () => {
       source: 'direct-skills',
       userInvocable: true,
       argumentHint: '<report>',
+      supportedProviders: ['codex', 'claude code', 'opencode'],
     })
   })
 

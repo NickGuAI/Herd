@@ -15,6 +15,7 @@ import {
   parseClaudeAdaptiveThinking,
   parseClaudeEffort,
   parseClaudeMaxThinkingTokens,
+  parseOptionalClaudePermissionMode,
   parseCwd,
   parseOptionalHost,
   parseOptionalModel,
@@ -24,7 +25,9 @@ import {
 } from './session/input.js'
 import { ProviderAuthRequiredError } from './provider-auth.js'
 import {
+  providerSupportsPermissionMode,
   resolveProviderDefaults,
+  unsupportedProviderPermissionModeError,
   type ProviderCreateOptions,
 } from './providers/provider-adapter.js'
 import { getProvider, parseProviderId } from './providers/registry.js'
@@ -51,6 +54,7 @@ export const COMMANDER_WORKER_LAUNCH_BODY_KEYS = new Set([
   'maxThinkingTokens',
   'model',
   'name',
+  'permissionMode',
   'sessionType',
   'task',
 ])
@@ -60,6 +64,7 @@ export const LEGACY_DISPATCH_WORKER_BODY_KEYS = new Set([
   'currentSkillInvocation',
   'cwd',
   'host',
+  'permissionMode',
   'spawnedBy',
   'task',
 ])
@@ -268,6 +273,15 @@ export function parseWorkerLaunchRequest(
     return { ok: false, status: 400, body: { error: 'model must be a string when provided' } }
   }
 
+  const parsedPermissionMode = parseOptionalClaudePermissionMode(body.permissionMode)
+  if (parsedPermissionMode === null) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'Invalid permissionMode. Expected one of: default, acceptEdits, bypassPermissions' },
+    }
+  }
+
   const currentSkillInvocationOverrideRequested = hasOwn(body, 'currentSkillInvocation')
   const rawCurrentSkillInvocation = body.currentSkillInvocation
   const parsedCurrentSkillInvocation =
@@ -317,6 +331,14 @@ export function parseWorkerLaunchRequest(
       body: { error: `Provider ${agentType} cannot dispatch worker sessions` },
     }
   }
+  const mode = parsedPermissionMode ?? options.mode ?? options.sourceDefaults?.mode ?? 'default'
+  if (!providerSupportsPermissionMode(provider, mode)) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: unsupportedProviderPermissionModeError(provider, mode) },
+    }
+  }
 
   const effectiveModel = model ?? options.sourceDefaults?.model
   const modelValidation = validateModelForAgentType(agentType, effectiveModel ?? null)
@@ -359,7 +381,7 @@ export function parseWorkerLaunchRequest(
     request: {
       agentType,
       creator: options.creator,
-      mode: options.mode ?? options.sourceDefaults?.mode ?? 'default',
+      mode,
       preferMachineCwd: options.preferMachineCwd ?? false,
       sessionName,
       task: task ?? '',
@@ -449,6 +471,13 @@ export async function launchProviderWorkerSession(
         ...(request.spawnedBy ? { spawnedBy: request.spawnedBy } : {}),
       },
     )
+    session.mode = request.mode
+    session.sessionType = 'worker'
+    session.creator = request.creator
+    session.cwd = workerCwd
+    if (request.spawnedBy) {
+      session.spawnedBy = request.spawnedBy
+    }
 
     if (options.abortSignal?.aborted) {
       await deps.teardownProviderSession?.(session, 'Worker dispatch was cancelled before registration')

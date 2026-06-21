@@ -242,6 +242,7 @@ export function createGeminiSessionAdapter(
           displayText: options?.displayText,
           images: normalizedImages,
           clientSendId: options?.clientSendId,
+          userEventSubtype: options?.userEventSubtype,
           priority: 'normal',
         })
         return { ok: true, delivered: 'queued', message, position }

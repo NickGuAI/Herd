@@ -34,8 +34,6 @@ import type {
   StreamSession,
 } from './types.js'
 
-export const WS_REPLAY_TAIL_LIMIT = 200
-
 export interface AgentsWebSocketContext {
   sessions: Map<string, AnySession>
   verifyWsAuth(req: IncomingMessage): Promise<boolean>
@@ -78,7 +76,7 @@ function readClientSendId(value: unknown): string | undefined {
 }
 
 function hasLatestSystemEvent(session: StreamSession, text: string): boolean {
-  const latest = session.events.at(-1)
+  const latest = session.events[session.events.length - 1]
   return latest?.type === 'system' && latest.text === text
 }
 
@@ -133,8 +131,8 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
           // Include the accumulated usage so the client can set totals
           // directly rather than re-accumulating from individual deltas.
           if (session.events.length > 0) {
-            const replayEvents = session.events.slice(-WS_REPLAY_TAIL_LIMIT)
-            const replayMore = session.events.length > WS_REPLAY_TAIL_LIMIT
+            const replayEvents = session.events.slice()
+            const replayMore = false
             const queue = session.kind === 'stream' ? getQueueUpdatePayload(session).queue : undefined
             const projection = projectSessionReplay({
               events: replayEvents,

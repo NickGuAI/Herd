@@ -7,6 +7,8 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store.js'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection.js'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema.js'
 import { createAutomationsRouter } from '../../automations/routes.js'
 import { AutomationStore } from '../../automations/store.js'
 import { defaultOperatorStorePath, OperatorStore } from '../../operators/store.js'
@@ -523,6 +525,8 @@ async function startAgentsServer(): Promise<{
   close: () => Promise<void>
 }> {
   const runtimeDir = await mkdtemp(path.join(tmpdir(), 'hammurabi-agents-'))
+  const sqliteDb = openHammurabiSqliteDatabase(path.join(runtimeDir, 'hammurabi.sqlite'))
+  applyHammurabiSqliteSchema(sqliteDb)
   const app = express()
   app.use(express.json())
 
@@ -530,7 +534,7 @@ async function startAgentsServer(): Promise<{
     apiKeyStore: createTestApiKeyStore(),
     autoResumeSessions: false,
     commanderSessionStorePath: path.join(runtimeDir, 'commander-sessions.json'),
-    sessionStorePath: path.join(runtimeDir, 'stream-sessions.json'),
+    sqliteDb,
   })
 
   app.use('/api', createProviderRegistryRouter({ apiKeyStore: createTestApiKeyStore() }))
@@ -557,6 +561,7 @@ async function startAgentsServer(): Promise<{
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: async () => {
+      await agents.sessionsInterface.shutdown?.()
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (error) {
@@ -566,6 +571,7 @@ async function startAgentsServer(): Promise<{
           resolve()
         })
       })
+      sqliteDb.close()
       await rm(runtimeDir, { recursive: true, force: true })
     },
   }

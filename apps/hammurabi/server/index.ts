@@ -21,6 +21,11 @@ import { configureHttpServerTimeouts } from './http-server-timeouts.js'
 import { acquireHammurabiStoreProcessLock } from './store-process-lock.js'
 import { AppSettingsStore } from '../modules/settings/store.js'
 import type { AppTheme } from '../modules/settings/types.js'
+import {
+  ensureHammurabiDatabaseReadyForBoot,
+  openHammurabiSqliteDatabase,
+  type HammurabiDatabaseReadiness,
+} from './db/index.js'
 
 const buildVersion = process.env.LAUNCH_COMMIT ?? 'dev'
 const startedAt = Date.now()
@@ -58,13 +63,18 @@ const storeProcessLock = await acquireHammurabiStoreProcessLock().catch((error) 
   process.exit(1)
 })
 
+let databaseReadiness: HammurabiDatabaseReadiness | null = null
+let sqliteDb: ReturnType<typeof openHammurabiSqliteDatabase> | null = null
+
 async function exitStartupFailure(message: string): Promise<never> {
   logError(message)
+  sqliteDb?.close()
   await storeProcessLock.release()
   process.exit(1)
 }
 
 process.on('exit', () => {
+  sqliteDb?.close()
   storeProcessLock.releaseSync()
 })
 
@@ -87,8 +97,25 @@ const allowedCorsOrigins = parseAllowedCorsOrigins(process.env.HAMMURABI_ALLOWED
 const apiKeyStore = new ApiKeyJsonStore()
 const appSettingsStore = new AppSettingsStore()
 
+try {
+  databaseReadiness = await ensureHammurabiDatabaseReadyForBoot(process.env)
+  sqliteDb = openHammurabiSqliteDatabase(databaseReadiness.dbPath)
+  logInfo(
+    `[database] SQLite runtime-session store ready at ${databaseReadiness.dbPath} `
+    + `(schema ${databaseReadiness.schemaVersion})`,
+  )
+} catch (error) {
+  await exitStartupFailure(formatError(error))
+}
+
+if (!databaseReadiness || !sqliteDb) {
+  await exitStartupFailure('[database] SQLite runtime-session store did not initialize before module startup.')
+}
+const readyDatabaseReadiness = databaseReadiness as HammurabiDatabaseReadiness
+const readySqliteDb = sqliteDb as ReturnType<typeof openHammurabiSqliteDatabase>
+
 if (shouldStopActiveSessionsOnBoot(process.env.HAMMURABI_STOP_ACTIVE_SESSIONS_ON_BOOT)) {
-  const resetResult = await resetActiveRuntimeStateForLaunch()
+  const resetResult = await resetActiveRuntimeStateForLaunch({ sqliteDb: readySqliteDb })
   if (resetResult.errors.length > 0) {
     await exitStartupFailure(
       `[launch] Refusing to serve after stale active-state reset failed\n` +
@@ -96,10 +123,8 @@ if (shouldStopActiveSessionsOnBoot(process.env.HAMMURABI_STOP_ACTIVE_SESSIONS_ON
     )
   }
   logInfo(
-    `[launch] Stopped stale active state before module init: ` +
-    `${resetResult.streamSessionsStopped} stream session(s), ` +
-    `${resetResult.conversationsStopped} conversation(s), ` +
-    `${resetResult.commanderSessionsStopped} commander session(s)`,
+    `[launch] Paused ${resetResult.runtimeSessionsPaused} active runtime session(s) and idled `
+    + `${resetResult.commanderSessionsIdled} commander record(s) before module init`,
   )
 }
 
@@ -122,6 +147,8 @@ const { modules, otelRouter, moduleGraph } = createModules({
   auth0ClientId: process.env.AUTH0_CLIENT_ID,
   maxAgentSessions,
   appSettingsStore,
+  sqliteDb: readySqliteDb,
+  databaseReadiness: readyDatabaseReadiness,
   initializeAgentSessionRuntimes: backgroundRuntimesEnabled,
   initializeAutomationScheduler: backgroundRuntimesEnabled,
   initializeChannelRuntimes: backgroundRuntimesEnabled,
@@ -154,6 +181,15 @@ app.get('/api/health', (_req, res) => {
     uptime: Math.floor((Date.now() - startedAt) / 1000),
     version: buildVersion,
     backgroundRuntimes: backgroundRuntimesEnabled ? 'enabled' : 'disabled',
+    database: {
+      ready: readyDatabaseReadiness.ready,
+      path: readyDatabaseReadiness.dbPath,
+      schemaVersion: readyDatabaseReadiness.schemaVersion,
+      requiredSchemaVersion: readyDatabaseReadiness.requiredSchemaVersion,
+      migrationStatus: readyDatabaseReadiness.migrationStatus,
+      migrationRequired: readyDatabaseReadiness.migrationRequired,
+      remediationCommand: readyDatabaseReadiness.ready ? null : readyDatabaseReadiness.remediationCommand,
+    },
     modules: modules.map((m) => m.name),
     memory: {
       rss: memory.rss,
@@ -253,6 +289,11 @@ async function shutdownModules(): Promise<void> {
   }
 }
 
+async function closeDatabase(): Promise<void> {
+  sqliteDb?.close()
+  sqliteDb = null
+}
+
 server.listen(port, host, () => {
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
@@ -264,6 +305,7 @@ server.listen(port, host, () => {
       void (async () => {
         try {
           await shutdownModules()
+          await closeDatabase()
           server.close((error) => {
             void (async () => {
               if (error) {
@@ -278,6 +320,7 @@ server.listen(port, host, () => {
           })
         } catch (error) {
           logError(`Error during shutdown\n${formatError(error)}`)
+          await closeDatabase()
           await storeProcessLock.release()
           process.exit(1)
         }

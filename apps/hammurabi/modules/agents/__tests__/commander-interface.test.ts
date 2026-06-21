@@ -25,7 +25,7 @@ import {
   createCommanderSessionsInterface,
   type CommanderInterfaceContext,
 } from '../commander-interface'
-import { createCodexProviderContext } from '../providers/provider-session-context'
+import { createClaudeProviderContext, createCodexProviderContext } from '../providers/provider-session-context'
 import type { AgentType, AnySession, StreamJsonEvent, StreamSession } from '../types'
 import type { QueuedMessage, QueuedMessageImage } from '../message-queue'
 
@@ -99,10 +99,20 @@ function makeBaseContext(
       }
       return createClaudeSessionMock(name)
     }),
-    createQueuedMessage: vi.fn((text, priority, images?: QueuedMessageImage[]) => ({
+    createQueuedMessage: vi.fn((
+      text,
+      priority,
+      images?: QueuedMessageImage[],
+      displayText?: string,
+      clientSendId?: string,
+      userEventSubtype?: string,
+    ) => ({
       id: 'queued-1',
       text,
       images,
+      ...(displayText !== undefined ? { displayText } : {}),
+      ...(clientSendId ? { clientSendId } : {}),
+      ...(userEventSubtype ? { userEventSubtype } : {}),
       priority,
       queuedAt: new Date().toISOString(),
     }) as unknown as QueuedMessage),
@@ -185,15 +195,10 @@ describe('createCommanderSessionsInterface — createCommanderSession', () => {
     expect(ctx.sessions.has('commander-gemini')).toBe(true)
   })
 
-  it('falls back to a fresh codex thread when resume fails', async () => {
-    let callCount = 0
+  it('fails Codex commander resume instead of falling back to a fresh thread', async () => {
     const ctx = makeBaseContext({
-      createCodexSessionMock: vi.fn(async (name: string) => {
-        callCount += 1
-        if (callCount === 1) {
-          throw new Error('resume rollout missing')
-        }
-        return makeCodexStreamSession(name)
+      createCodexSessionMock: vi.fn(async () => {
+        throw new Error('resume rollout missing')
       }),
     })
     ctx.createProviderStreamSession = vi.fn(async (name, _mode, _task, _cwd, _machine, agentType) => {
@@ -207,16 +212,70 @@ describe('createCommanderSessionsInterface — createCommanderSession', () => {
     })
     const iface = createCommanderSessionsInterface(ctx)
 
-    await iface.createCommanderSession({
+    await expect(iface.createCommanderSession({
       name: 'commander-codex-resume',
       commanderId: 'codex-resume',
       systemPrompt: 'hi',
       agentType: 'codex',
       resumeProviderContext: createCodexProviderContext({ threadId: 'stale-thread' }),
+    })).rejects.toThrow('resume rollout missing')
+
+    expect(ctx.createCodexSessionMock).toHaveBeenCalledTimes(1)
+    expect(ctx.sessions.has('commander-codex-resume')).toBe(false)
+    expect(ctx.schedulePersistedSessionsWrite).not.toHaveBeenCalled()
+  })
+
+  it('fails Claude commander resume instead of falling back to a fresh session', async () => {
+    const ctx = makeBaseContext({
+      createClaudeSessionMock: vi.fn(async () => {
+        throw new Error('claude resume unavailable')
+      }),
+    })
+    ctx.createProviderStreamSession = vi.fn(async (name, _mode, _task, _cwd, _machine, agentType) => {
+      if (agentType === 'claude') {
+        return ctx.createClaudeSessionMock(name)
+      }
+      return makeCodexStreamSession(name)
+    })
+    const iface = createCommanderSessionsInterface(ctx)
+
+    await expect(iface.createCommanderSession({
+      name: 'commander-claude-resume',
+      commanderId: 'claude-resume',
+      systemPrompt: 'hi',
+      agentType: 'claude',
+      resumeProviderContext: createClaudeProviderContext({ sessionId: 'stale-claude-session' }),
+    })).rejects.toThrow('claude resume unavailable')
+
+    expect(ctx.createClaudeSessionMock).toHaveBeenCalledTimes(1)
+    expect(ctx.sessions.has('commander-claude-resume')).toBe(false)
+    expect(ctx.schedulePersistedSessionsWrite).not.toHaveBeenCalled()
+  })
+
+  it('does not treat foreign or missing provider context ids as native resume ids', async () => {
+    const ctx = makeBaseContext()
+    const iface = createCommanderSessionsInterface(ctx)
+
+    await iface.createCommanderSession({
+      name: 'codex-to-claude',
+      commanderId: 'foreign-context',
+      systemPrompt: 'hi',
+      agentType: 'claude',
+      resumeProviderContext: createCodexProviderContext({ threadId: 'codex-thread' }),
+    })
+    await iface.createCommanderSession({
+      name: 'claude-without-session-id',
+      commanderId: 'missing-context-id',
+      systemPrompt: 'hi',
+      agentType: 'claude',
+      resumeProviderContext: createClaudeProviderContext(),
     })
 
-    expect(ctx.createCodexSessionMock).toHaveBeenCalledTimes(2)
-    expect(ctx.sessions.has('commander-codex-resume')).toBe(true)
+    const createCalls = vi.mocked(ctx.createProviderStreamSession).mock.calls
+    const firstOptions = createCalls[0]?.[6]
+    const secondOptions = createCalls[1]?.[6]
+    expect(firstOptions).not.toEqual(expect.objectContaining({ resumeSessionId: expect.any(String) }))
+    expect(secondOptions).not.toEqual(expect.objectContaining({ resumeSessionId: expect.any(String) }))
   })
 })
 
@@ -347,6 +406,28 @@ describe('createCommanderSessionsInterface — sendToSession', () => {
     expect(ctx.sendImmediateTextToStreamSession).toHaveBeenCalledWith(session, 'hello', [image])
   })
 
+  it('immediate send forwards internal user event subtype through sendImmediateTextToStreamSession', async () => {
+    const session = makeClaudeStreamSession('target')
+    const sessions = new Map<string, AnySession>([['target', session]])
+    const ctx = makeBaseContext({ sessions })
+    const iface = createCommanderSessionsInterface(ctx)
+
+    const ok = await iface.sendToSession('target', {
+      text: 'Commander runtime started. Acknowledge readiness and await instructions.',
+      userEventSubtype: 'commander_startup',
+    })
+
+    expect(ok).toBe(true)
+    expect(ctx.sendImmediateTextToStreamSession).toHaveBeenCalledWith(
+      session,
+      'Commander runtime started. Acknowledge readiness and await instructions.',
+      undefined,
+      undefined,
+      undefined,
+      'commander_startup',
+    )
+  })
+
   it('queued send routes through createQueuedMessage + enqueue + drain', async () => {
     const session = makeClaudeStreamSession('target')
     const sessions = new Map<string, AnySession>([['target', session]])
@@ -374,6 +455,34 @@ describe('createCommanderSessionsInterface — sendToSession', () => {
     expect(ok).toBe(true)
     expect(ctx.createQueuedMessage).toHaveBeenCalledWith('', 'normal', [image])
     expect(ctx.enqueueQueuedMessage).toHaveBeenCalledTimes(1)
+    expect(ctx.scheduleQueuedMessageDrain).toHaveBeenCalledTimes(1)
+  })
+
+  it('queued send forwards internal user event subtype through createQueuedMessage', async () => {
+    const session = makeClaudeStreamSession('target')
+    const sessions = new Map<string, AnySession>([['target', session]])
+    const ctx = makeBaseContext({ sessions })
+    const iface = createCommanderSessionsInterface(ctx)
+
+    const ok = await iface.sendToSession(
+      'target',
+      { text: '[HEARTBEAT]', userEventSubtype: 'heartbeat' },
+      { queue: true, priority: 'low' },
+    )
+
+    expect(ok).toBe(true)
+    expect(ctx.createQueuedMessage).toHaveBeenCalledWith(
+      '[HEARTBEAT]',
+      'low',
+      undefined,
+      undefined,
+      undefined,
+      'heartbeat',
+    )
+    expect(ctx.enqueueQueuedMessage).toHaveBeenCalledWith(
+      session,
+      expect.objectContaining({ userEventSubtype: 'heartbeat' }),
+    )
     expect(ctx.scheduleQueuedMessageDrain).toHaveBeenCalledTimes(1)
   })
 

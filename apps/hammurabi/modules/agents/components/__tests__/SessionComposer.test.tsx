@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionComposer } from '../SessionComposer'
 import { MAX_MESSAGE_IMAGE_BYTES, MAX_MESSAGE_IMAGE_SIZE_MB } from '../../message-images'
+import { ensureLocalStorage } from '../../../command-room/__tests__/ensureLocalStorage'
 
 const speechRecognitionMock = {
   isListening: false,
@@ -165,6 +166,46 @@ function setDraftText(value: string) {
   })
 }
 
+function textarea(): HTMLTextAreaElement {
+  const element = document.body.querySelector('textarea') as HTMLTextAreaElement | null
+  expect(element).not.toBeNull()
+  return element as HTMLTextAreaElement
+}
+
+function dispatchComposerKey(
+  key: string,
+  options: KeyboardEventInit & { isComposing?: boolean; keyCode?: number } = {},
+) {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  })
+  if (options.isComposing !== undefined) {
+    Object.defineProperty(event, 'isComposing', {
+      configurable: true,
+      value: options.isComposing,
+    })
+  }
+  if (options.keyCode !== undefined) {
+    Object.defineProperty(event, 'keyCode', {
+      configurable: true,
+      value: options.keyCode,
+    })
+  }
+  flushSync(() => {
+    textarea().dispatchEvent(event)
+  })
+  return event
+}
+
+function dispatchComposerComposition(type: 'compositionstart' | 'compositionend') {
+  flushSync(() => {
+    textarea().dispatchEvent(new CompositionEvent(type, { bubbles: true }))
+  })
+}
+
 function fileWithSize(name: string, type: string, size: number): File {
   const file = new File(['x'], name, { type })
   Object.defineProperty(file, 'size', {
@@ -192,6 +233,7 @@ async function attachComposerImage(file = new File(['fake-image'], 'draft.png', 
 }
 
 beforeEach(() => {
+  ensureLocalStorage().clear()
   speechRecognitionMock.isListening = false
   speechRecognitionMock.transcript = ''
   speechRecognitionMock.isSupported = true
@@ -222,7 +264,7 @@ afterEach(() => {
   container?.remove()
   container = null
   document.body.innerHTML = ''
-  window.localStorage.clear()
+  ensureLocalStorage().clear()
   vi.useRealTimers()
   vi.clearAllMocks()
 })
@@ -603,29 +645,214 @@ describe('SessionComposer', () => {
     }))
   })
 
-  it('keeps the mobile draft when an async fallback send resolves false', async () => {
-    const onSend = vi.fn(() => Promise.resolve(false))
+  it('does not send when Enter is pressed during IME composition', async () => {
+    const onSend = vi.fn(() => true)
+    renderComposer({ onSend })
+    setDraftText('nihao')
+
+    dispatchComposerComposition('compositionstart')
+    const event = dispatchComposerKey('Enter', { isComposing: true })
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea().value).toBe('nihao')
+  })
+
+  it('does not queue when Tab is pressed during IME composition', async () => {
+    const onSend = vi.fn(() => true)
+    const onQueue = vi.fn(() => true)
+    renderComposer({
+      onSend,
+      onQueue,
+      queueSnapshot: {
+        currentMessage: null,
+        items: [],
+        totalCount: 0,
+        maxSize: 8,
+      },
+    })
+    setDraftText('nihon')
+
+    dispatchComposerComposition('compositionstart')
+    const event = dispatchComposerKey('Tab', { isComposing: true })
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(onQueue).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea().value).toBe('nihon')
+  })
+
+  it('does not send on the compositionend keydown race but sends after composition settles', async () => {
+    const onSend = vi.fn(() => true)
+    renderComposer({ onSend })
+    setDraftText('你好')
+
+    dispatchComposerComposition('compositionstart')
+    dispatchComposerComposition('compositionend')
+    dispatchComposerKey('Enter')
+
+    expect(onSend).not.toHaveBeenCalled()
+    expect(textarea().value).toBe('你好')
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    dispatchComposerKey('Enter')
+
+    await vi.waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1)
+    })
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
+      text: '你好',
+      clientSendId: expect.stringMatching(/^send-/u),
+    }))
+  })
+
+  it('sends once while an async send is in flight after a double click', async () => {
+    let resolveSend: ((sent: boolean) => void) | null = null
+    const sendPromise = new Promise<boolean>((resolve) => {
+      resolveSend = resolve
+    })
+    const onSend = vi.fn(() => sendPromise)
 
     renderComposer({
       variant: 'mobile',
       isStreaming: false,
       onSend,
     })
-    setDraftText('Keep failed fallback draft')
+    setDraftText('Send this once')
+    window.dispatchEvent(new Event('pagehide'))
+    expect(window.localStorage.getItem('hammurabi:draft:commander-atlas')).toBe('Send this once')
+    const sendButton = findButtonByLabel('Send message')
+
+    flushSync(() => {
+      sendButton.click()
+      sendButton.click()
+    })
+
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(window.localStorage.getItem('hammurabi:draft:commander-atlas')).toBeNull()
+    expect(document.body.querySelector('textarea')).toBeNull()
+    expect(document.body.querySelector('[role="status"][aria-label="Sending message"]')?.textContent)
+      .toContain('Sending message...')
+    expect(findButtonByLabel('Send message').disabled).toBe(true)
+
+    await act(async () => {
+      resolveSend?.(true)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(textarea().value).toBe('')
+  })
+
+  it('sends once while an async send is in flight after repeated Enter', async () => {
+    let resolveSend: ((sent: boolean) => void) | null = null
+    const sendPromise = new Promise<boolean>((resolve) => {
+      resolveSend = resolve
+    })
+    const onSend = vi.fn(() => sendPromise)
+
+    renderComposer({
+      onSend,
+    })
+    setDraftText('Enter once')
+    window.dispatchEvent(new Event('pagehide'))
+    expect(window.localStorage.getItem('hammurabi:draft:commander-atlas')).toBe('Enter once')
+
+    const target = textarea()
+    flushSync(() => {
+      target.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }))
+      target.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }))
+    })
+
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(window.localStorage.getItem('hammurabi:draft:commander-atlas')).toBeNull()
+    expect(document.body.querySelector('[role="status"][aria-label="Sending message"]')).not.toBeNull()
+
+    await act(async () => {
+      resolveSend?.(true)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(textarea().value).toBe('')
+  })
+
+  it('clears then restores the exact mobile draft, image, and context when async send resolves false', async () => {
+    const sessionName = 'conversation-failed-restore'
+    const onSend = vi.fn(() => Promise.resolve(false))
+    const onClearContextFilePaths = vi.fn()
+    const onRestoreContextAttachments = vi.fn()
+    const contextAnnotation = {
+      id: 'annotation-1',
+      path: 'docs/spec.md',
+      body: 'Please restore this.',
+      quote: null,
+      range: null,
+    }
+
+    renderComposer({
+      sessionName,
+      variant: 'mobile',
+      isStreaming: false,
+      onSend,
+      contextFilePaths: ['docs/spec.md'],
+      contextDirectoryPaths: ['src'],
+      contextFileAnnotations: [contextAnnotation],
+      onClearContextFilePaths,
+      onRestoreContextAttachments,
+    })
+    setDraftText('  Keep failed fallback draft  ')
+    await attachComposerImage()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(window.localStorage.getItem(`hammurabi:draft:${sessionName}`)).toBe('  Keep failed fallback draft  ')
+    expect(window.localStorage.getItem(`hammurabi:draft-images:${sessionName}`)).not.toBeNull()
 
     flushSync(() => {
       findButtonByLabel('Send message').click()
     })
 
+    expect(window.localStorage.getItem(`hammurabi:draft:${sessionName}`)).toBeNull()
+    expect(window.localStorage.getItem(`hammurabi:draft-images:${sessionName}`)).toBeNull()
+    expect(onClearContextFilePaths).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => {
       expect(onSend).toHaveBeenCalledWith(expect.objectContaining({
         text: 'Keep failed fallback draft',
-        images: undefined,
+        images: [{ mediaType: 'image/png', data: 'ZmFrZS1pbWFnZQ==' }],
         clientSendId: expect.stringMatching(/^send-/u),
+        context: {
+          filePaths: ['docs/spec.md'],
+          directoryPaths: ['src'],
+          fileAnnotations: [{
+            path: 'docs/spec.md',
+            body: 'Please restore this.',
+            quote: null,
+            range: null,
+          }],
+        },
       }))
     })
-    const textarea = document.body.querySelector('textarea') as HTMLTextAreaElement | null
-    expect(textarea?.value).toBe('Keep failed fallback draft')
+    await vi.waitFor(() => {
+      expect(textarea().value).toBe('  Keep failed fallback draft  ')
+    })
+    expect(document.body.querySelector('.composer-attachment')).not.toBeNull()
+    expect(window.localStorage.getItem(`hammurabi:draft:${sessionName}`)).toBe('  Keep failed fallback draft  ')
+    expect(JSON.parse(window.localStorage.getItem(`hammurabi:draft-images:${sessionName}`) ?? '{}')).toEqual({
+      images: [{ mediaType: 'image/png', data: 'ZmFrZS1pbWFnZQ==' }],
+    })
+    expect(onRestoreContextAttachments).toHaveBeenCalledWith({
+      filePaths: ['docs/spec.md'],
+      directoryPaths: ['src'],
+      fileAnnotations: [contextAnnotation],
+    })
   })
 
   it('keeps the mobile draft when send is rejected synchronously', async () => {

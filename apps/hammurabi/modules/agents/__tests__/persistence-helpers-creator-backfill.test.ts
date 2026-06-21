@@ -1,38 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  createPersistenceHelpers,
-  type PersistenceHelpersContext,
-} from '../persistence-helpers'
 import { buildDefaultCommanderConversationId } from '../../commanders/store'
-import type {
-  AnySession,
-  CompletedSession,
-  ExitedStreamSessionState,
-  PersistedSessionsState,
-} from '../types'
-
-function makeBaseContext(sessionStorePath: string): PersistenceHelpersContext {
-  return {
-    sessionStorePath,
-    maxSessions: 32,
-    machineRegistry: {
-      readMachineRegistry: vi.fn(async () => []),
-    } as PersistenceHelpersContext['machineRegistry'],
-    sessions: new Map<string, AnySession>(),
-    completedSessions: new Map<string, CompletedSession>(),
-    exitedStreamSessions: new Map<string, ExitedStreamSessionState>(),
-    applyStreamUsageEvent: vi.fn(),
-    createClaudeSession: vi.fn(),
-    createCodexSession: vi.fn(),
-    createGeminiSession: vi.fn(),
-    teardownCodexSessionRuntime: vi.fn(async () => undefined),
-    isExitedSessionResumeAvailable: vi.fn(async () => false),
-    isLiveSessionResumeAvailable: vi.fn(async () => false),
-  }
-}
+import { migrateLegacyPersistedSessionSources } from '../legacy-session-source-migration'
+import type { PersistedSessionsState } from '../types'
 
 function makeLegacyExitedEntry(
   name: string,
@@ -88,13 +60,10 @@ describe('persisted session creator backfill', () => {
       }
       await writeFile(sessionStorePath, JSON.stringify(legacyState, null, 2), 'utf8')
 
-      const ctx = makeBaseContext(sessionStorePath)
-      const { restorePersistedSessions } = createPersistenceHelpers(ctx)
+      const { state, changed } = await migrateLegacyPersistedSessionSources(sessionStorePath, legacyState)
 
-      await restorePersistedSessions()
-
-      const persisted = JSON.parse(await readFile(sessionStorePath, 'utf8')) as PersistedSessionsState
-      expect(persisted.sessions).toEqual([
+      expect(changed).toBe(true)
+      expect(state.sessions).toEqual([
         expect.objectContaining({
           name: 'command-room-nightly',
           sessionType: 'cron',
@@ -125,15 +94,6 @@ describe('persisted session creator backfill', () => {
       ])
 
       expect(consoleInfo.mock.calls.length).toBeGreaterThanOrEqual(5)
-      expect(ctx.exitedStreamSessions.get('worker-1710000000000')).toMatchObject({
-        sessionType: 'worker',
-        creator: { kind: 'commander', id: 'cmdr-atlas' },
-        spawnedBy: 'commander-cmdr-atlas',
-      })
-      expect(ctx.exitedStreamSessions.get('session-plain')).toMatchObject({
-        sessionType: 'worker',
-        creator: { kind: 'human', id: '<unknown-user>' },
-      })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

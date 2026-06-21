@@ -1,6 +1,7 @@
 import type { Router } from 'express'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
+import type { DatabaseSync } from 'node:sqlite'
 import type { AgentSessionMonitorOptions } from '@gehirn/ai-services'
 import type { AppSettingsStore } from '../modules/settings/store.js'
 import type {
@@ -16,6 +17,7 @@ import {
 } from './module-loader.js'
 import type { HammurabiRuntimeCapabilities } from './module-runtime-capabilities.js'
 import type { HammurabiRouteDeclaration } from '../src/types/module-manifest.js'
+import type { HammurabiDatabaseReadiness } from './db/readiness.js'
 
 export interface HammurabiModule {
   name: string
@@ -35,6 +37,10 @@ export interface ModuleRegistryOptions {
   auth0ClientId?: string
   /** Max concurrent agent sessions (default 10). Set via HAMMURABI_MAX_AGENT_SESSIONS. */
   maxAgentSessions?: number
+  /** Current SQLite runtime-session database handle. Required by the agents module. */
+  sqliteDb?: DatabaseSync
+  /** Readiness details for the current SQLite runtime-session database. */
+  databaseReadiness?: HammurabiDatabaseReadiness
   appSettingsStore?: AppSettingsStore
   /** Disable agent session recovery and pruner loops for preflight candidates. */
   initializeAgentSessionRuntimes?: boolean
@@ -42,6 +48,10 @@ export interface ModuleRegistryOptions {
   initializeAutomationScheduler?: boolean
   /** Disable channel adapter runtimes when a process is only a preflight/API candidate. */
   initializeChannelRuntimes?: boolean
+  /** Disable telemetry local scanning in registry-level tests and preflight candidates. */
+  initializeTelemetryLocalScan?: boolean
+  /** Override telemetry retention compaction; use 0 to disable background compaction. */
+  telemetryRetentionDays?: number
 }
 
 export interface ModuleRuntimeContext {
@@ -49,6 +59,7 @@ export interface ModuleRuntimeContext {
   readonly moduleGraph: LoadedHammurabiModuleGraph
   readonly capabilities: HammurabiCapabilityContainer<HammurabiRuntimeCapabilities>
   readonly internalToken: string
+  readonly approvalBridgeSigningSecret: string
   readonly commandRoomMonitorOptions: AgentSessionMonitorOptions
 }
 

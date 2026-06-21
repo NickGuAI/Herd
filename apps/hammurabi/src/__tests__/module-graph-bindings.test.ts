@@ -307,6 +307,25 @@ describe('module graph frontend bindings', () => {
     }
   })
 
+  it('mounts the policies page on desktop and mobile surfaces', () => {
+    const policiesModule = HAMMURABI_MODULE_GRAPH.find((module) => module.id === 'policies')
+    const policiesRoute = policiesModule?.ui.routes.find((route) => route.id === 'policies.ui')
+    const policiesBinding = moduleComponentBindings.find((binding) => binding.routeId === 'policies.ui')
+
+    expect(policiesBinding).toMatchObject({
+      componentKey: 'modules/policies/page',
+    })
+    expect(policiesRoute).toMatchObject({
+      path: '/policies',
+      componentKey: 'modules/policies/page',
+      surfaces: expect.arrayContaining(['desktop', 'mobile']),
+      nav: expect.objectContaining({
+        surfaces: expect.arrayContaining(['desktop', 'mobile']),
+      }),
+    })
+    expect(policiesModule?.ui.surfaces).toEqual(expect.arrayContaining(['desktop', 'mobile']))
+  })
+
   it('keeps desktop nav manifest order aligned with the top bar sequence', () => {
     const orderedDesktopNav = HAMMURABI_MODULE_GRAPH.flatMap((module) =>
       module.ui.routes.flatMap((route) => {

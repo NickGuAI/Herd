@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, useState } from 'react'
+import { act, useState, type Dispatch, type SetStateAction } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -128,6 +128,7 @@ let root: Root | null = null
 let container: HTMLDivElement | null = null
 let originalCanvasGetContext: typeof HTMLCanvasElement.prototype.getContext | undefined
 let conversationMessageResolve: ((value: { accepted: boolean }) => void) | null = null
+let setStreamMessages: Dispatch<SetStateAction<MsgItem[]>> | null = null
 
 const pushOptimisticUserMessageSpy = vi.fn()
 const streamSendInputSpy = vi.fn(async () => true)
@@ -308,6 +309,7 @@ describe('MobileChatView optimistic user bubble', () => {
     answerQuestionSpy.mockClear()
     conversationMessageSpy.mockClear()
     conversationMessageResolve = null
+    setStreamMessages = null
 
     mocks.useCommander.mockReturnValue({
       commanders: [commander],
@@ -353,6 +355,7 @@ describe('MobileChatView optimistic user bubble', () => {
     })
     mocks.useAgentSessionStream.mockImplementation(() => {
       const [messages, setMessages] = useState<MsgItem[]>([])
+      setStreamMessages = setMessages
 
       return {
         messages,
@@ -419,7 +422,7 @@ describe('MobileChatView optimistic user bubble', () => {
     vi.clearAllMocks()
   })
 
-  it('renders the optimistic user bubble before the conversation HTTP send resolves', async () => {
+  it('renders the selected-conversation pending user bubble outside stream replay state', async () => {
     await renderAt('/command-room?surface=mobile&commander=cmd-1&conversation=conv-1')
 
     await vi.waitFor(() => {
@@ -433,11 +436,7 @@ describe('MobileChatView optimistic user bubble', () => {
     })
 
     await vi.waitFor(() => {
-      expect(pushOptimisticUserMessageSpy).toHaveBeenCalledWith(
-        'Ship the mobile bubble',
-        undefined,
-        'send-mobile-bubble-1',
-      )
+      expect(pushOptimisticUserMessageSpy).not.toHaveBeenCalled()
       expect(conversationMessageSpy).toHaveBeenCalledWith({
         conversationId: 'conv-1',
         message: 'Ship the mobile bubble',
@@ -448,10 +447,23 @@ describe('MobileChatView optimistic user bubble', () => {
       expect(transcriptProbe?.textContent).toContain('user:Ship the mobile bubble')
     })
 
-    expect(pushOptimisticUserMessageSpy.mock.invocationCallOrder[0]).toBeLessThan(
-      conversationMessageSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    )
     expect(streamSendInputSpy).not.toHaveBeenCalled()
+    expect(document.body.querySelector('[data-testid="mobile-transcript-probe"]')?.textContent).toBe(
+      'user:Ship the mobile bubble',
+    )
+
+    await act(async () => {
+      setStreamMessages?.([
+        {
+          id: 'stale-replay-agent',
+          kind: 'agent',
+          text: 'Stale replay should not own selected conversation chat',
+          transcript: { seq: 1, source: { provider: 'codex', backend: 'rpc' } },
+        },
+      ])
+      await Promise.resolve()
+    })
+
     expect(document.body.querySelector('[data-testid="mobile-transcript-probe"]')?.textContent).toBe(
       'user:Ship the mobile bubble',
     )

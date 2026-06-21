@@ -14,8 +14,8 @@ curl -fsSL https://herd.gehirn.ai/install.sh | bash
 
 The installer prepares a hermetic Node/pnpm toolchain, clones the public
 Herd repo, writes the local env file, installs dependencies, builds the app,
-starts the shell once, creates a 24-hour bootstrap API key, and prints the local
-sign-in URL.
+checks the SQLite runtime-session database, starts the shell once, creates a
+24-hour bootstrap API key, and prints the local sign-in URL.
 
 Verification:
 
@@ -25,6 +25,7 @@ Verification:
   sign-in, create a permanent API key in Settings, then rotate or revoke the
   bootstrap key before its 24-hour expiry.
 - The Herd process exposes `/api/health`.
+- `/api/health` reports `database.ready: true`.
 
 ## 2. Open Herd
 
@@ -44,11 +45,12 @@ Verification:
 
 Follow the First Run flow:
 
-1. Confirm the founder and organization profile.
-2. Seed Gaia when prompted.
-3. Install or intentionally skip the starter workforce.
-4. Review provider readiness.
-5. Review machine readiness.
+1. Confirm the database step is ready.
+2. Confirm the founder and organization profile.
+3. Seed Gaia when prompted.
+4. Install or intentionally skip the starter workforce.
+5. Review provider readiness.
+6. Review machine readiness.
 
 Partial setup is valid. Unchecked providers and machines remain unavailable
 until you return and verify them.
@@ -121,6 +123,7 @@ Verification:
 |---|---|---|
 | Installer cannot run | `git`, `curl`, `tar`, outbound HTTPS | Install the missing tool and rerun the installer. |
 | Browser cannot reach app | `/api/health`, process logs, port `20001` | Restart Herd and confirm the printed URL. |
+| Database not ready | `/api/health.database`, local SQLite file | Run the printed migration command from the app workspace, then restart Herd. |
 | API key rejected | local browser storage, latest installer output | Clear the stale key and use a current bootstrap key, or create a permanent key from Settings before the bootstrap key expires. |
 | Provider unavailable | native provider auth status on that host | Run the provider login command on the provider host. |
 | Machine unavailable | ordinary SSH, Tailscale status, machine registry | Fix SSH/Tailscale first, then bootstrap the machine. |

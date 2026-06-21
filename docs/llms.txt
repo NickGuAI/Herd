@@ -1,8 +1,8 @@
 # Herd
 
-> Herd is an operator-controlled agent fleet runtime. It coordinates
-> commanders, workers, provider CLIs, channels, workspace files, approvals,
-> telemetry, onboarding, and persistent memory.
+> Herd is an operator-controlled meta-harness for agent fleets. It coordinates
+> commanders, workers, agent harnesses such as Codex and Claude Code, channels,
+> workspace files, approvals, telemetry, onboarding, and persistent memory.
 
 Use this file as the concise agent-readable map. Prefer setup and operation
 pages first.

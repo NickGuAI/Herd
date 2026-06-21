@@ -1,7 +1,6 @@
 import {
   ensureCodexProviderContext,
   readCodexRuntime,
-  readCodexThreadId,
 } from './providers/provider-session-context.js'
 import type { AnySession } from './types.js'
 
@@ -31,7 +30,7 @@ export function registerCodexProcessExitSessionMap(sessions: Map<string, AnySess
         ensureCodexProviderContext(session).notificationCleanup = undefined
 
         if (readCodexRuntime(session)) {
-          readCodexRuntime(session)?.teardownOnProcessExit?.(readCodexThreadId(session))
+          readCodexRuntime(session)?.teardownOnProcessExit?.()
           continue
         }
 

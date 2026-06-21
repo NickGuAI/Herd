@@ -31,6 +31,7 @@ import {
   withTerminalSpinner,
 } from './terminal-style.js'
 import { validateTelemetryWriteKey } from './validate.js'
+import { parseTailscaleStatusJson } from './tailscale-status.js'
 
 const DEFAULT_ENDPOINT = 'https://herd.gehirn.ai'
 const DEFAULT_AGENTS: readonly HammurabiAgent[] = [
@@ -263,10 +264,6 @@ function parseOnboardArgs(args: readonly string[]): ParsedOnboardArgs {
   return options
 }
 
-function normalizeTailscaleHostname(value: string): string {
-  return value.trim().replace(/\.+$/u, '')
-}
-
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return (
     typeof error === 'object' &&
@@ -307,27 +304,8 @@ export function buildTailscaleInstallCommand(
 }
 
 export function extractTailscaleDnsName(statusJson: string): string | null {
-  let payload: unknown
-  try {
-    payload = JSON.parse(statusJson) as unknown
-  } catch {
-    return null
-  }
-
-  const self = typeof payload === 'object' && payload !== null
-    ? (payload as { Self?: unknown }).Self
-    : null
-  if (typeof self !== 'object' || self === null) {
-    return null
-  }
-
-  const dnsName = (self as { DNSName?: unknown }).DNSName
-  if (typeof dnsName !== 'string') {
-    return null
-  }
-
-  const normalized = normalizeTailscaleHostname(dnsName)
-  return normalized.length > 0 ? normalized : null
+  const parsed = parseTailscaleStatusJson(statusJson)
+  return parsed.ok ? parsed.status.dnsName : null
 }
 
 async function defaultRunCommand(
@@ -597,16 +575,20 @@ async function runTailscaleSetup(
     return null
   }
 
-  const dnsName = extractTailscaleDnsName(statusResult.stdout)
-  if (!dnsName) {
-    process.stderr.write('Tailscale connected, but no DNS name was found in `tailscale status --json`.\n')
+  const parsedStatus = parseTailscaleStatusJson(statusResult.stdout)
+  if (!parsedStatus.ok) {
+    process.stderr.write(`${parsedStatus.error}\n`)
     return null
   }
 
-  process.stdout.write(`Tailscale hostname: ${dnsName}\n`)
-  process.stdout.write('Use that hostname when you register this worker from Herd or the CLI.\n')
-  process.stdout.write(`Example: hammurabi machine add --id <id> --label <label> --tailscale-hostname ${dnsName}\n`)
-  return dnsName
+  const status = parsedStatus.status
+  process.stdout.write(`Tailscale machine: ${status.label} (${status.machineId})\n`)
+  process.stdout.write(`Tailscale hostname: ${status.dnsName}\n`)
+  process.stdout.write(`Tailscale IPs: ${status.tailscaleIps.join(', ')}\n`)
+  process.stdout.write('Next: register and verify it with one command from this machine:\n')
+  process.stdout.write('  hammurabi machine onboard --from-tailscale-status --cwd <absolute-workspace-path>\n')
+  process.stdout.write('Or paste the full `tailscale status --json` output into Herd Add Machine.\n')
+  return status.dnsName
 }
 
 function printSelectedAgentInstructions(

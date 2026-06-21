@@ -81,9 +81,22 @@ function durableEventKey(event: StreamJsonEvent): string | null {
     return `user:${clientSendId}:${event.ev.type}`
   }
 
+  const envelopeId = readTrimmedString(event.id)
+  if (envelopeId) {
+    return `envelope:${envelopeId}`
+  }
+
   const seq = readStreamEventSeq(event)
   if (seq !== null) {
-    return `seq:${seq}`
+    return [
+      'seq',
+      event.source.provider,
+      event.source.backend,
+      event.source.sessionId ?? '',
+      event.time,
+      event.ev.type,
+      seq,
+    ].join(':')
   }
 
   const source = event.source
@@ -119,11 +132,11 @@ function buildRecord(
 }
 
 function compareCanonicalEventRecords(left: CanonicalEventRecord, right: CanonicalEventRecord): number {
-  if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
-    return left.seq - right.seq
-  }
   if (left.timeMs !== null && right.timeMs !== null && left.timeMs !== right.timeMs) {
     return left.timeMs - right.timeMs
+  }
+  if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
+    return left.seq - right.seq
   }
   if (left.seq !== null && right.seq === null) {
     return -1

@@ -194,6 +194,40 @@ describe('CommanderSessionStore', () => {
     expect(persisted.sessions.find((entry) => entry.id === 'model-roundtrip')?.model).toBe('gpt-5.4')
   })
 
+  it('roundtrips nullable commander cost caps through save and load', async () => {
+    const dir = await createTempDir('hammurabi-commander-cost-cap-roundtrip-')
+    const storePath = join(dir, 'sessions.json')
+    const store = new CommanderSessionStore(storePath)
+
+    await store.create({
+      id: 'cost-cap-roundtrip',
+      host: 'cost-cap-host',
+      state: 'idle',
+      created: '2026-05-01T00:00:00.000Z',
+      agentType: 'claude',
+      maxTurns: DEFAULT_COMMANDER_MAX_TURNS,
+      costCapUsd: 25.5,
+      contextMode: DEFAULT_COMMANDER_CONTEXT_MODE,
+      heartbeat: createDefaultHeartbeatConfig(),
+      taskSource: null,
+    })
+
+    const reloaded = new CommanderSessionStore(storePath)
+    expect((await reloaded.get('cost-cap-roundtrip'))?.costCapUsd).toBe(25.5)
+
+    await reloaded.update('cost-cap-roundtrip', (current) => ({
+      ...current,
+      costCapUsd: null,
+    }))
+    const cleared = new CommanderSessionStore(storePath)
+    expect((await cleared.get('cost-cap-roundtrip'))?.costCapUsd).toBeNull()
+
+    const persisted = JSON.parse(await readFile(storePath, 'utf8')) as {
+      sessions: Array<{ id: string; costCapUsd?: number | null }>
+    }
+    expect(persisted.sessions.find((entry) => entry.id === 'cost-cap-roundtrip')?.costCapUsd).toBeNull()
+  })
+
   it('loads legacy commander heartbeat lastSentAt and drops it on serialize', async () => {
     const dir = await createTempDir('hammurabi-commander-heartbeat-last-sent-discard-')
     const storePath = join(dir, 'sessions.json')

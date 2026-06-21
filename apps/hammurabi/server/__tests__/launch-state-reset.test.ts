@@ -1,16 +1,14 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createCodexProviderContext } from '../../modules/agents/providers/provider-session-context'
-import { readPersistedSessionsState } from '../../modules/agents/session/persistence'
-import type { PersistedStreamSession } from '../../modules/agents/types'
+import { openHammurabiSqliteDatabase } from '../db/connection'
+import { applyHammurabiSqliteSchema } from '../db/schema'
 import { createDefaultHeartbeatConfig } from '../../modules/commanders/heartbeat'
-import { ConversationStore } from '../../modules/commanders/conversation-store'
 import {
   CommanderSessionStore,
-  DEFAULT_COMMANDER_CONTEXT_MODE,
   DEFAULT_COMMANDER_MAX_TURNS,
+  type CommanderSession,
 } from '../../modules/commanders/store'
 import {
   resetActiveRuntimeStateForLaunch,
@@ -33,58 +31,20 @@ afterEach(async () => {
   )
 })
 
-function buildPersistedSession(
-  name: string,
-  overrides: Partial<PersistedStreamSession> = {},
-): PersistedStreamSession {
+function buildCommanderSession(
+  id: string,
+  state: CommanderSession['state'],
+): CommanderSession {
   return {
-    name,
-    sessionType: 'commander',
-    creator: {
-      kind: 'commander',
-      id: 'd66a5217-ace6-4f00-b2ac-bbd64a9a7e7e',
-    },
-    conversationId: '11111111-1111-4111-8111-111111111111',
-    agentType: 'codex',
-    model: 'gpt-5',
-    mode: 'default',
-    cwd: '/tmp/project',
-    createdAt: '2026-05-29T00:00:00.000Z',
-    providerContext: createCodexProviderContext({
-      threadId: `${name}-thread`,
-    }),
-    queuedMessages: [],
-    pendingDirectSendMessages: [],
-    ...overrides,
+    id,
+    host: 'local',
+    state,
+    created: '2026-06-20T01:00:00.000Z',
+    heartbeat: createDefaultHeartbeatConfig(),
+    maxTurns: DEFAULT_COMMANDER_MAX_TURNS,
+    contextMode: 'fat',
+    taskSource: null,
   }
-}
-
-async function createConversation(
-  store: ConversationStore,
-  input: {
-    id: string
-    commanderId: string
-    status: 'active' | 'idle' | 'archived'
-    createdAt: string
-  },
-) {
-  return store.create({
-    id: input.id,
-    commanderId: input.commanderId,
-    surface: 'ui',
-    agentType: 'codex',
-    model: 'gpt-5',
-    status: input.status,
-    currentTask: null,
-    lastHeartbeat: null,
-    heartbeatTickCount: 0,
-    completedTasks: 0,
-    totalCostUsd: 0,
-    creationSource: 'ui',
-    createdByKind: 'human',
-    createdAt: input.createdAt,
-    lastMessageAt: input.createdAt,
-  })
 }
 
 describe('launch state reset', () => {
@@ -96,172 +56,165 @@ describe('launch state reset', () => {
     expect(shouldStopActiveSessionsOnBoot(undefined)).toBe(false)
   })
 
-  it('marks stale active persisted runtime state as restartable before module init', async () => {
+  it('pauses active SQLite runtime sessions before module init', async () => {
     const dir = await createTempDir('hammurabi-launch-reset-')
-    const sessionStorePath = join(dir, 'agents', 'stream-sessions.json')
-    const commanderDataDir = join(dir, 'commander')
-    const commanderSessionStorePath = join(commanderDataDir, 'sessions.json')
-    const commanderId = 'd66a5217-ace6-4f00-b2ac-bbd64a9a7e7e'
-    const idleCommanderId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const db = openHammurabiSqliteDatabase(join(dir, 'hammurabi.sqlite'))
+    try {
+      applyHammurabiSqliteSchema(db)
+      const insert = db.prepare(
+        `INSERT INTO agent_runtime_sessions (
+           name, session_type, creator_kind, creator_id, conversation_id, spawned_by,
+           transport_type, machine_id, state, provider, provider_resume_json, runtime_state_json, cwd,
+           created_at, updated_at, archived_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'stream', 'local', ?, 'codex', ?, ?, '/repo', ?, ?, ?)`,
+      )
+      insert.run(
+        'active-runtime',
+        'commander',
+        'commander',
+        'gaia',
+        'conv-1',
+        null,
+        'active',
+        JSON.stringify({
+          providerId: 'codex',
+          threadId: 'thread-active',
+          daemonProcess: { processId: 'dead-daemon', mode: 'pipe' },
+        }),
+        JSON.stringify({
+          mode: 'default',
+          hadResult: true,
+          activeTurnId: 'turn-stale',
+          queuedMessages: [{
+            id: 'queued-normal',
+            text: 'normal queued message',
+            priority: 'normal',
+            queuedAt: '2026-06-20T01:00:05.000Z',
+          }],
+          currentQueuedMessage: {
+            id: 'direct-current',
+            text: 'current direct send',
+            displayText: 'current direct send with image',
+            images: [{
+              mediaType: 'image/png',
+              data: 'base64-image-data',
+            }],
+            clientSendId: 'client-send-1755',
+            userEventSubtype: 'image',
+            priority: 'high',
+            queuedAt: '2026-06-20T01:00:10.000Z',
+          },
+          pendingDirectSendMessages: [{
+            id: 'direct-existing',
+            text: 'existing direct send',
+            priority: 'high',
+            queuedAt: '2026-06-20T01:00:15.000Z',
+          }],
+        }),
+        '2026-06-20T01:00:00.000Z',
+        '2026-06-20T01:00:00.000Z',
+        null,
+      )
+      insert.run(
+        'paused-runtime',
+        'worker',
+        'commander',
+        'gaia',
+        null,
+        'active-runtime',
+        'paused',
+        JSON.stringify({ providerId: 'codex', threadId: 'thread-paused' }),
+        '{}',
+        '2026-06-20T01:05:00.000Z',
+        '2026-06-20T01:05:00.000Z',
+        null,
+      )
+      insert.run(
+        'archived-runtime',
+        'worker',
+        'commander',
+        'gaia',
+        null,
+        'active-runtime',
+        'archived',
+        JSON.stringify({ providerId: 'codex', threadId: 'thread-archived' }),
+        '{}',
+        '2026-06-20T01:10:00.000Z',
+        '2026-06-20T01:10:00.000Z',
+        '2026-06-20T01:11:00.000Z',
+      )
 
-    await mkdir(join(dir, 'agents'), { recursive: true })
+      const result = await resetActiveRuntimeStateForLaunch({ sqliteDb: db })
 
-    const currentQueuedMessage = {
-      id: 'current-normal',
-      text: 'resume this on manual restart',
-      priority: 'normal' as const,
-      queuedAt: '2026-05-29T00:01:00.000Z',
-    }
-    await writeFile(
-      sessionStorePath,
-      JSON.stringify({
-        sessions: [
-          buildPersistedSession('active-stream', {
-            sessionState: 'active',
-            activeTurnId: 'turn-1',
-            hadResult: true,
-            daemonProcess: {
-              processId: 'daemon-process-1',
-              mode: 'pipe',
-            },
-            currentQueuedMessage,
-            queuedMessages: [
-              {
-                id: 'queued-normal',
-                text: 'already queued',
-                priority: 'normal',
-                queuedAt: '2026-05-29T00:02:00.000Z',
-              },
-            ],
-            pendingDirectSendMessages: [
-              {
-                id: 'queued-high',
-                text: 'send first',
-                priority: 'high',
-                queuedAt: '2026-05-29T00:03:00.000Z',
-              },
-            ],
+      expect(result).toEqual({
+        runtimeSessionsPaused: 1,
+        commanderSessionsIdled: 0,
+        errors: [],
+      })
+      const rows = db.prepare(
+        'SELECT name, state, archived_at FROM agent_runtime_sessions ORDER BY name ASC',
+      ).all() as Array<{ name: string; state: string; archived_at: string | null }>
+      expect(rows).toEqual([
+        { name: 'active-runtime', state: 'paused', archived_at: null },
+        { name: 'archived-runtime', state: 'archived', archived_at: '2026-06-20T01:11:00.000Z' },
+        { name: 'paused-runtime', state: 'paused', archived_at: null },
+      ])
+      const activeRow = db.prepare(
+        `SELECT provider_resume_json, runtime_state_json
+         FROM agent_runtime_sessions
+         WHERE name = 'active-runtime'`,
+      ).get() as { provider_resume_json: string; runtime_state_json: string }
+      const providerResume = JSON.parse(activeRow.provider_resume_json) as Record<string, unknown>
+      const runtimeState = JSON.parse(activeRow.runtime_state_json) as Record<string, unknown>
+      expect(providerResume).toMatchObject({ providerId: 'codex', threadId: 'thread-active' })
+      expect(providerResume).not.toHaveProperty('daemonProcess')
+      expect(runtimeState).toMatchObject({
+        mode: 'default',
+        hadResult: false,
+        queuedMessages: [expect.objectContaining({ id: 'queued-normal' })],
+        pendingDirectSendMessages: [
+          expect.objectContaining({
+            id: 'direct-current',
+            displayText: 'current direct send with image',
+            images: [{ mediaType: 'image/png', data: 'base64-image-data' }],
+            clientSendId: 'client-send-1755',
+            userEventSubtype: 'image',
           }),
-          buildPersistedSession('already-exited', {
-            sessionState: 'exited',
-            hadResult: true,
-          }),
+          expect.objectContaining({ id: 'direct-existing' }),
         ],
-      }, null, 2),
-      'utf8',
-    )
-
-    const conversationStore = new ConversationStore(commanderDataDir)
-    await createConversation(conversationStore, {
-      id: '11111111-1111-4111-8111-111111111111',
-      commanderId,
-      status: 'active',
-      createdAt: '2026-05-29T00:00:00.000Z',
-    })
-    await createConversation(conversationStore, {
-      id: '22222222-2222-4222-8222-222222222222',
-      commanderId,
-      status: 'idle',
-      createdAt: '2026-05-29T00:01:00.000Z',
-    })
-    await createConversation(conversationStore, {
-      id: '33333333-3333-4333-8333-333333333333',
-      commanderId,
-      status: 'archived',
-      createdAt: '2026-05-29T00:02:00.000Z',
-    })
-
-    const commanderStore = new CommanderSessionStore(commanderSessionStorePath)
-    await commanderStore.create({
-      id: commanderId,
-      host: 'localhost',
-      state: 'running',
-      created: '2026-05-29T00:00:00.000Z',
-      agentType: 'codex',
-      model: 'gpt-5',
-      heartbeat: createDefaultHeartbeatConfig(),
-      maxTurns: DEFAULT_COMMANDER_MAX_TURNS,
-      contextMode: DEFAULT_COMMANDER_CONTEXT_MODE,
-      taskSource: null,
-    })
-    await commanderStore.create({
-      id: idleCommanderId,
-      host: 'localhost',
-      state: 'stopped',
-      created: '2026-05-29T00:01:00.000Z',
-      agentType: 'claude',
-      heartbeat: createDefaultHeartbeatConfig(),
-      maxTurns: DEFAULT_COMMANDER_MAX_TURNS,
-      contextMode: DEFAULT_COMMANDER_CONTEXT_MODE,
-      taskSource: null,
-    })
-
-    const result = await resetActiveRuntimeStateForLaunch({
-      sessionStorePath,
-      commanderDataDir,
-      commanderSessionStorePath,
-    })
-
-    expect(result).toEqual({
-      streamSessionsStopped: 1,
-      conversationsStopped: 1,
-      commanderSessionsStopped: 1,
-      errors: [],
-    })
-
-    const persistedSessions = await readPersistedSessionsState(sessionStorePath)
-    const activeStream = persistedSessions.sessions.find((session) => session.name === 'active-stream')
-    const alreadyExited = persistedSessions.sessions.find((session) => session.name === 'already-exited')
-
-    expect(activeStream?.sessionState).toBe('exited')
-    expect(activeStream?.hadResult).toBe(false)
-    expect(activeStream?.activeTurnId).toBeUndefined()
-    expect(activeStream?.daemonProcess).toBeUndefined()
-    expect(activeStream?.currentQueuedMessage).toBeUndefined()
-    expect(activeStream?.queuedMessages?.map((message) => message.id)).toEqual([
-      'current-normal',
-      'queued-normal',
-    ])
-    expect(activeStream?.pendingDirectSendMessages?.map((message) => message.id)).toEqual([
-      'queued-high',
-    ])
-    expect(alreadyExited?.sessionState).toBe('exited')
-    expect(alreadyExited?.hadResult).toBe(true)
-
-    const reloadedConversationStore = new ConversationStore(commanderDataDir)
-    await expect(reloadedConversationStore.get('11111111-1111-4111-8111-111111111111'))
-      .resolves.toMatchObject({ status: 'idle' })
-    await expect(reloadedConversationStore.get('22222222-2222-4222-8222-222222222222'))
-      .resolves.toMatchObject({ status: 'idle' })
-    await expect(reloadedConversationStore.get('33333333-3333-4333-8333-333333333333'))
-      .resolves.toMatchObject({ status: 'archived' })
-
-    const reloadedCommanderStore = new CommanderSessionStore(commanderSessionStorePath)
-    await expect(reloadedCommanderStore.get(commanderId)).resolves.toMatchObject({ state: 'idle' })
-    await expect(reloadedCommanderStore.get(idleCommanderId)).resolves.toMatchObject({ state: 'stopped' })
-
-    const rawPersistedSessions = await readFile(sessionStorePath, 'utf8')
-    expect(rawPersistedSessions).not.toContain('daemon-process-1')
-    expect(rawPersistedSessions).not.toContain('turn-1')
+      })
+      expect(runtimeState).not.toHaveProperty('activeTurnId')
+      expect(runtimeState).not.toHaveProperty('currentQueuedMessage')
+    } finally {
+      db.close()
+    }
   })
 
-  it('fails fast when a reset store cannot be read', async () => {
-    const dir = await createTempDir('hammurabi-launch-reset-failure-')
-    const sessionStorePath = join(dir, 'agents')
-    const commanderDataDir = join(dir, 'commander')
-    const commanderSessionStorePath = join(commanderDataDir, 'sessions.json')
-    await mkdir(sessionStorePath, { recursive: true })
+  it('idles running commander records before module init', async () => {
+    const dir = await createTempDir('hammurabi-launch-reset-commanders-')
+    const db = openHammurabiSqliteDatabase(join(dir, 'hammurabi.sqlite'))
+    const store = new CommanderSessionStore(join(dir, 'sessions.json'))
+    try {
+      applyHammurabiSqliteSchema(db)
+      await store.create(buildCommanderSession('gaia', 'running'))
+      await store.create(buildCommanderSession('atlas', 'idle'))
+      await store.create(buildCommanderSession('atlas', 'stopped'))
 
-    const result = await resetActiveRuntimeStateForLaunch({
-      sessionStorePath,
-      commanderDataDir,
-      commanderSessionStorePath,
-    })
+      const result = await resetActiveRuntimeStateForLaunch({
+        sqliteDb: db,
+        commanderSessionStore: store,
+      })
 
-    expect(result.streamSessionsStopped).toBe(0)
-    expect(result.conversationsStopped).toBe(0)
-    expect(result.commanderSessionsStopped).toBe(0)
-    expect(result.errors).toHaveLength(1)
-    expect(result.errors[0]).toContain('stream sessions:')
+      expect(result).toEqual({
+        runtimeSessionsPaused: 0,
+        commanderSessionsIdled: 1,
+        errors: [],
+      })
+      await expect(store.get('gaia')).resolves.toMatchObject({ state: 'idle' })
+      await expect(store.get('atlas')).resolves.toMatchObject({ state: 'idle' })
+      await expect(store.get('atlas')).resolves.toMatchObject({ state: 'stopped' })
+    } finally {
+      db.close()
+    }
   })
 })

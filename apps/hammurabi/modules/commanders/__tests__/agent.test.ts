@@ -90,4 +90,25 @@ describe('CommanderAgent system prompt bootstrap', () => {
     expect(taskPickup.layersIncluded).toContain(2)
   })
 
+  it('adds a prior conversation pointer without transcript content when requested', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222'
+    const agent = new CommanderAgent(commanderId, tmpDir)
+
+    const taskPickup = await agent.buildTaskPickupSystemPrompt(
+      'You are the commander system.',
+      {
+        currentTask: null,
+        recentConversation: [],
+        mode: 'startup',
+        priorConversation: { conversationId },
+      },
+    )
+
+    expect(taskPickup.systemPrompt).toContain('## Continuing Prior Conversation')
+    expect(taskPickup.systemPrompt).toContain(`This session continues conversation ${conversationId}.`)
+    expect(taskPickup.systemPrompt).toContain(`hammurabi conversations messages ${conversationId} --tail 40`)
+    expect(taskPickup.systemPrompt).not.toContain('Prior user said')
+    expect(taskPickup.memorySection).not.toContain('## Continuing Prior Conversation')
+  })
+
 })

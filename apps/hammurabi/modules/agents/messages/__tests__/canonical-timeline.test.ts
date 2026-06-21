@@ -56,15 +56,65 @@ describe('canonical timeline helpers', () => {
     expect(getNextStreamEventSeq([unsequencedUser('unsequenced'), first])).toBe(4)
   })
 
-  it('dedupes persisted and live events by durable seq and orders by seq', () => {
-    const persistedOne = codexEnvelope({ id: 'persisted-1', itemId: 'item-1', seq: 1, text: 'old one' })
+  it('dedupes persisted and live events by durable envelope id and orders equal-time rows by seq', () => {
+    const persistedOne = codexEnvelope({ id: 'event-1', itemId: 'item-1', seq: 1, text: 'old one' })
     const persistedTwo = codexEnvelope({ id: 'persisted-2', itemId: 'item-2', seq: 2, text: 'two' })
-    const liveOne = codexEnvelope({ id: 'live-1', itemId: 'item-1-live', seq: 1, text: 'new one' })
+    const liveOne = codexEnvelope({ id: 'event-1', itemId: 'item-1-live', seq: 1, text: 'new one' })
 
     expect(mergeCanonicalStreamEvents({
       persistedEvents: [persistedTwo, persistedOne],
       liveEvents: [liveOne],
     })).toEqual([liveOne, persistedTwo])
+  })
+
+  it('orders resumed runtime envelopes by event time when seq resets', () => {
+    const oldHighSeq = codexEnvelope({
+      id: 'old-high-seq',
+      itemId: 'old-answer',
+      seq: 120,
+      time: '2026-06-17T00:00:00.000Z',
+      text: 'old answer',
+    })
+    const resumedUser = codexEnvelope({
+      id: 'resumed-user',
+      itemId: 'send-resumed',
+      seq: 1,
+      time: '2026-06-21T04:03:46.437Z',
+      clientSendId: 'send-resumed',
+      ev: { type: 'message.delta', text: 'What year is it?', channel: 'final' },
+    })
+    const resumedAssistant = codexEnvelope({
+      id: 'resumed-assistant',
+      itemId: 'resumed-answer',
+      seq: 6,
+      time: '2026-06-21T04:03:50.288Z',
+      text: '2026',
+    })
+
+    expect(mergeCanonicalStreamEvents({
+      persistedEvents: [oldHighSeq, resumedUser, resumedAssistant],
+    })).toEqual([oldHighSeq, resumedUser, resumedAssistant])
+  })
+
+  it('preserves unrelated envelopes that reuse the same seq in later resumed runtimes', () => {
+    const firstRun = codexEnvelope({
+      id: 'first-run-seq-1',
+      itemId: 'first-run',
+      seq: 1,
+      time: '2026-06-17T00:00:00.000Z',
+      text: 'first run',
+    })
+    const resumedRun = codexEnvelope({
+      id: 'resumed-run-seq-1',
+      itemId: 'resumed-run',
+      seq: 1,
+      time: '2026-06-21T04:03:46.437Z',
+      text: 'resumed run',
+    })
+
+    expect(mergeCanonicalStreamEvents({
+      persistedEvents: [firstRun, resumedRun],
+    })).toEqual([firstRun, resumedRun])
   })
 
   it('uses clientSendId as the durable identity before sequence for user records', () => {

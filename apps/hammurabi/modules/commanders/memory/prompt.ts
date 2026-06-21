@@ -4,6 +4,27 @@ import {
   type ContextBuildOptions,
 } from './context-builder.js'
 
+export interface PriorConversationPointer {
+  conversationId: string
+  tail?: number
+}
+
+export interface CommanderAgentSystemPromptOptions extends ContextBuildOptions {
+  priorConversation?: PriorConversationPointer
+}
+
+export function buildPriorConversationSection(pointer: PriorConversationPointer): string {
+  const tail = pointer.tail ?? 40
+  return `## Continuing Prior Conversation
+
+This session continues conversation ${pointer.conversationId}. Earlier turns are not in your current context window.
+
+To recall prior messages on demand, run:
+  hammurabi conversations messages ${pointer.conversationId} --tail ${tail}
+
+Use that command whenever you need context from before this session start.`
+}
+
 function buildQuestBoardSection(commanderId: string): string {
   const commanderFlag = `--commander ${commanderId}`
   return `# Hammurabi Quest Board
@@ -125,14 +146,14 @@ export class CommanderAgent {
 
   async buildTaskPickupSystemPrompt(
     baseSystemPrompt: string,
-    options: ContextBuildOptions,
+    options: CommanderAgentSystemPromptOptions,
   ): Promise<CommanderAgentPromptResult> {
     return this.buildSystemPrompt(baseSystemPrompt, options)
   }
 
   private async buildSystemPrompt(
     baseSystemPrompt: string,
-    options: ContextBuildOptions,
+    options: CommanderAgentSystemPromptOptions,
   ): Promise<CommanderAgentPromptResult> {
     const builtContext = await this.contextBuilder.build(options)
     const base = baseSystemPrompt.trim()
@@ -142,6 +163,7 @@ export class CommanderAgent {
       base.includes('Shared Knowledge Bootstrap') ? '' : buildSharedKnowledgeBootstrapSection(),
       base.includes('Hammurabi Quest Board') ? '' : buildQuestBoardSection(this.commanderId),
       base.includes('Commander Memory Workflow') ? '' : buildCommanderMemoryWorkflowSection(this.commanderId),
+      options.priorConversation ? buildPriorConversationSection(options.priorConversation) : '',
       builtContext.systemPromptSection,
     ].filter((section) => section.length > 0)
     const systemPrompt = promptSections.join('\n\n')

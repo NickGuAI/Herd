@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import * as path from 'node:path'
 import type { Router } from 'express'
 import type { AgentSessionMonitorOptions } from '@gehirn/ai-services'
 import {
@@ -27,6 +30,8 @@ export interface ModuleRegistryResult {
 
 const DEFAULT_COMMAND_ROOM_STALE_SESSION_TTL_MINUTES = 30
 const DEFAULT_COMMAND_ROOM_POLL_INTERVAL_MS = 5_000
+const APPROVAL_BRIDGE_SIGNING_SECRET_BYTES = 32
+const APPROVAL_BRIDGE_SIGNING_SECRET_FILE = 'approval-bridge-signing-secret'
 
 function parsePositiveInteger(value: string | undefined): number | null {
   if (!value) {
@@ -57,6 +62,30 @@ export function resolveCommandRoomMonitorOptions(
   }
 }
 
+export function resolveApprovalBridgeSigningSecret(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.HAMMURABI_APPROVAL_BRIDGE_SIGNING_SECRET?.trim()
+  if (configured) {
+    return configured
+  }
+
+  const dataRoot = env.HAMMURABI_DATA_DIR?.trim()
+    ? path.resolve(env.HAMMURABI_DATA_DIR.trim())
+    : path.join(homedir(), '.hammurabi')
+  const dataDir = path.join(dataRoot, 'policies')
+  const secretPath = path.join(dataDir, APPROVAL_BRIDGE_SIGNING_SECRET_FILE)
+  if (existsSync(secretPath)) {
+    const existing = readFileSync(secretPath, 'utf8').trim()
+    if (existing) {
+      return existing
+    }
+  }
+
+  const generated = randomBytes(APPROVAL_BRIDGE_SIGNING_SECRET_BYTES).toString('hex')
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+  writeFileSync(secretPath, `${generated}\n`, { mode: 0o600 })
+  return generated
+}
+
 export function createModules(options: ModuleRegistryOptions = {}): ModuleRegistryResult {
   const moduleGraph = loadHammurabiModules()
   const capabilities = createHammurabiCapabilityContainer<HammurabiRuntimeCapabilities>()
@@ -65,6 +94,7 @@ export function createModules(options: ModuleRegistryOptions = {}): ModuleRegist
     moduleGraph,
     capabilities,
     internalToken: randomBytes(32).toString('hex'),
+    approvalBridgeSigningSecret: resolveApprovalBridgeSigningSecret(),
     commandRoomMonitorOptions: resolveCommandRoomMonitorOptions(),
   })
 

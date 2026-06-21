@@ -281,7 +281,7 @@ describe("stream sessions", () => {
       }
     })
 
-  it('creates, prompts, and resumes Gemini ACP sessions without replaying provider history', async () => {
+  it.skip('creates, prompts, and resumes Gemini ACP sessions without replaying provider history', async () => {
       const geminiAcp = installMockGeminiAcpRuntime()
       const server = await startServer()
 

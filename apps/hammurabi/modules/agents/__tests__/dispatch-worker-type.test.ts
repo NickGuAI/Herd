@@ -8,6 +8,8 @@ import type { ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema'
 import { ProviderAuthStore } from '../provider-auth'
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -154,6 +156,11 @@ function createTestApiKeyStore(): ApiKeyStoreLike {
 async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<RunningServer> {
   const app = express()
   app.use(express.json())
+  const sqliteDir = options.sqliteDb ? null : await mkdtemp(join(tmpdir(), 'hammurabi-dispatch-worker-sqlite-'))
+  const sqliteDb = options.sqliteDb ?? openHammurabiSqliteDatabase(join(sqliteDir!, 'hammurabi.sqlite'))
+  if (!options.sqliteDb) {
+    applyHammurabiSqliteSchema(sqliteDb)
+  }
 
   const agents = createAgentsRouter({
     apiKeyStore: createTestApiKeyStore(),
@@ -161,6 +168,7 @@ async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<
     commanderSessionStorePath: '/tmp/nonexistent-commander-sessions-dispatch-worker-test.json',
     internalToken: INTERNAL_TOKEN,
     ...options,
+    sqliteDb,
   })
   app.use('/api/agents', agents.router)
 
@@ -197,6 +205,12 @@ async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<
           resolve()
         })
       })
+      if (!options.sqliteDb) {
+        sqliteDb.close()
+      }
+      if (sqliteDir) {
+        await rm(sqliteDir, { recursive: true, force: true })
+      }
     },
   }
 }

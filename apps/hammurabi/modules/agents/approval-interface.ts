@@ -144,6 +144,15 @@ export function createApprovalSessionsInterface(
       return null
     },
 
+    validateApprovalBridgeCredential(sessionName, nonce) {
+      const session = sessions.get(sessionName.trim())
+      if (!session || (session.kind !== 'stream' && session.kind !== 'pty')) {
+        return false
+      }
+      const expectedNonce = session?.approvalBridgeNonce?.trim()
+      return Boolean(expectedNonce && expectedNonce === nonce.trim())
+    },
+
     listPendingCodexApprovals() {
       const pending: PendingCodexApprovalView[] = []
       for (const session of sessions.values()) {

@@ -194,6 +194,83 @@ describe('useStreamEventProcessor assistant tail-repeat handling', () => {
     harness.cleanup()
   })
 
+  it('does not shorten a richer live message when replay projection is partial', () => {
+    const harness = createHarness()
+    const fullMessage: MsgItem = {
+      id: 'msg-1',
+      kind: 'agent',
+      text: 'Codex answer that is already fully rendered.',
+      transcript: {
+        source: {
+          provider: 'codex',
+          backend: 'rpc',
+          sessionId: 'thread-replay-partial',
+        },
+        turnId: 'turn-replay-partial',
+        itemId: 'msg-replay-partial',
+      },
+    }
+    const partialReplay: MsgItem = {
+      ...fullMessage,
+      id: 'msg-replay-partial-projection',
+      text: 'Codex answer',
+    }
+
+    harness.hydrateReplayMessages([fullMessage], [])
+    harness.hydrateReplayMessages([partialReplay], [])
+
+    expect(harness.getMessages()).toEqual([
+      expect.objectContaining({
+        id: 'msg-1',
+        text: 'Codex answer that is already fully rendered.',
+      }),
+    ])
+
+    harness.cleanup()
+  })
+
+  it('keeps a durable live suffix when replay projection ends before it', () => {
+    const harness = createHarness()
+    const userMessage: MsgItem = {
+      id: 'msg-user-1',
+      kind: 'user',
+      text: 'Run the check',
+      clientSendId: 'send-live-suffix',
+      transcript: {
+        source: {
+          provider: 'codex',
+          backend: 'rpc',
+          sessionId: 'thread-live-suffix',
+        },
+        itemId: 'send-live-suffix',
+      },
+    }
+    const liveSuffix: MsgItem = {
+      id: 'msg-agent-live-suffix',
+      kind: 'agent',
+      text: 'The check is still streaming.',
+      transcript: {
+        source: {
+          provider: 'codex',
+          backend: 'rpc',
+          sessionId: 'thread-live-suffix',
+        },
+        turnId: 'turn-live-suffix',
+        itemId: 'msg-live-suffix',
+      },
+    }
+
+    harness.hydrateReplayMessages([userMessage, liveSuffix], [])
+    harness.hydrateReplayMessages([{ ...userMessage, id: 'msg-user-replay' }], [])
+
+    expect(harness.getMessages()).toEqual([
+      expect.objectContaining({ kind: 'user', text: 'Run the check' }),
+      expect.objectContaining({ kind: 'agent', text: 'The check is still streaming.' }),
+    ])
+
+    harness.cleanup()
+  })
+
   it('appends late Claude bridged content_block_delta text to the existing assistant block', () => {
     const harness = createHarness()
     const events = [

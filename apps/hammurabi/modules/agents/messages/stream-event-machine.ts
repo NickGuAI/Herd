@@ -1,9 +1,11 @@
 import type { AskQuestion, StreamEvent } from '@/types'
 import {
   isTranscriptEnvelope,
+  type ProviderErrorClassification,
   type TranscriptEnvelope,
   type TranscriptMessageRole,
 } from '../../../src/types/transcript-envelope.js'
+import { classifyProviderError } from '../provider-errors.js'
 import {
   capMessages,
   createUserMessage,
@@ -39,6 +41,7 @@ export type MutableStreamProcessorState = {
   activeEnvelopeMessages: Record<string, { msgId: string; role: TranscriptMessageRole; ended?: boolean }>
   activeEnvelopeSubagents: Record<string, string>
   planningToolNames: Record<string, PlanningToolName>
+  seenProviderErrorKeys: Record<string, true>
 }
 
 export type StreamEventProcessorContext = {
@@ -78,6 +81,7 @@ export function createStreamProcessorState(): MutableStreamProcessorState {
     activeEnvelopeMessages: {},
     activeEnvelopeSubagents: {},
     planningToolNames: {},
+    seenProviderErrorKeys: {},
   }
 }
 
@@ -87,6 +91,7 @@ export function resetStreamProcessorState(state: MutableStreamProcessorState) {
   state.activeEnvelopeMessages = {}
   state.activeEnvelopeSubagents = {}
   state.planningToolNames = {}
+  state.seenProviderErrorKeys = {}
 }
 
 function hydrateEnvelopeMessageStateFromMessage(
@@ -129,6 +134,13 @@ function hydrateEnvelopeMessageStateFromMessage(
     if (subagentId) {
       state.activeEnvelopeSubagents[subagentId] = message.id
       pushActiveAgentMessageId(state, message.id)
+    }
+  }
+
+  if (message.kind === 'error') {
+    const key = getProviderErrorMessageKeyFromMessage(message)
+    if (key) {
+      state.seenProviderErrorKeys[key] = true
     }
   }
 }
@@ -210,6 +222,77 @@ function buildTranscriptMeta(
     providerEventId: envelope.source.rawEventId,
     ...extra,
   }
+}
+
+interface ProviderErrorMessageInput {
+  message: string
+  classification: ProviderErrorClassification
+  code?: string
+  hint?: string
+  retryable?: boolean
+  payload?: unknown
+}
+
+function buildProviderErrorKey(parts: {
+  source?: TranscriptEnvelope['source'] | NonNullable<MsgItem['transcript']>['source']
+  turnId?: string
+  itemId?: string
+  providerEventId?: string
+  providerEventType?: string
+  message: string
+}): string {
+  return [
+    parts.source?.provider,
+    parts.source?.backend,
+    parts.source?.sessionId,
+    parts.turnId,
+    parts.itemId,
+    parts.providerEventId,
+    parts.providerEventType,
+    parts.message,
+  ].map((part) => part ?? '').join('\u001f')
+}
+
+function getProviderErrorMessageKey(
+  envelope: TranscriptEnvelope,
+  error: Pick<ProviderErrorMessageInput, 'message' | 'code'>,
+): string {
+  return buildProviderErrorKey({
+    source: envelope.source,
+    turnId: envelope.turnId,
+    itemId: envelope.itemId,
+    providerEventId: envelope.source.rawEventId,
+    providerEventType: envelope.source.rawEventType,
+    message: error.message,
+  })
+}
+
+function getProviderErrorMessageKeyFromMessage(message: MsgItem): string | null {
+  const transcript = message.transcript
+  if (!transcript?.source) {
+    return null
+  }
+  return buildProviderErrorKey({
+    source: transcript.source,
+    turnId: transcript.turnId,
+    itemId: transcript.itemId,
+    providerEventId: transcript.providerEventId,
+    providerEventType: transcript.providerEventType,
+    message: message.text,
+  })
+}
+
+function markProviderErrorSeen(
+  state: MutableStreamProcessorState,
+  envelope: TranscriptEnvelope,
+  error: Pick<ProviderErrorMessageInput, 'message' | 'code'>,
+): boolean {
+  const key = getProviderErrorMessageKey(envelope, error)
+  if (state.seenProviderErrorKeys[key]) {
+    return false
+  }
+  state.seenProviderErrorKeys[key] = true
+  return true
 }
 
 function getEnvelopeMessageKey(envelope: TranscriptEnvelope, role: TranscriptMessageRole): string {
@@ -358,6 +441,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readTrimmedString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function readCodeString(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  return readTrimmedString(value)
 }
 
 function readImageMediaType(
@@ -575,6 +665,36 @@ function appendProviderActivity(
   }, getEnvelopeSubagentParentId(context.state, envelope))
 }
 
+function appendProviderError(
+  context: StreamEventProcessorContext,
+  envelope: TranscriptEnvelope,
+  error: ProviderErrorMessageInput,
+) {
+  if (error.retryable === true || !markProviderErrorSeen(context.state, envelope, error)) {
+    return
+  }
+  context.setMessages((prev) =>
+    (context.capMessages ?? capMessages)([
+      ...prev,
+      {
+        id: context.nextId(),
+        kind: 'error',
+        text: error.message,
+        providerError: {
+          classification: error.classification,
+          ...(error.code ? { code: error.code } : {}),
+          ...(error.hint ? { hint: error.hint } : {}),
+          ...(error.retryable !== undefined ? { retryable: error.retryable } : {}),
+        },
+        transcript: buildTranscriptMeta(envelope, {
+          providerPayload: error.payload,
+          providerEventType: envelope.source.rawEventType ?? envelope.ev.type,
+        }),
+      },
+    ]),
+  )
+}
+
 function appendAgentMessage(
   context: StreamEventProcessorContext,
   text: string,
@@ -637,6 +757,11 @@ function isTranscriptUserEcho(envelope: TranscriptEnvelope): boolean {
   return Boolean(envelope.clientSendId) || envelope.source.rawEventType === 'hammurabi/user'
 }
 
+function isAuthoritativeCompletedMessageDelta(envelope: TranscriptEnvelope): boolean {
+  return envelope.source.provider === 'codex'
+    && envelope.source.rawEventType === 'item/completed'
+}
+
 function normalizeToolStatus(status: string | undefined): 'running' | 'success' | 'error' {
   const normalized = status?.trim().toLowerCase()
   if (!normalized) {
@@ -649,6 +774,59 @@ function normalizeToolStatus(status: string | undefined): 'running' | 'success' 
     return 'error'
   }
   return 'running'
+}
+
+function isTerminalErrorStatus(status: string | undefined): boolean {
+  const normalized = status?.trim().toLowerCase()
+  return normalized === 'error' || normalized === 'failed' || normalized === 'failure'
+}
+
+function readProviderErrorMessage(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : undefined
+  }
+  const record = asRecord(value)
+  if (!record) {
+    return undefined
+  }
+  return readTrimmedString(record.message)
+    ?? readTrimmedString(record.error)
+    ?? readTrimmedString(record.result)
+    ?? readTrimmedString(record.detail)
+    ?? readTrimmedString(record.text)
+}
+
+function readProviderErrorCode(value: unknown): string | undefined {
+  const record = asRecord(value)
+  if (!record) {
+    return undefined
+  }
+  return readCodeString(record.codexErrorInfo)
+    ?? readCodeString(record.api_error_status)
+    ?? readCodeString(record.api_error_code)
+    ?? readCodeString(record.error_code)
+    ?? readCodeString(record.code)
+    ?? readCodeString(record.classification)
+}
+
+function buildTurnEndProviderError(
+  ev: Extract<TranscriptEnvelope['ev'], { type: 'turn.end' }>,
+): ProviderErrorMessageInput | null {
+  if (!isTerminalErrorStatus(ev.status)) {
+    return null
+  }
+  const payload = ev.error ?? ev.result
+  const message = readProviderErrorMessage(payload)
+    ?? `Provider turn ended with status ${ev.status ?? 'error'}`
+  const code = readProviderErrorCode(payload)
+  return {
+    message,
+    classification: classifyProviderError(message, code),
+    ...(code ? { code } : {}),
+    retryable: false,
+    payload,
+  }
 }
 
 function readToolDeltaInput(ev: Extract<TranscriptEnvelope['ev'], { type: 'tool.delta' }>): unknown {
@@ -684,6 +862,10 @@ function processTranscriptEnvelope(
     case 'turn.end': {
       const resultStatus = normalizeToolStatus(ev.status)
       const isSubagentResult = Boolean(envelope.subagentId)
+      const terminalProviderError = buildTurnEndProviderError(ev)
+      if (terminalProviderError) {
+        appendProviderError(context, envelope, terminalProviderError)
+      }
       context.setMessages((prev) =>
         (context.capMessages ?? capMessages)([
           ...prev.map((message) =>
@@ -706,6 +888,17 @@ function processTranscriptEnvelope(
       context.onWorkspaceMutation?.()
       return
     }
+
+    case 'provider.error':
+      appendProviderError(context, envelope, {
+        message: ev.message,
+        classification: ev.classification,
+        ...(ev.code ? { code: ev.code } : {}),
+        ...(ev.hint ? { hint: ev.hint } : {}),
+        ...(ev.retryable !== undefined ? { retryable: ev.retryable } : {}),
+        payload: ev.data,
+      })
+      return
 
     case 'message.start': {
       const key = getEnvelopeMessageKey(envelope, ev.role)
@@ -749,6 +942,8 @@ function processTranscriptEnvelope(
       const kind = role === 'assistant'
         ? 'agent'
         : (role === 'user' ? 'user' : 'system')
+      const authoritativeCompletedText = role === 'assistant'
+        && isAuthoritativeCompletedMessageDelta(envelope)
       context.setMessages((prev) => {
         const optimisticUserMessageId = role === 'user'
           ? findUserMessageIdByClientSendId(prev, envelope.clientSendId)
@@ -773,7 +968,7 @@ function processTranscriptEnvelope(
           ...message,
           text: replacesOptimisticUserText && envelope.clientSendId === message.clientSendId
             ? ev.text
-            : message.text + ev.text,
+            : (authoritativeCompletedText ? ev.text : message.text + ev.text),
           timestamp: message.timestamp ?? envelope.time,
           transcript: message.transcript ?? buildTranscriptMeta(envelope),
         })))

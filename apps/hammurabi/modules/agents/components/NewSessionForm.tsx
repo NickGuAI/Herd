@@ -35,8 +35,8 @@ export interface NewSessionFormProps {
   transportType: Exclude<SessionTransportType, 'external'>
   setTransportType: (value: Exclude<SessionTransportType, 'external'>) => void
   machines: Machine[]
-  selectedHost: string
-  setSelectedHost: (value: string) => void
+  selectedMachineId: string
+  setSelectedMachineId: (value: string) => void
   isCreating: boolean
   createError: string | null
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
@@ -77,8 +77,8 @@ function NewSessionFormComponent({
   transportType,
   setTransportType,
   machines,
-  selectedHost,
-  setSelectedHost,
+  selectedMachineId,
+  setSelectedMachineId,
   isCreating,
   createError,
   onSubmit,
@@ -151,8 +151,8 @@ function NewSessionFormComponent({
 
       {showMachineSelector ? (
         <MachineSection
-          selectedHost={selectedHost}
-          setSelectedHost={setSelectedHost}
+          selectedMachineId={selectedMachineId}
+          setSelectedMachineId={setSelectedMachineId}
           machines={machines}
           resumeLocked={resumeLocked}
           resumeSource={resumeSource}
@@ -171,7 +171,7 @@ function NewSessionFormComponent({
         afterScheduleField={afterScheduleField}
         cwd={cwd}
         setCwd={setCwd}
-        selectedHost={selectedHost}
+        selectedMachineId={selectedMachineId}
         resumeLocked={resumeLocked}
         taskLabel={taskLabel}
         task={task}

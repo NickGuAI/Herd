@@ -187,6 +187,7 @@ describe('CommanderIdentityTab', () => {
       maxTurns: number
       contextMode: 'thin' | 'fat'
       contextConfig: { fatPinInterval?: number }
+      costCapUsd: number | null
       effort: 'low' | 'medium' | 'high' | 'max'
       adaptiveThinking: 'enabled' | 'disabled'
       maxThinkingTokens: number
@@ -199,6 +200,8 @@ describe('CommanderIdentityTab', () => {
           contextConfig: {
             fatPinInterval: 2,
           },
+          costCapUsd: 12,
+          monthlyCostUsd: 9,
           runtime: {
             heartbeatCount: 4,
             terminalState: {
@@ -221,6 +224,7 @@ describe('CommanderIdentityTab', () => {
           maxTurns: number
           contextMode: 'thin' | 'fat'
           contextConfig: { fatPinInterval?: number }
+          costCapUsd: number | null
           effort: 'low' | 'medium' | 'high' | 'max'
           adaptiveThinking: 'enabled' | 'disabled'
           maxThinkingTokens: number
@@ -236,7 +240,18 @@ describe('CommanderIdentityTab', () => {
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain('Claude hit the max-turn cap at 9 turns.')
       expect(document.body.textContent).toContain('Global default 12 turns · limit 25')
+      expect(document.body.textContent).toContain('Month-to-date spend')
+      expect(document.body.textContent).toContain('$9.00')
+      expect(document.body.textContent).toContain('$12.00')
+      expect(document.body.textContent).toContain('$3.00 remaining')
     })
+
+    const costCapInput = Array.from(document.body.querySelectorAll<HTMLInputElement>('input[type="number"]')).find(
+      (input) => input.value === '12',
+    )
+    if (!costCapInput) {
+      throw new Error('Could not find monthly spend cap input')
+    }
 
     const maxTurnsInput = document.body.querySelector<HTMLInputElement>('input[type="number"][max="25"]')
     if (!maxTurnsInput) {
@@ -266,6 +281,7 @@ describe('CommanderIdentityTab', () => {
           contextConfig: {
             fatPinInterval: 2,
           },
+          costCapUsd: 12,
           effort: 'medium',
           adaptiveThinking: 'disabled',
           maxThinkingTokens: 128000,

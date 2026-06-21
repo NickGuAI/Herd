@@ -211,6 +211,124 @@ describe('WizardChatPanel', () => {
     expect(document.body.textContent).not.toContain('Preview:\\n\\n- Gaia\\n- onboarding')
   })
 
+  it('detects wizard completion from replay projection messages', async () => {
+    const onCreated = vi.fn()
+    await renderPanel({ onCreated })
+    const socket = FakeWebSocket.instances[0]
+    expect(socket).toBeDefined()
+
+    await act(async () => {
+      socket?.emit(JSON.stringify({
+        type: 'replay',
+        projection: {
+          messages: [{
+            id: 'msg-success',
+            kind: 'agent',
+            text: 'WIZARD_CREATE_SUCCESS commander-123 local',
+          }],
+        },
+      }))
+      await flushReact()
+    })
+
+    await vi.waitFor(() => {
+      expect(onCreated).toHaveBeenCalledTimes(1)
+    })
+    expect(mocks.fetchVoid).toHaveBeenCalledWith(
+      '/api/commanders/wizard/commander-wizard-alpha',
+      { method: 'DELETE' },
+    )
+  })
+
+  it('detects wizard completion from live v2 transcript envelopes', async () => {
+    const onCreated = vi.fn()
+    await renderPanel({ onCreated })
+    const socket = FakeWebSocket.instances[0]
+    expect(socket).toBeDefined()
+
+    await act(async () => {
+      socket?.emit(JSON.stringify({
+        schemaVersion: 2,
+        id: 'env-success',
+        time: '2026-06-18T00:00:00.000Z',
+        source: { provider: 'claude', backend: 'sdk' },
+        ev: {
+          type: 'message.delta',
+          channel: 'final',
+          text: 'WIZARD_CREATE_SUCCESS commander-456 local',
+        },
+      }))
+      await flushReact()
+    })
+
+    await vi.waitFor(() => {
+      expect(onCreated).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('does not treat v2 user echoes as assistant output or wizard completion', async () => {
+    const onCreated = vi.fn()
+    await renderPanel({ onCreated })
+    const socket = FakeWebSocket.instances[0]
+    expect(socket).toBeDefined()
+
+    await act(async () => {
+      socket?.emit(JSON.stringify({
+        schemaVersion: 2,
+        id: 'env-user-echo',
+        time: '2026-06-18T00:00:00.000Z',
+        source: {
+          provider: 'claude',
+          backend: 'sdk',
+          rawEventType: 'hammurabi/user',
+        },
+        clientSendId: 'send-user-echo-1',
+        ev: {
+          type: 'message.delta',
+          channel: 'final',
+          text: 'WIZARD_CREATE_SUCCESS commander-from-user-echo local',
+        },
+      }))
+      await flushReact()
+    })
+
+    expect(onCreated).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain('commander-from-user-echo')
+  })
+
+  it('detects wizard completion when live v2 transcript deltas split the success marker', async () => {
+    const onCreated = vi.fn()
+    await renderPanel({ onCreated })
+    const socket = FakeWebSocket.instances[0]
+    expect(socket).toBeDefined()
+
+    const emitDelta = (text: string) => {
+      socket?.emit(JSON.stringify({
+        schemaVersion: 2,
+        id: `env-success-${text}`,
+        time: '2026-06-18T00:00:00.000Z',
+        source: { provider: 'claude', backend: 'sdk' },
+        ev: {
+          type: 'message.delta',
+          channel: 'final',
+          text,
+        },
+      }))
+    }
+
+    await act(async () => {
+      emitDelta('WIZARD_CREATE_SUCCESS ')
+      emitDelta('commander-789')
+      emitDelta(' ')
+      emitDelta('local')
+      await flushReact()
+    })
+
+    await vi.waitFor(() => {
+      expect(onCreated).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('shows matching pending approvals inline and resolves them from the panel', async () => {
     const approval = buildApproval()
     mocks.pendingApprovals = [approval, buildApproval({

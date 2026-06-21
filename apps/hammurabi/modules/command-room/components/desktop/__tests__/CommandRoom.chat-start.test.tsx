@@ -439,7 +439,7 @@ describe('CommandRoom chat-row Start (one-click resume)', () => {
           conversationId: conversation.id,
           sessionName: 'commander-cmd-1-conversation-conv-history',
           source: 'canonical',
-          limit: 10,
+          limit: 50,
           before: null,
           nextBefore: '3',
           hasMore: true,
@@ -470,6 +470,131 @@ describe('CommandRoom chat-row Start (one-click resume)', () => {
     })
 
     expect(fetchNextPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders live selected-conversation Codex replies while backend history is stale', async () => {
+    const conversation = buildIdleConversation({
+      id: 'conv-live-codex',
+      status: 'active',
+      agentType: 'codex',
+      websocketReady: true,
+      liveSession: {
+        name: 'commander-cmd-1-conversation-conv-live-codex',
+        created: '2026-05-01T08:00:00.000Z',
+        lastActivityAt: '2026-05-01T08:00:00.000Z',
+        pid: 123,
+        transportType: 'stream',
+        processAlive: true,
+        hadResult: false,
+        status: 'running',
+        agentType: 'codex',
+      },
+      sendTarget: {
+        kind: 'conversation',
+        conversationId: 'conv-live-codex',
+        commanderId: 'cmd-1',
+        sessionName: 'commander-cmd-1-conversation-conv-live-codex',
+        transportType: 'stream',
+        agentType: 'codex',
+        queue: { supported: true, reason: null },
+        media: { supported: true, reason: null },
+      },
+      allowedActions: {
+        send: true,
+        queue: true,
+        media: true,
+        start: false,
+        pause: true,
+        resume: false,
+        archive: true,
+        delete: true,
+        updateProvider: true,
+      },
+      displayState: {
+        status: 'active',
+        runtimeState: 'active',
+        websocketReady: true,
+        runtimeError: null,
+        isVisible: true,
+        isDefaultConversation: false,
+        hasLiveSession: true,
+        isSendable: true,
+        isQueueable: true,
+        isMediaSendable: true,
+        label: 'Active chat',
+        disabledReasons: {
+          send: null,
+          queue: null,
+          media: null,
+          start: 'Conversation is already active',
+          pause: null,
+          resume: 'Conversation is already active',
+          archive: null,
+          delete: null,
+          updateProvider: null,
+        },
+      },
+    })
+    mocks.useConversations.mockImplementation((_, selectedConversationId: string | null) => ({
+      conversations: [conversation],
+      selectedConversation: selectedConversationId === conversation.id ? conversation : null,
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    }))
+    mocks.useConversationMessages.mockReturnValue({
+      data: {
+        pages: [{
+          conversationId: conversation.id,
+          sessionName: 'commander-cmd-1-conversation-conv-live-codex',
+          source: 'canonical',
+          limit: 50,
+          before: null,
+          nextBefore: null,
+          hasMore: false,
+          totalMessages: 1,
+          messages: [
+            { id: 'history-user', kind: 'user', text: 'Stale canonical prompt', clientSendId: 'send-stale' },
+          ],
+        }],
+      },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+    mocks.useAgentSessionStream.mockReturnValue({
+      messages: [
+        {
+          id: 'live-agent',
+          kind: 'agent',
+          text: 'Live Codex answer before canonical catch-up.',
+          transcript: {
+            source: { provider: 'codex', backend: 'rpc', sessionId: 'thread-live-codex' },
+            turnId: 'turn-live-codex',
+            itemId: 'msg-live-codex',
+          },
+        },
+      ],
+      sendInput: vi.fn(async () => true),
+      sendDispatcher: { mode: 'ws-direct', send: vi.fn(async () => true) },
+      answerQuestion: vi.fn(),
+      status: 'connected',
+      isStreaming: true,
+    })
+
+    await renderAt('/command-room?commander=cmd-1&conversation=conv-live-codex')
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? '').toContain('Live Codex answer before canonical catch-up.')
+    })
+    expect(mocks.useAgentSessionStream).toHaveBeenLastCalledWith(
+      'commander-cmd-1-conversation-conv-live-codex',
+      expect.objectContaining({
+        enabled: true,
+      }),
+    )
   })
 
   it('waits for backend websocketReady before opening a selected conversation websocket', async () => {

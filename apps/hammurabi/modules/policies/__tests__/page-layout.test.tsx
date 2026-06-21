@@ -34,6 +34,7 @@ const reactActEnvironment = globalThis as typeof globalThis & {
 let previousActEnvironment: boolean | undefined
 let root: Root | null = null
 let container: HTMLDivElement | null = null
+let updatePolicyMutate: ReturnType<typeof vi.fn>
 
 function createQueryResult<T>(data: T) {
   return {
@@ -90,10 +91,13 @@ describe('PoliciesPage layout', () => {
         name: 'audit-pr',
         description: 'Review a pull request.',
         userInvocable: true,
+        supportedProviders: ['codex', 'claude code'],
+        source: 'direct-skills',
       },
     ]))
+    updatePolicyMutate = vi.fn()
     mocks.useUpdateActionPolicy.mockReturnValue({
-      mutate: vi.fn(),
+      mutate: updatePolicyMutate,
       error: null,
       isPending: false,
       variables: null,
@@ -121,7 +125,7 @@ describe('PoliciesPage layout', () => {
     vi.clearAllMocks()
   })
 
-  it('lets the Shell own vertical page scrolling', async () => {
+  it('renders the master-detail policies surface with skill provider badges', async () => {
     await renderPoliciesPage()
 
     const page = await vi.waitFor(() => {
@@ -131,27 +135,95 @@ describe('PoliciesPage layout', () => {
     })
     expect(page.tagName).toBe('SECTION')
     const pageClasses = page.className.split(/\s+/)
+    expect(pageClasses).toContain('flex')
+    expect(pageClasses).toContain('h-full')
+    expect(pageClasses).toContain('min-h-0')
     expect(pageClasses).toContain('w-full')
     expect(pageClasses).toContain('min-w-0')
-    expect(pageClasses).not.toContain('h-full')
-    expect(pageClasses).not.toContain('overflow-y-auto')
 
     const content = document.body.querySelector('[data-testid="policies-page-content"]') as HTMLElement | null
     expect(content).not.toBeNull()
     const contentClasses = content?.className.split(/\s+/) ?? []
-    expect(contentClasses).toContain('w-full')
-    expect(contentClasses).toContain('max-w-full')
-    expect(contentClasses).not.toContain('flex-1')
-    expect(contentClasses).not.toContain('min-h-0')
-    expect(contentClasses).not.toContain('overflow-y-auto')
+    expect(contentClasses).toContain('flex')
+    expect(contentClasses).toContain('flex-1')
+    expect(contentClasses).toContain('min-h-0')
+    expect(contentClasses).toContain('overflow-hidden')
 
-    const routeOwnedVerticalScrollers = Array.from(page.querySelectorAll('*')).filter((element) =>
-      String((element as HTMLElement).className).includes('overflow-y-auto')
-    )
-    expect(routeOwnedVerticalScrollers).toHaveLength(0)
+    const listPane = document.body.querySelector('[data-testid="policy-list-pane"]') as HTMLElement | null
+    expect(listPane).not.toBeNull()
+    expect(listPane?.className).toContain('w-full')
+    expect(listPane?.className).toContain('md:w-64')
+    expect(listPane?.className).toContain('lg:w-72')
+    expect(listPane?.className).toContain('shrink-0')
 
-    const tableScroll = document.body.querySelector('[data-testid="policies-table-scroll"]') as HTMLElement | null
-    expect(tableScroll).not.toBeNull()
-    expect(tableScroll?.className).toContain('overflow-x-auto')
+    const detailShell = document.body.querySelector('[data-testid="policy-detail-shell"]') as HTMLElement | null
+    expect(detailShell).not.toBeNull()
+    expect(detailShell?.className).toContain('flex-1')
+    expect(detailShell?.className).toContain('min-w-0')
+    expect(detailShell?.className).toContain('hidden md:flex')
+
+    expect(document.body.textContent).toContain('/audit-pr')
+    expect(document.body.textContent).toContain('Review a pull request.')
+    expect(document.body.textContent).toContain('Supported Providers')
+    expect(document.body.textContent).toContain('codex')
+    expect(document.body.textContent).toContain('claude code')
+    expect(document.body.textContent).toContain('Queue Defaults')
+    expect(document.body.querySelector('[data-testid="policies-table-scroll"]')).toBeNull()
+  })
+
+  it('uses the mobile list-to-detail back navigation classes', async () => {
+    await renderPoliciesPage()
+
+    const listPane = document.body.querySelector('[data-testid="policy-list-pane"]') as HTMLElement | null
+    const detailShell = document.body.querySelector('[data-testid="policy-detail-shell"]') as HTMLElement | null
+    const row = document.body.querySelector('[data-testid="policy-row-skill:audit-pr"]') as HTMLButtonElement | null
+    expect(listPane?.className).toContain('flex')
+    expect(detailShell?.className).toContain('hidden md:flex')
+    expect(row).not.toBeNull()
+
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(listPane?.className).toContain('hidden md:flex')
+    expect(detailShell?.className.split(/\s+/)).toContain('flex')
+
+    const backButton = Array.from(document.body.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Policies'),
+    ) as HTMLButtonElement | undefined
+    expect(backButton).toBeDefined()
+
+    await act(async () => {
+      backButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(listPane?.className).toContain('flex')
+    expect(detailShell?.className).toContain('hidden md:flex')
+  })
+
+  it('updates the selected row policy from the detail pane', async () => {
+    await renderPoliciesPage()
+
+    const select = document.getElementById('policy-detail-select-skill:audit-pr') as HTMLSelectElement | null
+    expect(select).not.toBeNull()
+
+    await act(async () => {
+      if (select) {
+        select.value = 'block'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      await Promise.resolve()
+    })
+
+    expect(updatePolicyMutate).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'global',
+      actionId: 'skill:audit-pr',
+      id: 'skill:audit-pr',
+      name: '/audit-pr',
+      kind: 'skill',
+      policy: 'block',
+    }))
   })
 })

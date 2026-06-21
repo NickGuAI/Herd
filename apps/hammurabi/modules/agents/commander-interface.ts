@@ -19,6 +19,7 @@ import type { QueuedMessage, QueuedMessageImage, QueuedMessagePriority } from '.
 import { WebSocket } from 'ws'
 import type { ProviderCreateOptions } from './providers/provider-adapter.js'
 import { getProvider } from './providers/registry.js'
+import { resolveNativeProviderResumeId } from './providers/native-resume.js'
 import type {
   AgentType,
   AnySession,
@@ -54,6 +55,7 @@ export type CreateQueuedMessage = (
   images?: QueuedMessageImage[],
   displayText?: string,
   clientSendId?: string,
+  userEventSubtype?: string,
 ) => QueuedMessage
 
 export type EnqueueQueuedMessage = (
@@ -78,6 +80,7 @@ export type SendImmediateText = (
   images?: QueuedMessageImage[],
   displayText?: string,
   clientSendId?: string,
+  userEventSubtype?: string,
 ) => Promise<
   | { ok: true; queued: boolean; message: QueuedMessage }
   | { ok: false; error: string }
@@ -128,11 +131,13 @@ function normalizeSendPayload(payload: string | SessionSendPayload): SessionSend
   const images = payload.images && payload.images.length > 0 ? [...payload.images] : undefined
   const displayText = payload.displayText !== undefined ? payload.displayText.trim() : undefined
   const clientSendId = payload.clientSendId !== undefined ? payload.clientSendId.trim() : undefined
+  const userEventSubtype = payload.userEventSubtype !== undefined ? payload.userEventSubtype.trim() : undefined
   return {
     text: payload.text,
     ...(displayText !== undefined ? { displayText } : {}),
     images,
     ...(clientSendId ? { clientSendId } : {}),
+    ...(userEventSubtype ? { userEventSubtype } : {}),
   }
 }
 
@@ -180,12 +185,13 @@ export function createCommanderSessionsInterface(
       throw new Error(`Unknown provider: ${agentType}`)
     }
     const sessionCwd = cwd ?? process.env.HOME ?? '/tmp'
-    const resumeSessionId = resumeProviderContext
-      ? provider.getResumeId({
-        agentType,
-        providerContext: resumeProviderContext,
-      } as StreamSession)
-      : undefined
+    const resumeSessionId = resolveNativeProviderResumeId({
+      provider,
+      agentType,
+      providerContext: resumeProviderContext,
+      sessionName: name,
+      cwd: sessionCwd,
+    })
     const baseOptions: ProviderSessionCreateOptions = {
       systemPrompt,
       model,
@@ -210,15 +216,7 @@ export function createCommanderSessionsInterface(
           ...baseOptions,
           resumeSessionId,
         },
-      ).catch(async () => createProviderStreamSession(
-        name,
-        'default',
-        '',
-        sessionCwd,
-        undefined,
-        agentType,
-        baseOptions,
-      ))
+      )
       : await createProviderStreamSession(
         name,
         'default',
@@ -273,10 +271,10 @@ export function createCommanderSessionsInterface(
       if (!session || session.kind !== 'stream') {
         return false
       }
-      const { text, images, displayText, clientSendId } = normalizeSendPayload(payload)
+      const { text, images, displayText, clientSendId, userEventSubtype } = normalizeSendPayload(payload)
       if (options?.queue) {
-        const message = displayText !== undefined || clientSendId
-          ? createQueuedMessage(text, options.priority ?? 'normal', images, displayText, clientSendId)
+        const message = displayText !== undefined || clientSendId || userEventSubtype
+          ? createQueuedMessage(text, options.priority ?? 'normal', images, displayText, clientSendId, userEventSubtype)
           : createQueuedMessage(text, options.priority ?? 'normal', images)
         const queued = enqueueQueuedMessage(session, message)
         if (!queued.ok) {
@@ -286,8 +284,8 @@ export function createCommanderSessionsInterface(
         return true
       }
 
-      const result = displayText !== undefined || clientSendId
-        ? await sendImmediateTextToStreamSession(session, text, images, displayText, clientSendId)
+      const result = displayText !== undefined || clientSendId || userEventSubtype
+        ? await sendImmediateTextToStreamSession(session, text, images, displayText, clientSendId, userEventSubtype)
         : await sendImmediateTextToStreamSession(session, text, images)
       return result.ok
     },

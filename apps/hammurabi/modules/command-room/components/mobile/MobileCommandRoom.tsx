@@ -10,7 +10,10 @@ import {
   type WorkspaceSourceRecovery,
 } from '@modules/workspace/use-workspace'
 import type { WorkspaceTreeNode } from '@modules/workspace/types'
-import type { SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
+import type {
+  SessionComposerContextAttachments,
+  SessionComposerSubmitPayload,
+} from '@modules/agents/components/SessionComposer'
 import type { MsgItem } from '@modules/agents/messages/model'
 import {
   GLOBAL_COMMANDER_ID,
@@ -96,6 +99,7 @@ export interface MobileCommandRoomProps {
   contextFileAnnotations?: WorkspacePendingFileAnnotation[]
   onRemoveContextFileAnnotation?: (commentId: string) => void
   onClearContextFileAnnotations?: () => void
+  onRestoreContextAttachments?: (context: SessionComposerContextAttachments) => void
   workspaceSource: WorkspaceSource | null
   onOpenWorkspaceFile?: (path: string) => void
   workspaceRequestedPath?: string | null
@@ -161,6 +165,7 @@ export function MobileCommandRoom({
   contextFileAnnotations = [],
   onRemoveContextFileAnnotation,
   onClearContextFileAnnotations,
+  onRestoreContextAttachments,
   workspaceSource,
   onOpenWorkspaceFile,
   workspaceRequestedPath,
@@ -366,6 +371,12 @@ export function MobileCommandRoom({
     setContextDirectoryPaths((current) => current.filter((entry) => entry !== directoryPath))
   }
 
+  function handleRestoreContextAttachments(context: SessionComposerContextAttachments) {
+    setContextFilePaths(context.filePaths)
+    setContextDirectoryPaths(context.directoryPaths)
+    onRestoreContextAttachments?.(context)
+  }
+
   const handleOpenWorkspaceFileFromChat = useCallback((filePath: string) => {
     void onOpenWorkspaceFile?.(filePath)
     setSheet('workspace')
@@ -449,6 +460,7 @@ export function MobileCommandRoom({
               setContextDirectoryPaths([])
               onClearContextFileAnnotations?.()
             }}
+            onRestoreContextAttachments={handleRestoreContextAttachments}
             onSend={onSend}
             onQueue={onQueue}
           />

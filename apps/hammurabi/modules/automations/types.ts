@@ -15,13 +15,14 @@
  * mechanical (single-line type alias swap).
  */
 
-import type { AgentType, ClaudePermissionMode } from '../agents/types.js'
+import type { AgentType } from '../agents/types.js'
 
 export type AutomationTrigger = 'schedule' | 'quest' | 'manual'
 export type AutomationQuestEvent = 'completed'
 export type AutomationStatus = 'active' | 'paused' | 'completed' | 'cancelled'
 export type AutomationExecutionSource = AutomationTrigger
 export type AutomationSessionType = 'stream' | 'pty'
+export type AutomationPermissionMode = 'default'
 
 export interface AutomationQuestTrigger {
   event: AutomationQuestEvent
@@ -74,7 +75,7 @@ export interface Automation {
   questTrigger?: AutomationQuestTrigger
   instruction: string
   agentType: AgentType
-  permissionMode: ClaudePermissionMode
+  permissionMode: AutomationPermissionMode
   /** Workspace `.config/` skill names (no per-automation skill binding). */
   skills: string[]
   templateId?: string | null

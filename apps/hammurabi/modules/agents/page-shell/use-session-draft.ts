@@ -181,6 +181,21 @@ export function useSessionDraft(sessionName: string) {
     })
   }, [clearDraftSaveTimer, clearDraftSavedIndicatorTimer, draftImagesStorageKey, draftStorageKey, resizeTextarea])
 
+  const restoreDraft = useCallback((value: string, images: SessionDraftImage[]) => {
+    const normalizedImages = normalizeDraftImages(images)
+    latestInputTextRef.current = value
+    latestPendingImagesRef.current = normalizedImages
+    clearDraftSaveTimer()
+    clearDraftSavedIndicatorTimer()
+    persistDraft(value, normalizedImages, false)
+    setInputTextState(value)
+    setPendingImagesState(normalizedImages)
+    setShowDraftSaved(false)
+    requestAnimationFrame(() => {
+      resizeTextarea()
+    })
+  }, [clearDraftSaveTimer, clearDraftSavedIndicatorTimer, persistDraft, resizeTextarea])
+
   useEffect(() => {
     resizeTextarea()
   }, [inputText, resizeTextarea])
@@ -272,5 +287,6 @@ export function useSessionDraft(sessionName: string) {
     focusTextarea,
     textareaRef,
     clearDraft,
+    restoreDraft,
   }
 }

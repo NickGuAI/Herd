@@ -3,6 +3,7 @@ import { fetchJson } from '@/lib/api'
 import {
   createSession,
   killSession,
+  pauseSession,
   triggerPreKillDebrief,
   getDebriefStatus,
   sendSessionMessage,
@@ -24,6 +25,22 @@ describe('killSession', () => {
 
     expect(fetchJson).toHaveBeenCalledWith('/api/agents/sessions/claude-alpha', {
       method: 'DELETE',
+    })
+  })
+})
+
+describe('pauseSession', () => {
+  beforeEach(() => {
+    vi.mocked(fetchJson).mockReset()
+  })
+
+  it('posts to the explicit pause endpoint', async () => {
+    vi.mocked(fetchJson).mockResolvedValue({ paused: true })
+
+    await expect(pauseSession('claude-alpha')).resolves.toEqual({ paused: true })
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/agents/sessions/claude-alpha/pause', {
+      method: 'POST',
     })
   })
 })

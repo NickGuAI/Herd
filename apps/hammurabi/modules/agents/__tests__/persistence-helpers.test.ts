@@ -8,14 +8,18 @@
  * store module.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 
 import {
   createPersistenceHelpers,
   type PersistenceHelpersContext,
 } from '../persistence-helpers'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema'
 import { COMMAND_ROOM_COMPLETED_SESSION_TTL_MS } from '../constants'
 import {
   appendTranscriptEvent,
@@ -36,6 +40,7 @@ interface TestPersistenceHelpersContext extends PersistenceHelpersContext {
 }
 
 const tempDirs: string[] = []
+const tempDbs: DatabaseSync[] = []
 
 async function createTempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'hammurabi-persistence-helpers-'))
@@ -45,6 +50,9 @@ async function createTempDir(): Promise<string> {
 
 afterEach(async () => {
   resetTranscriptStoreRoot()
+  for (const db of tempDbs.splice(0)) {
+    db.close()
+  }
   await Promise.all(
     tempDirs.splice(0).map((directory) =>
       rm(directory, { recursive: true, force: true }),
@@ -69,6 +77,15 @@ function makeCommandRoomCodexSession(
     finalResultEvent: { type: 'result', subtype: 'success' } as unknown,
     clients: new Set(),
   } as unknown as StreamSession
+}
+
+function createTempSqliteDb(): DatabaseSync {
+  const dir = mkdtempSync(join(tmpdir(), 'hammurabi-persistence-helpers-sqlite-'))
+  tempDirs.push(dir)
+  const db = openHammurabiSqliteDatabase(join(dir, 'hammurabi.sqlite'))
+  applyHammurabiSqliteSchema(db)
+  tempDbs.push(db)
+  return db
 }
 
 function makeCommandRoomClaudeSession(
@@ -129,7 +146,7 @@ function makeBaseContext(
   const restoreProviderSessionMock = vi.fn()
   const teardownProviderSessionMock = vi.fn(async () => undefined)
   const defaults: TestPersistenceHelpersContext = {
-    sessionStorePath: '/tmp/test-session-store.json',
+    sqliteDb: createTempSqliteDb(),
     maxSessions: 32,
     machineRegistry: {} as PersistenceHelpersContext['machineRegistry'],
     sessions: new Map<string, AnySession>(),
@@ -147,7 +164,7 @@ function makeBaseContext(
 }
 
 describe('createPersistenceHelpers — pruneStaleCommandRoomSessions', () => {
-  it('prunes command-room sessions that completed longer than TTL ago', () => {
+  it('prunes command-room sessions that completed longer than TTL ago', async () => {
     const stale = makeCommandRoomCodexSession(
       'command-room-alpha',
       COMMAND_ROOM_COMPLETED_SESSION_TTL_MS + 10_000,
@@ -155,9 +172,10 @@ describe('createPersistenceHelpers — pruneStaleCommandRoomSessions', () => {
     const ctx = makeBaseContext({
       sessions: new Map<string, AnySession>([['command-room-alpha', stale]]),
     })
-    const { pruneStaleCommandRoomSessions } = createPersistenceHelpers(ctx)
+    const helpers = createPersistenceHelpers(ctx)
 
-    pruneStaleCommandRoomSessions()
+    helpers.pruneStaleCommandRoomSessions()
+    await helpers.flushPersistedSessionsWrite()
 
     expect(ctx.sessions.has('command-room-alpha')).toBe(false)
     expect(ctx.teardownProviderSessionMock).toHaveBeenCalledWith(
@@ -166,44 +184,47 @@ describe('createPersistenceHelpers — pruneStaleCommandRoomSessions', () => {
     )
   })
 
-  it('keeps command-room sessions that completed within TTL', () => {
+  it('keeps command-room sessions that completed within TTL', async () => {
     const fresh = makeCommandRoomCodexSession('command-room-fresh', 5_000)
     const ctx = makeBaseContext({
       sessions: new Map<string, AnySession>([['command-room-fresh', fresh]]),
     })
-    const { pruneStaleCommandRoomSessions } = createPersistenceHelpers(ctx)
+    const helpers = createPersistenceHelpers(ctx)
 
-    pruneStaleCommandRoomSessions()
+    helpers.pruneStaleCommandRoomSessions()
+    await helpers.flushPersistedSessionsWrite()
 
     expect(ctx.sessions.has('command-room-fresh')).toBe(true)
     expect(ctx.teardownProviderSessionMock).not.toHaveBeenCalled()
   })
 
-  it('keeps command-room sessions that are still running (no lastTurnCompleted)', () => {
+  it('keeps command-room sessions that are still running (no lastTurnCompleted)', async () => {
     const running = makeRunningCommandRoomSession('command-room-live')
     const ctx = makeBaseContext({
       sessions: new Map<string, AnySession>([['command-room-live', running]]),
     })
-    const { pruneStaleCommandRoomSessions } = createPersistenceHelpers(ctx)
+    const helpers = createPersistenceHelpers(ctx)
 
-    pruneStaleCommandRoomSessions()
+    helpers.pruneStaleCommandRoomSessions()
+    await helpers.flushPersistedSessionsWrite()
 
     expect(ctx.sessions.has('command-room-live')).toBe(true)
   })
 
-  it('ignores non-command-room sessions regardless of age', () => {
+  it('ignores non-command-room sessions regardless of age', async () => {
     const worker = makeWorkerSession('worker-old')
     const ctx = makeBaseContext({
       sessions: new Map<string, AnySession>([['worker-old', worker]]),
     })
-    const { pruneStaleCommandRoomSessions } = createPersistenceHelpers(ctx)
+    const helpers = createPersistenceHelpers(ctx)
 
-    pruneStaleCommandRoomSessions()
+    helpers.pruneStaleCommandRoomSessions()
+    await helpers.flushPersistedSessionsWrite()
 
     expect(ctx.sessions.has('worker-old')).toBe(true)
   })
 
-  it('kills the process with SIGTERM for non-codex stale command-room sessions', () => {
+  it('kills the process with SIGTERM for non-codex stale command-room sessions', async () => {
     const stale = makeCommandRoomClaudeSession(
       'command-room-claude',
       COMMAND_ROOM_COMPLETED_SESSION_TTL_MS + 1_000,
@@ -211,9 +232,10 @@ describe('createPersistenceHelpers — pruneStaleCommandRoomSessions', () => {
     const ctx = makeBaseContext({
       sessions: new Map<string, AnySession>([['command-room-claude', stale]]),
     })
-    const { pruneStaleCommandRoomSessions } = createPersistenceHelpers(ctx)
+    const helpers = createPersistenceHelpers(ctx)
 
-    pruneStaleCommandRoomSessions()
+    helpers.pruneStaleCommandRoomSessions()
+    await helpers.flushPersistedSessionsWrite()
 
     expect(ctx.teardownProviderSessionMock).toHaveBeenCalledWith(
       stale,
@@ -222,15 +244,16 @@ describe('createPersistenceHelpers — pruneStaleCommandRoomSessions', () => {
     expect(ctx.sessions.has('command-room-claude')).toBe(false)
   })
 
-  it('nowMs override allows deterministic "time travel" in tests', () => {
+  it('nowMs override allows deterministic "time travel" in tests', async () => {
     const session = makeCommandRoomCodexSession('command-room-t', 0)
     const ctx = makeBaseContext({
       sessions: new Map<string, AnySession>([['command-room-t', session]]),
     })
-    const { pruneStaleCommandRoomSessions } = createPersistenceHelpers(ctx)
+    const helpers = createPersistenceHelpers(ctx)
 
     const futureNow = Date.now() + COMMAND_ROOM_COMPLETED_SESSION_TTL_MS + 60_000
-    pruneStaleCommandRoomSessions(futureNow)
+    helpers.pruneStaleCommandRoomSessions(futureNow)
+    await helpers.flushPersistedSessionsWrite()
 
     expect(ctx.sessions.has('command-room-t')).toBe(false)
   })

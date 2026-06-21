@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import {
   createPersistenceHelpers,
   type PersistenceHelpersContext,
   type SessionPrunerConfig,
 } from '../persistence-helpers'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema'
 import {
   createClaudeProviderContext,
   createCodexProviderContext,
@@ -20,13 +27,36 @@ interface TestPersistenceHelpersContext extends PersistenceHelpersContext {
   teardownProviderSessionMock: ReturnType<typeof vi.fn>
 }
 
+const tempDirs: string[] = []
+const tempDbs: DatabaseSync[] = []
+
+afterEach(async () => {
+  for (const db of tempDbs.splice(0)) {
+    db.close()
+  }
+  await Promise.all(
+    tempDirs.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  )
+})
+
+function createTempSqliteDb(): DatabaseSync {
+  const dir = mkdtempSync(join(tmpdir(), 'hammurabi-persistence-helpers-prune-sqlite-'))
+  tempDirs.push(dir)
+  const db = openHammurabiSqliteDatabase(join(dir, 'hammurabi.sqlite'))
+  applyHammurabiSqliteSchema(db)
+  tempDbs.push(db)
+  return db
+}
+
 function makeBaseContext(
   overrides: Partial<TestPersistenceHelpersContext> = {},
 ): TestPersistenceHelpersContext {
   const restoreProviderSessionMock = vi.fn()
   const teardownProviderSessionMock = vi.fn(async () => undefined)
   return {
-    sessionStorePath: '/tmp/test-session-store.json',
+    sqliteDb: createTempSqliteDb(),
     maxSessions: 32,
     machineRegistry: {} as PersistenceHelpersContext['machineRegistry'],
     sessions: new Map<string, AnySession>(),
@@ -238,9 +268,10 @@ describe('prune stale non-human sessions', () => {
         }],
       ]),
     })
-    const { pruneStaleNonHumanSessions } = createPersistenceHelpers(ctx)
+    const helpers = createPersistenceHelpers(ctx)
 
-    const pruned = await pruneStaleNonHumanSessions(PRUNER_CONFIG, nowMs)
+    const pruned = await helpers.pruneStaleNonHumanSessions(PRUNER_CONFIG, nowMs)
+    await helpers.flushPersistedSessionsWrite()
 
     expect(pruned).toBe(3)
     expect(ctx.teardownProviderSessionMock).toHaveBeenCalledWith(

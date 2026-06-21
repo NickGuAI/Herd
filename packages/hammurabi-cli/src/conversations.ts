@@ -27,6 +27,33 @@ interface CreateOptions {
   surface: 'ui' | 'cli' | 'api'
 }
 
+interface MessagesOptions {
+  conversationId: string
+  tail: number
+  before?: number
+  json: boolean
+}
+
+interface ConversationMessage {
+  id?: string
+  kind: string
+  text: string
+  timestamp?: string
+  [key: string]: unknown
+}
+
+interface ConversationMessagesPage {
+  conversationId: string
+  sessionName?: string
+  source?: string
+  limit?: number
+  before: string | null
+  nextBefore: string | null
+  hasMore: boolean
+  totalMessages?: number
+  messages: ConversationMessage[]
+}
+
 export interface ConversationsCliDependencies {
   fetchImpl?: typeof fetch
   readConfig?: () => Promise<HammurabiConfig | null>
@@ -49,6 +76,7 @@ function printUsage(stdout: Writable): void {
   stdout.write('Usage:\n')
   stdout.write('  hammurabi conversations list --commander <id>\n')
   stdout.write('  hammurabi conversations create --commander <id> --surface <ui|cli|api>\n')
+  stdout.write('  hammurabi conversations messages <conversation-id> [--tail <count>] [--before <cursor>] [--json]\n')
   stdout.write('  hammurabi conversations attach <conversation-id>\n')
   stdout.write('  hammurabi conversations archive <conversation-id>\n')
 }
@@ -64,6 +92,26 @@ function parseConversationId(value: string | undefined): string | null {
     return null
   }
   return trimmed
+}
+
+function parsePositiveInteger(value: string | undefined): number | null {
+  const trimmed = parseNonEmpty(value)
+  if (!trimmed || !/^\d+$/u.test(trimmed)) {
+    return null
+  }
+
+  const parsed = Number.parseInt(trimmed, 10)
+  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : null
+}
+
+function parseNonNegativeInteger(value: string | undefined): number | null {
+  const trimmed = parseNonEmpty(value)
+  if (!trimmed || !/^\d+$/u.test(trimmed)) {
+    return null
+  }
+
+  const parsed = Number.parseInt(trimmed, 10)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
 }
 
 function parseListOptions(args: readonly string[]): ListOptions | null {
@@ -109,6 +157,53 @@ function parseCreateOptions(args: readonly string[]): CreateOptions | null {
   }
 
   return { commanderId, surface }
+}
+
+function parseMessagesOptions(args: readonly string[]): MessagesOptions | null {
+  const conversationId = parseConversationId(args[0])
+  if (!conversationId) {
+    return null
+  }
+
+  let tail = 40
+  let before: number | undefined
+  let json = false
+  for (let index = 1; index < args.length; index += 1) {
+    const flag = args[index]
+    if (flag === '--json') {
+      json = true
+      continue
+    }
+
+    if (flag === '--tail') {
+      const parsed = parsePositiveInteger(args[index + 1])
+      if (parsed === null) {
+        return null
+      }
+      tail = parsed
+      index += 1
+      continue
+    }
+
+    if (flag === '--before') {
+      const parsed = parseNonNegativeInteger(args[index + 1])
+      if (parsed === null) {
+        return null
+      }
+      before = parsed
+      index += 1
+      continue
+    }
+
+    return null
+  }
+
+  return {
+    conversationId,
+    tail,
+    ...(before !== undefined ? { before } : {}),
+    json,
+  }
 }
 
 function buildApiUrl(endpoint: string, apiPath: string): string {
@@ -253,6 +348,54 @@ function parseConversationList(payload: unknown): ConversationSummary[] {
   return conversations
 }
 
+function parseConversationMessage(payload: unknown): ConversationMessage | null {
+  if (!isObject(payload)) {
+    return null
+  }
+
+  const kind = parseNonEmpty(typeof payload.kind === 'string' ? payload.kind : undefined)
+  const text = typeof payload.text === 'string' ? payload.text : null
+  if (!kind || text === null) {
+    return null
+  }
+
+  return {
+    ...payload,
+    kind,
+    text,
+  }
+}
+
+function parseConversationMessagesPage(payload: unknown): ConversationMessagesPage | null {
+  if (!isObject(payload) || !Array.isArray(payload.messages)) {
+    return null
+  }
+
+  const conversationId = parseNonEmpty(typeof payload.conversationId === 'string' ? payload.conversationId : undefined)
+  if (!conversationId) {
+    return null
+  }
+
+  const messages = payload.messages
+    .map((message) => parseConversationMessage(message))
+    .filter((message): message is ConversationMessage => message !== null)
+  if (messages.length !== payload.messages.length) {
+    return null
+  }
+
+  return {
+    conversationId,
+    ...(typeof payload.sessionName === 'string' ? { sessionName: payload.sessionName } : {}),
+    ...(typeof payload.source === 'string' ? { source: payload.source } : {}),
+    ...(typeof payload.limit === 'number' ? { limit: payload.limit } : {}),
+    before: typeof payload.before === 'string' ? payload.before : null,
+    nextBefore: typeof payload.nextBefore === 'string' ? payload.nextBefore : null,
+    hasMore: payload.hasMore === true,
+    ...(typeof payload.totalMessages === 'number' ? { totalMessages: payload.totalMessages } : {}),
+    messages,
+  }
+}
+
 async function resolveConfig(
   dependencies: ConversationsCliDependencies,
   stderr: Writable,
@@ -345,6 +488,139 @@ async function runCreate(
   return 0
 }
 
+function buildMessagesUrl(config: HammurabiConfig, options: {
+  conversationId: string
+  limit: number
+  before?: number
+}): string {
+  const url = new URL(
+    buildApiUrl(config.endpoint, `/api/conversations/${encodeURIComponent(options.conversationId)}/messages`),
+  )
+  url.searchParams.set('limit', String(options.limit))
+  if (options.before !== undefined) {
+    url.searchParams.set('before', String(options.before))
+  }
+  return url.toString()
+}
+
+async function fetchConversationMessagesPage(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  options: {
+    conversationId: string
+    limit: number
+    before?: number
+  },
+  stderr: Writable,
+): Promise<ConversationMessagesPage | null> {
+  const result = await fetchJson(fetchImpl, buildMessagesUrl(config, options), {
+    method: 'GET',
+    headers: buildAuthHeaders(config, false),
+  })
+
+  if (!result.ok) {
+    await writeRequestFailure(stderr, result.response, config)
+    return null
+  }
+
+  const page = parseConversationMessagesPage(result.data)
+  if (!page) {
+    stderr.write('Request succeeded but response was malformed.\n')
+    return null
+  }
+
+  return page
+}
+
+function roleForMessageKind(kind: string): string {
+  return kind === 'agent' ? 'assistant' : kind
+}
+
+function indentMultiline(text: string): string {
+  return text.split(/\r?\n/u).map((line) => `  ${line}`).join('\n')
+}
+
+function writeTextMessages(stdout: Writable, messages: readonly ConversationMessage[]): void {
+  if (messages.length === 0) {
+    stdout.write('No messages.\n')
+    return
+  }
+
+  for (const message of messages) {
+    const role = roleForMessageKind(message.kind)
+    if (message.text.includes('\n')) {
+      stdout.write(`${role}:\n${indentMultiline(message.text)}\n`)
+    } else {
+      stdout.write(`${role}: ${message.text}\n`)
+    }
+  }
+}
+
+async function runMessages(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  options: MessagesOptions,
+  stdout: Writable,
+  stderr: Writable,
+): Promise<number> {
+  const pages: ConversationMessagesPage[] = []
+  let remaining = options.tail
+  let before = options.before
+
+  while (remaining > 0) {
+    const limit = Math.min(remaining, 100)
+    const page = await fetchConversationMessagesPage(
+      config,
+      fetchImpl,
+      {
+        conversationId: options.conversationId,
+        limit,
+        ...(before !== undefined ? { before } : {}),
+      },
+      stderr,
+    )
+    if (!page) {
+      return 1
+    }
+
+    pages.push(page)
+    remaining -= page.messages.length
+    if (!page.hasMore || !page.nextBefore || page.messages.length === 0) {
+      break
+    }
+
+    before = Number.parseInt(page.nextBefore, 10)
+    if (!Number.isSafeInteger(before)) {
+      break
+    }
+  }
+
+  const messages = pages
+    .slice()
+    .reverse()
+    .flatMap((page) => page.messages)
+  const lastPage = pages.at(-1)
+  const payload = {
+    conversationId: options.conversationId,
+    sessionName: pages[0]?.sessionName,
+    source: pages[0]?.source,
+    requestedTail: options.tail,
+    before: options.before !== undefined ? String(options.before) : null,
+    nextBefore: lastPage?.nextBefore ?? null,
+    hasMore: lastPage?.hasMore ?? false,
+    totalMessages: lastPage?.totalMessages ?? pages[0]?.totalMessages,
+    messages,
+  }
+
+  if (options.json) {
+    stdout.write(`${JSON.stringify(payload, null, 2)}\n`)
+  } else {
+    writeTextMessages(stdout, messages)
+  }
+
+  return 0
+}
+
 async function runAttach(
   config: HammurabiConfig,
   fetchImpl: typeof fetch,
@@ -420,6 +696,7 @@ export async function runConversationsCli(
     !command ||
     (command !== 'list' &&
       command !== 'create' &&
+      command !== 'messages' &&
       command !== 'attach' &&
       command !== 'archive')
   ) {
@@ -448,6 +725,15 @@ export async function runConversationsCli(
       return 1
     }
     return runCreate(config, fetchImpl, options, stdout, stderr)
+  }
+
+  if (command === 'messages') {
+    const options = parseMessagesOptions(args.slice(1))
+    if (!options) {
+      printUsage(stdout)
+      return 1
+    }
+    return runMessages(config, fetchImpl, options, stdout, stderr)
   }
 
   const conversationId = parseConversationId(args[1])

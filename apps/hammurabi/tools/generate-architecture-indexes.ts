@@ -288,7 +288,7 @@ const features: FeatureMapping[] = [
       'modules/conversation/runtime.ts',
       'modules/workspace/runtime.ts',
     ],
-    storage: ['agents.stream-sessions', 'commanders.conversations', 'workspace.conversation-targets', 'approvals.pending'],
+    storage: ['agent_runtime_sessions', 'commanders.conversations', 'workspace.conversation-targets', 'approvals.pending'],
     tests: [
       'modules/command-room/__tests__/hervald-routing.test.ts',
       'modules/command-room/components/desktop/__tests__/CommandRoom.chat-start.test.tsx',
@@ -320,7 +320,7 @@ const features: FeatureMapping[] = [
       'modules/agents/messages/stream-event-machine.ts',
       'modules/agents/messages/planning.ts',
     ],
-    storage: ['agents.stream-sessions', 'agents.transcripts'],
+    storage: ['agent_runtime_sessions', 'agents.transcripts'],
     tests: [
       'modules/agents/components/__tests__/SessionMessageList.test.ts',
       'modules/agents/components/session-message-list/__tests__/blocks.test.tsx',
@@ -350,7 +350,7 @@ const features: FeatureMapping[] = [
       'modules/agents/routes/session-control-routes.ts',
       'modules/agents/websocket.ts',
     ],
-    storage: ['live session queue state', 'agents.stream-sessions for persisted runtime session metadata'],
+    storage: ['live session queue state', 'agent_runtime_sessions for persisted runtime session metadata'],
     tests: [
       'modules/agents/__tests__/queue-mutation.test.ts',
       'modules/agents/__tests__/queue-capability.test.ts',

@@ -7,7 +7,12 @@
  * URL-baked-creator + key-presence-rejection contract end-to-end.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createMockPtySpawner, createTempMachinesRegistry, startServer } from './routes-test-harness'
+import {
+  createMockPtySpawner,
+  createTempMachinesRegistry,
+  installMockCodexSidecar,
+  startServer,
+} from './routes-test-harness'
 
 const COMMANDER_ID = 'd66a5217-ace6-4f00-b2ac-bbd64a9a7e7e'
 
@@ -137,6 +142,93 @@ describe('dispatchWorkerForCommander helper (agents-side)', () => {
     } finally {
       await server.close()
       await registry.cleanup()
+    }
+  })
+
+  it('threads permissionMode into commander worker launches', async () => {
+    const sidecar = installMockCodexSidecar()
+    const registry = await createTempMachinesRegistry({
+      machines: [
+        { id: 'gpu-1', label: 'GPU 1', host: '10.0.1.50', user: 'builder' },
+      ],
+    })
+    const server = await startServer({ machinesFilePath: registry.filePath })
+
+    try {
+      const result = await server.agents.sessionsInterface.dispatchWorkerForCommander({
+        commanderId: COMMANDER_ID,
+        rawBody: {
+          name: 'worker-bypass-mode',
+          agentType: 'codex',
+          host: 'gpu-1',
+          permissionMode: 'bypassPermissions',
+        },
+      })
+
+      expect(result.status).toBe(201)
+      expect(result.body).toMatchObject({
+        sessionName: 'worker-bypass-mode',
+        mode: 'bypassPermissions',
+        sessionType: 'worker',
+        creator: { kind: 'commander', id: COMMANDER_ID },
+        transportType: 'stream',
+        agentType: 'codex',
+        host: 'gpu-1',
+        created: true,
+      })
+    } finally {
+      await server.close()
+      await registry.cleanup()
+      await sidecar.closeServer()
+    }
+  })
+
+  it('rejects unsupported permissionMode inputs for default Claude commander workers', async () => {
+    const registry = await createTempMachinesRegistry({
+      machines: [
+        { id: 'gpu-1', label: 'GPU 1', host: '10.0.1.50', user: 'builder' },
+      ],
+    })
+    const server = await startServer({ machinesFilePath: registry.filePath })
+
+    try {
+      const result = await server.agents.sessionsInterface.dispatchWorkerForCommander({
+        commanderId: COMMANDER_ID,
+        rawBody: {
+          name: 'worker-unsupported-mode',
+          host: 'gpu-1',
+          permissionMode: 'bypassPermissions',
+        },
+      })
+
+      expect(result.status).toBe(400)
+      expect(result.body).toEqual({
+        error: 'permissionMode "bypassPermissions" is not supported by provider claude. Expected one of: default',
+      })
+    } finally {
+      await server.close()
+      await registry.cleanup()
+    }
+  })
+
+  it('rejects deprecated permissionMode spellings', async () => {
+    const { spawner } = createMockPtySpawner()
+    const server = await startServer({ ptySpawner: spawner })
+
+    try {
+      const result = await server.agents.sessionsInterface.dispatchWorkerForCommander({
+        commanderId: COMMANDER_ID,
+        rawBody: {
+          name: 'worker-legacy-mode',
+          cwd: '/tmp',
+          permissionMode: 'dangerouslySkipPermissions',
+        },
+      })
+
+      expect(result.status).toBe(400)
+      expect(String(result.body.error)).toContain('Invalid permissionMode')
+    } finally {
+      await server.close()
     }
   })
 

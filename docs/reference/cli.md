@@ -9,6 +9,8 @@ commands for local development and deployment checks:
 | Build | `pnpm run build` |
 | Test | `pnpm test` |
 | Start | `pnpm start` |
+| Check SQLite runtime-session store | `pnpm run db:ready -- --source-root "$HERD_DATA_DIR" --db "$HERD_DATA_DIR/herd.sqlite"` |
+| Migrate legacy runtime sessions | `pnpm run migrate:sqlite -- --source-root "$HERD_DATA_DIR" --db "$HERD_DATA_DIR/herd.sqlite" --backup` |
 
 For operator workflows such as machines, workers, provider auth, and
 transcripts, use the visible Herd UI surfaces documented here:

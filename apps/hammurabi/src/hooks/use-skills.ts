@@ -7,9 +7,26 @@ export interface Skill {
   description: string
   userInvocable: boolean
   argumentHint?: string
+  supportedProviders?: string[]
+  source?: string
 }
 
 type SkillsResponse = Skill[] | { skills?: Skill[] }
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : []
+
+  const normalized = values
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  return normalized.length > 0 ? normalized : undefined
+}
 
 export async function fetchSkills(): Promise<Skill[]> {
   const payload = await fetchJson<SkillsResponse>('/api/skills')
@@ -27,6 +44,8 @@ export async function fetchSkills(): Promise<Skill[]> {
       dirName: skill.dirName?.trim() || undefined,
       description: skill.description?.trim() || '',
       argumentHint: skill.argumentHint?.trim() || undefined,
+      supportedProviders: normalizeStringArray(skill.supportedProviders),
+      source: skill.source?.trim() || undefined,
     }))
     .filter((skill) => skill.name.length > 0)
 }

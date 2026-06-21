@@ -1,4 +1,5 @@
 import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
+import { classifyProviderError } from '../provider-errors.js'
 import { createTranscriptId } from '../transcript-id.js'
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -64,8 +65,134 @@ function readTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined
 }
 
+type CodexRateLimitStatus = {
+  primaryUsedPercent?: number
+  secondaryUsedPercent?: number
+  primaryResetAtIso?: string
+  rateLimitReachedType?: string
+  planType?: string
+}
+
+const CODEX_RATE_LIMIT_SURFACE_THRESHOLD_PERCENT = 90
+
+function formatCodexTimestamp(value: unknown): string | undefined {
+  const numericValue = typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : (typeof value === 'string' && value.trim().length > 0 ? Number(value) : undefined)
+  if (typeof numericValue === 'number' && Number.isFinite(numericValue)) {
+    const millis = numericValue > 10_000_000_000 ? numericValue : numericValue * 1000
+    const date = new Date(millis)
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+  }
+
+  const textValue = readTrimmedString(value)
+  if (!textValue) {
+    return undefined
+  }
+  const date = new Date(textValue)
+  return Number.isNaN(date.getTime()) ? textValue : date.toISOString()
+}
+
+function extractCodexRateLimitStatus(params: Record<string, unknown>): CodexRateLimitStatus | null {
+  const rateLimits = asObject(params.rateLimits) ?? params
+  const primary = asObject(rateLimits.primary)
+  const secondary = asObject(rateLimits.secondary)
+  const primaryUsedPercent = primary
+    ? readNumber(primary, ['usedPercent', 'used_percent'])
+    : readNumber(rateLimits, ['primaryUsedPercent', 'primary_used_percent', 'usedPercent', 'used_percent'])
+  const secondaryUsedPercent = secondary
+    ? readNumber(secondary, ['usedPercent', 'used_percent'])
+    : readNumber(rateLimits, ['secondaryUsedPercent', 'secondary_used_percent'])
+  const primaryResetAtIso = formatCodexTimestamp(
+    primary?.resetsAt
+    ?? primary?.resetAt
+    ?? rateLimits.primaryResetsAt
+    ?? rateLimits.primaryResetAt
+    ?? rateLimits.resetsAt
+    ?? rateLimits.resetAt,
+  )
+  const rateLimitReachedType = readTrimmedString(rateLimits.rateLimitReachedType)
+    ?? readTrimmedString(params.rateLimitReachedType)
+  const planType = readTrimmedString(rateLimits.planType)
+    ?? readTrimmedString(params.planType)
+
+  if (
+    primaryUsedPercent === undefined
+    && secondaryUsedPercent === undefined
+    && !primaryResetAtIso
+    && !rateLimitReachedType
+    && !planType
+  ) {
+    return null
+  }
+
+  return {
+    ...(primaryUsedPercent !== undefined ? { primaryUsedPercent } : {}),
+    ...(secondaryUsedPercent !== undefined ? { secondaryUsedPercent } : {}),
+    ...(primaryResetAtIso ? { primaryResetAtIso } : {}),
+    ...(rateLimitReachedType ? { rateLimitReachedType } : {}),
+    ...(planType ? { planType } : {}),
+  }
+}
+
+function shouldSurfaceCodexRateLimitStatus(status: CodexRateLimitStatus): boolean {
+  return Boolean(status.rateLimitReachedType)
+    || (status.primaryUsedPercent ?? 0) >= CODEX_RATE_LIMIT_SURFACE_THRESHOLD_PERCENT
+    || (status.secondaryUsedPercent ?? 0) >= CODEX_RATE_LIMIT_SURFACE_THRESHOLD_PERCENT
+}
+
+function formatCodexRateLimitDetail(status: CodexRateLimitStatus): string {
+  const parts: string[] = []
+  if (status.primaryUsedPercent !== undefined) {
+    parts.push(`primary quota ${Math.round(status.primaryUsedPercent)}% used`)
+  }
+  if (status.secondaryUsedPercent !== undefined) {
+    parts.push(`weekly quota ${Math.round(status.secondaryUsedPercent)}% used`)
+  }
+  if (status.primaryResetAtIso) {
+    parts.push(`resets at ${status.primaryResetAtIso}`)
+  }
+  if (status.rateLimitReachedType) {
+    parts.push(`limit status ${status.rateLimitReachedType}`)
+  }
+  if (status.planType) {
+    parts.push(`plan ${status.planType}`)
+  }
+  return parts.length > 0 ? `Codex ${parts.join('; ')}.` : 'Codex quota status changed.'
+}
+
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function readCodeString(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  return readTrimmedString(value)
+}
+
+function readCodexContentText(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value.length > 0 ? value : undefined
+  }
+  if (!Array.isArray(value)) {
+    const record = asObject(value)
+    return readNonEmptyString(record?.text)
+      ?? readNonEmptyString(record?.content)
+      ?? undefined
+  }
+
+  const chunks = value.flatMap((entry) => {
+    if (typeof entry === 'string') {
+      return entry.length > 0 ? [entry] : []
+    }
+    const record = asObject(entry)
+    const text = readNonEmptyString(record?.text)
+      ?? readNonEmptyString(record?.content)
+    return text ? [text] : []
+  })
+  return chunks.length > 0 ? chunks.join('') : undefined
 }
 
 function readCodexMessageDeltaText(params: Record<string, unknown>): string | undefined {
@@ -112,6 +239,15 @@ function readCodexSubagentId(item: Record<string, unknown> | null, params: Recor
   return readTrimmedString(item?.subagentId)
     ?? readTrimmedString(params.subagentId)
     ?? readTrimmedString(asObject(item?.subagent)?.id)
+}
+
+function readCodexAgentMessageText(item: Record<string, unknown>): string | undefined {
+  return readNonEmptyString(item.text)
+    ?? readNonEmptyString(item.outputText)
+    ?? readNonEmptyString(item.output_text)
+    ?? readNonEmptyString(item.message)
+    ?? readCodexContentText(item.content)
+    ?? undefined
 }
 
 function isCodexCollabAgentItemType(itemType: string | undefined): boolean {
@@ -250,6 +386,30 @@ function createCodexActivityEnvelope(
   })
 }
 
+function createCodexProviderErrorEnvelope(
+  method: string,
+  params: Record<string, unknown>,
+): TranscriptEnvelope {
+  const error = asObject(params.error)
+  const message = readTrimmedString(error?.message)
+    ?? readTrimmedString(params.message)
+    ?? 'Codex provider error'
+  const code = readCodeString(error?.codexErrorInfo)
+    ?? readCodeString(error?.code)
+    ?? readCodeString(params.code)
+  const hint = readTrimmedString(error?.additionalDetails)
+    ?? readTrimmedString(params.additionalDetails)
+  return createCodexEnvelope(method, params, {
+    type: 'provider.error',
+    message,
+    classification: classifyProviderError(message, code),
+    ...(code ? { code } : {}),
+    ...(hint ? { hint } : {}),
+    retryable: params.willRetry === true,
+    data: params,
+  })
+}
+
 function mapCodexStartedItem(method: string, params: Record<string, unknown>): TranscriptEnvelope[] {
   const item = asObject(params.item)
   if (!item) {
@@ -299,8 +459,16 @@ function mapCodexCompletedItem(method: string, params: Record<string, unknown>):
   switch (itemType) {
     case 'userMessage':
       return []
-    case 'agentMessage':
-      return [createCodexEnvelope(method, params, { type: 'message.end' }, { itemId })]
+    case 'agentMessage': {
+      const text = readCodexAgentMessageText(item)
+      return text
+        ? [
+            createCodexEnvelope(method, params, { type: 'message.start', role: 'assistant' }, { itemId }),
+            createCodexEnvelope(method, params, { type: 'message.delta', text, channel: 'final' }, { itemId }),
+            createCodexEnvelope(method, params, { type: 'message.end' }, { itemId }),
+          ]
+        : [createCodexEnvelope(method, params, { type: 'message.end' }, { itemId })]
+    }
     case 'reasoning':
       return [createCodexActivityEnvelope(method, params, 'Reasoning completed', itemType, item)]
     case 'plan': {
@@ -351,6 +519,19 @@ export function mapCodexToTranscriptEnvelopes(
 ): TranscriptEnvelope[] {
   const p = asObject(params) ?? {}
   switch (method) {
+    case 'account/rateLimits/updated': {
+      const rateLimit = extractCodexRateLimitStatus(p)
+      if (!rateLimit || !shouldSurfaceCodexRateLimitStatus(rateLimit)) {
+        return []
+      }
+      return [createCodexActivityEnvelope(
+        method,
+        p,
+        rateLimit.rateLimitReachedType ? 'Codex quota limit reached' : 'Codex quota nearly exhausted',
+        formatCodexRateLimitDetail(rateLimit),
+        { rateLimit, rateLimits: asObject(p.rateLimits) ?? p },
+      )]
+    }
     case 'thread/started':
       return [createCodexActivityEnvelope(method, p, 'Thread started', undefined, p)]
     case 'thread/archived':
@@ -481,13 +662,18 @@ export function mapCodexToTranscriptEnvelopes(
     case 'windowsSandbox/setupCompleted':
       return [createCodexActivityEnvelope(method, p, 'Sandbox setup completed', undefined, p)]
     case 'error':
-      return [createCodexActivityEnvelope(
-        method,
-        p,
-        'Codex error',
-        readTrimmedString(asObject(p.error)?.message) ?? readTrimmedString(p.message),
-        p,
-      )]
+      {
+        const activityEnvelope = createCodexActivityEnvelope(
+          method,
+          p,
+          'Codex error',
+          readTrimmedString(asObject(p.error)?.message) ?? readTrimmedString(p.message),
+          p,
+        )
+        return p.willRetry === false
+          ? [activityEnvelope, createCodexProviderErrorEnvelope(method, p)]
+          : [activityEnvelope]
+      }
     default:
       return [createCodexRawEnvelope(method, p)]
   }

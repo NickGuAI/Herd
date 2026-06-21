@@ -8,6 +8,7 @@ import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.j
 import type { AgentType, StreamJsonEvent, StreamSession } from '../../agents/types.js'
 import type { QueuedMessageImage } from '../../agents/message-queue.js'
 import { mapStreamEventsToMessages } from '../../agents/messages/history.js'
+import { COMMANDER_STARTUP_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes.js'
 import type { MsgItem } from '../../agents/messages/model.js'
 import { mergeCanonicalStreamEvents } from '../../agents/messages/canonical-timeline.js'
 import { readTranscriptTailPage } from '../../agents/transcript-store.js'
@@ -21,6 +22,12 @@ import { asClaudeProviderContext } from '../../agents/providers/provider-session
 import { getProvider } from '../../agents/providers/registry.js'
 import { resolveProviderDefaults } from '../../agents/providers/provider-adapter.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
+import { hasNativeProviderResumeIdentifier } from '../../agents/providers/native-resume.js'
+import {
+  appendCommanderCostRecord,
+  computeLiveSessionMonthlySpendUsd,
+  enforceCommanderCostCap,
+} from '../cost-control.js'
 
 export function buildConversationSessionName(conversation: Conversation): string {
   return `commander-${conversation.commanderId}-conversation-${conversation.id}`
@@ -33,11 +40,12 @@ export function getLiveConversationSession(
   return context.sessionsInterface?.getSession(buildConversationSessionName(conversation))
 }
 
-const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 10
-const MAX_CONVERSATION_MESSAGES_LIMIT = 50
+const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 50
+const MAX_CONVERSATION_MESSAGES_LIMIT = 100
 const DEFAULT_TRANSCRIPT_TAIL_EVENT_LIMIT = 500
 const MAX_TRANSCRIPT_TAIL_EVENT_LIMIT = 5_000
 const MAX_TRANSCRIPT_TAIL_READ_ATTEMPTS = 5
+const CLIENT_SEND_ID_DEDUPE_TAIL_TURNS = 200
 const DEEP_THINKING_RESEARCH_ROLES = ['context-research', 'risk-research'] as const
 const DEEP_THINKING_THINKING_ROLES = ['inversion-thinking', 'synthesis-thinking', 'operational-thinking'] as const
 const DEFAULT_DEEP_THINKING_WORKER_WAIT_TIMEOUT_MS = 10 * 60 * 1000
@@ -65,6 +73,7 @@ interface DeepThinkingOperationRegistration {
 }
 
 const deepThinkingOperations = new Map<string, DeepThinkingOperationRegistration>()
+const inFlightConversationDeliveries = new Map<string, Promise<DeliverConversationMessageResult>>()
 
 export function configureDeepThinkingRoutingForTest(options: {
   workerWaitTimeoutMs?: number
@@ -311,6 +320,23 @@ interface PreparedConversationSession {
   }
 }
 
+async function hasConversationTranscriptMessages(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): Promise<boolean> {
+  const sessionName = buildConversationSessionName(conversation)
+  const liveEvents = getLiveConversationSession(context, conversation)?.events ?? []
+  const transcriptWindow = await readTranscriptEventsWindow(sessionName, 1, liveEvents)
+  return transcriptWindow.messages.length > 0
+}
+
+function mayHavePriorConversationHistory(conversation: Conversation): boolean {
+  return Boolean(conversation.providerContext)
+    || conversation.createdAt !== conversation.lastMessageAt
+    || conversation.completedTasks > 0
+    || conversation.heartbeatTickCount > 0
+}
+
 export class ConversationProviderSwapConflictError extends Error {
   constructor(message: string) {
     super(message)
@@ -383,19 +409,35 @@ async function prepareConversationSession(
     : undefined
   const cwd = commander.cwd ?? undefined
   const host = commander.host ?? undefined
+  const sessionName = buildConversationSessionName(conversation)
+  const hasNativeResumeIdentifier = provider
+    ? hasNativeProviderResumeIdentifier({
+      provider,
+      agentType,
+      providerContext: conversation.providerContext,
+      sessionName,
+      cwd: cwd ?? process.env.HOME ?? '/tmp',
+    })
+    : false
+  const hasPriorTranscriptMessages = hasNativeResumeIdentifier || !mayHavePriorConversationHistory(conversation)
+    ? false
+    : await hasConversationTranscriptMessages(context, conversation)
   const workflow = await resolveCommanderWorkflow(
     commanderId,
     cwd,
     context.commanderBasePath,
   )
   const built = await buildCommanderSessionSeedFromResolvedWorkflow(
-      {
-        commanderId,
-        cwd,
-        currentTask: conversation.currentTask,
-        taskSource: commander.taskSource,
+    {
+      commanderId,
+      cwd,
+      currentTask: conversation.currentTask,
+      taskSource: commander.taskSource,
       maxTurns: commander.maxTurns,
       memoryBasePath: context.commanderBasePath,
+      ...(hasPriorTranscriptMessages
+        ? { priorConversation: { conversationId: conversation.id } }
+        : {}),
     },
     workflow,
   )
@@ -405,9 +447,9 @@ async function prepareConversationSession(
 
   return {
     commander,
-    sessionName: buildConversationSessionName(conversation),
+    sessionName,
     createSessionInput: {
-      name: buildConversationSessionName(conversation),
+      name: sessionName,
       commanderId,
       conversationId: conversation.id,
       systemPrompt,
@@ -570,9 +612,18 @@ export async function startConversationSession(
     })
   }
 
-  const messageToSend = initialMessage ?? (reusingLiveSession ? null : STARTUP_PROMPT)
+  const isBackendStartupPrompt = initialMessage == null
+    && !reusingLiveSession
+    && !conversation.providerContext
+  const messageToSend = initialMessage ?? (isBackendStartupPrompt ? STARTUP_PROMPT : null)
   const sent = messageToSend
-    ? await sessionsInterface.sendToSession(sessionName, messageToSend, sendOptions)
+    ? await sessionsInterface.sendToSession(
+      sessionName,
+      isBackendStartupPrompt
+        ? { text: messageToSend, userEventSubtype: COMMANDER_STARTUP_USER_EVENT_SUBTYPE }
+        : messageToSend,
+      sendOptions,
+    )
     : true
   if (!sent) {
     context.heartbeatManager.stop(heartbeatConversation.id)
@@ -688,6 +739,23 @@ export interface ConversationMessagePayload {
   images?: QueuedMessageImage[]
   clientSendId?: string
 }
+
+type DeliverConversationMessageSuccess = {
+  ok: true
+  createdSession: boolean
+  conversation: Conversation
+  operationId?: string
+}
+
+type DeliverConversationMessageFailure = {
+  ok: false
+  status: number
+  error: string
+}
+
+type DeliverConversationMessageResult =
+  | DeliverConversationMessageSuccess
+  | DeliverConversationMessageFailure
 
 interface DeepThinkingWorkerLaunch {
   stage: 'research' | 'thinking'
@@ -1401,6 +1469,71 @@ function eventType(event: StreamJsonEvent): string {
   return typeof event.type === 'string' ? event.type : ''
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function normalizeClientSendId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function eventClientSendId(event: unknown): string | null {
+  if (!isObjectRecord(event)) {
+    return null
+  }
+
+  const directClientSendId = normalizeClientSendId(event.clientSendId)
+  if (directClientSendId) {
+    return directClientSendId
+  }
+
+  const message = event.message
+  return isObjectRecord(message) ? normalizeClientSendId(message.clientSendId) : null
+}
+
+function liveSessionHasClientSendId(liveSession: StreamSession | undefined, clientSendId: string): boolean {
+  if (!liveSession) {
+    return false
+  }
+  if (eventClientSendId(liveSession.currentQueuedMessage) === clientSendId) {
+    return true
+  }
+  if (liveSession.pendingDirectSendMessages.some((message) => eventClientSendId(message) === clientSendId)) {
+    return true
+  }
+  if (liveSession.messageQueue?.list().some((message) => eventClientSendId(message) === clientSendId)) {
+    return true
+  }
+  return liveSession.events.some((event) => eventClientSendId(event) === clientSendId)
+}
+
+async function conversationAlreadyHasClientSendId(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  liveSession: StreamSession | undefined,
+  clientSendId: string | undefined,
+): Promise<boolean> {
+  const normalizedClientSendId = normalizeClientSendId(clientSendId)
+  if (!normalizedClientSendId) {
+    return false
+  }
+  if (liveSessionHasClientSendId(liveSession, normalizedClientSendId)) {
+    return true
+  }
+
+  const sessionName = buildConversationSessionName(conversation)
+  const page = await readTranscriptTailPage(sessionName, {
+    maxTurns: CLIENT_SEND_ID_DEDUPE_TAIL_TURNS,
+    maxEvents: MAX_TRANSCRIPT_TAIL_EVENT_LIMIT,
+  })
+  return page.events.some((event) => eventClientSendId(event) === normalizedClientSendId)
+}
+
+function conversationDeliveryDedupeKey(conversation: Conversation, clientSendId: string | undefined): string | null {
+  const normalizedClientSendId = normalizeClientSendId(clientSendId)
+  return normalizedClientSendId ? `${conversation.id}:${normalizedClientSendId}` : null
+}
+
 function extractAssistantReplyText(events: readonly StreamJsonEvent[]): string | null {
   const messages = mapStreamEventsToMessages(events)
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -1657,13 +1790,26 @@ export async function persistConversationRuntimeSnapshot(
 ): Promise<Conversation | null> {
   const liveSession = getLiveConversationSession(context, conversation)
   const usageCostUsd = liveSession?.usage?.costUsd ?? 0
+  const occurredAtDate = context.now()
+  const occurredAt = occurredAtDate.toISOString()
+  const monthlyUsageCostUsd = liveSession
+    ? computeLiveSessionMonthlySpendUsd(liveSession, occurredAtDate)
+    : 0
+  if (monthlyUsageCostUsd > 0) {
+    await appendCommanderCostRecord(context, {
+      commanderId: conversation.commanderId,
+      conversationId: conversation.id,
+      costUsd: monthlyUsageCostUsd,
+      occurredAt,
+    })
+  }
   return context.conversationStore.update(conversation.id, (current) => ({
     ...current,
     model: liveSession?.model,
     providerContext: sanitizeConversationProviderContext(liveSession) ?? current.providerContext,
     totalCostUsd: current.totalCostUsd + usageCostUsd,
     status: nextStatus,
-    lastMessageAt: new Date().toISOString(),
+    lastMessageAt: occurredAt,
   }))
 }
 
@@ -1715,19 +1861,34 @@ export async function deliverConversationMessage(
   conversation: Conversation,
   payload: ConversationMessagePayload,
   options?: DeliverConversationMessageOptions,
-): Promise<
-  | {
-    ok: true
-    createdSession: boolean
-    conversation: Conversation
-    operationId?: string
+): Promise<DeliverConversationMessageResult> {
+  const dedupeKey = conversationDeliveryDedupeKey(conversation, payload.clientSendId)
+  if (!dedupeKey) {
+    return deliverConversationMessageUnchecked(context, conversation, payload, options)
   }
-  | {
-    ok: false
-    status: number
-    error: string
+
+  const inFlightDelivery = inFlightConversationDeliveries.get(dedupeKey)
+  if (inFlightDelivery) {
+    return inFlightDelivery
   }
-> {
+
+  const delivery = deliverConversationMessageUnchecked(context, conversation, payload, options)
+  inFlightConversationDeliveries.set(dedupeKey, delivery)
+  try {
+    return await delivery
+  } finally {
+    if (inFlightConversationDeliveries.get(dedupeKey) === delivery) {
+      inFlightConversationDeliveries.delete(dedupeKey)
+    }
+  }
+}
+
+async function deliverConversationMessageUnchecked(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  payload: ConversationMessagePayload,
+  options?: DeliverConversationMessageOptions,
+): Promise<DeliverConversationMessageResult> {
   if (conversation.status === 'archived') {
     return { ok: false, status: 409, error: `Conversation "${conversation.id}" is archived` }
   }
@@ -1742,8 +1903,24 @@ export async function deliverConversationMessage(
     : { queue: options.queue, priority: options.priority }
 
   const liveSession = getLiveConversationSession(context, conversation)
+  if (await conversationAlreadyHasClientSendId(context, conversation, liveSession, payload.clientSendId)) {
+    return {
+      ok: true,
+      createdSession: false,
+      conversation,
+    }
+  }
+
   if (!liveSession) {
     if (conversation.status === 'idle' && options?.autoStartIdle) {
+      const costCap = await enforceCommanderCostCap(context, conversation.commanderId)
+      if (!costCap.ok) {
+        return {
+          ok: false,
+          status: costCap.status,
+          error: costCap.body.error,
+        }
+      }
       const started = await startConversationSession(
         context,
         conversation.commanderId,
@@ -1810,6 +1987,73 @@ export async function deliverConversationMessage(
         error: `Conversation is idle. Call POST /api/conversations/${conversation.id}/start first.`,
       }
     }
+    if (conversation.status === 'active') {
+      const costCap = await enforceCommanderCostCap(context, conversation.commanderId)
+      if (!costCap.ok) {
+        return {
+          ok: false,
+          status: costCap.status,
+          error: costCap.body.error,
+        }
+      }
+      const restarted = await startConversationSession(
+        context,
+        conversation.commanderId,
+        conversation,
+        null,
+        options?.startSpawnOptions,
+        undefined,
+        options?.dispatchChannelReplies === true,
+        options?.dispatchChannelReplies === true ? 1 : 0,
+      )
+      if (!restarted.sent) {
+        return {
+          ok: false,
+          status: 503,
+          error: `Conversation "${conversation.id}" could not be recovered`,
+        }
+      }
+      const sessionName = buildConversationSessionName(restarted.conversation)
+      const restartedLiveSession = getLiveConversationSession(context, restarted.conversation)
+      if (!restartedLiveSession) {
+        await stopConversationSession(context, restarted.conversation, 'idle')
+        return {
+          ok: false,
+          status: 503,
+          error: `Conversation "${conversation.id}" recovered without a live session`,
+        }
+      }
+      const sent = await sendConversationPayloadWithDeepThinkingGuard({
+        context,
+        conversation: restarted.conversation,
+        commander,
+        liveSession: restartedLiveSession,
+        sessionName,
+        payload,
+        sendOptions,
+        abortSignal: options?.abortSignal,
+      })
+      if (!sent.ok) {
+        await stopConversationSession(context, restarted.conversation, 'idle')
+        return {
+          ok: false,
+          status: sent.status,
+          error: sent.error,
+        }
+      }
+      const updated = await context.conversationStore.update(restarted.conversation.id, (current) => ({
+        ...current,
+        status: 'active',
+        lastMessageAt: new Date().toISOString(),
+      }))
+      await updateCommanderDerivedState(context, conversation.commanderId)
+      return {
+        ok: true,
+        createdSession: true,
+        conversation: updated ?? restarted.conversation,
+        ...(sent.operationId ? { operationId: sent.operationId } : {}),
+      }
+    }
     return {
       ok: false,
       status: 409,
@@ -1818,6 +2062,14 @@ export async function deliverConversationMessage(
   }
 
   const sessionName = buildConversationSessionName(conversation)
+  const costCap = await enforceCommanderCostCap(context, conversation.commanderId)
+  if (!costCap.ok) {
+    return {
+      ok: false,
+      status: costCap.status,
+      error: costCap.body.error,
+    }
+  }
   if (options?.dispatchChannelReplies) {
     ensureChannelReplyForwarder(context, conversation)
   }

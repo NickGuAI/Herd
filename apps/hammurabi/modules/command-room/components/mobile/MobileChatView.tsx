@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Plus } from 'lucide-react'
 import type { AgentType, SessionQueueSnapshot } from '@/types'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { MobileSessionShell } from '@modules/agents/page-shell/MobileSessionShell'
-import type { SessionComposerSubmitPayload } from '@modules/agents/components/SessionComposer'
+import type {
+  SessionComposerContextAttachments,
+  SessionComposerSubmitPayload,
+} from '@modules/agents/components/SessionComposer'
 import type { MsgItem } from '@modules/agents/messages/model'
 import {
   CreateConversationPanel,
@@ -15,6 +18,8 @@ import type { Commander, Worker } from '@modules/command-room/components/desktop
 import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
 import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
 import { orderMobileConversations } from './orderMobileConversations'
+
+type MobileStreamStatus = 'connecting' | 'connected' | 'disconnected' | 'closed' | null
 
 interface MobileChatViewProps {
   commander: Commander | null
@@ -32,7 +37,7 @@ interface MobileChatViewProps {
   selectedConversationId?: string | null
   isStreaming?: boolean
   agentType?: AgentType
-  wsStatus?: 'connecting' | 'connected' | 'disconnected' | 'closed' | null
+  wsStatus?: MobileStreamStatus
   costUsd?: number
   durationSec?: number
   theme: 'light' | 'dark'
@@ -76,10 +81,31 @@ interface MobileChatViewProps {
   onRemoveContextDirectoryPath?: (directoryPath: string) => void
   onRemoveContextFileAnnotation?: (commentId: string) => void
   onClearContextFilePaths?: () => void
+  onRestoreContextAttachments?: (context: SessionComposerContextAttachments) => void
   onSend?: (payload: SessionComposerSubmitPayload) => boolean | void | Promise<boolean | void>
   onQueue?: (
     payload: SessionComposerSubmitPayload,
   ) => boolean | void | Promise<boolean | void>
+}
+
+function MobileConversationStreamStatusNotice({
+  status,
+}: {
+  status: Exclude<MobileStreamStatus, null | 'connected'>
+}) {
+  const message = status === 'connecting'
+    ? 'Conversation stream reconnecting...'
+    : 'Conversation stream unavailable. Reconnecting to the live session.'
+
+  return (
+    <div
+      className="rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2 font-mono text-[11px] leading-5 text-[color:var(--hv-fg-muted)]"
+      data-testid="mobile-conversation-stream-status"
+      role="status"
+    >
+      {message}
+    </div>
+  )
 }
 
 const EMPTY_QUEUE_SNAPSHOT: SessionQueueSnapshot = {
@@ -199,6 +225,7 @@ export function MobileChatView({
   onRemoveContextDirectoryPath,
   onRemoveContextFileAnnotation,
   onClearContextFilePaths,
+  onRestoreContextAttachments,
   onSend,
   onQueue,
 }: MobileChatViewProps) {
@@ -333,12 +360,12 @@ export function MobileChatView({
     container.scrollTo({ left: targetLeft, behavior: 'auto' })
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (activeConversationIndex < 0) {
       return
     }
     scrollToConversation(activeConversationId)
-  }, [activeConversationId, activeConversationIndex, scrollToConversation])
+  }, [activeConversationId, activeConversationIndex, scrollToConversation, transcript])
 
   const selectConversationFromScroll = useCallback(() => {
     const container = scrollContainerRef.current
@@ -501,9 +528,12 @@ export function MobileChatView({
         composerPlaceholder={`Send a message to ${commander.name}…`}
         contextFilePaths={contextFilePaths}
         contextDirectoryPaths={contextDirectoryPaths}
+        contextFileAnnotations={contextFileAnnotations}
         onRemoveContextFilePath={onRemoveContextFilePath}
         onRemoveContextDirectoryPath={onRemoveContextDirectoryPath}
+        onRemoveContextFileAnnotation={onRemoveContextFileAnnotation}
         onClearContextFilePaths={onClearContextFilePaths}
+        onRestoreContextAttachments={onRestoreContextAttachments}
         theme={theme}
         onSetTheme={onSetTheme}
         onBack={onBack}
@@ -602,6 +632,9 @@ export function MobileChatView({
           const conversationMessages = isActive
             ? transcript
             : transcriptCacheRef.current.get(conversation.id) ?? []
+          const streamNotice = isActive && wsStatus && wsStatus !== 'connected'
+            ? <MobileConversationStreamStatusNotice status={wsStatus} />
+            : undefined
           return (
             <div
               key={conversation.id}
@@ -654,6 +687,7 @@ export function MobileChatView({
                 onRemoveContextDirectoryPath={isActive ? onRemoveContextDirectoryPath : undefined}
                 onRemoveContextFileAnnotation={isActive ? onRemoveContextFileAnnotation : undefined}
                 onClearContextFilePaths={isActive ? onClearContextFilePaths : undefined}
+                onRestoreContextAttachments={isActive ? onRestoreContextAttachments : undefined}
                 theme={theme}
                 onSetTheme={onSetTheme}
                 onBack={onBack}
@@ -676,6 +710,7 @@ export function MobileChatView({
                 onSwapConversationProvider={onSwapConversationProvider}
                 onArchiveConversation={handleArchiveConversation}
                 onRemoveConversation={handleRemoveConversation}
+                belowHeader={streamNotice}
                 headerAccessory={isActive && onRequestCreateConversation
                   ? (
                     <div className="flex items-center gap-2">

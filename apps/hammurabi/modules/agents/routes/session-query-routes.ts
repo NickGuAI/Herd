@@ -2,11 +2,13 @@ import type { RequestHandler, Router } from 'express'
 import { parseSessionName } from '../session/input.js'
 import {
   buildPersistedEntryFromExitedSession,
+  buildRuntimeSessionActions,
   canResumeLiveStreamSession,
   getConnectionState,
   getResumeState,
   getWorldAgentStatus,
   liveSessionToApiPayload,
+  resolveRuntimeSessionMachine,
   summarizeWorkerStates,
   toCompletedSession,
 } from '../session/state.js'
@@ -19,6 +21,7 @@ import type {
   AnySession,
   CompletedSession,
   ExitedStreamSessionState,
+  MachineConfig,
   StreamSession,
   WorkerState,
 } from '../types.js'
@@ -27,6 +30,7 @@ interface SessionQueryRouteDeps {
   router: Router
   requireReadAccess: RequestHandler
   getCommanderLabels?(): Promise<Record<string, string>>
+  readMachineRegistry(): Promise<MachineConfig[]>
   sessions: Map<string, AnySession>
   completedSessions: Map<string, CompletedSession>
   exitedStreamSessions: Map<string, ExitedStreamSessionState>
@@ -97,6 +101,14 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
   async function pruneSessions(): Promise<void> {
     pruneCronSessions()
     await pruneNonHumanSessions()
+  }
+
+  async function readRuntimeMachines(): Promise<MachineConfig[]> {
+    try {
+      return await deps.readMachineRegistry()
+    } catch {
+      return []
+    }
   }
 
   router.get('/sessions/:name/workers', requireReadAccess, (req, res) => {
@@ -274,9 +286,11 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
 
       if (active.kind === 'stream') {
         const workerStates = deps.getWorkerStates(name)
+        const machines = await readRuntimeMachines()
+        const machine = resolveRuntimeSessionMachine(active.host, machines)
         const resumeAvailable = canResumeLiveStreamSession(active)
         res.json({
-          ...liveSessionToApiPayload(active, { resumeAvailable }),
+          ...liveSessionToApiPayload(active, { resumeAvailable, machine }),
           completed: false,
           workerSummary: summarizeWorkerStates(workerStates),
           resumeAvailable,
@@ -284,6 +298,17 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         return
       }
 
+      const machines = await readRuntimeMachines()
+      const machine = resolveRuntimeSessionMachine(
+        active.host ?? (active.kind === 'external' ? active.machine : undefined),
+        machines,
+      )
+      const { allowedActions, disabledReasons } = buildRuntimeSessionActions({
+        state: 'active',
+        transportType: active.kind === 'external' ? 'external' : 'pty',
+        resumeAvailable: false,
+        machine,
+      })
       const pid = active.kind === 'pty' ? active.pty.pid : 0
       const connectionState = active.kind === 'external'
         ? (active.status === 'connected' ? 'connected' : 'disconnected')
@@ -299,6 +324,10 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         turnState: active.kind === 'external' ? (active.status === 'stale' ? 'stale' : 'idle') : 'idle',
         connectionState,
         resumeState: 'unavailable',
+        state: 'active',
+        machine,
+        allowedActions,
+        disabledReasons,
         processAlive: active.kind !== 'external',
         resumeAvailable: false,
         sessionType: active.sessionType,
@@ -310,7 +339,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         maxThinkingTokens: active.maxThinkingTokens,
         cwd: active.cwd,
         host: active.host ?? (active.kind === 'external' ? active.machine : undefined),
-        ...(active.kind === 'external' ? { machine: active.machine, metadata: active.metadata } : {}),
+        ...(active.kind === 'external' ? { externalMachineId: active.machine, metadata: active.metadata } : {}),
       })
       return
     }
@@ -346,7 +375,15 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
     const exited = deps.exitedStreamSessions.get(name)
     if (exited) {
       const persistedEntry = buildPersistedEntryFromExitedSession(name, exited)
+      const machines = await readRuntimeMachines()
+      const machine = resolveRuntimeSessionMachine(exited.host, machines)
       const resumeAvailable = await deps.isExitedSessionResumeAvailable(persistedEntry)
+      const { allowedActions, disabledReasons } = buildRuntimeSessionActions({
+        state: 'paused',
+        transportType: 'stream',
+        resumeAvailable,
+        machine,
+      })
       res.json({
         name,
         completed: false,
@@ -358,11 +395,16 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         turnState: exited.hadResult ? 'completed' : 'idle',
         connectionState: 'not_applicable',
         resumeState: getResumeState(resumeAvailable),
+        state: 'paused',
+        machine,
+        allowedActions,
+        disabledReasons,
         sessionType: exited.sessionType,
         creator: exited.creator,
         transportType: 'stream',
         agentType: exited.agentType,
         model: exited.model,
+        mode: exited.mode,
         effort: exited.effort,
         adaptiveThinking: exited.adaptiveThinking,
         maxThinkingTokens: exited.maxThinkingTokens,
@@ -388,6 +430,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
     const result: AgentSession[] = []
     const nowMs = Date.now()
     const commanderLabels = await deps.getCommanderLabels?.() ?? {}
+    const machines = await readRuntimeMachines()
     for (const [name, session] of deps.sessions) {
       if (
         session.kind === 'stream' &&
@@ -404,8 +447,9 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
 
       if (session.kind === 'stream') {
         const workerStates = deps.getWorkerStates(name)
+        const machine = resolveRuntimeSessionMachine(session.host, machines)
         const resumeAvailable = canResumeLiveStreamSession(session)
-        const livePayload = liveSessionToApiPayload(session, { resumeAvailable })
+        const livePayload = liveSessionToApiPayload(session, { resumeAvailable, machine })
         result.push({
           ...livePayload,
           ...(label ? { label } : {}),
@@ -418,6 +462,16 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
       const connectionState = session.kind === 'external'
         ? (session.status === 'connected' ? 'connected' : 'disconnected')
         : getConnectionState(session)
+      const machine = resolveRuntimeSessionMachine(
+        session.host ?? (session.kind === 'external' ? session.machine : undefined),
+        machines,
+      )
+      const { allowedActions, disabledReasons } = buildRuntimeSessionActions({
+        state: 'active',
+        transportType: session.kind === 'external' ? 'external' : 'pty',
+        resumeAvailable: false,
+        machine,
+      })
       result.push({
         name,
         ...(label ? { label } : {}),
@@ -427,6 +481,10 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         turnState: session.kind === 'external' ? (session.status === 'stale' ? 'stale' : 'idle') : 'idle',
         connectionState,
         resumeState: 'unavailable',
+        state: 'active',
+        machine,
+        allowedActions,
+        disabledReasons,
         sessionType: session.sessionType,
         creator: session.creator,
         transportType: session.kind === 'external' ? 'external' : 'pty',
@@ -449,6 +507,13 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
 
       const persistedEntry = buildPersistedEntryFromExitedSession(name, exited)
       const resumeAvailable = await deps.isExitedSessionResumeAvailable(persistedEntry)
+      const machine = resolveRuntimeSessionMachine(exited.host, machines)
+      const { allowedActions, disabledReasons } = buildRuntimeSessionActions({
+        state: 'paused',
+        transportType: 'stream',
+        resumeAvailable,
+        machine,
+      })
       result.push({
         name,
         created: exited.createdAt,
@@ -457,11 +522,16 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         turnState: exited.hadResult ? 'completed' : 'idle',
         connectionState: 'not_applicable',
         resumeState: getResumeState(resumeAvailable),
+        state: 'paused',
+        machine,
+        allowedActions,
+        disabledReasons,
         sessionType: exited.sessionType,
         creator: exited.creator,
         transportType: 'stream',
         agentType: exited.agentType,
         model: exited.model,
+        mode: exited.mode,
         effort: exited.effort,
         adaptiveThinking: exited.adaptiveThinking,
         maxThinkingTokens: exited.maxThinkingTokens,

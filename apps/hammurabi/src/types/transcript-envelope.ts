@@ -7,6 +7,7 @@ import type {
 
 export type TranscriptMessageRole = 'user' | 'assistant' | 'system'
 export type TranscriptMessageChannel = 'final' | 'analysis' | 'reasoning' | 'system'
+export type ProviderErrorClassification = 'usage_limit' | 'auth_required' | 'other'
 
 export interface TranscriptEnvelopeSource {
   provider: HammurabiEventProvider
@@ -63,6 +64,15 @@ export type TranscriptEnvelopeEvent =
   | { type: 'plan.update'; plan: unknown; status?: string; toolCallId?: string }
   | { type: 'file.change'; path: string; action?: string; data?: unknown }
   | { type: 'provider.activity'; title?: string; detail?: string; data?: unknown }
+  | {
+      type: 'provider.error'
+      message: string
+      classification: ProviderErrorClassification
+      code?: string
+      hint?: string
+      retryable?: boolean
+      data?: unknown
+    }
   | { type: 'provider.raw'; method?: string; payload: unknown }
 
 export interface TranscriptEnvelope {

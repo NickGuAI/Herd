@@ -71,6 +71,8 @@ async function createServer(): Promise<RunningServer & { tmpDir: string }> {
       apiKeyStore: createTestApiKeyStore(),
       store,
       now,
+      localScan: { enabled: false },
+      retentionDays: 0,
     }).router,
   )
 
@@ -740,7 +742,7 @@ describe('OTEL receiver', () => {
 
     await store.append(oldEntry)
 
-    const hub = new HubClass({ store, now: () => TEST_NOW })
+    const hub = new HubClass({ store, now: () => TEST_NOW, retentionDays: 0 })
     await hub.ensureReady()
 
     const sessions = hub.getSessions(TEST_NOW)

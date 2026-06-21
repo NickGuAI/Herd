@@ -8,11 +8,15 @@ import {
 } from '../adapters/codex/helpers.js'
 import type { QueuedMessage, QueuedMessageImage, QueuedMessagePriority } from '../message-queue.js'
 import { parseMessageImagesForRequest } from '../message-images.js'
-import type { ProviderCreateOptions } from '../providers/provider-adapter.js'
+import type { ProviderCreateOptions, ProviderTeardownOptions } from '../providers/provider-adapter.js'
 import { getProvider } from '../providers/registry.js'
 import { ProviderAuthRequiredError } from '../provider-auth.js'
 import { parseSessionName } from '../session/input.js'
-import { snapshotDeletedResumableStreamSession } from '../session/state.js'
+import {
+  buildPersistedEntryFromExitedSession,
+  buildPersistedEntryFromLiveStreamSession,
+  snapshotDeletedResumableStreamSession,
+} from '../session/state.js'
 import {
   applyWorkspaceContextToText,
   hasWorkspaceContextPayload,
@@ -73,6 +77,7 @@ interface SessionControlRouteDeps {
     sessionName: string,
     persistedState: PersistedSessionsState,
   ): { source?: ResolvedResumableSessionSource; error?: { status: number; message: string } }
+  archivePersistedSession(sessionName: string, entry?: PersistedStreamSession): boolean
   retireLiveSessionForResume(sessionName: string, session: StreamSession): void
   schedulePersistedSessionsWrite(): void
   sendImmediateTextToStreamSession(
@@ -95,6 +100,7 @@ interface SessionControlRouteDeps {
     images?: QueuedMessageImage[],
     displayText?: string,
     clientSendId?: string,
+    userEventSubtype?: string,
   ): QueuedMessage
   enqueueQueuedMessage(session: StreamSession, message: QueuedMessage): QueueMutationResult
   getQueueSnapshot(session: StreamSession): SessionQueueSnapshot
@@ -113,7 +119,7 @@ interface SessionControlRouteDeps {
     options?: { includeCurrentMessage?: boolean },
   ): void
   resumeRestoredQueueDrain(session: StreamSession): void
-  teardownProviderSession(session: StreamSession, reason: string): Promise<void>
+  teardownProviderSession(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void>
   initializeAutoRotationState(session: StreamSession): void
 }
 
@@ -399,6 +405,56 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
     res.json({ status: 'none' })
   })
 
+  router.post('/sessions/:name/pause', requireWriteAccess, async (req, res) => {
+    const sessionName = parseSessionName(req.params.name)
+    if (!sessionName) {
+      res.status(400).json({ error: 'Invalid session name' })
+      return
+    }
+
+    const session = sessions.get(sessionName)
+    if (!session) {
+      if (exitedStreamSessions.has(sessionName)) {
+        res.json({ paused: true })
+        return
+      }
+      if (completedSessions.has(sessionName)) {
+        res.status(409).json({ error: `Session "${sessionName}" is already completed` })
+        return
+      }
+      res.status(404).json({ error: `Session "${sessionName}" not found` })
+      return
+    }
+
+    if (session.kind !== 'stream') {
+      res.status(409).json({ error: `Session "${sessionName}" cannot be paused` })
+      return
+    }
+
+    const exitedSnapshot = snapshotDeletedResumableStreamSession(session)
+    if (!exitedSnapshot) {
+      res.status(409).json({ error: `Session "${sessionName}" has no resume handle to pause` })
+      return
+    }
+
+    for (const client of session.clients) {
+      client.close(1000, 'Session paused')
+    }
+    if (getProvider(session.agentType)?.id === 'codex') {
+      clearCodexTurnWatchdog(session)
+      markCodexTurnHealthy(session)
+    }
+    await deps.teardownProviderSession(session, `Session "${sessionName}" paused`, { archive: false })
+
+    sessions.delete(sessionName)
+    exitedStreamSessions.set(sessionName, exitedSnapshot)
+    completedSessions.delete(sessionName)
+    sessionEventHandlers.delete(sessionName)
+    deps.schedulePersistedSessionsWrite()
+
+    res.json({ paused: true })
+  })
+
   router.delete('/sessions/:name', requireWriteAccess, async (req, res) => {
     const sessionName = parseSessionName(req.params.name)
     if (!sessionName) {
@@ -408,9 +464,14 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
 
     const session = sessions.get(sessionName)
     if (!session) {
+      const exited = exitedStreamSessions.get(sessionName)
+      const archived = deps.archivePersistedSession(
+        sessionName,
+        exited ? buildPersistedEntryFromExitedSession(sessionName, exited) : undefined,
+      )
       const hadExited = exitedStreamSessions.delete(sessionName)
       const hadCompleted = completedSessions.delete(sessionName)
-      if (hadExited || hadCompleted) {
+      if (archived || hadExited || hadCompleted) {
         deps.schedulePersistedSessionsWrite()
         res.json({ killed: true })
         return
@@ -430,10 +491,13 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
         clearCodexTurnWatchdog(session)
         markCodexTurnHealthy(session)
       }
-      await deps.teardownProviderSession(session, `Session "${sessionName}" deleted`)
+      await deps.teardownProviderSession(session, `Session "${sessionName}" deleted`, { archive: true })
     }
 
-    const exitedSnapshot = session.kind === 'stream'
+    const archived = session.kind === 'stream'
+      ? deps.archivePersistedSession(sessionName, buildPersistedEntryFromLiveStreamSession(sessionName, session))
+      : deps.archivePersistedSession(sessionName)
+    const exitedSnapshot = !archived && session.kind === 'stream'
       ? snapshotDeletedResumableStreamSession(session)
       : null
 
@@ -524,6 +588,7 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
           effort: source.effort,
           adaptiveThinking: source.adaptiveThinking,
           maxThinkingTokens: source.maxThinkingTokens,
+          model: source.model,
           resumeSessionId: sourceResumeId,
           resumedFrom: source.resumedFrom,
           sessionType: source.sessionType,

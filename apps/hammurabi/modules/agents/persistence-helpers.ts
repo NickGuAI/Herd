@@ -2,13 +2,13 @@
  * Persistence + restore + prune helpers for the agents router.
  *
  * Extracted from `createAgentsRouter()` in `routes.ts` in issue/921 Phase
- * P6b. Combines four related functions that together manage the on-disk
- * session state: serialize/write on session-lifecycle changes, read on
+ * P6b. Combines four related functions that together manage the SQLite
+ * runtime session state: serialize/write on session-lifecycle changes, read on
  * server boot, restore previously-persisted sessions on startup, and
  * periodically prune command-room sessions that have completed.
  *
  * Why these four belong together: they all read/write the same
- * `sessionStorePath`, all operate on the same three session maps
+ * runtime session database, all operate on the same three session maps
  * (`sessions`, `completedSessions`, `exitedStreamSessions`), and both
  * `pruneStaleCommandRoomSessions` and the write path share the
  * `schedulePersistedSessionsWrite` serialization. Keeping them in one
@@ -17,22 +17,25 @@
  * module-local state rather than leak out as a `persistSessionStateQueue`
  * ref through the context.
  */
+import type { DatabaseSync } from 'node:sqlite'
 import {
   COMMAND_ROOM_COMPLETED_SESSION_TTL_MS,
   MAX_STREAM_EVENTS,
   RESTORED_REPLAY_TURN_LIMIT,
 } from './constants.js'
-import { migrateLegacyPersistedSessionSources } from './legacy-session-source-migration.js'
 import {
   buildPersistedEntryFromExitedSession,
   getWorldAgentStatus,
 } from './session/state.js'
 import {
-  readPersistedSessionsState as readPersistedSessionsStateFromStore,
   restorePersistedSessions as restorePersistedSessionsFromStore,
   serializePersistedSessionsState as serializePersistedSessionsStateForStore,
-  writePersistedSessionsState as writePersistedSessionsStateToStore,
 } from './session/persistence.js'
+import {
+  archiveSqliteRuntimeSession,
+  readSqlitePersistedSessionsState,
+  writeSqlitePersistedSessionsState,
+} from './session/sqlite-runtime-store.js'
 import {
   clearCodexTurnWatchdog,
   markCodexTurnHealthy,
@@ -73,7 +76,7 @@ export type ProviderSessionTeardown = (
 ) => Promise<void>
 
 export interface PersistenceHelpersContext {
-  sessionStorePath: string
+  sqliteDb: DatabaseSync
   maxSessions: number
   machineRegistry: MachineRegistryStore
   sessions: Map<string, AnySession>
@@ -114,6 +117,7 @@ export interface PersistenceHelpers {
   flushPersistedSessionsWrite: () => Promise<void>
   readPersistedSessionsState: () => Promise<PersistedSessionsState>
   restorePersistedSessions: () => Promise<void>
+  archivePersistedSession: (sessionName: string, entry?: PersistedStreamSession) => boolean
   getStaleCronSessionCandidates: (nowMs?: number) => SessionPruneCandidate[]
   pruneStaleCronSessions: (nowMs?: number) => number
   pruneStaleCommandRoomSessions: (nowMs?: number) => number
@@ -130,7 +134,7 @@ export function createPersistenceHelpers(
   ctx: PersistenceHelpersContext,
 ): PersistenceHelpers {
   const {
-    sessionStorePath,
+    sqliteDb,
     maxSessions,
     machineRegistry,
     sessions,
@@ -144,14 +148,20 @@ export function createPersistenceHelpers(
   } = ctx
 
   // Single-writer queue: each write is chained off the previous one so
-  // concurrent callers never interleave writes to the same file. A `.catch`
+  // concurrent callers never interleave writes to the same durable store. A `.catch`
   // swallow before `.then` prevents a rejected previous write from
   // poisoning every subsequent call.
   let persistSessionStateQueue: Promise<void> = Promise.resolve()
   let transcriptPruneQueue: Promise<void> = Promise.resolve()
 
   function isBenignPersistedSessionWriteError(error: unknown): boolean {
-    return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+    const maybeNodeError = error as NodeJS.ErrnoException | null
+    return maybeNodeError?.code === 'ENOENT'
+      || (
+        maybeNodeError?.code === 'ERR_INVALID_STATE'
+        && typeof maybeNodeError.message === 'string'
+        && maybeNodeError.message.includes('database is not open')
+      )
   }
 
   function schedulePersistedSessionsWrite(): void {
@@ -159,10 +169,8 @@ export function createPersistenceHelpers(
       .catch(() => undefined)
       .then(async () => {
         try {
-          await writePersistedSessionsStateToStore(
-            sessionStorePath,
-            serializePersistedSessionsStateForStore({ sessions, exitedStreamSessions }),
-          )
+          const state = serializePersistedSessionsStateForStore({ sessions, exitedStreamSessions })
+          writeSqlitePersistedSessionsState(sqliteDb, state)
         } catch (error) {
           // Test teardown and process shutdown can remove ephemeral data dirs
           // before this queued write drains. Treat that as a benign stop case.
@@ -182,26 +190,26 @@ export function createPersistenceHelpers(
   }
 
   async function readPersistedSessionsState(): Promise<PersistedSessionsState> {
-    return readPersistedSessionsStateFromStore(sessionStorePath)
+    return readSqlitePersistedSessionsState(sqliteDb)
   }
 
   async function restorePersistedSessions(): Promise<void> {
-    const persisted = await readPersistedSessionsStateFromStore(sessionStorePath)
-    const { state: migratedState, changed } = await migrateLegacyPersistedSessionSources(sessionStorePath, persisted)
-    if (changed) {
-      await writePersistedSessionsStateToStore(sessionStorePath, migratedState, { backup: true })
-    }
+    const persisted = readSqlitePersistedSessionsState(sqliteDb)
 
     await restorePersistedSessionsFromStore({
       sessions,
       completedSessions,
       exitedStreamSessions,
       maxSessions,
-      sessionStorePath,
+      persistedState: persisted,
       machineRegistry,
       applyUsageEvent: applyStreamUsageEvent,
       restoreProviderSession,
     })
+  }
+
+  function archivePersistedSession(sessionName: string, entry?: PersistedStreamSession): boolean {
+    return archiveSqliteRuntimeSession(sqliteDb, sessionName, entry)
   }
 
   function scheduleTranscriptPrune(sessionName: string): void {
@@ -423,6 +431,7 @@ export function createPersistenceHelpers(
     flushPersistedSessionsWrite,
     readPersistedSessionsState,
     restorePersistedSessions,
+    archivePersistedSession,
     getStaleCronSessionCandidates,
     pruneStaleCronSessions,
     pruneStaleCommandRoomSessions: pruneStaleCronSessions,

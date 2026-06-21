@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   createMachine,
-  verifyTailscaleHostname,
   type CreateMachineInput,
-  type VerifyTailscaleHostnameResponse,
 } from '@/hooks/use-agents'
+import { parseTailscaleStatusJson } from '@gehirn/hammurabi-cli/tailscale-status'
 
 type WorkerConnectionMode = 'same-machine' | 'direct-ssh' | 'tailscale'
 type TailscalePlatformOption = 'macos' | 'linux' | 'already-installed'
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-[color:var(--hv-border-hair)] px-3 py-2 text-[16px] md:text-sm bg-[var(--hv-surface-card)] focus:outline-none focus:ring-1 focus:ring-[color:var(--hv-field-focus-border)] placeholder:text-[color:var(--hv-fg-faint)]'
+const TEXTAREA_CLASS = `${INPUT_CLASS} min-h-[120px] resize-y font-mono text-xs`
 const LABEL_CLASS = 'text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]'
 
 const MODE_OPTIONS: Array<{ value: WorkerConnectionMode; label: string }> = [
@@ -55,10 +55,6 @@ function detectSuggestedTailscalePlatform(): TailscalePlatformOption {
   return 'already-installed'
 }
 
-function normalizeHostname(value: string): string {
-  return value.trim().replace(/\.+$/u, '')
-}
-
 function parsePort(value: string): number | undefined {
   const trimmed = value.trim()
   if (!trimmed) {
@@ -73,7 +69,7 @@ function renderCommandList(platform: TailscalePlatformOption) {
   return (
     <div className="space-y-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-3">
       <p className="text-sm text-[color:var(--hv-fg)]">
-        Run these commands on the worker you want to pair:
+        Run these commands on the machine you want to pair:
       </p>
       {TAILSCALE_COMMANDS[platform].map((command) => (
         <pre
@@ -88,8 +84,7 @@ function renderCommandList(platform: TailscalePlatformOption) {
       </p>
       <div className="rounded-md border border-dashed border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] p-3">
         <p className="text-sm text-[color:var(--hv-fg)]">
-          Then run <span className="font-mono">tailscale status --json</span>, copy
-          {' '}<span className="font-mono">Self.DNSName</span>, and paste it below.
+          Then run <span className="font-mono">tailscale status --json</span> and paste the full JSON output below.
         </p>
       </div>
     </div>
@@ -109,44 +104,17 @@ export function AddWorkerWizard({
   const [id, setId] = useState('')
   const [label, setLabel] = useState('')
   const [host, setHost] = useState('')
-  const [tailscaleHostname, setTailscaleHostname] = useState('')
+  const [tailscaleStatusJson, setTailscaleStatusJson] = useState('')
   const [user, setUser] = useState('')
   const [port, setPort] = useState('')
   const [cwd, setCwd] = useState('')
-  const [verification, setVerification] = useState<VerifyTailscaleHostnameResponse | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [isVerifying, setIsVerifying] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const normalizedTailscaleHostname = useMemo(
-    () => normalizeHostname(tailscaleHostname),
-    [tailscaleHostname],
-  )
-
-  useEffect(() => {
-    setVerification((current) => (
-      current?.tailscaleHostname === normalizedTailscaleHostname ? current : null
-    ))
-  }, [normalizedTailscaleHostname])
-
-  async function handleVerify(): Promise<void> {
-    if (!normalizedTailscaleHostname) {
-      setActionError('Tailscale hostname is required.')
-      return
-    }
-
-    setIsVerifying(true)
-    setActionError(null)
-    try {
-      const result = await verifyTailscaleHostname(normalizedTailscaleHostname)
-      setVerification(result)
-    } catch (error) {
-      setVerification(null)
-      setActionError(error instanceof Error ? error.message : 'Failed to verify Tailscale hostname.')
-    } finally {
-      setIsVerifying(false)
-    }
-  }
+  const parsedTailscaleStatus = useMemo(() => {
+    const trimmed = tailscaleStatusJson.trim()
+    return trimmed ? parseTailscaleStatusJson(trimmed) : null
+  }, [tailscaleStatusJson])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -159,10 +127,22 @@ export function AddWorkerWizard({
       return
     }
 
-    const trimmedId = id.trim()
-    const trimmedLabel = label.trim()
+    const parsedStatus = mode === 'tailscale'
+      ? parseTailscaleStatusJson(tailscaleStatusJson.trim())
+      : null
+    if (parsedStatus && !parsedStatus.ok) {
+      setActionError(parsedStatus.error)
+      return
+    }
+
+    const trimmedId = id.trim() || (parsedStatus?.ok ? parsedStatus.status.machineId : '')
+    const trimmedLabel = label.trim() || (parsedStatus?.ok ? parsedStatus.status.label : '')
     if (!trimmedId || !trimmedLabel) {
       setActionError('Machine ID and label are required.')
+      return
+    }
+    if (!cwd.trim()) {
+      setActionError('Working directory is required.')
       return
     }
 
@@ -177,20 +157,16 @@ export function AddWorkerWizard({
     if (mode === 'direct-ssh') {
       const trimmedHost = host.trim()
       if (!trimmedHost) {
-        setActionError('Host is required for direct SSH workers.')
+        setActionError('Host is required for direct SSH machines.')
         return
       }
       input.host = trimmedHost
     } else {
-      if (!normalizedTailscaleHostname) {
-        setActionError('Tailscale hostname is required.')
+      if (!tailscaleStatusJson.trim()) {
+        setActionError('Full Tailscale status JSON is required.')
         return
       }
-      if (verification?.tailscaleHostname !== normalizedTailscaleHostname) {
-        setActionError('Verify the Tailscale hostname before registering the worker.')
-        return
-      }
-      input.tailscaleHostname = normalizedTailscaleHostname
+      input.tailscaleStatusJson = tailscaleStatusJson.trim()
     }
 
     setIsSubmitting(true)
@@ -200,7 +176,7 @@ export function AddWorkerWizard({
       await queryClient.invalidateQueries({ queryKey: ['agents', 'machines'] })
       await onCreated()
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to register worker.')
+      setActionError(error instanceof Error ? error.message : 'Failed to register machine.')
     } finally {
       setIsSubmitting(false)
     }
@@ -209,7 +185,7 @@ export function AddWorkerWizard({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <label className={LABEL_CLASS} htmlFor="worker-connection-mode">Worker Location</label>
+        <label className={LABEL_CLASS} htmlFor="worker-connection-mode">Machine location</label>
         <select
           id="worker-connection-mode"
           value={mode}
@@ -229,14 +205,14 @@ export function AddWorkerWizard({
       {mode === 'same-machine' && (
         <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-4 text-sm text-[color:var(--hv-fg)]">
           The Herd host already exposes the local machine as <span className="font-mono">local</span>.
-          Use that machine entry when you want to run workers on this server.
+          Use that machine entry when you want to run sessions on this server.
         </div>
       )}
 
       {mode === 'tailscale' && (
         <>
           <div className="space-y-2">
-            <label className={LABEL_CLASS} htmlFor="worker-tailscale-platform">Worker OS</label>
+            <label className={LABEL_CLASS} htmlFor="worker-tailscale-platform">Machine OS</label>
             <select
               id="worker-tailscale-platform"
               value={tailscalePlatform}
@@ -265,7 +241,7 @@ export function AddWorkerWizard({
                 onChange={(event) => setId(event.target.value)}
                 placeholder="home-mac"
                 className={INPUT_CLASS}
-                required
+                required={mode === 'direct-ssh'}
               />
             </div>
             <div className="space-y-2">
@@ -276,7 +252,7 @@ export function AddWorkerWizard({
                 onChange={(event) => setLabel(event.target.value)}
                 placeholder="Home Mac"
                 className={INPUT_CLASS}
-                required
+                required={mode === 'direct-ssh'}
               />
             </div>
           </div>
@@ -295,34 +271,25 @@ export function AddWorkerWizard({
             </div>
           ) : (
             <div className="space-y-2">
-              <label className={LABEL_CLASS} htmlFor="worker-tailscale-hostname">Tailscale Hostname</label>
-              <div className="flex flex-col gap-2 md:flex-row">
-                <input
-                  id="worker-tailscale-hostname"
-                  value={tailscaleHostname}
-                  onChange={(event) => {
-                    setTailscaleHostname(event.target.value)
-                    setActionError(null)
-                  }}
-                  placeholder="home-mac.tail2bb6ea.ts.net"
-                  className={INPUT_CLASS}
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => { void handleVerify() }}
-                  className="btn-ghost min-h-[44px] whitespace-nowrap"
-                  disabled={isVerifying}
-                >
-                  {isVerifying ? 'Verifying...' : 'Verify'}
-                </button>
-              </div>
-              {verification && (
+              <label className={LABEL_CLASS} htmlFor="worker-tailscale-status-json">Tailscale status JSON</label>
+              <textarea
+                id="worker-tailscale-status-json"
+                value={tailscaleStatusJson}
+                onChange={(event) => {
+                  setTailscaleStatusJson(event.target.value)
+                  setActionError(null)
+                }}
+                placeholder="Paste the full output of tailscale status --json"
+                className={TEXTAREA_CLASS}
+                required
+              />
+              {parsedTailscaleStatus?.ok ? (
                 <p className="text-sm text-[color:var(--hv-fg)]">
-                  Verified. Server can reach <span className="font-mono">{verification.tailscaleHostname}</span>
-                  {' '}({verification.resolvedHost}).
+                  Derived <span className="font-mono">{parsedTailscaleStatus.status.machineId}</span>
+                  {' '}from <span className="font-mono">{parsedTailscaleStatus.status.dnsName}</span>
+                  {' '}({parsedTailscaleStatus.status.primaryTailscaleIp}).
                 </p>
-              )}
+              ) : null}
             </div>
           )}
 
@@ -374,7 +341,7 @@ export function AddWorkerWizard({
           className="btn-ghost min-h-[44px]"
           disabled={isSubmitting || mode === 'same-machine'}
         >
-          {isSubmitting ? 'Registering...' : 'Register Worker'}
+          {isSubmitting ? 'Registering...' : 'Register machine'}
         </button>
       </div>
     </form>

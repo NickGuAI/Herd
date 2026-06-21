@@ -29,12 +29,19 @@ const AUTH_HEADERS = {
 }
 
 const INTERNAL_TOKEN = 'internal-secret'
+const APPROVAL_BRIDGE_SIGNING_SECRET = 'approval-bridge-secret'
 
 const tempDirectories: string[] = []
 
 interface ApprovalSessionsStub {
   interface: ApprovalSessionsInterface
-  setSessionContext(name: string, context: ApprovalSessionContext, claudeSessionId?: string): void
+  setSessionContext(
+    name: string,
+    context: ApprovalSessionContext,
+    claudeSessionId?: string,
+    approvalBridgeNonce?: string,
+  ): void
+  deleteSession(name: string): void
   addCodexApproval(approval: PendingCodexApprovalView): void
   resolveCalls: Array<{ approvalId: string; decision: 'accept' | 'decline' }>
 }
@@ -107,7 +114,7 @@ function createApprovalSessionsStub(): ApprovalSessionsStub {
   const listeners = new Set<(event: CodexApprovalQueueEvent) => void>()
   const resolveCalls: Array<{ approvalId: string; decision: 'accept' | 'decline' }> = []
 
-  function buildLiveSession(context: ApprovalSessionContext): StreamSession {
+  function buildLiveSession(context: ApprovalSessionContext, approvalBridgeNonce?: string): StreamSession {
     return {
       kind: 'stream',
       name: context.sessionName,
@@ -118,6 +125,7 @@ function createApprovalSessionsStub(): ApprovalSessionsStub {
       cwd: context.cwd,
       host: context.host,
       currentSkillInvocation: context.currentSkillInvocation,
+      approvalBridgeNonce,
       spawnedWorkers: [],
       process: {} as StreamSession['process'],
       events: [],
@@ -157,6 +165,9 @@ function createApprovalSessionsStub(): ApprovalSessionsStub {
       const sessionName = claudeSessionNames.get(sessionId)
       return sessionName ? liveSessions.get(sessionName) ?? null : null
     },
+    validateApprovalBridgeCredential(sessionName, nonce) {
+      return liveSessions.get(sessionName)?.approvalBridgeNonce === nonce
+    },
     listPendingCodexApprovals() {
       return Array.from(codexApprovals.values())
     },
@@ -193,11 +204,20 @@ function createApprovalSessionsStub(): ApprovalSessionsStub {
 
   return {
     interface: approvalSessionsInterface,
-    setSessionContext(name, context, claudeSessionId) {
+    setSessionContext(name, context, claudeSessionId, approvalBridgeNonce) {
       sessionContexts.set(name, context)
-      liveSessions.set(name, buildLiveSession(context))
+      liveSessions.set(name, buildLiveSession(context, approvalBridgeNonce))
       if (claudeSessionId) {
         claudeSessionNames.set(claudeSessionId, name)
+      }
+    },
+    deleteSession(name) {
+      sessionContexts.delete(name)
+      liveSessions.delete(name)
+      for (const [sessionId, sessionName] of claudeSessionNames) {
+        if (sessionName === name) {
+          claudeSessionNames.delete(sessionId)
+        }
       }
     },
     addCodexApproval(approval) {
@@ -244,6 +264,7 @@ async function startServer(options: {
   const policies = createPoliciesRouter({
     apiKeyStore: createTestApiKeyStore(),
     internalToken: INTERNAL_TOKEN,
+    approvalBridgeSigningSecret: APPROVAL_BRIDGE_SIGNING_SECRET,
     policyStore,
     approvalCoordinator,
     approvalSessionsInterface: approvalSessions.interface,
@@ -1355,12 +1376,23 @@ describe('policies routes', () => {
 
   it('accepts scoped approval bridge tokens only for the owning session approval check surface', async () => {
     const server = await startServer()
+    const bridgeNonce = 'nonce-stream-bridge-01'
     const bridgeToken = createApprovalBridgeToken({
-      internalToken: INTERNAL_TOKEN,
+      signingSecret: APPROVAL_BRIDGE_SIGNING_SECRET,
       sessionName: 'stream-bridge-01',
+      nonce: bridgeNonce,
     })
 
     try {
+      server.approvalSessions.setSessionContext('stream-bridge-01', {
+        sessionName: 'stream-bridge-01',
+        sessionType: 'worker',
+        creator: { kind: 'human' },
+        agentType: 'claude',
+        mode: 'default',
+        cwd: '/tmp/worktree',
+      }, undefined, bridgeNonce)
+
       const createResponse = await fetch(`${server.baseUrl}/api/approval/check`, {
         method: 'POST',
         headers: {
@@ -1389,6 +1421,31 @@ describe('policies routes', () => {
           id: createPayload.request_id,
           sessionId: 'stream-bridge-01',
         }))
+      })
+
+      const otherBridgeNonce = 'nonce-stream-bridge-other'
+      const otherBridgeToken = createApprovalBridgeToken({
+        signingSecret: APPROVAL_BRIDGE_SIGNING_SECRET,
+        sessionName: 'stream-bridge-other',
+        nonce: otherBridgeNonce,
+      })
+      server.approvalSessions.setSessionContext('stream-bridge-other', {
+        sessionName: 'stream-bridge-other',
+        sessionType: 'worker',
+        creator: { kind: 'human' },
+        agentType: 'claude',
+        mode: 'default',
+        cwd: '/tmp/worktree',
+      }, undefined, otherBridgeNonce)
+
+      const otherPollResponse = await fetch(`${server.baseUrl}/api/approval/check/${createPayload.request_id}`, {
+        headers: {
+          [APPROVAL_BRIDGE_TOKEN_HEADER]: otherBridgeToken,
+        },
+      })
+      expect(otherPollResponse.status).toBe(403)
+      expect(await otherPollResponse.json()).toEqual({
+        error: 'Approval bridge token cannot read another session approval',
       })
 
       const privilegedPolicyResponse = await fetch(`${server.baseUrl}/api/action-policies/settings`, {
@@ -1438,14 +1495,69 @@ describe('policies routes', () => {
     }
   })
 
-  it('rejects approval bridge tokens used for another session', async () => {
+  it('rejects approval bridge tokens after the owning session is revoked', async () => {
     const server = await startServer()
+    const bridgeNonce = 'nonce-revoked-stream-bridge'
     const bridgeToken = createApprovalBridgeToken({
-      internalToken: INTERNAL_TOKEN,
-      sessionName: 'stream-bridge-owner',
+      signingSecret: APPROVAL_BRIDGE_SIGNING_SECRET,
+      sessionName: 'stream-bridge-revoked',
+      nonce: bridgeNonce,
     })
 
     try {
+      server.approvalSessions.setSessionContext('stream-bridge-revoked', {
+        sessionName: 'stream-bridge-revoked',
+        sessionType: 'worker',
+        creator: { kind: 'human' },
+        agentType: 'claude',
+        mode: 'default',
+        cwd: '/tmp/worktree',
+      }, undefined, bridgeNonce)
+      server.approvalSessions.deleteSession('stream-bridge-revoked')
+
+      const response = await fetch(`${server.baseUrl}/api/approval/check`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          [APPROVAL_BRIDGE_TOKEN_HEADER]: bridgeToken,
+        },
+        body: JSON.stringify({
+          hammurabi_session_name: 'stream-bridge-revoked',
+          tool_name: 'mcp__slack__post_message',
+          tool_input: {
+            channel: '#ops',
+            message: 'Ship the hotfix.',
+          },
+        }),
+      })
+
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual({ error: 'Invalid approval bridge token' })
+      expect(await server.approvalCoordinator.listPending()).toEqual([])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('rejects approval bridge tokens used for another session', async () => {
+    const server = await startServer()
+    const bridgeNonce = 'nonce-stream-bridge-owner'
+    const bridgeToken = createApprovalBridgeToken({
+      signingSecret: APPROVAL_BRIDGE_SIGNING_SECRET,
+      sessionName: 'stream-bridge-owner',
+      nonce: bridgeNonce,
+    })
+
+    try {
+      server.approvalSessions.setSessionContext('stream-bridge-owner', {
+        sessionName: 'stream-bridge-owner',
+        sessionType: 'worker',
+        creator: { kind: 'human' },
+        agentType: 'claude',
+        mode: 'default',
+        cwd: '/tmp/worktree',
+      }, undefined, bridgeNonce)
+
       const response = await fetch(`${server.baseUrl}/api/approval/check`, {
         method: 'POST',
         headers: {

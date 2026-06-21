@@ -41,6 +41,11 @@ interface ToolResultLike {
   is_error?: boolean
 }
 
+interface TranscriptTextEntryTracker {
+  indexesByKey: Map<string, number[]>
+  suppressedIndexes: Set<number>
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -179,14 +184,16 @@ function pushEntry(
   entry: SessionMessagePeekEntry | null,
   role: SessionMessagePeekRoleFilter,
   includeToolUse: boolean,
-): void {
+): number | null {
   if (!entry || entry.preview.length === 0) {
-    return
+    return null
   }
   if (!shouldIncludeEntry(entry, role, includeToolUse)) {
-    return
+    return null
   }
+  const index = entries.length
   entries.push(entry)
+  return index
 }
 
 function resolveEventTimestamp(event: StreamJsonEvent, fallbackTimestamp: string): string {
@@ -225,6 +232,18 @@ function transcriptMessageKey(envelope: TranscriptEnvelope): string {
 
 function transcriptEntryType(role: TranscriptMessageRole): SessionMessagePeekEntry['type'] {
   return role === 'assistant' || role === 'user' ? role : 'system'
+}
+
+function isAuthoritativeCodexCompletedText(envelope: TranscriptEnvelope): boolean {
+  return envelope.source.provider === 'codex'
+    && envelope.source.rawEventType === 'item/completed'
+}
+
+function transcriptTextEntryKey(
+  envelope: TranscriptEnvelope,
+  role: TranscriptMessageRole,
+): string {
+  return `${role}\u0001${transcriptMessageKey(envelope)}`
 }
 
 function inferTranscriptMessageRole(
@@ -429,6 +448,7 @@ function collectTranscriptEnvelopeEntry(
   includeToolUse: boolean,
   toolNamesById: Map<string, string>,
   transcriptMessageRoles: Map<string, TranscriptMessageRole>,
+  transcriptTextEntries: TranscriptTextEntryTracker,
 ): void {
   const ev = envelope.ev
   if (ev.type === 'message.start') {
@@ -438,12 +458,25 @@ function collectTranscriptEnvelopeEntry(
 
   if (ev.type === 'message.delta') {
     const messageRole = inferTranscriptMessageRole(envelope, transcriptMessageRoles)
-    pushEntry(entries, {
+    const entry = {
       ts,
       type: transcriptEntryType(messageRole),
       kind: 'text',
       preview: truncatePreview(ev.text),
-    }, role, includeToolUse)
+    } satisfies SessionMessagePeekEntry
+    const key = transcriptTextEntryKey(envelope, messageRole)
+    if (isAuthoritativeCodexCompletedText(envelope)) {
+      for (const index of transcriptTextEntries.indexesByKey.get(key) ?? []) {
+        transcriptTextEntries.suppressedIndexes.add(index)
+      }
+    }
+    const index = pushEntry(entries, entry, role, includeToolUse)
+    if (index !== null) {
+      const existingIndexes = isAuthoritativeCodexCompletedText(envelope)
+        ? []
+        : (transcriptTextEntries.indexesByKey.get(key) ?? [])
+      transcriptTextEntries.indexesByKey.set(key, [...existingIndexes, index])
+    }
     return
   }
 
@@ -532,6 +565,10 @@ export function extractSessionMessagePeek(
   const entries: SessionMessagePeekEntry[] = []
   const toolNamesById = new Map<string, string>()
   const transcriptMessageRoles = new Map<string, TranscriptMessageRole>()
+  const transcriptTextEntries: TranscriptTextEntryTracker = {
+    indexesByKey: new Map<string, number[]>(),
+    suppressedIndexes: new Set<number>(),
+  }
   let lastTimestamp = options.fallbackTimestamp
 
   for (const event of events) {
@@ -547,6 +584,7 @@ export function extractSessionMessagePeek(
         options.includeToolUse,
         toolNamesById,
         transcriptMessageRoles,
+        transcriptTextEntries,
       )
       continue
     }
@@ -602,9 +640,11 @@ export function extractSessionMessagePeek(
     }
   }
 
-  if (entries.length <= options.last) {
-    return entries
+  const visibleEntries = entries.filter((_, index) => !transcriptTextEntries.suppressedIndexes.has(index))
+
+  if (visibleEntries.length <= options.last) {
+    return visibleEntries
   }
 
-  return entries.slice(-options.last)
+  return visibleEntries.slice(-options.last)
 }

@@ -17,6 +17,7 @@ export interface SkillInfo {
   userInvocable: boolean
   argumentHint?: string
   allowedTools?: string
+  supportedProviders?: string[]
   /** Source package (e.g. "pkos", "general-skills") */
   source: string
 }
@@ -59,6 +60,27 @@ function parseFrontmatter(content: string): Record<string, string | boolean> {
   return result
 }
 
+function parseStringListField(value: string | boolean | undefined): string[] | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  const listSource = trimmed.startsWith('[') && trimmed.endsWith(']')
+    ? trimmed.slice(1, -1)
+    : trimmed
+  const providers = listSource
+    .split(',')
+    .map((item) => item.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean)
+
+  return providers.length > 0 ? Array.from(new Set(providers)) : undefined
+}
+
 // ---------------------------------------------------------------------------
 // Skill discovery — scans installed skill roots and bundled agent-skills packages.
 // ---------------------------------------------------------------------------
@@ -94,6 +116,7 @@ export async function discoverSkills(): Promise<SkillInfo[]> {
           userInvocable: fm['user-invocable'] === true || fm['user-invocable'] === 'true',
           argumentHint: typeof fm['argument-hint'] === 'string' ? fm['argument-hint'] : undefined,
           allowedTools: typeof fm['allowed-tools'] === 'string' ? fm['allowed-tools'] : undefined,
+          supportedProviders: parseStringListField(fm['supported-providers']),
           source: skillSource.source,
         })
       } catch {

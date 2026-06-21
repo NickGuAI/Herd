@@ -12,7 +12,6 @@ export const SESSION_NAME_PATTERN = /^[\w-]+$/
 export const FILE_NAME_PATTERN = /^[a-zA-Z0-9._\- ]+$/
 export const DEFAULT_COLS = 120
 export const DEFAULT_ROWS = 40
-export const DEFAULT_SESSION_STORE_PATH = 'data/agents/stream-sessions.json'
 export const COMMANDER_SESSION_NAME_PREFIX = 'commander-'
 export const COMMANDER_PATH_SEGMENT_PATTERN = /^[a-zA-Z0-9._-]+$/
 export const COMMAND_ROOM_COMPLETED_SESSION_TTL_MS = 24 * 60 * 60 * 1000
@@ -30,6 +29,8 @@ export const RESTORED_REPLAY_TURN_LIMIT = 20
 
 export const CODEX_MODE_COMMANDS: Record<ClaudePermissionMode, string> = {
   default: 'codex',
+  acceptEdits: 'codex',
+  bypassPermissions: 'codex --dangerously-bypass-approvals-and-sandbox',
 }
 
 export const GEMINI_ACP_COMMAND = 'gemini'

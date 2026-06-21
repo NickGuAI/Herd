@@ -15,7 +15,7 @@ interface SessionFieldsSectionProps {
   afterScheduleField?: ReactNode
   cwd: string
   setCwd: (value: string) => void
-  selectedHost: string
+  selectedMachineId: string
   resumeLocked: boolean
   taskLabel: string
   task: string
@@ -40,7 +40,7 @@ export function SessionFieldsSection({
   afterScheduleField,
   cwd,
   setCwd,
-  selectedHost,
+  selectedMachineId,
   resumeLocked,
   taskLabel,
   task,
@@ -82,7 +82,7 @@ export function SessionFieldsSection({
             {cwd || '~'}
           </div>
         ) : (
-          <DirectoryPicker value={cwd} onChange={setCwd} host={selectedHost || undefined} />
+          <DirectoryPicker value={cwd} onChange={setCwd} host={selectedMachineId || undefined} />
         )}
       </div>
 

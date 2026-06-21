@@ -10,6 +10,7 @@ import {
   appendTranscriptEvent,
   resetTranscriptStoreRoot,
   setTranscriptStoreRoot,
+  setTranscriptStoreRootForSession,
 } from '../../agents/transcript-store'
 import { createTranscriptId } from '../../agents/transcript-id'
 import { createCommandersRouter, type CommandersRouterOptions } from '../routes'
@@ -33,6 +34,7 @@ import {
   DEFAULT_COMMANDER_CONTEXT_MODE,
   DEFAULT_COMMANDER_MAX_TURNS,
 } from '../store'
+import { ConversationStore } from '../conversation-store'
 import { createDefaultHeartbeatConfig } from '../heartbeat'
 import { STARTUP_PROMPT } from '../routes/context'
 import type { WorkspaceResolverCapability } from '../../workspace/capability'
@@ -42,6 +44,8 @@ const COMMANDER_A = '00000000-0000-4000-a000-0000000000aa'
 const COMMANDER_B = '00000000-0000-4000-a000-0000000000bb'
 const CONVERSATION_A = '11111111-1111-4111-8111-111111111111'
 const CONVERSATION_B = '22222222-2222-4222-8222-222222222222'
+const MESSAGE_PAGING_CONVERSATION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const LIVE_MESSAGE_CONVERSATION = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
 const FULL_AUTH_HEADERS = {
   'x-hammurabi-api-key': 'full-scope-key',
@@ -838,10 +842,11 @@ describe('conversation routes', () => {
     }
   })
 
-  it('returns canonical conversation messages with default last-ten paging', async () => {
+  it('returns canonical conversation messages with default 50 paging and max 100 clamping', async () => {
     const dir = await createTempDir('hammurabi-commanders-conversation-messages-')
     const storePath = join(dir, 'sessions.json')
-    setTranscriptStoreRoot(join(dir, 'transcripts'))
+    const transcriptRoot = join(dir, 'transcripts')
+    setTranscriptStoreRoot(transcriptRoot)
     await seedCommander(storePath, COMMANDER_A)
 
     const sessions = createMockSessionsInterface()
@@ -852,7 +857,7 @@ describe('conversation routes', () => {
 
     try {
       const createResponse = await createConversation(server.baseUrl, COMMANDER_A, {
-        id: CONVERSATION_A,
+        id: MESSAGE_PAGING_CONVERSATION,
         surface: 'ui',
       })
       expect(createResponse.status).toBe(201)
@@ -861,13 +866,20 @@ describe('conversation routes', () => {
         commanderId: string
       }
       const sessionName = buildConversationSessionName(conversation as Parameters<typeof buildConversationSessionName>[0])
+      setTranscriptStoreRootForSession(sessionName, transcriptRoot)
 
-      for (let index = 0; index < 12; index += 1) {
-        await appendTranscriptEvent(sessionName, assistantTextEvent(index, `history ${index}`))
-      }
+      const transcriptPath = join(transcriptRoot, sessionName, 'transcript.v1.jsonl')
+      await mkdir(dirname(transcriptPath), { recursive: true })
+      await writeFile(
+        transcriptPath,
+        `${Array.from(
+          { length: 120 },
+          (_, index) => JSON.stringify(assistantTextEvent(index, `history ${index}`)),
+        ).join('\n')}\n`,
+      )
 
       const response = await fetch(
-        `${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages`,
+        `${server.baseUrl}/api/conversations/${MESSAGE_PAGING_CONVERSATION}/messages`,
         { headers: READ_ONLY_AUTH_HEADERS },
       )
       expect(response.status).toBe(200)
@@ -880,26 +892,17 @@ describe('conversation routes', () => {
         messages: Array<{ kind: string; text: string }>
       }
       expect(payload.source).toBe('canonical')
-      expect(payload.limit).toBe(10)
-      expect(payload.nextBefore).toBe('10')
+      expect(payload.limit).toBe(50)
+      expect(payload.nextBefore).toBe('50')
       expect(payload.hasMore).toBe(true)
-      expect(payload.totalMessages).toBe(12)
-      expect(payload.messages.map((message) => message.text)).toEqual([
-        'history 2',
-        'history 3',
-        'history 4',
-        'history 5',
-        'history 6',
-        'history 7',
-        'history 8',
-        'history 9',
-        'history 10',
-        'history 11',
-      ])
+      expect(payload.totalMessages).toBe(120)
+      expect(payload.messages.map((message) => message.text)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `history ${index + 70}`),
+      )
 
       expect(payload.nextBefore).toBeTruthy()
       const olderResponse = await fetch(
-        `${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages?before=${payload.nextBefore}`,
+        `${server.baseUrl}/api/conversations/${MESSAGE_PAGING_CONVERSATION}/messages?before=${payload.nextBefore}`,
         { headers: READ_ONLY_AUTH_HEADERS },
       )
       expect(olderResponse.status).toBe(200)
@@ -908,12 +911,49 @@ describe('conversation routes', () => {
         hasMore: boolean
         messages: Array<{ text: string }>
       }
-      expect(olderPayload.nextBefore).toBeNull()
-      expect(olderPayload.hasMore).toBe(false)
-      expect(olderPayload.messages.map((message) => message.text)).toEqual([
-        'history 0',
-        'history 1',
-      ])
+      expect(olderPayload.nextBefore).toBe('100')
+      expect(olderPayload.hasMore).toBe(true)
+      expect(olderPayload.messages.map((message) => message.text)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `history ${index + 20}`),
+      )
+
+      const maxResponse = await fetch(
+        `${server.baseUrl}/api/conversations/${MESSAGE_PAGING_CONVERSATION}/messages?limit=100`,
+        { headers: READ_ONLY_AUTH_HEADERS },
+      )
+      expect(maxResponse.status).toBe(200)
+      const maxPayload = await maxResponse.json() as {
+        limit: number
+        nextBefore: string | null
+        hasMore: boolean
+        messages: Array<{ text: string }>
+      }
+      expect(maxPayload.limit).toBe(100)
+      expect(maxPayload.nextBefore).toBe('100')
+      expect(maxPayload.hasMore).toBe(true)
+      expect(maxPayload.messages.map((message) => message.text)).toEqual(
+        Array.from({ length: 100 }, (_, index) => `history ${index + 20}`),
+      )
+
+      const clampedResponse = await fetch(
+        `${server.baseUrl}/api/conversations/${MESSAGE_PAGING_CONVERSATION}/messages?limit=101`,
+        { headers: READ_ONLY_AUTH_HEADERS },
+      )
+      expect(clampedResponse.status).toBe(200)
+      const clampedPayload = await clampedResponse.json() as {
+        limit: number
+        messages: Array<{ text: string }>
+      }
+      expect(clampedPayload.limit).toBe(100)
+      expect(clampedPayload.messages.map((message) => message.text)).toEqual(
+        Array.from({ length: 100 }, (_, index) => `history ${index + 20}`),
+      )
+
+      const invalidResponse = await fetch(
+        `${server.baseUrl}/api/conversations/${MESSAGE_PAGING_CONVERSATION}/messages?limit=not-a-number`,
+        { headers: READ_ONLY_AUTH_HEADERS },
+      )
+      expect(invalidResponse.status).toBe(400)
     } finally {
       sessions.dispose()
       await server.close()
@@ -923,7 +963,8 @@ describe('conversation routes', () => {
   it('includes live session events in the canonical message page', async () => {
     const dir = await createTempDir('hammurabi-commanders-conversation-live-messages-')
     const storePath = join(dir, 'sessions.json')
-    setTranscriptStoreRoot(join(dir, 'transcripts'))
+    const transcriptRoot = join(dir, 'transcripts')
+    setTranscriptStoreRoot(transcriptRoot)
     await seedCommander(storePath, COMMANDER_A)
 
     const sessions = createMockSessionsInterface()
@@ -934,18 +975,19 @@ describe('conversation routes', () => {
 
     try {
       expect((await createConversation(server.baseUrl, COMMANDER_A, {
-        id: CONVERSATION_A,
+        id: LIVE_MESSAGE_CONVERSATION,
         surface: 'ui',
       })).status).toBe(201)
-      expect([200, 202]).toContain((await startConversation(server.baseUrl, CONVERSATION_A, {
+      expect([200, 202]).toContain((await startConversation(server.baseUrl, LIVE_MESSAGE_CONVERSATION, {
         agentType: 'claude',
       })).status)
       await waitForCreateCall(sessions)
 
       const sessionName = buildConversationSessionName({
-        id: CONVERSATION_A,
+        id: LIVE_MESSAGE_CONVERSATION,
         commanderId: COMMANDER_A,
       } as Parameters<typeof buildConversationSessionName>[0])
+      setTranscriptStoreRootForSession(sessionName, transcriptRoot)
       const activeSession = sessions.activeSessions.get(sessionName)
       if (!activeSession) {
         throw new Error('Expected active conversation session')
@@ -956,7 +998,7 @@ describe('conversation routes', () => {
       )
 
       const response = await fetch(
-        `${server.baseUrl}/api/conversations/${CONVERSATION_A}/messages`,
+        `${server.baseUrl}/api/conversations/${LIVE_MESSAGE_CONVERSATION}/messages`,
         { headers: READ_ONLY_AUTH_HEADERS },
       )
       expect(response.status).toBe(200)
@@ -965,18 +1007,9 @@ describe('conversation routes', () => {
         messages: Array<{ text: string }>
       }
       expect(payload.source).toBe('canonical')
-      expect(payload.messages.map((message) => message.text)).toEqual([
-        'live 2',
-        'live 3',
-        'live 4',
-        'live 5',
-        'live 6',
-        'live 7',
-        'live 8',
-        'live 9',
-        'live 10',
-        'live 11',
-      ])
+      expect(payload.messages.map((message) => message.text)).toEqual(
+        Array.from({ length: 12 }, (_, index) => `live ${index}`),
+      )
     } finally {
       sessions.dispose()
       await server.close()
@@ -1228,6 +1261,7 @@ describe('conversation routes', () => {
         messagePage?: {
           conversationId: string
           source: string
+          limit: number
           messages: Array<{ kind: string; text: string }>
         }
       }
@@ -1237,6 +1271,7 @@ describe('conversation routes', () => {
       expect(firstMessage.messagePage).toEqual(expect.objectContaining({
         conversationId: CONVERSATION_A,
         source: 'canonical',
+        limit: 50,
       }))
       expect(firstMessage.messagePage?.messages).toEqual(
         expect.arrayContaining([
@@ -1535,6 +1570,7 @@ describe('conversation routes', () => {
       })
       expect([200, 202]).toContain(startResponse.status)
       await waitForCreateCall(sessions)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
       await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
 
       const sessionName = Array.from(sessions.activeSessions.keys())[0]
@@ -1898,6 +1934,7 @@ describe('conversation routes', () => {
       })
       expect([200, 202]).toContain(startResponse.status)
       await waitForCreateCall(sessions)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
 
       const messageResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/message`, {
         method: 'POST',
@@ -1958,6 +1995,173 @@ describe('conversation routes', () => {
           sessionId: `claude-${CONVERSATION_A}`,
         }),
       }))
+    } finally {
+      await server.close()
+    }
+  })
+
+  it.each([
+    {
+      fromAgentType: 'claude' as const,
+      toAgentType: 'codex' as const,
+      toModel: 'gpt-5.5',
+      historyText: 'historical Claude turn that must not be copied into the prompt',
+    },
+    {
+      fromAgentType: 'codex' as const,
+      toAgentType: 'claude' as const,
+      toModel: 'claude-opus-4-6',
+      historyText: 'historical Codex turn that must not be copied into the prompt',
+    },
+  ])(
+    'seeds a prior-transcript pointer on $fromAgentType to $toAgentType restarts with history',
+    async ({ fromAgentType, toAgentType, toModel, historyText }) => {
+      const dir = await createTempDir('hammurabi-commanders-conversation-continuity-')
+      const storePath = join(dir, 'sessions.json')
+      setTranscriptStoreRoot(join(dir, 'transcripts'))
+      await seedCommander(storePath, COMMANDER_A)
+
+      const sessions = createMockSessionsInterface()
+      const server = await startServer({
+        sessionStorePath: storePath,
+        sessionsInterface: sessions.iface,
+      })
+
+      try {
+        expect((await createConversation(server.baseUrl, COMMANDER_A, {
+          id: CONVERSATION_A,
+          surface: 'api',
+          agentType: fromAgentType,
+        })).status).toBe(201)
+        expect([200, 202]).toContain((await startConversation(server.baseUrl, CONVERSATION_A, {
+          agentType: fromAgentType,
+        })).status)
+        await waitForCreateCall(sessions)
+
+        const sessionName = buildConversationSessionName({
+          id: CONVERSATION_A,
+          commanderId: COMMANDER_A,
+        } as Parameters<typeof buildConversationSessionName>[0])
+        await appendTranscriptEvent(
+          sessionName,
+          assistantTextEvent(1, historyText),
+        )
+
+        const pauseResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/pause`, {
+          method: 'POST',
+          headers: FULL_AUTH_HEADERS,
+        })
+        expect([200, 202]).toContain(pauseResponse.status)
+
+        const patchResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+          method: 'PATCH',
+          headers: {
+            ...FULL_AUTH_HEADERS,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            agentType: toAgentType,
+            model: toModel,
+          }),
+        })
+        expect(patchResponse.status).toBe(200)
+
+        expect([200, 202]).toContain((await startConversation(server.baseUrl, CONVERSATION_A, {
+          agentType: toAgentType,
+        })).status)
+        const swappedProviderCreateCall = await waitForCreateCall(sessions, 1)
+        expect(swappedProviderCreateCall.agentType).toBe(toAgentType)
+        expect(swappedProviderCreateCall.model).toBe(toModel)
+        expect(swappedProviderCreateCall.resumeProviderContext).toEqual(expect.objectContaining({
+          providerId: fromAgentType,
+        }))
+        expect(swappedProviderCreateCall.systemPrompt).toContain('## Continuing Prior Conversation')
+        expect(swappedProviderCreateCall.systemPrompt).toContain(`This session continues conversation ${CONVERSATION_A}.`)
+        expect(swappedProviderCreateCall.systemPrompt).toContain(
+          `hammurabi conversations messages ${CONVERSATION_A} --tail 40`,
+        )
+        expect(swappedProviderCreateCall.systemPrompt).not.toContain(historyText)
+      } finally {
+        await server.close()
+      }
+    },
+  )
+
+  it('omits the prior-transcript pointer for true fresh conversation starts', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-fresh-continuity-')
+    const storePath = join(dir, 'sessions.json')
+    setTranscriptStoreRoot(join(dir, 'transcripts'))
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+        agentType: 'codex',
+      })).status).toBe(201)
+      expect([200, 202]).toContain((await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'codex',
+      })).status)
+
+      const createCall = await waitForCreateCall(sessions)
+      expect(createCall.systemPrompt).not.toContain('## Continuing Prior Conversation')
+      expect(createCall.systemPrompt).not.toContain('hammurabi conversations messages')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('omits the prior-transcript pointer when a same-provider native resume id exists', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-native-resume-continuity-')
+    const storePath = join(dir, 'sessions.json')
+    setTranscriptStoreRoot(join(dir, 'transcripts'))
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+        agentType: 'claude',
+      })).status).toBe(201)
+      expect([200, 202]).toContain((await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })).status)
+      await waitForCreateCall(sessions)
+
+      const sessionName = buildConversationSessionName({
+        id: CONVERSATION_A,
+        commanderId: COMMANDER_A,
+      } as Parameters<typeof buildConversationSessionName>[0])
+      await appendTranscriptEvent(sessionName, assistantTextEvent(1, 'history is already restored by native resume'))
+
+      const pauseResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/pause`, {
+        method: 'POST',
+        headers: FULL_AUTH_HEADERS,
+      })
+      expect([200, 202]).toContain(pauseResponse.status)
+
+      expect([200, 202]).toContain((await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })).status)
+      const resumedCreateCall = await waitForCreateCall(sessions, 1)
+      expect(resumedCreateCall.resumeProviderContext).toEqual(expect.objectContaining({
+        providerId: 'claude',
+        sessionId: `claude-${CONVERSATION_A}`,
+      }))
+      expect(resumedCreateCall.systemPrompt).not.toContain('## Continuing Prior Conversation')
+      expect(resumedCreateCall.systemPrompt).not.toContain('hammurabi conversations messages')
     } finally {
       await server.close()
     }
@@ -2041,6 +2245,7 @@ describe('conversation routes', () => {
         agentType: 'claude',
       })).status)
       await waitForCreateCall(sessions)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
 
       const sessionName = Array.from(sessions.activeSessions.keys())[0]
       expect(sessionName).toBeDefined()
@@ -2409,6 +2614,157 @@ describe('conversation routes', () => {
     } finally {
       releaseCreate?.()
       sessions.dispose()
+      await server.close()
+    }
+  })
+
+  it('fires one immediate heartbeat when resume recreates the conversation session', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-resume-heartbeat-recreate-')
+    const storePath = join(dir, 'sessions.json')
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })).status).toBe(201)
+
+      const startResponse = await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })
+      expect([200, 202]).toContain(startResponse.status)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
+
+      const pauseResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/pause`, {
+        method: 'POST',
+        headers: FULL_AUTH_HEADERS,
+      })
+      expect(pauseResponse.status).toBe(200)
+      expect(sessions.createCalls).toHaveLength(1)
+      const sendsBeforeResume = sessions.sendCalls.length
+
+      const resumeResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/resume`, {
+        method: 'POST',
+        headers: FULL_AUTH_HEADERS,
+      })
+      expect([200, 202]).toContain(resumeResponse.status)
+
+      await vi.waitFor(() => {
+        const heartbeatSends = sessions.sendCalls.slice(sendsBeforeResume).filter((call) => (
+          call.text.includes('[HEARTBEAT ')
+        ))
+        expect(heartbeatSends).toHaveLength(1)
+        expect(heartbeatSends[0]).toEqual(expect.objectContaining({
+          name: expect.stringContaining(`-conversation-${CONVERSATION_A}`),
+          options: expect.objectContaining({
+            queue: true,
+            priority: 'low',
+          }),
+        }))
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(sessions.sendCalls.slice(sendsBeforeResume).filter((call) => (
+        call.text.includes('[HEARTBEAT ')
+      ))).toHaveLength(1)
+      expect(sessions.createCalls).toHaveLength(2)
+
+      const detailResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(detailResponse.status).toBe(200)
+      const detail = await detailResponse.json() as {
+        lastHeartbeat: string | null
+        heartbeatTickCount: number
+      }
+      expect(detail.lastHeartbeat).toEqual(expect.any(String))
+      expect(detail.heartbeatTickCount).toBe(1)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('fires one immediate heartbeat when resume reuses an existing live session', async () => {
+    const dir = await createTempDir('hammurabi-commanders-conversation-resume-heartbeat-live-')
+    const storePath = join(dir, 'sessions.json')
+    const conversationStore = new ConversationStore(dirname(storePath))
+    await seedCommander(storePath, COMMANDER_A)
+
+    const sessions = createMockSessionsInterface()
+    const server = await startServer({
+      sessionStorePath: storePath,
+      conversationStore,
+      sessionsInterface: sessions.iface,
+    })
+
+    try {
+      expect((await createConversation(server.baseUrl, COMMANDER_A, {
+        id: CONVERSATION_A,
+        surface: 'api',
+      })).status).toBe(201)
+
+      const startResponse = await startConversation(server.baseUrl, CONVERSATION_A, {
+        agentType: 'claude',
+      })
+      expect([200, 202]).toContain(startResponse.status)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
+      expect(sessions.createCalls).toHaveLength(1)
+      const sendsBeforeResume = sessions.sendCalls.length
+
+      await conversationStore.update(CONVERSATION_A, (current) => ({
+        ...current,
+        status: 'idle',
+        lastHeartbeat: null,
+        heartbeatTickCount: 0,
+      }))
+
+      const resumeResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/resume`, {
+        method: 'POST',
+        headers: FULL_AUTH_HEADERS,
+      })
+      expect(resumeResponse.status).toBe(200)
+      expect(await resumeResponse.json()).toEqual(expect.objectContaining({
+        id: CONVERSATION_A,
+        status: 'active',
+        liveSession: expect.objectContaining({
+          name: expect.stringContaining(`-conversation-${CONVERSATION_A}`),
+        }),
+      }))
+
+      await vi.waitFor(() => {
+        const heartbeatSends = sessions.sendCalls.slice(sendsBeforeResume).filter((call) => (
+          call.text.includes('[HEARTBEAT ')
+        ))
+        expect(heartbeatSends).toHaveLength(1)
+        expect(heartbeatSends[0]?.options).toEqual(expect.objectContaining({
+          queue: true,
+          priority: 'low',
+        }))
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(sessions.sendCalls.slice(sendsBeforeResume).filter((call) => (
+        call.text.includes('[HEARTBEAT ')
+      ))).toHaveLength(1)
+      expect(sessions.createCalls).toHaveLength(1)
+
+      const detailResponse = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}`, {
+        headers: READ_ONLY_AUTH_HEADERS,
+      })
+      expect(detailResponse.status).toBe(200)
+      const detail = await detailResponse.json() as {
+        lastHeartbeat: string | null
+        heartbeatTickCount: number
+      }
+      expect(detail.lastHeartbeat).toEqual(expect.any(String))
+      expect(detail.heartbeatTickCount).toBe(1)
+    } finally {
       await server.close()
     }
   })
@@ -3085,7 +3441,7 @@ describe('conversation routes', () => {
     }
   })
 
-  it('marks active conversations without a live session as non-sendable', async () => {
+  it('marks active conversations without a live session as send-recoverable but not queueable', async () => {
     const dir = await createTempDir('hammurabi-commanders-conversation-read-model-no-live-')
     const storePath = join(dir, 'sessions.json')
     await seedCommander(storePath, COMMANDER_A)
@@ -3134,12 +3490,12 @@ describe('conversation routes', () => {
       }))
       expect(payload.displayState.hasLiveSession).toBe(false)
       expect(payload.allowedActions).toEqual(expect.objectContaining({
-        send: false,
+        send: true,
         queue: false,
         media: false,
         pause: true,
       }))
-      expect(payload.displayState.disabledReasons.send).toContain('no live session')
+      expect(payload.displayState.disabledReasons.send).toBeNull()
       expect(payload.displayState.disabledReasons.media).toContain('active stream session')
     } finally {
       await server.close()
@@ -3503,6 +3859,7 @@ describe('conversation routes', () => {
         agentType: 'claude',
       })).status)
       await waitForCreateCall(sessions)
+      await waitForActiveConversation(server.baseUrl, CONVERSATION_A)
 
       const archive = await fetch(`${server.baseUrl}/api/conversations/${CONVERSATION_A}/archive`, {
         method: 'POST',

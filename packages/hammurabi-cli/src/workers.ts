@@ -28,6 +28,7 @@ interface DispatchOptions {
   machine?: string
   agentType?: string
   cwd?: string
+  permissionMode?: PermissionMode
   skipValidation?: boolean
 }
 
@@ -44,6 +45,8 @@ interface SendOptions {
   sessionName: string
   text: string
 }
+
+type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions'
 
 const DISPATCH_TIMEOUT_MS = 300_000
 
@@ -94,7 +97,7 @@ function printUsage(stdout: Writable): void {
   stdout.write('Usage:\n')
   stdout.write('  hammurabi workers list [--all] [--all-creators]\n')
   stdout.write(
-    '  hammurabi workers dispatch [--session <name>] [--task <text>] [--cwd <path>] [--machine <id>] [--agent <provider>] [--skip-validation]\n',
+    '  hammurabi workers dispatch [--session <name>] [--task <text>] [--cwd <path>] [--machine <id>] [--agent <provider>] [--permission-mode <default|acceptEdits|bypassPermissions>] [--skip-validation]\n',
   )
   stdout.write('  hammurabi workers cleanup [--dry-run]\n')
   stdout.write('  hammurabi workers kill <name>\n')
@@ -183,6 +186,18 @@ function parseSessionName(value: string | undefined): string | null {
   return name.length > 0 ? name : null
 }
 
+function parsePermissionMode(value: string | undefined): PermissionMode | null {
+  const normalized = value?.trim()
+  if (
+    normalized === 'default' ||
+    normalized === 'acceptEdits' ||
+    normalized === 'bypassPermissions'
+  ) {
+    return normalized
+  }
+  return null
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError'
 }
@@ -193,6 +208,7 @@ function parseDispatchOptions(args: readonly string[]): DispatchOptions | null {
   let machine: string | undefined
   let agentType: string | undefined
   let cwd: string | undefined
+  let permissionMode: PermissionMode | undefined
   let skipValidation = false
 
   for (let index = 0; index < args.length; index += 1) {
@@ -208,7 +224,8 @@ function parseDispatchOptions(args: readonly string[]): DispatchOptions | null {
       flag !== '--task' &&
       flag !== '--machine' &&
       flag !== '--agent' &&
-      flag !== '--cwd'
+      flag !== '--cwd' &&
+      flag !== '--permission-mode'
     ) {
       return null
     }
@@ -229,6 +246,12 @@ function parseDispatchOptions(args: readonly string[]): DispatchOptions | null {
         return null
       }
       cwd = value
+    } else if (flag === '--permission-mode') {
+      const parsedMode = parsePermissionMode(value)
+      if (!parsedMode) {
+        return null
+      }
+      permissionMode = parsedMode
     }
 
     index += 1
@@ -247,6 +270,7 @@ function parseDispatchOptions(args: readonly string[]): DispatchOptions | null {
     machine,
     agentType,
     cwd,
+    permissionMode,
     skipValidation,
   }
 }
@@ -557,7 +581,7 @@ async function runDispatch(
     body.task = options.task
   }
   if (options.machine) {
-    body.machine = options.machine
+    body.host = options.machine
   }
   if (options.agentType) {
     body.agentType = options.agentType
@@ -565,9 +589,8 @@ async function runDispatch(
   if (options.cwd) {
     body.cwd = options.cwd
   }
-  const commanderId = process.env.HAMMURABI_COMMANDER_ID?.trim()
-  if (commanderId) {
-    body.creator = { kind: 'commander', id: commanderId }
+  if (options.permissionMode) {
+    body.permissionMode = options.permissionMode
   }
 
   const timeoutController = new AbortController()

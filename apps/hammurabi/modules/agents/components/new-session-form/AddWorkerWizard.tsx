@@ -5,8 +5,10 @@ import {
   createMachine,
   setupMachineAuth,
   useMachineAuthStatus,
+  verifyMachineLaunch,
 } from '@/hooks/use-agents'
 import { useProviderRegistry } from '@/hooks/use-providers'
+import { parseTailscaleStatusJson } from '@gehirn/hammurabi-cli/tailscale-status'
 import type {
   Machine,
   MachineAuthMode,
@@ -40,7 +42,7 @@ function slugifyMachineId(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-  return normalized || 'worker'
+  return normalized || 'machine'
 }
 
 function shellQuote(value: string): string {
@@ -51,7 +53,7 @@ function buildSshCommand(machine: Machine, innerCommand: string): string {
   if (!machine.host) {
     return innerCommand
   }
-  const destination = machine.user ? `${machine.user}@${machine.host}` : (machine.host ?? 'worker')
+  const destination = machine.user ? `${machine.user}@${machine.host}` : (machine.host ?? 'machine')
   const portPart = machine.port ? `-p ${machine.port} ` : ''
   return `ssh ${portPart}${destination} ${shellQuote(innerCommand)}`
 }
@@ -133,11 +135,13 @@ export function AddWorkerWizard({
   const [step, setStep] = useState<1 | 2>(initialMachine ? 2 : 1)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [host, setHost] = useState(initialMachine?.host ?? '')
+  const [tailscaleStatusJson, setTailscaleStatusJson] = useState('')
   const [label, setLabel] = useState(initialMachine?.label ?? '')
   const [user, setUser] = useState(initialMachine?.user ?? '')
   const [port, setPort] = useState(initialMachine?.port ? String(initialMachine.port) : '')
   const [cwd, setCwd] = useState(initialMachine?.cwd ?? '')
   const [isCreating, setIsCreating] = useState(false)
+  const [isLaunchVerifying, setIsLaunchVerifying] = useState(false)
   const [machine, setMachine] = useState<Machine | null>(initialMachine)
   const [selectedProviders, setSelectedProviders] = useState<Record<string, boolean>>({})
   const [providerDrafts, setProviderDrafts] = useState<Record<string, ProviderDraftState>>({})
@@ -150,41 +154,58 @@ export function AddWorkerWizard({
     setStep(initialMachine ? 2 : 1)
     setConnectionError(null)
     setHost(initialMachine?.host ?? '')
+    setTailscaleStatusJson('')
     setLabel(initialMachine?.label ?? '')
     setUser(initialMachine?.user ?? '')
     setPort(initialMachine?.port ? String(initialMachine.port) : '')
     setCwd(initialMachine?.cwd ?? '')
     setIsCreating(false)
+    setIsLaunchVerifying(false)
     setMachine(initialMachine)
     setSelectedProviders(buildInitialProviderSelection(machineProviders))
     setProviderDrafts(buildInitialProviderDrafts(machineProviders))
   }, [initialMachine, machineProviders, open])
 
-  const derivedMachineId = useMemo(
-    () => slugifyMachineId(label.trim() || host.trim()),
-    [host, label],
-  )
+  const parsedTailscaleStatus = useMemo(() => {
+    const trimmed = tailscaleStatusJson.trim()
+    return trimmed ? parseTailscaleStatusJson(trimmed) : null
+  }, [tailscaleStatusJson])
+
+  const derivedMachineId = useMemo(() => {
+    const parsed = parsedTailscaleStatus?.ok ? parsedTailscaleStatus.status : null
+    return slugifyMachineId(label.trim() || parsed?.machineId || host.trim())
+  }, [host, label, parsedTailscaleStatus])
 
   const authStatusQuery = useMachineAuthStatus(machine?.id, open && machine !== null)
   const authStatus = authStatusQuery.data
-  const machineLabel = (machine?.label ?? label.trim()) || 'Worker'
+  const machineLabel = (machine?.label ?? label.trim()) || 'Machine'
   const machineHost = machine?.host ?? (host.trim() || 'local')
 
-  const canFinish = machineProviders.every((provider) => {
-    if (!selectedProviders[provider.id]) {
-      return true
-    }
-    return authStatus?.providers[provider.id]?.configured === true
-  })
+  const selectedMachineProviders = machineProviders.filter((provider) => selectedProviders[provider.id])
+  const launchProviderId = selectedMachineProviders.find((provider) =>
+    authStatus?.providers[provider.id]?.configured === true,
+  )?.id
+  const canFinish = machineProviders.length === 0 || (
+    selectedMachineProviders.length > 0 &&
+    selectedMachineProviders.every((provider) => authStatus?.providers[provider.id]?.configured === true) &&
+    Boolean(launchProviderId)
+  )
 
   async function handleCreateMachine(): Promise<void> {
     const trimmedHost = host.trim()
-    const trimmedLabel = label.trim() || trimmedHost
+    const trimmedTailscaleStatusJson = tailscaleStatusJson.trim()
+    const parsedStatus = trimmedTailscaleStatusJson ? parseTailscaleStatusJson(trimmedTailscaleStatusJson) : null
+    if (parsedStatus && !parsedStatus.ok) {
+      setConnectionError(parsedStatus.error)
+      return
+    }
+
+    const trimmedLabel = label.trim() || (parsedStatus?.ok ? parsedStatus.status.label : trimmedHost)
     const trimmedUser = user.trim()
     const trimmedCwd = cwd.trim()
 
-    if (!trimmedHost) {
-      setConnectionError('Hostname or IP address is required.')
+    if (!trimmedHost && !trimmedTailscaleStatusJson) {
+      setConnectionError('Hostname/IP or full Tailscale status JSON is required.')
       return
     }
 
@@ -194,7 +215,12 @@ export function AddWorkerWizard({
       return
     }
 
-    if (trimmedCwd && !trimmedCwd.startsWith('/')) {
+    if (!trimmedCwd) {
+      setConnectionError('Workspace directory is required for launch verification.')
+      return
+    }
+
+    if (!trimmedCwd.startsWith('/')) {
       setConnectionError('Workspace directory must be an absolute path.')
       return
     }
@@ -206,16 +232,16 @@ export function AddWorkerWizard({
       const created = await createMachine({
         id: derivedMachineId,
         label: trimmedLabel,
-        host: trimmedHost,
+        ...(trimmedTailscaleStatusJson ? { tailscaleStatusJson: trimmedTailscaleStatusJson } : { host: trimmedHost }),
         ...(trimmedUser ? { user: trimmedUser } : {}),
         ...(parsedPort ? { port: parsedPort } : {}),
-        ...(trimmedCwd ? { cwd: trimmedCwd } : {}),
+        cwd: trimmedCwd,
       })
       setMachine(created)
       setStep(2)
       await queryClient.invalidateQueries({ queryKey: ['agents', 'machines'] })
     } catch (error) {
-      setConnectionError(error instanceof Error ? error.message : 'Failed to add worker.')
+      setConnectionError(error instanceof Error ? error.message : 'Failed to add machine.')
     } finally {
       setIsCreating(false)
     }
@@ -275,18 +301,36 @@ export function AddWorkerWizard({
     updateProviderDraft(provider, { error: null, secret: '' })
   }
 
-  function handleFinish(): void {
-    if (machine) {
-      onMachineReady?.(machine)
+  async function handleFinish(): Promise<void> {
+    if (!machine) {
+      onClose()
+      return
     }
-    onClose()
+    if (!canFinish) {
+      setConnectionError('Configure at least one provider before launch verification.')
+      return
+    }
+
+    setIsLaunchVerifying(true)
+    setConnectionError(null)
+    try {
+      await verifyMachineLaunch(machine.id, {
+        ...(launchProviderId ? { agentType: launchProviderId } : {}),
+      })
+      onMachineReady?.(machine)
+      onClose()
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : 'Machine launch verification failed.')
+    } finally {
+      setIsLaunchVerifying(false)
+    }
   }
 
   return (
     <ModalFormContainer
       open={open}
       onClose={onClose}
-      title={step === 1 ? 'Add Worker' : 'Worker Provider Auth'}
+      title={step === 1 ? 'Add Machine' : 'Machine Provider Auth'}
       contentClassName="space-y-4"
     >
       <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
@@ -295,7 +339,7 @@ export function AddWorkerWizard({
         </div>
         <div className="mt-1 text-sm text-[color:var(--hv-fg)]">
           {step === 1
-          ? 'Register the worker first, then configure provider auth on the same machine.'
+          ? 'Register the machine first, then configure provider auth on the same machine.'
             : `Configure provider auth on ${machineLabel}.`}
         </div>
       </div>
@@ -304,7 +348,7 @@ export function AddWorkerWizard({
         <div className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2">
             <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
-              <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Worker label</span>
+              <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Machine label</span>
               <input
                 value={label}
                 onChange={(event) => setLabel(event.target.value)}
@@ -346,6 +390,21 @@ export function AddWorkerWizard({
           </div>
 
           <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
+            <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Tailscale status JSON</span>
+            <textarea
+              value={tailscaleStatusJson}
+              onChange={(event) => setTailscaleStatusJson(event.target.value)}
+              placeholder="Paste the full output of tailscale status --json"
+              className={TEXTAREA_CLASS}
+            />
+            {parsedTailscaleStatus?.ok ? (
+              <span className="block text-xs text-[color:var(--hv-fg-subtle)]">
+                Derived from Tailscale: {parsedTailscaleStatus.status.dnsName} ({parsedTailscaleStatus.status.primaryTailscaleIp})
+              </span>
+            ) : null}
+          </label>
+
+          <label className="space-y-1 text-sm text-[color:var(--hv-fg)]">
             <span className="text-whisper uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">Workspace directory</span>
             <input
               value={cwd}
@@ -356,7 +415,7 @@ export function AddWorkerWizard({
           </label>
 
           <div className="rounded-lg border border-dashed border-[color:var(--hv-border-hair)] px-3 py-2 text-sm text-[color:var(--hv-fg-subtle)]">
-            Worker ID preview: <span className="font-mono text-[color:var(--hv-fg)]">{derivedMachineId}</span>
+            Machine ID preview: <span className="font-mono text-[color:var(--hv-fg)]">{derivedMachineId}</span>
           </div>
 
           {connectionError ? (
@@ -418,7 +477,7 @@ export function AddWorkerWizard({
           {authStatusQuery.isLoading ? (
             <div className="flex items-center gap-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3 text-sm text-[color:var(--hv-fg-subtle)]">
               <Loader2 size={14} className="animate-spin" />
-              Checking worker provider status…
+              Checking machine provider status...
             </div>
           ) : null}
 
@@ -473,10 +532,10 @@ export function AddWorkerWizard({
                       </div>
                       <div className="mt-1 text-sm text-[color:var(--hv-fg-subtle)]">
                         {supportedAuthModes.includes('setup-token')
-                          ? 'Run setup-token on the worker, paste the resulting token here, then verify before dispatching sessions.'
+                          ? 'Run setup-token on the machine, paste the resulting token here, then verify before dispatching sessions.'
                           : supportedAuthModes.includes('device-auth')
-                            ? 'Use an API key or device auth on the worker. Device auth keeps provider credentials on disk.'
-                            : 'Paste an API key here, then verify the worker before dispatching sessions.'}
+                            ? 'Use an API key or device auth on the machine. Device auth keeps provider credentials on disk.'
+                            : 'Paste an API key here, then verify the machine before dispatching sessions.'}
                       </div>
                     </div>
                   </label>
@@ -523,7 +582,7 @@ export function AddWorkerWizard({
 
                     {draft.mode === 'setup-token' ? (
                       <div className="rounded-lg border border-dashed border-[color:var(--hv-border-hair)] px-3 py-2 text-sm text-[color:var(--hv-fg-subtle)]">
-                        1. Run on the worker:
+                        1. Run on the machine:
                         <div className="mt-2 font-mono text-xs text-[color:var(--hv-fg)]">{sshCommand}</div>
                         <div className="mt-2">2. Paste the resulting token below and verify it.</div>
                       </div>
@@ -531,8 +590,8 @@ export function AddWorkerWizard({
 
                     {draft.mode === 'device-auth' ? (
                       <div className="rounded-lg border border-dashed border-[color:var(--hv-border-hair)] px-3 py-2 text-sm text-[color:var(--hv-fg-subtle)]">
-                        1. Click <strong>Prepare device auth</strong> once so the worker can store credentials on disk.
-                        <div className="mt-2">2. Run on the worker:</div>
+                        1. Click <strong>Prepare device auth</strong> once so the machine can store credentials on disk.
+                        <div className="mt-2">2. Run on the machine:</div>
                         <div className="mt-2 font-mono text-xs text-[color:var(--hv-fg)]">{sshCommand}</div>
                         <div className="mt-2">3. Complete the device-code prompt, then refresh status here.</div>
                       </div>
@@ -564,7 +623,7 @@ export function AddWorkerWizard({
                     {status?.configured ? (
                       <div className="flex items-center gap-2 rounded-lg border border-[color:var(--hv-accent-success)] bg-[var(--hv-accent-success-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-success)]">
                         <CheckCircle2 size={16} />
-                        {status.label} is ready on this worker.
+                        {status.label} is ready on this machine.
                       </div>
                     ) : null}
 
@@ -609,9 +668,15 @@ export function AddWorkerWizard({
             )
           })}
 
+          {connectionError ? (
+            <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {connectionError}
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-[color:var(--hv-fg-subtle)]">
-              Partial setup is OK. Unchecked providers stay unavailable until you return and verify them.
+              Configure at least one provider so Hammurabi can launch-verify this machine.
             </div>
             <div className="flex items-center gap-2">
               {!initialMachine ? (
@@ -625,11 +690,11 @@ export function AddWorkerWizard({
               ) : null}
               <button
                 type="button"
-                onClick={handleFinish}
+                onClick={() => void handleFinish()}
                 className="btn-primary"
-                disabled={!canFinish}
+                disabled={!canFinish || isLaunchVerifying}
               >
-                Finish worker setup
+                {isLaunchVerifying ? 'Verifying launch...' : 'Finish machine setup'}
               </button>
             </div>
           </div>

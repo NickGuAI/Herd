@@ -280,6 +280,24 @@ else
     echo -e "${GREEN}${CHECKMARK} Build complete${NC}"
 fi
 
+DB_READY_LOG="$(mktemp "${TMPDIR:-/tmp}/hammurabi-db-ready.XXXXXX")"
+echo -n -e "${YELLOW}Checking SQLite runtime-session store...${NC}"
+if (
+    cd "$APP_DIR"
+    set -a
+    [ ! -f .env ] || source .env
+    set +a
+    pnpm run db:ready
+) >"$DB_READY_LOG" 2>&1; then
+    echo -e " ${GREEN}${CHECKMARK}${NC}"
+    rm -f "$DB_READY_LOG"
+else
+    echo -e " ${RED}${CROSS}${NC}"
+    cat "$DB_READY_LOG"
+    rm -f "$DB_READY_LOG"
+    exit 1
+fi
+
 if [ "$MODE" = "prod" ]; then
     echo "[INFO] $(date -u +%Y-%m-%dT%H:%M:%SZ) Production mode selected; stopping existing listener on port $PORT for handoff" >> "$LAUNCH_LOG_FILE"
 else

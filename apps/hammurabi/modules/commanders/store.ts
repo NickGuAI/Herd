@@ -113,6 +113,7 @@ export interface CommanderSession {
   cwd?: string
   heartbeat: CommanderHeartbeatConfig
   maxTurns: number
+  costCapUsd?: number | null
   contextMode: CommanderContextMode
   contextConfig?: HeartbeatContextConfig
   taskSource: CommanderTaskSource | null
@@ -338,6 +339,12 @@ function parseCommanderMaxTurns(raw: unknown, runtimeConfig: CommanderRuntimeCon
   return Math.min(raw, runtimeConfig.limits.maxTurns)
 }
 
+export function parseCommanderCostCapUsd(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+    ? raw
+    : null
+}
+
 function parseCommanderContextMode(raw: unknown): CommanderContextMode {
   return raw === 'thin'
     ? 'thin'
@@ -406,6 +413,7 @@ function parseCommanderSession(
   const taskSource = raw.taskSource != null ? parseTaskSource(raw.taskSource) : null
   const contextConfig = parseHeartbeatContextConfig(raw.contextConfig)
   const maxTurns = parseCommanderMaxTurns(raw.maxTurns, runtimeConfig)
+  const costCapUsd = parseCommanderCostCapUsd(raw.costCapUsd)
   const contextMode = parseCommanderContextMode(raw.contextMode)
   const heartbeat = normalizeHeartbeatConfig(raw.heartbeat)
   const heartbeatMissing = !hasOwnProperty(raw, 'heartbeat')
@@ -444,6 +452,7 @@ function parseCommanderSession(
     cwd,
     heartbeat,
     maxTurns,
+    costCapUsd,
     contextMode,
     contextConfig,
     taskSource,

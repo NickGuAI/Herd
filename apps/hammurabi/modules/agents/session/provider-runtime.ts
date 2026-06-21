@@ -24,6 +24,7 @@ import {
   readCodexRuntime,
   readCodexThreadId,
 } from '../providers/provider-session-context.js'
+import { mapCodexToTranscriptEnvelopes } from '../event-normalizers/codex.js'
 import { createTranscriptId } from '../transcript-id.js'
 import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import {
@@ -33,6 +34,7 @@ import {
 import type {
   ProviderAdapterDeps,
   ProviderCreateOptions,
+  ProviderTeardownOptions,
 } from '../providers/provider-adapter.js'
 import { asObject } from './state.js'
 import type { MachineDaemonRegistry } from '../daemon/registry.js'
@@ -81,6 +83,7 @@ interface ProviderSessionRuntimeDeps {
   wsKeepAliveIntervalMs: number
   codexTurnWatchdogTimeoutMs: number
   internalToken?: string
+  approvalBridgeSigningSecret?: string
   getActionPolicyGate?: () => ActionPolicyGate | null
   appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void
   broadcastStreamEvent(session: StreamSession, event: StreamJsonEvent): void
@@ -108,7 +111,7 @@ export interface ProviderSessionRuntime {
     entry: PersistedStreamSession,
     machine: MachineConfig | undefined,
   ): Promise<StreamSession>
-  teardownProviderSession(session: StreamSession, reason: string): Promise<void>
+  teardownProviderSession(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void>
   shutdownProviderRuntimes(reason?: string): Promise<void>
   applyCodexApprovalDecision(
     session: StreamSession,
@@ -158,6 +161,7 @@ export function createProviderSessionRuntime(
     spawnImpl: spawn,
     daemonRegistry: deps.daemonRegistry,
     internalToken: deps.internalToken,
+    approvalBridgeSigningSecret: deps.approvalBridgeSigningSecret,
     writeToStdin: deps.writeToStdin,
     writeTranscriptMeta: deps.writeTranscriptMeta,
     getActionPolicyGate: deps.getActionPolicyGate,
@@ -280,12 +284,13 @@ export function createProviderSessionRuntime(
   async function teardownProviderSession(
     session: StreamSession,
     reason: string,
+    options?: ProviderTeardownOptions,
   ): Promise<void> {
     const provider = getProvider(session.agentType)
     if (!provider) {
       return
     }
-    await provider.teardown(session, reason)
+    await provider.teardown(session, reason, options)
   }
 
   async function shutdownProviderRuntimes(reason = 'Herd shutdown'): Promise<void> {
@@ -326,18 +331,45 @@ export function createProviderSessionRuntime(
     )
   }
 
-  function buildCodexResultFromThreadSnapshot(
+  function buildCodexAssistantMessageEventsFromThreadSnapshot(
+    turnId: string | undefined,
+    turn: Record<string, unknown>,
+    thread: Record<string, unknown>,
+  ): TranscriptEnvelope[] {
+    const threadId = typeof thread.id === 'string' && thread.id.trim().length > 0
+      ? thread.id.trim()
+      : undefined
+    const items = Array.isArray(turn.items) ? turn.items : []
+
+    return items.flatMap((entry) => {
+      const item = asObject(entry)
+      if (!item || item.type !== 'agentMessage') {
+        return []
+      }
+      const envelopes = mapCodexToTranscriptEnvelopes('item/completed', {
+        ...(threadId ? { threadId } : {}),
+        ...(turnId ? { turnId } : {}),
+        item,
+      })
+      return envelopes.some((envelope) => envelope.ev.type === 'message.delta')
+        ? envelopes
+        : []
+    })
+  }
+
+  function buildCodexEventsFromThreadSnapshot(
     session: StreamSession,
     status: string,
     turn: Record<string, unknown>,
     thread: Record<string, unknown>,
-  ): StreamJsonEvent {
+  ): StreamJsonEvent[] {
     const turnUsage = extractCodexUsageTotals(asObject(turn.tokenUsage) ?? asObject(turn.usage))
     const threadUsage = extractCodexUsageTotals(asObject(thread.tokenUsage) ?? asObject(thread.usage))
     const usage = turnUsage.usage ?? threadUsage.usage
     const totalCostUsd = turnUsage.totalCostUsd ?? threadUsage.totalCostUsd
 
     const turnId = typeof turn.id === 'string' && turn.id.trim().length > 0 ? turn.id.trim() : undefined
+    const assistantMessageEvents = buildCodexAssistantMessageEventsFromThreadSnapshot(turnId, turn, thread)
     const payload = {
       turn,
       thread,
@@ -348,7 +380,7 @@ export function createProviderSessionRuntime(
       ? error.message.trim()
       : 'Codex turn failed'
 
-    return {
+    const resultEvent = {
       schemaVersion: 2,
       id: createTranscriptId(),
       time: new Date().toISOString(),
@@ -369,6 +401,8 @@ export function createProviderSessionRuntime(
           : { result: status === 'interrupted' ? { ...payload, message: 'Turn interrupted' } : payload }),
       },
     } satisfies TranscriptEnvelope
+
+    return [...assistantMessageEvents, resultEvent]
   }
 
   async function handleCodexTurnWatchdogTimeout(session: StreamSession): Promise<void> {
@@ -429,9 +463,11 @@ export function createProviderSessionRuntime(
         : ''
 
       if (latestTurn && thread && (status === 'completed' || status === 'failed' || status === 'interrupted')) {
-        const syntheticResult = buildCodexResultFromThreadSnapshot(session, status, latestTurn, thread)
-        deps.appendStreamEvent(session, syntheticResult)
-        deps.broadcastStreamEvent(session, syntheticResult)
+        const syntheticEvents = buildCodexEventsFromThreadSnapshot(session, status, latestTurn, thread)
+        for (const syntheticEvent of syntheticEvents) {
+          deps.appendStreamEvent(session, syntheticEvent)
+          deps.broadcastStreamEvent(session, syntheticEvent)
+        }
         deps.schedulePersistedSessionsWrite()
         resolved = true
       }

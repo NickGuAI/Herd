@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { type HammurabiConfig, normalizeEndpoint, readHammurabiConfig } from './config.js'
 import { fetchJson as fetchJsonStrict } from './http-json.js'
+import { parseTailscaleStatusJson } from './tailscale-status.js'
 import {
   findProvider,
   listMachineAuthProviders,
@@ -107,11 +108,29 @@ interface MachineDaemonPairPayload {
   status: MachineDaemonStatusPayload
 }
 
+interface MachineLaunchVerificationPayload {
+  agentType: string
+  host: string
+  machineId: string
+  sessionName: string
+}
+
 interface AddOptions {
-  id: string
-  label: string
+  id?: string
+  label?: string
   host?: string
   tailscaleHostname?: string
+  tailscaleStatusJson?: string
+  user?: string
+  port?: number
+  cwd?: string
+  verifyLaunch?: boolean
+}
+
+interface OnboardOptions {
+  fromTailscaleStatus: boolean
+  id?: string
+  label?: string
   user?: string
   port?: number
   cwd?: string
@@ -133,6 +152,11 @@ interface DaemonPairOptions {
   machineId: string
   label?: string
   cwd?: string
+}
+
+interface VerifyLaunchOptions {
+  machineId: string
+  provider?: string
 }
 
 interface AuthSetupOptions {
@@ -231,8 +255,10 @@ async function readErrorDetail(response: Response): Promise<string | null> {
 function printUsage(stdout: Writable): void {
   stdout.write('Usage:\n')
   stdout.write('  hammurabi machine list\n')
-  stdout.write('  hammurabi machine add --id <id> --label <label> (--host <host> | --tailscale-hostname <hostname>) [--user <user>] [--port <port>] [--cwd <cwd>]\n')
+  stdout.write('  hammurabi machine add --id <id> --label <label> (--host <host> | --tailscale-hostname <hostname>) [--user <user>] [--port <port>] [--cwd <cwd>] [--verify-launch]\n')
+  stdout.write('  hammurabi machine onboard --from-tailscale-status [--id <id>] [--label <label>] [--user <user>] [--port <port>] --cwd <cwd>\n')
   stdout.write('  hammurabi machine check <id>\n')
+  stdout.write('  hammurabi machine verify-launch --machine <id> [--provider <provider>]\n')
   stdout.write('  hammurabi machine remove <id>\n')
   stdout.write('  hammurabi machine bootstrap <id> [--tools <provider-a,provider-b>] [--skip-telemetry]\n')
   stdout.write('  hammurabi machine auth-status --machine <id>\n')
@@ -498,9 +524,15 @@ function parseAddOptions(args: readonly string[]): AddOptions | null {
   let user: string | undefined
   let port: number | undefined
   let cwd: string | undefined
+  let verifyLaunch = false
 
-  for (let index = 0; index < args.length; index += 2) {
+  for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]
+    if (flag === '--verify-launch') {
+      verifyLaunch = true
+      continue
+    }
+
     const rawValue = args[index + 1]
     const value = typeof rawValue === 'string' ? rawValue.trim() : ''
     if (!value) {
@@ -509,37 +541,26 @@ function parseAddOptions(args: readonly string[]): AddOptions | null {
 
     if (flag === '--id') {
       id = value
-      continue
-    }
-    if (flag === '--label') {
+    } else if (flag === '--label') {
       label = value
-      continue
-    }
-    if (flag === '--host') {
+    } else if (flag === '--host') {
       host = value
-      continue
-    }
-    if (flag === '--tailscale-hostname') {
+    } else if (flag === '--tailscale-hostname') {
       tailscaleHostname = value
-      continue
-    }
-    if (flag === '--user') {
+    } else if (flag === '--user') {
       user = value
-      continue
-    }
-    if (flag === '--port') {
+    } else if (flag === '--port') {
       const parsed = Number.parseInt(value, 10)
       if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
         return null
       }
       port = parsed
-      continue
-    }
-    if (flag === '--cwd') {
+    } else if (flag === '--cwd') {
       cwd = value
-      continue
+    } else {
+      return null
     }
-    return null
+    index += 1
   }
 
   if (!id || !label) {
@@ -558,7 +579,70 @@ function parseAddOptions(args: readonly string[]): AddOptions | null {
     return null
   }
 
-  return { id, label, host, tailscaleHostname, user, port, cwd }
+  return {
+    id,
+    label,
+    host,
+    tailscaleHostname,
+    user,
+    port,
+    cwd,
+    ...(verifyLaunch ? { verifyLaunch: true } : {}),
+  }
+}
+
+function parseOnboardOptions(args: readonly string[]): OnboardOptions | null {
+  let fromTailscaleStatus = false
+  let id: string | undefined
+  let label: string | undefined
+  let user: string | undefined
+  let port: number | undefined
+  let cwd: string | undefined
+
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index]
+    if (flag === '--from-tailscale-status') {
+      fromTailscaleStatus = true
+      continue
+    }
+
+    const value = args[index + 1]?.trim()
+    if (!flag || !value) {
+      return null
+    }
+
+    if (flag === '--id') {
+      id = value
+    } else if (flag === '--label') {
+      label = value
+    } else if (flag === '--user') {
+      user = value
+    } else if (flag === '--port') {
+      const parsed = Number.parseInt(value, 10)
+      if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+        return null
+      }
+      port = parsed
+    } else if (flag === '--cwd') {
+      cwd = value
+    } else {
+      return null
+    }
+    index += 1
+  }
+
+  if (!fromTailscaleStatus || !cwd || !cwd.startsWith('/')) {
+    return null
+  }
+
+  return {
+    fromTailscaleStatus,
+    ...(id ? { id } : {}),
+    ...(label ? { label } : {}),
+    ...(user ? { user } : {}),
+    ...(port ? { port } : {}),
+    cwd,
+  }
 }
 
 function parseBootstrapToolList(
@@ -597,6 +681,37 @@ function parseAuthStatusOptions(args: readonly string[]): AuthStatusOptions | nu
 
 function parseMachineOnlyOptions(args: readonly string[]): AuthStatusOptions | null {
   return parseAuthStatusOptions(args)
+}
+
+function parseVerifyLaunchOptions(args: readonly string[]): VerifyLaunchOptions | null {
+  let machineId: string | undefined
+  let provider: string | undefined
+
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index]
+    const value = args[index + 1]?.trim()
+    if (!flag || !value) {
+      return null
+    }
+
+    if (flag === '--machine') {
+      machineId = value
+      continue
+    }
+    if (flag === '--provider') {
+      provider = value
+      continue
+    }
+    return null
+  }
+
+  if (!machineId) {
+    return null
+  }
+  return {
+    machineId,
+    ...(provider ? { provider } : {}),
+  }
 }
 
 function parseDaemonPairOptions(args: readonly string[]): DaemonPairOptions | null {
@@ -829,7 +944,7 @@ function buildBootstrapScript(
       'const end = "# <<< hammurabi ssh hardening <<<"',
       'const block = [',
       '  begin,',
-      '  "AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*",',
+      '  "AcceptEnv HAMMURABI_APPROVAL_BRIDGE_TOKEN HAMMURABI_MACHINE_ENV_*",',
       '  "MaxStartups 20:30:200",',
       '  end,',
       '].join("\\n")',
@@ -1175,6 +1290,36 @@ function parseMachineDaemonPairPayload(payload: unknown): MachineDaemonPairPaylo
   }
 }
 
+function parseMachineLaunchVerificationPayload(payload: unknown): MachineLaunchVerificationPayload | null {
+  if (!isObject(payload)) {
+    return null
+  }
+
+  const agentType = typeof payload.agentType === 'string' && payload.agentType.trim()
+    ? payload.agentType.trim()
+    : ''
+  const host = typeof payload.host === 'string' && payload.host.trim()
+    ? payload.host.trim()
+    : ''
+  const machineId = typeof payload.machineId === 'string' && payload.machineId.trim()
+    ? payload.machineId.trim()
+    : ''
+  const sessionName = typeof payload.sessionName === 'string' && payload.sessionName.trim()
+    ? payload.sessionName.trim()
+    : ''
+
+  if (!agentType || !host || !machineId || !sessionName) {
+    return null
+  }
+
+  return {
+    agentType,
+    host,
+    machineId,
+    sessionName,
+  }
+}
+
 async function fetchMachineAuthStatus(
   config: HammurabiConfig,
   fetchImpl: typeof fetch,
@@ -1228,6 +1373,24 @@ async function fetchMachineDaemonStatus(
   return { ok: true, data: payload }
 }
 
+async function postMachineLaunchVerification(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  options: VerifyLaunchOptions,
+): Promise<{ ok: true; data: unknown } | { ok: false; response: Response }> {
+  return fetchJson(
+    fetchImpl,
+    buildApiUrl(config.endpoint, `/api/agents/machines/${encodeURIComponent(options.machineId)}/verify-launch`),
+    {
+      method: 'POST',
+      headers: buildAuthHeaders(config, true),
+      body: JSON.stringify({
+        ...(options.provider ? { agentType: options.provider } : {}),
+      }),
+    },
+  )
+}
+
 async function runList(
   config: HammurabiConfig,
   fetchImpl: typeof fetch,
@@ -1266,13 +1429,99 @@ async function runAdd(
 
   const machines = parseMachines([result.data])
   const created = machines[0]
-  stdout.write(`Registered machine: ${created?.id ?? options.id}\n`)
+  stdout.write(`Registered machine: ${created?.id ?? options.id ?? '<derived>'}\n`)
   if (created) {
     stdout.write(`Host: ${formatHost(created)}\n`)
     if (created.tailscaleHostname && created.host) {
       stdout.write(`Resolved IP: ${created.host}\n`)
     }
   }
+
+  if (options.verifyLaunch) {
+    const responsePayload = isObject(result.data) ? result.data : {}
+    const verification = parseMachineLaunchVerificationPayload(responsePayload.verification)
+    if (!verification) {
+      stderr.write('Launch verification failed: machine create response did not include atomic verification details.\n')
+      return 1
+    }
+    printLaunchVerification(stdout, verification)
+  }
+  return 0
+}
+
+async function runOnboard(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  runCommand: CommandRunner,
+  options: OnboardOptions,
+  stdout: Writable,
+  stderr: Writable,
+): Promise<number> {
+  const statusResult = await runCommand('tailscale', ['status', '--json'], { timeoutMs: 15_000 })
+  if (statusResult.code !== 0) {
+    stderr.write(statusResult.stderr.trim() || statusResult.stdout.trim() || 'Failed to read `tailscale status --json`.\n')
+    if (!statusResult.stderr.endsWith('\n') && !statusResult.stdout.endsWith('\n')) {
+      stderr.write('\n')
+    }
+    return 1
+  }
+
+  const parsedStatus = parseTailscaleStatusJson(statusResult.stdout)
+  if (!parsedStatus.ok) {
+    stderr.write(`${parsedStatus.error}\n`)
+    return 1
+  }
+
+  stdout.write(`Derived machine ID: ${options.id ?? parsedStatus.status.machineId}\n`)
+  stdout.write(`Derived label: ${options.label ?? parsedStatus.status.label}\n`)
+  stdout.write(`Tailscale hostname: ${parsedStatus.status.dnsName}\n`)
+
+  return runAdd(
+    config,
+    fetchImpl,
+    {
+      ...(options.id ? { id: options.id } : {}),
+      ...(options.label ? { label: options.label } : {}),
+      tailscaleStatusJson: statusResult.stdout,
+      ...(options.user ? { user: options.user } : {}),
+      ...(options.port ? { port: options.port } : {}),
+      cwd: options.cwd,
+      verifyLaunch: true,
+    },
+    stdout,
+    stderr,
+  )
+}
+
+function printLaunchVerification(
+  stdout: Writable,
+  payload: MachineLaunchVerificationPayload,
+): void {
+  stdout.write(`Launch verified: ${payload.sessionName} used machine ${payload.host}\n`)
+}
+
+async function runVerifyLaunch(
+  config: HammurabiConfig,
+  fetchImpl: typeof fetch,
+  options: VerifyLaunchOptions,
+  stdout: Writable,
+  stderr: Writable,
+): Promise<number> {
+  const result = await postMachineLaunchVerification(config, fetchImpl, options)
+  if (!result.ok) {
+    const detail = await readErrorDetail(result.response)
+    stderr.write(detail ? `Launch verification failed (${result.response.status}): ${detail}\n` : `Launch verification failed (${result.response.status}).\n`)
+    return 1
+  }
+
+  const payload = isObject(result.data) ? result.data : {}
+  const verification = parseMachineLaunchVerificationPayload(payload) ?? {
+    agentType: options.provider ?? 'claude',
+    host: options.machineId,
+    machineId: options.machineId,
+    sessionName: '<temporary session>',
+  }
+  printLaunchVerification(stdout, verification)
   return 0
 }
 
@@ -1560,7 +1809,7 @@ async function runBootstrap(
 
   // Codex audit on PR/1269: `configure_sshd_hardening` silently emits
   // `sshd:skipped:no-sudo` when passwordless sudo is unavailable, leaving
-  // remote sshd without `AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*`.
+  // remote sshd without `AcceptEnv HAMMURABI_APPROVAL_BRIDGE_TOKEN HAMMURABI_MACHINE_ENV_*`.
   // The Claude approval-bridge token cannot reach the PreToolUse hook in that
   // state, so worker tool calls fail closed with "approval service unreachable"
   // until the operator either configures passwordless sudo + re-bootstraps OR
@@ -1569,7 +1818,7 @@ async function runBootstrap(
   if (/^sshd:skipped:no-sudo$/m.test(commandResult.stdout)) {
     stdout.write('\n')
     stdout.write('⚠️  Remote sshd hardening was NOT applied — passwordless sudo unavailable on target.\n')
-    stdout.write('    Without `AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*`, the\n')
+    stdout.write('    Without `AcceptEnv HAMMURABI_APPROVAL_BRIDGE_TOKEN HAMMURABI_MACHINE_ENV_*`, the\n')
     stdout.write('    Claude approval-bridge token cannot reach the PreToolUse hook on this\n')
     stdout.write('    machine. Worker tool calls (Bash, Edit, etc.) will fail closed with\n')
     stdout.write('    `approval service unreachable` until this is fixed.\n')
@@ -1578,7 +1827,7 @@ async function runBootstrap(
     stdout.write(`         hammurabi machine bootstrap ${options.id}\n`)
     stdout.write('      2. SSH to the target as root and append to `/etc/ssh/sshd_config`:\n')
     stdout.write('           # >>> hammurabi ssh hardening >>>\n')
-    stdout.write('           AcceptEnv HAMMURABI_INTERNAL_TOKEN HAMMURABI_MACHINE_ENV_*\n')
+    stdout.write('           AcceptEnv HAMMURABI_APPROVAL_BRIDGE_TOKEN HAMMURABI_MACHINE_ENV_*\n')
     stdout.write('           MaxStartups 20:30:200\n')
     stdout.write('           # <<< hammurabi ssh hardening <<<\n')
     stdout.write('         then restart sshd (`launchctl kickstart -k system/com.openssh.sshd`\n')
@@ -1622,7 +1871,9 @@ export async function runMachinesCli(
   if (!command || ![
     'list',
     'add',
+    'onboard',
     'check',
+    'verify-launch',
     'remove',
     'bootstrap',
     'auth-status',
@@ -1668,11 +1919,21 @@ export async function runMachinesCli(
   if (command === 'add') {
     const options = parseAddOptions(args.slice(1))
     if (!options) {
-      stderr.write('Invalid add arguments. Use either --host or --tailscale-hostname, avoid user@host, and provide absolute --cwd when set.\n')
+      stderr.write('Invalid add arguments. Use either --host or --tailscale-hostname, avoid user@host, and provide absolute --cwd.\n')
       printUsage(stdout)
       return 1
     }
     return runAdd(config, fetchImpl, options, stdout, stderr)
+  }
+
+  if (command === 'onboard') {
+    const options = parseOnboardOptions(args.slice(1))
+    if (!options) {
+      stderr.write('Invalid onboard arguments. Use --from-tailscale-status and provide absolute --cwd.\n')
+      printUsage(stdout)
+      return 1
+    }
+    return runOnboard(config, fetchImpl, runCommand, options, stdout, stderr)
   }
 
   if (command === 'check') {
@@ -1682,6 +1943,15 @@ export async function runMachinesCli(
       return 1
     }
     return runCheck(config, fetchImpl, machineId, providers, stdout, stderr)
+  }
+
+  if (command === 'verify-launch') {
+    const options = parseVerifyLaunchOptions(args.slice(1))
+    if (!options) {
+      printUsage(stdout)
+      return 1
+    }
+    return runVerifyLaunch(config, fetchImpl, options, stdout, stderr)
   }
 
   if (command === 'remove') {

@@ -20,6 +20,9 @@
     },
     "./session-contract": {
       "import": "./dist/session-contract.js"
+    },
+    "./tailscale-status": {
+      "import": "./dist/tailscale-status.js"
     }
   },
   "files": [

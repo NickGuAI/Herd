@@ -503,6 +503,63 @@ export function ProviderActivityBlock({ msg }: { msg: MsgItem }) {
   )
 }
 
+function formatProviderErrorClassification(
+  value?: NonNullable<MsgItem['providerError']>['classification'],
+): string {
+  switch (value) {
+    case 'usage_limit':
+      return 'Usage limit'
+    case 'auth_required':
+      return 'Authentication required'
+    case 'other':
+    default:
+      return 'Provider error'
+  }
+}
+
+export function ProviderErrorBlock({ msg }: { msg: MsgItem }) {
+  const provider = msg.transcript?.source?.provider ?? 'provider'
+  const backend = msg.transcript?.source?.backend ?? 'unknown'
+  const classification = msg.providerError?.classification ?? 'other'
+  const classificationLabel = formatProviderErrorClassification(classification)
+  const code = msg.providerError?.code
+  const hint = msg.providerError?.hint
+
+  return (
+    <div className="message msg-provider-error rounded border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-[color:var(--hv-fg)]">
+      <div className="flex items-start gap-2">
+        <AlertTriangle size={15} className="mt-0.5 shrink-0 text-[color:var(--hv-accent-danger)]" />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-accent-danger)]">
+              {classificationLabel}
+            </span>
+            <span className="rounded-full border border-[color:var(--hv-accent-danger)] px-2 py-0.5 font-mono text-[10px] text-[color:var(--hv-accent-danger)]">
+              {classification}
+            </span>
+            {code && (
+              <span className="rounded-full border border-[color:var(--hv-border-soft)] px-2 py-0.5 font-mono text-[10px] text-[color:var(--hv-fg-muted)]">
+                {code}
+              </span>
+            )}
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-muted)]">
+              {provider} / {backend}
+            </span>
+          </div>
+          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-[color:var(--hv-fg)]">
+            {msg.text}
+          </p>
+          {hint && (
+            <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-[color:var(--hv-fg-muted)]">
+              {hint}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ProviderActivityGroup({ messages }: { messages: MsgItem[] }) {
   const [expanded, setExpanded] = useState(false)
   const providers = Array.from(new Set(messages.map((message) =>
@@ -890,6 +947,8 @@ function renderActivityMessage(
       )
     case 'provider':
       return <ProviderActivityBlock key={message.id} msg={message} />
+    case 'error':
+      return <ProviderErrorBlock key={message.id} msg={message} />
     default:
       return null
   }

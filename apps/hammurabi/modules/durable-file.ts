@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, readFileSync, rmSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import {
   copyFile,
   mkdir,
@@ -124,7 +124,6 @@ async function removeLockIfOwned(lockPath: string, token: string): Promise<void>
       return
     }
     await rm(lockPath, { force: true })
-    await fsyncDirectory(path.dirname(lockPath))
   } catch {
     // Lock cleanup is best-effort during shutdown and failure paths.
   }
@@ -216,15 +215,22 @@ export async function acquireFileLock(
 
   const create = async () => {
     const handle = await open(lockPath, 'wx', 0o600)
+    let handleClosed = false
+    const closeHandle = async () => {
+      if (handleClosed) {
+        return
+      }
+      handleClosed = true
+      await handle.close().catch(() => undefined)
+    }
     try {
       const metadata = buildLockMetadata(token)
       await handle.writeFile(`${JSON.stringify(metadata)}\n`, 'utf8')
       await handle.sync()
-      await fsyncDirectory(path.dirname(lockPath))
+      await closeHandle()
     } catch (error) {
-      await handle.close().catch(() => undefined)
+      await closeHandle()
       await rm(lockPath, { force: true }).catch(() => undefined)
-      await fsyncDirectory(path.dirname(lockPath)).catch(() => undefined)
       throw error
     }
 
@@ -236,7 +242,6 @@ export async function acquireFileLock(
           return
         }
         released = true
-        await handle.close().catch(() => undefined)
         await removeLockIfOwned(lockPath, token)
       },
       releaseSync() {
@@ -244,11 +249,6 @@ export async function acquireFileLock(
           return
         }
         released = true
-        try {
-          closeSync(handle.fd)
-        } catch {
-          // The descriptor may already be closed by async shutdown.
-        }
         removeLockIfOwnedSync(lockPath, token)
       },
     } satisfies HeldFileLock
@@ -264,7 +264,6 @@ export async function acquireFileLock(
 
   if (await shouldBreakLock(lockPath, options)) {
     await rm(lockPath, { force: true })
-    await fsyncDirectory(path.dirname(lockPath))
     try {
       return await create()
     } catch (error) {

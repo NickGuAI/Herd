@@ -7,6 +7,7 @@ import type {
   MachineDaemonPairResponse,
   MachineDaemonRevokeResponse,
   MachineDaemonStatus,
+  MachineLaunchVerificationResponse,
   MachineAuthSetupInput,
   MachineAuthStatusReport,
   Machine,
@@ -54,6 +55,22 @@ export async function createMachine(input: CreateMachineInput): Promise<Machine>
     },
     body: JSON.stringify(input),
   })
+}
+
+export async function verifyMachineLaunch(
+  machineId: string,
+  input: { agentType?: string } = {},
+): Promise<MachineLaunchVerificationResponse> {
+  return fetchJson<MachineLaunchVerificationResponse>(
+    `/api/agents/machines/${encodeURIComponent(machineId)}/verify-launch`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    },
+  )
 }
 
 export async function fetchMachineAuthStatus(machineId: string): Promise<MachineAuthStatusReport> {
@@ -173,6 +190,36 @@ export async function verifyTailscaleHostname(
   })
 }
 
+function isLikelyConnectionEndpoint(value: string): boolean {
+  return value.includes('.') || value.includes(':')
+}
+
+function buildCreateSessionPayload(input: CreateSessionInput): Record<string, unknown> {
+  const rawMachineId = input.machineId ?? input.host
+  let host: string | undefined
+  if (rawMachineId !== undefined && rawMachineId !== null && rawMachineId !== '') {
+    if (typeof rawMachineId !== 'string') {
+      throw new Error('Create session requires a registered machine ID string, not a machine object.')
+    }
+    const trimmed = rawMachineId.trim()
+    if (!/^[\w-]+$/u.test(trimmed)) {
+      throw new Error(
+        isLikelyConnectionEndpoint(trimmed)
+          ? 'Create session requires a registered machine ID, not a Tailscale hostname or IP address.'
+          : 'Create session requires a registered machine ID string.',
+      )
+    }
+    host = trimmed
+  }
+
+  const { machineId: _machineId, host: _host, ...rest } = input
+  return {
+    ...rest,
+    ...(host ? { host } : {}),
+    transportType: input.transportType ?? 'stream',
+  }
+}
+
 export function useMachineAuthStatus(machineId?: string, enabled = true) {
   return useQuery({
     queryKey: ['agents', 'machines', machineId ?? '', 'auth-status'],
@@ -220,16 +267,19 @@ export async function createSession(
     headers: {
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      ...input,
-      transportType: input.transportType ?? 'stream',
-    }),
+    body: JSON.stringify(buildCreateSessionPayload(input)),
   })
 }
 
 export async function killSession(sessionName: string): Promise<{ killed: boolean }> {
   return fetchJson(`/api/agents/sessions/${encodeURIComponent(sessionName)}`, {
     method: 'DELETE',
+  })
+}
+
+export async function pauseSession(sessionName: string): Promise<{ paused: boolean }> {
+  return fetchJson(`/api/agents/sessions/${encodeURIComponent(sessionName)}/pause`, {
+    method: 'POST',
   })
 }
 

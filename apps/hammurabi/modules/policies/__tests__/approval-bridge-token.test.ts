@@ -1,44 +1,69 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
+  createApprovalBridgeNonce,
   createApprovalBridgeToken,
   verifyApprovalBridgeToken,
 } from '../approval-bridge-token'
 
 describe('approval bridge token', () => {
-  it('round-trips a session-scoped expiring token', () => {
+  it('round-trips a session-scoped token without wall-clock expiry', () => {
+    const nonce = 'nonce-stream-worker-01'
     const token = createApprovalBridgeToken({
-      internalToken: 'server-internal-secret',
+      signingSecret: 'approval-bridge-secret',
       sessionName: 'stream-worker-01',
-      ttlMs: 60_000,
-      now: 1_000,
+      nonce,
     })
 
     expect(verifyApprovalBridgeToken(token, {
-      internalToken: 'server-internal-secret',
-      now: 30_000,
+      signingSecret: 'approval-bridge-secret',
     })).toEqual({
       ok: true,
       sessionName: 'stream-worker-01',
-      expiresAtMs: 61_000,
+      nonce,
     })
   })
 
-  it('rejects expired and tampered tokens', () => {
+  it('keeps the same credential valid after more than 24 hours of simulated time', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-06-18T00:00:00.000Z'))
+      const nonce = 'nonce-long-lived-stream-worker'
+      const token = createApprovalBridgeToken({
+        signingSecret: 'approval-bridge-secret',
+        sessionName: 'stream-worker-long-lived',
+        nonce,
+      })
+
+      vi.setSystemTime(new Date('2026-06-19T00:00:01.000Z'))
+      expect(verifyApprovalBridgeToken(token, {
+        signingSecret: 'approval-bridge-secret',
+      })).toEqual({
+        ok: true,
+        sessionName: 'stream-worker-long-lived',
+        nonce,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('generates non-empty nonce values for session credential binding', () => {
+    expect(createApprovalBridgeNonce()).toMatch(/^[A-Za-z0-9_-]+$/u)
+  })
+
+  it('rejects tampered tokens and wrong signing secrets', () => {
     const token = createApprovalBridgeToken({
-      internalToken: 'server-internal-secret',
+      signingSecret: 'approval-bridge-secret',
       sessionName: 'stream-worker-01',
-      ttlMs: 60_000,
-      now: 1_000,
+      nonce: 'nonce-stream-worker-01',
     })
 
     expect(verifyApprovalBridgeToken(token, {
-      internalToken: 'server-internal-secret',
-      now: 61_001,
-    })).toEqual({ ok: false, reason: 'expired' })
+      signingSecret: 'other-secret',
+    })).toEqual({ ok: false, reason: 'invalid' })
 
     expect(verifyApprovalBridgeToken(`${token}x`, {
-      internalToken: 'server-internal-secret',
-      now: 30_000,
+      signingSecret: 'approval-bridge-secret',
     })).toEqual({ ok: false, reason: 'invalid' })
   })
 })

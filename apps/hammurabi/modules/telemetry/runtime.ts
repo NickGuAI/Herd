@@ -14,6 +14,10 @@ export interface TelemetryRuntimeResult {
 export function createTelemetryRuntime(context: ModuleRuntimeContext): TelemetryRuntimeResult {
   const telemetry = createTelemetryRouterWithHub({
     apiKeyStore: context.options.apiKeyStore,
+    localScan: {
+      enabled: context.options.initializeTelemetryLocalScan ?? true,
+    },
+    retentionDays: context.options.telemetryRetentionDays,
   })
   context.capabilities.provide('telemetry.hub', 'telemetry', telemetry.hub)
   context.capabilities.provide('telemetry.store', 'telemetry', telemetry.store)

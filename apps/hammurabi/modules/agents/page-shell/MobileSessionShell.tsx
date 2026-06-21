@@ -30,6 +30,7 @@ import { AddToChatSheet } from '@modules/agents/components/AddToChatSheet'
 import Transcript from '@modules/agents/components/Transcript'
 import {
   SessionComposer,
+  type SessionComposerContextAttachments,
   type SessionComposerHandle,
   type SessionComposerSubmitPayload,
 } from '@modules/agents/components/SessionComposer'
@@ -103,6 +104,7 @@ export interface MobileSessionShellProps {
   onRemoveContextDirectoryPath?: (directoryPath: string) => void
   onRemoveContextFileAnnotation?: (commentId: string) => void
   onClearContextFilePaths?: () => void
+  onRestoreContextAttachments?: (context: SessionComposerContextAttachments) => void
   showComposerWorkspaceShortcut?: boolean
   isStreaming?: boolean
   emptyState?: ReactNode
@@ -177,6 +179,7 @@ export function MobileSessionShell({
   onRemoveContextDirectoryPath,
   onRemoveContextFileAnnotation,
   onClearContextFilePaths,
+  onRestoreContextAttachments,
   showComposerWorkspaceShortcut = false,
   isStreaming = false,
   emptyState,
@@ -1110,6 +1113,7 @@ export function MobileSessionShell({
               onRemoveContextDirectoryPath={onRemoveContextDirectoryPath}
               onRemoveContextFileAnnotation={onRemoveContextFileAnnotation}
               onClearContextFilePaths={onClearContextFilePaths}
+              onRestoreContextAttachments={onRestoreContextAttachments}
               onOpenWorkspace={onOpenWorkspace}
               onOpenAddToChat={handleOpenAddToChat}
               showWorkspaceShortcut={showComposerWorkspaceShortcut}

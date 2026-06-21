@@ -132,6 +132,141 @@ describe('runConversationsCli', () => {
     )
   })
 
+  it('prints conversation messages and paginates beyond the API page cap', async () => {
+    const conversationId = '77777777-7777-4777-8777-777777777777'
+    const page = (start: number, count: number) => Array.from({ length: count }, (_, index) => {
+      const number = start + index
+      return {
+        id: `message-${number}`,
+        kind: number % 2 === 0 ? 'agent' : 'user',
+        text: `message ${number}`,
+      }
+    })
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = String(input)
+      if (url === `https://herd.gehirn.ai/api/conversations/${conversationId}/messages?limit=100`) {
+        return new Response(
+          JSON.stringify({
+            conversationId,
+            sessionName: `commander-cmdr-1-conversation-${conversationId}`,
+            source: 'canonical',
+            before: null,
+            nextBefore: '100',
+            hasMore: true,
+            totalMessages: 120,
+            messages: page(21, 100),
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
+      }
+      if (url === `https://herd.gehirn.ai/api/conversations/${conversationId}/messages?limit=20&before=100`) {
+        return new Response(
+          JSON.stringify({
+            conversationId,
+            source: 'canonical',
+            before: '100',
+            nextBefore: null,
+            hasMore: false,
+            totalMessages: 120,
+            messages: page(1, 20),
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
+      }
+      return new Response(JSON.stringify({ error: `Unexpected URL: ${url}` }), {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    const exitCode = await runConversationsCli(['messages', conversationId, '--tail', '120'], {
+      fetchImpl,
+      readConfig: async () => config,
+      stdout: stdout.writer,
+      stderr: stderr.writer,
+    })
+
+    const output = stdout.read()
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(output.split('\n').filter(Boolean)).toHaveLength(120)
+    expect(output).toContain('user: message 1\n')
+    expect(output).toContain('assistant: message 120\n')
+    expect(output.indexOf('user: message 1')).toBeLessThan(output.indexOf('assistant: message 120'))
+  })
+
+  it('prints conversation messages as combined JSON with a before cursor', async () => {
+    const conversationId = '88888888-8888-4888-8888-888888888888'
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          conversationId,
+          sessionName: `commander-cmdr-1-conversation-${conversationId}`,
+          source: 'canonical',
+          before: '40',
+          nextBefore: '42',
+          hasMore: true,
+          totalMessages: 99,
+          messages: [
+            { id: 'message-1', kind: 'user', text: 'first prior message' },
+            { id: 'message-2', kind: 'agent', text: 'second prior message' },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    )
+    const stdout = createBufferWriter()
+    const stderr = createBufferWriter()
+
+    const exitCode = await runConversationsCli(
+      ['messages', conversationId, '--tail', '2', '--before', '40', '--json'],
+      {
+        fetchImpl,
+        readConfig: async () => config,
+        stdout: stdout.writer,
+        stderr: stderr.writer,
+      },
+    )
+
+    expect(exitCode).toBe(0)
+    expect(stderr.read()).toBe('')
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `https://herd.gehirn.ai/api/conversations/${conversationId}/messages?limit=2&before=40`,
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          authorization: 'Bearer hmrb_test_key',
+        }),
+      }),
+    )
+    expect(JSON.parse(stdout.read())).toEqual({
+      conversationId,
+      sessionName: `commander-cmdr-1-conversation-${conversationId}`,
+      source: 'canonical',
+      requestedTail: 2,
+      before: '40',
+      nextBefore: '42',
+      hasMore: true,
+      totalMessages: 99,
+      messages: [
+        { id: 'message-1', kind: 'user', text: 'first prior message' },
+        { id: 'message-2', kind: 'agent', text: 'second prior message' },
+      ],
+    })
+  })
+
   it('refuses to create conversations from an agent runtime context', async () => {
     const previousSessionName = process.env.HAMMURABI_SESSION_NAME
     process.env.HAMMURABI_SESSION_NAME = 'commander-runtime-session'

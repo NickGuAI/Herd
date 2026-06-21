@@ -165,6 +165,47 @@ describe('createApprovalSessionsInterface — findSessionContextByClaudeSessionI
   })
 })
 
+describe('createApprovalSessionsInterface — validateApprovalBridgeCredential', () => {
+  it('accepts matching bridge nonce on live stream and PTY sessions', () => {
+    const stream = makeClaudeSession('claude-stream', 'session-abc')
+    stream.approvalBridgeNonce = 'nonce-stream'
+    const pty = {
+      name: 'claude-pty',
+      kind: 'pty',
+      approvalBridgeNonce: 'nonce-pty',
+    } as unknown as AnySession
+    const iface = createApprovalSessionsInterface(makeBaseContext({
+      sessions: new Map<string, AnySession>([
+        ['claude-stream', stream],
+        ['claude-pty', pty],
+      ]),
+    }))
+
+    expect(iface.validateApprovalBridgeCredential('claude-stream', 'nonce-stream')).toBe(true)
+    expect(iface.validateApprovalBridgeCredential('claude-pty', 'nonce-pty')).toBe(true)
+  })
+
+  it('rejects missing, mismatched, and non-provider sessions', () => {
+    const stream = makeClaudeSession('claude-stream', 'session-abc')
+    stream.approvalBridgeNonce = 'nonce-stream'
+    const external = {
+      name: 'external-session',
+      kind: 'external',
+      approvalBridgeNonce: 'nonce-external',
+    } as unknown as AnySession
+    const iface = createApprovalSessionsInterface(makeBaseContext({
+      sessions: new Map<string, AnySession>([
+        ['claude-stream', stream],
+        ['external-session', external],
+      ]),
+    }))
+
+    expect(iface.validateApprovalBridgeCredential('claude-stream', 'wrong-nonce')).toBe(false)
+    expect(iface.validateApprovalBridgeCredential('missing-session', 'nonce-stream')).toBe(false)
+    expect(iface.validateApprovalBridgeCredential('external-session', 'nonce-external')).toBe(false)
+  })
+})
+
 describe('createApprovalSessionsInterface — listPendingCodexApprovals', () => {
   it('collects from codex sessions and sorts by requestedAt ascending', () => {
     const s1 = makeCodexSession('codex-A')

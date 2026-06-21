@@ -8,6 +8,10 @@ import {
 } from '../message-queue.js'
 import { getProvider } from '../providers/registry.js'
 import type { AnySession, StreamJsonEvent, StreamSession } from '../types.js'
+import {
+  isHiddenInternalUserEventSubtype,
+  QUEUED_MESSAGE_USER_EVENT_SUBTYPE,
+} from '../user-event-subtypes.js'
 
 const MESSAGE_QUEUE_RETRY_INITIAL_MS = 250
 const MESSAGE_QUEUE_RETRY_MAX_MS = 5000
@@ -173,15 +177,18 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
     images?: QueuedMessageImage[],
     displayText?: string,
     clientSendId?: string,
+    userEventSubtype?: string,
   ): QueuedMessage {
     const id = `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const normalizedClientSendId = clientSendId?.trim()
+    const normalizedUserEventSubtype = userEventSubtype?.trim()
     return {
       id,
       text,
       ...(displayText !== undefined ? { displayText: displayText.trim() } : {}),
       images: images && images.length > 0 ? [...images] : undefined,
       clientSendId: normalizedClientSendId || id,
+      ...(normalizedUserEventSubtype ? { userEventSubtype: normalizedUserEventSubtype } : {}),
       priority,
       queuedAt: new Date().toISOString(),
     }
@@ -301,9 +308,11 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
     }
 
     deps.resetActiveTurnState(session)
-    const displayEvent = buildUserEvent(text, images, options.userEventSubtype, prompt.displayText, prompt.clientSendId)
-    deps.appendStreamEvent(session, displayEvent)
-    deps.broadcastStreamEvent(session, displayEvent)
+    if (!isHiddenInternalUserEventSubtype(options.userEventSubtype)) {
+      const displayEvent = buildUserEvent(text, images, options.userEventSubtype, prompt.displayText, prompt.clientSendId)
+      deps.appendStreamEvent(session, displayEvent)
+      deps.broadcastStreamEvent(session, displayEvent)
+    }
     return { ok: true }
   }
 
@@ -406,7 +415,7 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
     deps.schedulePersistedSessionsWrite()
 
     const result = await attemptSendPromptToStreamSession(session, nextMessage, {
-      userEventSubtype: 'queued_message',
+      userEventSubtype: nextMessage.userEventSubtype ?? QUEUED_MESSAGE_USER_EVENT_SUBTYPE,
     })
     if (!result.ok) {
       if (session.currentQueuedMessage?.id === nextMessage.id) {
@@ -448,13 +457,14 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
     images?: QueuedMessageImage[],
     displayText?: string,
     clientSendId?: string,
+    userEventSubtype?: string,
   ): Promise<{ ok: true; queued: boolean; message: QueuedMessage } | { ok: false; error: string }> {
     const liveSession = await deps.awaitAutoRotationIfNeeded(session.name)
     if (!liveSession || liveSession.kind !== 'stream') {
       return { ok: false, error: 'Stream session unavailable' }
     }
 
-    const message = createQueuedMessage(text, 'high', images, displayText, clientSendId)
+    const message = createQueuedMessage(text, 'high', images, displayText, clientSendId, userEventSubtype)
 
     if (
       liveSession.lastTurnCompleted &&
@@ -465,7 +475,7 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
       broadcastQueueUpdate(liveSession)
       deps.schedulePersistedSessionsWrite()
       const result = await attemptSendPromptToStreamSession(liveSession, message, {
-        userEventSubtype: 'queued_message',
+        userEventSubtype: userEventSubtype ?? QUEUED_MESSAGE_USER_EVENT_SUBTYPE,
       })
       if (result.ok) {
         clearQueuedMessageRetry(liveSession)
@@ -493,7 +503,7 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
       )
     ) {
       const result = await attemptSendPromptToStreamSession(liveSession, message, {
-        userEventSubtype: 'queued_message',
+        userEventSubtype: userEventSubtype ?? QUEUED_MESSAGE_USER_EVENT_SUBTYPE,
       })
       if (result.ok) {
         clearQueuedMessageRetry(liveSession)

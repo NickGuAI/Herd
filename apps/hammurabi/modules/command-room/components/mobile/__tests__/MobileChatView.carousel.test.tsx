@@ -385,7 +385,7 @@ describe('MobileChatView carousel', () => {
     }
   })
 
-  it('keeps the previous conversation hydrated while selection settles', () => {
+	  it('keeps the previous conversation hydrated while selection settles', () => {
     const conversations = [
       buildConversation({
         id: 'conv-1',
@@ -425,10 +425,90 @@ describe('MobileChatView carousel', () => {
     })
 
     expect(getShellByConversationId('conv-1').textContent).toContain('conversation one still visible')
-    expect(getShellByConversationId('conv-2').textContent).toContain('conversation two selected')
-  })
+	    expect(getShellByConversationId('conv-2').textContent).toContain('conversation two selected')
+	  })
 
-  it('allows the next swipe to advance while stale previous-page scrolls are guarded', () => {
+	  it('keeps the selected conversation pinned when transcript churn leaves a stale scroll position', () => {
+	    const onSelectConversationId = vi.fn()
+	    const conversations = [
+	      buildConversation({
+	        id: 'conv-1',
+	        name: 'Chat 1',
+	        createdAt: '2026-05-01T08:00:00.000Z',
+	      }),
+	      buildConversation({
+	        id: 'conv-2',
+	        name: 'Chat 2',
+	        createdAt: '2026-05-01T08:05:00.000Z',
+	      }),
+	      buildConversation({
+	        id: 'conv-3',
+	        name: 'Chat 3',
+	        createdAt: '2026-05-01T08:10:00.000Z',
+	      }),
+	    ]
+	    const initialTranscript: MsgItem[] = [{
+	      id: 'conv-2-initial',
+	      kind: 'agent',
+	      text: 'conversation two initial',
+	    }]
+
+	    const { rerender } = renderView({
+	      conversations,
+	      selectedConversationId: null,
+	      transcript: initialTranscript,
+	      onSelectConversationId,
+	    })
+
+	    const carousel = document.body.querySelector('[data-testid="mobile-chat-carousel"]') as HTMLDivElement | null
+	    expect(carousel).not.toBeNull()
+
+	    Object.defineProperty(carousel as HTMLDivElement, 'clientWidth', {
+	      configurable: true,
+	      value: 320,
+	    })
+	    Object.defineProperty(carousel as HTMLDivElement, 'scrollLeft', {
+	      configurable: true,
+	      writable: true,
+	      value: 0,
+	    })
+	    const scrollTo = vi.fn(({ left }: { left: number }) => {
+	      ;(carousel as HTMLDivElement).scrollLeft = left
+	    })
+	    ;(carousel as HTMLDivElement).scrollTo = scrollTo
+
+	    rerender({
+	      conversations,
+	      selectedConversationId: 'conv-2',
+	      transcript: initialTranscript,
+	      onSelectConversationId,
+	    })
+
+	    expect(scrollTo).toHaveBeenLastCalledWith({ left: 320, behavior: 'auto' })
+	    expect((carousel as HTMLDivElement).scrollLeft).toBe(320)
+
+	    ;(carousel as HTMLDivElement).scrollLeft = 0
+	    rerender({
+	      conversations,
+	      selectedConversationId: 'conv-2',
+	      transcript: [
+	        ...initialTranscript,
+	        { id: 'conv-2-live', kind: 'agent', text: 'conversation two live update' },
+	      ],
+	      onSelectConversationId,
+	    })
+
+	    expect(scrollTo).toHaveBeenLastCalledWith({ left: 320, behavior: 'auto' })
+	    expect((carousel as HTMLDivElement).scrollLeft).toBe(320)
+
+	    flushSync(() => {
+	      ;(carousel as HTMLDivElement).dispatchEvent(new Event('scroll'))
+	    })
+
+	    expect(onSelectConversationId).not.toHaveBeenCalledWith('conv-1')
+	  })
+
+	  it('allows the next swipe to advance while stale previous-page scrolls are guarded', () => {
     vi.useFakeTimers()
     try {
       const onSelectConversationId = vi.fn()

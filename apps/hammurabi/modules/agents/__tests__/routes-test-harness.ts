@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { dirname, resolve, join } from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store'
+import { openHammurabiSqliteDatabase } from '../../../server/db/connection'
+import { applyHammurabiSqliteSchema } from '../../../server/db/schema'
 
 // Mock child_process.spawn so stream session tests can control the child process.
 // vi.mock is hoisted before imports by Vitest, so routes.ts gets the mock.
@@ -133,6 +135,7 @@ const AUTH_HEADERS = {
   'x-hammurabi-api-key': 'test-key',
 }
 const INTERNAL_TOKEN = 'test-internal-token'
+const APPROVAL_BRIDGE_SIGNING_SECRET = 'test-approval-bridge-secret'
 const INTERNAL_AUTH_HEADERS = {
   ...AUTH_HEADERS,
   'x-hammurabi-internal-token': INTERNAL_TOKEN,
@@ -283,7 +286,11 @@ async function createDefaultProviderAuthStore(): Promise<{
   return { dir, store }
 }
 
-async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<RunningServer> {
+type AgentsRouterTestOptions = Partial<AgentsRouterOptions> & {
+  sessionStorePath?: string
+}
+
+async function startServer(options: AgentsRouterTestOptions = {}): Promise<RunningServer> {
   const app = express()
   app.use(express.json())
 
@@ -320,6 +327,18 @@ async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<
     ?? (commanderStoreDataDir
       ? ((params) => buildCommanderSessionSeed({ ...params, memoryBasePath: commanderStoreDataDir }))
       : undefined)
+  const { sessionStorePath, ...routerOptions } = options
+  const stableSqlitePath = sessionStorePath
+    ? join(dirname(resolve(sessionStorePath)), 'hammurabi.sqlite')
+    : null
+  const sqliteDir = options.sqliteDb || stableSqlitePath
+    ? null
+    : await mkdtemp(join(tmpdir(), 'hammurabi-agents-sqlite-'))
+  const sqliteDb = options.sqliteDb
+    ?? openHammurabiSqliteDatabase(stableSqlitePath ?? join(sqliteDir!, 'hammurabi.sqlite'))
+  if (!options.sqliteDb) {
+    applyHammurabiSqliteSchema(sqliteDb)
+  }
 
   const agents = createAgentsRouter({
     apiKeyStore: createTestApiKeyStore(),
@@ -328,14 +347,17 @@ async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<
     commanderConversationStore,
     buildCommanderSessionSeed: commanderSessionSeedBuilder,
     internalToken: INTERNAL_TOKEN,
+    approvalBridgeSigningSecret: APPROVAL_BRIDGE_SIGNING_SECRET,
     getActionPolicyGate: options.getActionPolicyGate ?? (() => actionPolicyGate),
     providerAuthStore: defaultProviderAuth?.store,
-    ...options,
+    ...routerOptions,
+    sqliteDb,
   })
   approvalSessionsInterface = agents.approvalSessionsInterface
   const policies = createPoliciesRouter({
     apiKeyStore: createTestApiKeyStore(),
     internalToken: INTERNAL_TOKEN,
+    approvalBridgeSigningSecret: APPROVAL_BRIDGE_SIGNING_SECRET,
     policyStore,
     approvalCoordinator,
     approvalSessionsInterface,
@@ -379,6 +401,12 @@ async function startServer(options: Partial<AgentsRouterOptions> = {}): Promise<
           resolve()
         })
       })
+      if (!options.sqliteDb) {
+        sqliteDb.close()
+      }
+      if (sqliteDir) {
+        await rm(sqliteDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+      }
       await rm(approvalDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
       if (defaultProviderAuth) {
         await rm(defaultProviderAuth.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })

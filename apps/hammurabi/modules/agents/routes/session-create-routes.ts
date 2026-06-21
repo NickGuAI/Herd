@@ -8,11 +8,18 @@ import {
 } from '../../claude-adaptive-thinking.js'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL, type ClaudeEffortLevel } from '../../claude-effort.js'
 import { DEFAULT_CLAUDE_MAX_THINKING_TOKENS } from '../../claude-max-thinking-tokens.js'
-import { createApprovalBridgeToken } from '../../policies/approval-bridge-token.js'
+import {
+  createApprovalBridgeNonce,
+  createApprovalBridgeToken,
+} from '../../policies/approval-bridge-token.js'
 import { appendToBuffer, broadcastOutput } from '../session/helpers.js'
 import { ProviderAuthRequiredError } from '../provider-auth.js'
 import type { ProviderCreateOptions } from '../providers/provider-adapter.js'
-import { resolveProviderDefaults } from '../providers/provider-adapter.js'
+import {
+  providerSupportsPermissionMode,
+  resolveProviderDefaults,
+  unsupportedProviderPermissionModeError,
+} from '../providers/provider-adapter.js'
 import { getProvider, parseProviderId } from '../providers/registry.js'
 import { validateModelForAgentType } from '../providers/validate-model.js'
 import {
@@ -35,6 +42,7 @@ import {
   parseClaudeMaxThinkingTokens,
   parseCwd,
   parseOptionalHost,
+  parseOptionalClaudePermissionMode,
   parseOptionalModel,
   parseOptionalSessionName,
   parseOptionalTask,
@@ -88,7 +96,7 @@ interface SessionCreateRouteDeps {
   sessions: Map<string, AnySession>
   maxSessions: number
   taskDelayMs: number
-  internalToken?: string
+  approvalBridgeSigningSecret?: string
   daemonRegistry: MachineDaemonRegistry
   isInternalSessionRequest(req: Request): boolean
   sessionCreatorIdFromUser(req: Request): string | undefined
@@ -142,7 +150,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
     sessions,
     maxSessions,
     taskDelayMs,
-    internalToken,
+    approvalBridgeSigningSecret,
     daemonRegistry,
   } = deps
 
@@ -153,7 +161,13 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
       return
     }
 
-    const mode: ClaudePermissionMode = 'default'
+    const requestedMode = parseOptionalClaudePermissionMode(req.body?.permissionMode ?? req.body?.mode)
+    if (requestedMode === null) {
+      res.status(400).json({
+        error: 'Invalid permissionMode. Expected one of: default, acceptEdits, bypassPermissions',
+      })
+      return
+    }
 
     const parsedEffort = parseClaudeEffort(req.body?.effort)
     if (parsedEffort === null) {
@@ -278,6 +292,11 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
       return
     }
     const providerDefaults = resolveProviderDefaults(provider)
+    const mode: ClaudePermissionMode = requestedMode ?? resumeSource?.source.mode ?? 'default'
+    if (!providerSupportsPermissionMode(provider, mode)) {
+      res.status(400).json({ error: unsupportedProviderPermissionModeError(provider, mode) })
+      return
+    }
     const effectiveModel = resumeSource?.source.model ?? model ?? null
     const modelValidation = validateModelForAgentType(agentType, effectiveModel)
     if (!modelValidation.ok) {
@@ -308,9 +327,21 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
         ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
       )
       : undefined
+    const rawTransportType = req.body?.transportType
+    const defaultExplicitWorkerToStream = !resumeSource
+      && requestedSessionType === 'worker'
+      && (rawTransportType === undefined || rawTransportType === null || rawTransportType === '')
     const transportType: Exclude<SessionTransportType, 'external'> = resumeSource || provider.uiCapabilities.forcedTransport === 'stream'
       ? 'stream'
-      : parseSessionTransportType(req.body?.transportType)
+      : defaultExplicitWorkerToStream
+        ? 'stream'
+        : parseSessionTransportType(rawTransportType)
+    if (!resumeSource && requestedSessionType === 'worker' && transportType !== 'stream') {
+      res.status(400).json({
+        error: 'sessionType "worker" requires transportType "stream" on /api/agents/sessions',
+      })
+      return
+    }
     const requestedHost = resumeSource?.source.host ?? parseOptionalHost(req.body?.host)
     if (requestedHost === null) {
       res.status(400).json({ error: 'Invalid host: expected machine ID string' })
@@ -416,7 +447,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
             effort,
             adaptiveThinking,
             maxThinkingTokens,
-            model: resumeSource ? undefined : model,
+            model: effectiveModel ?? undefined,
             resumeSessionId: resumeSource ? provider.getResumeId(resumeSource.source) : undefined,
             resumedFrom: resumeFromSession,
             sessionType,
@@ -469,8 +500,13 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
       const preparedLaunch = prepareMachineLaunchEnvironment(machine, process.env)
       const providerPtyEnv = provider.preparePtyEnv?.({ mode, effort: claudeEffort }) ?? {}
       const requiresApprovalBridge = provider.uiCapabilities.supportsAdaptiveThinking
-      const approvalBridgeToken = requiresApprovalBridge && internalToken
-        ? createApprovalBridgeToken({ internalToken, sessionName })
+      const approvalBridgeNonce = requiresApprovalBridge ? createApprovalBridgeNonce() : undefined
+      const approvalBridgeToken = requiresApprovalBridge && approvalBridgeSigningSecret && approvalBridgeNonce
+        ? createApprovalBridgeToken({
+            signingSecret: approvalBridgeSigningSecret,
+            sessionName,
+            nonce: approvalBridgeNonce,
+          })
         : undefined
       const remoteShellCommand = buildLoginShellCommand(
         'exec "${SHELL:-/bin/bash}" -l',
@@ -542,6 +578,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
         clients: new Set(),
         createdAt,
         lastEventAt: createdAt,
+        approvalBridgeNonce,
       }
 
       pty.onData((data) => {

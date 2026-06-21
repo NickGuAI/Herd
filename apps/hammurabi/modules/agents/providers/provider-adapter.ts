@@ -137,7 +137,12 @@ export interface ProviderCreateOptions {
   conversationId?: string
   currentSkillInvocation?: ActiveSkillInvocation
   daemonProcess?: PersistedDaemonProcess
+  approvalBridgeNonce?: string
   providerAuth?: ProviderSpawnAuth
+}
+
+export interface ProviderTeardownOptions {
+  archive?: boolean
 }
 
 export interface ProviderAdapter {
@@ -180,7 +185,7 @@ export interface ProviderAdapter {
   canResumeLiveSession(session: StreamSession): boolean
   getResumeId(session: ProviderResumeSource, event?: StreamJsonEvent): string | undefined
   transcriptId(session: StreamSession, event?: StreamJsonEvent): string | undefined
-  teardown(session: StreamSession, reason: string): Promise<void> | void
+  teardown(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void> | void
   shutdownFleet?(sessions: Iterable<StreamSession>, reason?: string): Promise<void> | void
 }
 
@@ -214,4 +219,21 @@ export function resolveProviderDefaults(provider: ProviderAdapter): ProviderDefa
   }
 
   return defaults
+}
+
+export function providerSupportsPermissionMode(
+  provider: ProviderAdapter,
+  mode: ClaudePermissionMode,
+): boolean {
+  return provider.uiCapabilities.permissionModes.some((option) => option.value === mode)
+}
+
+export function unsupportedProviderPermissionModeError(
+  provider: ProviderAdapter,
+  mode: ClaudePermissionMode,
+): string {
+  const supportedModes = provider.uiCapabilities.permissionModes
+    .map((option) => option.value)
+    .join(', ')
+  return `permissionMode "${mode}" is not supported by provider ${provider.id}. Expected one of: ${supportedModes}`
 }

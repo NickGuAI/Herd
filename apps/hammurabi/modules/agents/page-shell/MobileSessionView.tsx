@@ -20,7 +20,10 @@ import { createReconnectBackoff, shouldReconnectWebSocketClose } from '../ws-rec
 import { WorkspaceOverlay } from '../components/WorkspaceOverlay'
 import { capMessages, createUserMessage, type MsgItem } from '../components/session-messages'
 import { useStreamEventProcessor } from '../components/use-stream-event-processor'
-import type { SessionComposerSubmitPayload } from '../components/SessionComposer'
+import type {
+  SessionComposerContextAttachments,
+  SessionComposerSubmitPayload,
+} from '../components/SessionComposer'
 import { runQueueMutationRequest } from '../queue-mutation'
 import {
   EMPTY_QUEUE_SNAPSHOT,
@@ -142,6 +145,11 @@ export function MobileSessionView({
   const clearContextFileChips = useCallback(() => {
     setFileChips([])
     setDirectoryChips([])
+  }, [])
+
+  const restoreContextFileChips = useCallback((context: SessionComposerContextAttachments) => {
+    setFileChips(context.filePaths)
+    setDirectoryChips(context.directoryPaths)
   }, [])
 
   const runQueueMutation = useCallback(async (
@@ -862,6 +870,7 @@ export function MobileSessionView({
         onRemoveContextFilePath={removeFileChip}
         onRemoveContextDirectoryPath={removeDirectoryChip}
         onClearContextFilePaths={clearContextFileChips}
+        onRestoreContextAttachments={restoreContextFileChips}
         showComposerWorkspaceShortcut={Boolean(workspaceSource)}
         isStreaming={isStreaming}
       />

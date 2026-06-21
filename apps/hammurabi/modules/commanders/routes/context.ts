@@ -1,4 +1,4 @@
-import { access, readFile } from 'node:fs/promises'
+import { access } from 'node:fs/promises'
 import path from 'node:path'
 import multer from 'multer'
 import { type Request, type RequestHandler } from 'express'
@@ -7,6 +7,7 @@ import { generateGeminiImage } from '../../../server/image-generation/gemini-cli
 import { combinedAuth } from '../../../server/middleware/combined-auth.js'
 import { authUserHasRequiredPermissions } from '../../../server/middleware/auth0.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
+import { HEARTBEAT_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes.js'
 import {
   findExpiredPendingPlanApproval,
   readPlanApprovalDefaultDecision,
@@ -32,6 +33,7 @@ import {
   resolveDefaultCommanderAvatarUrl,
   resolveCommanderAvatarUrl,
 } from '../commander-profile.js'
+import { computeCommanderMonthlySpendUsd } from '../cost-control.js'
 import {
   migrateLegacyCommanderConfig,
 } from '../config-migration.js'
@@ -137,10 +139,6 @@ export function buildConversationSessionName(
   return `${toCommanderSessionName(conversation.commanderId)}-conversation-${conversation.id}`
 }
 
-function defaultAgentsSessionStorePath(): string {
-  return path.join(resolveModuleDataDir('agents'), 'stream-sessions.json')
-}
-
 function normalizeQueuedInternalUserMessage(message: string): string | null {
   const normalized = message.trim()
   return normalized.length > 0 ? normalized : null
@@ -199,69 +197,18 @@ export async function sendQueuedInternalUserMessage(
   options: {
     queue?: boolean
     priority?: 'high' | 'normal' | 'low'
+    userEventSubtype?: string
   },
 ): Promise<boolean> {
-  const sent = await sessionsInterface.sendToSession(sessionName, message, options)
+  const { userEventSubtype, ...sendOptions } = options
+  const payload = userEventSubtype
+    ? { text: message, userEventSubtype }
+    : message
+  const sent = await sessionsInterface.sendToSession(sessionName, payload, sendOptions)
   if (sent) {
     queueInternalUserMessage(runtime, message)
   }
   return sent
-}
-
-function parsePersistedCommanderSessionNames(value: unknown): Set<string> {
-  const parsed = new Set<string>()
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    !Array.isArray((value as { sessions?: unknown }).sessions)
-  ) {
-    return parsed
-  }
-
-  for (const entry of (value as { sessions: unknown[] }).sessions) {
-    if (typeof entry !== 'object' || entry === null) {
-      continue
-    }
-    const name = (entry as { name?: unknown }).name
-    const sessionType = (entry as { sessionType?: unknown }).sessionType
-    const creator = (entry as { creator?: unknown }).creator
-    const creatorKind = typeof creator === 'object' && creator !== null
-      ? (creator as { kind?: unknown }).kind
-      : undefined
-    if (
-      typeof name !== 'string' ||
-      sessionType !== 'commander' ||
-      creatorKind !== 'commander'
-    ) {
-      continue
-    }
-    parsed.add(name)
-  }
-
-  return parsed
-}
-
-async function readPersistedCommanderSessionNames(
-  sessionStorePath: string,
-): Promise<{ names: Set<string>; parseFailed: boolean }> {
-  let raw: string
-  try {
-    raw = await readFile(sessionStorePath, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { names: new Set<string>(), parseFailed: false }
-    }
-    throw error
-  }
-
-  try {
-    return {
-      names: parsePersistedCommanderSessionNames(JSON.parse(raw) as unknown),
-      parseFailed: false,
-    }
-  } catch {
-    return { names: new Set<string>(), parseFailed: true }
-  }
 }
 
 export function resolveEffectiveHeartbeat(
@@ -379,6 +326,7 @@ function defaultCommanderRuntimeView(): CommanderConversationRuntimeView {
     currentTask: null,
     completedTasks: 0,
     totalCostUsd: 0,
+    monthlyCostUsd: 0,
   }
 }
 
@@ -470,16 +418,35 @@ async function resolveHeartbeatConversationForCommander(
 async function resolveCommanderRuntimeViewForCommander(
   commanderId: string,
   conversationStore: ConversationStore,
+  options?: {
+    commanderDataDir: string
+    now: () => Date
+    sessionsInterface?: CommanderSessionsInterface
+  },
 ): Promise<CommanderConversationRuntimeView> {
+  const monthlyCostUsd = options
+    ? await computeCommanderMonthlySpendUsd({
+        commanderDataDir: options.commanderDataDir,
+        now: options.now,
+        conversationStore,
+        sessionsInterface: options.sessionsInterface,
+      }, commanderId)
+    : 0
   const conversations = await conversationStore.listByCommander(commanderId)
   if (conversations.length === 0) {
-    return defaultCommanderRuntimeView()
+    return {
+      ...defaultCommanderRuntimeView(),
+      monthlyCostUsd,
+    }
   }
 
   const primary = selectPrimaryConversationForCommander(conversations)
 
   if (!primary) {
-    return defaultCommanderRuntimeView()
+    return {
+      ...defaultCommanderRuntimeView(),
+      monthlyCostUsd,
+    }
   }
 
   const totalCostUsd = conversations.reduce((sum, conversation) => sum + conversation.totalCostUsd, 0)
@@ -496,6 +463,7 @@ async function resolveCommanderRuntimeViewForCommander(
     currentTask: primary.currentTask ? { ...primary.currentTask } : null,
     completedTasks,
     totalCostUsd,
+    monthlyCostUsd,
     channelMeta: primary.channelMeta ? { ...primary.channelMeta } : undefined,
     lastRoute: primary.lastRoute ? { ...primary.lastRoute } : undefined,
     providerContext: primary.providerContext ? { ...primary.providerContext } : undefined,
@@ -585,6 +553,11 @@ export async function toCommanderSessionResponse(
   conversationStore: ConversationStore,
   runtime?: CommanderRuntime | undefined,
   stats: CommanderSessionStats = { questCount: 0, scheduleCount: 0 },
+  options?: {
+    commanderDataDir?: string
+    now?: () => Date
+    sessionsInterface?: CommanderSessionsInterface
+  },
 ): Promise<CommanderSessionResponse & {
   contextConfig: { fatPinInterval: number }
   runtime: {
@@ -593,7 +566,17 @@ export async function toCommanderSessionResponse(
   }
 }> {
   const normalizedAgentType = resolveCommanderAgentType(session)
-  const runtimeView = await resolveCommanderRuntimeViewForCommander(session.id, conversationStore)
+  const runtimeView = await resolveCommanderRuntimeViewForCommander(
+    session.id,
+    conversationStore,
+    options?.commanderDataDir && options.now
+      ? {
+          commanderDataDir: options.commanderDataDir,
+          now: options.now,
+          sessionsInterface: options.sessionsInterface,
+        }
+      : undefined,
+  )
   const { persona: _legacyPersona, ...publicSession } = session
   const base = session.remoteOrigin
     ? {
@@ -848,9 +831,6 @@ export function buildCommandersContext(
     heartbeatDataDir ? { dataDir: heartbeatDataDir } : undefined,
   )
   const sessionsInterface = options.sessionsInterface
-  const agentsSessionStorePath = path.resolve(
-    options.agentsSessionStorePath ?? defaultAgentsSessionStorePath(),
-  )
   const runtimes = new Map<string, CommanderRuntime>()
   const activeCommanderSessions = new Map<string, { sessionName: string; startedAt: string }>()
   const channelReplyForwarders = new Map<string, () => void>()
@@ -1035,11 +1015,16 @@ export function buildCommandersContext(
         heartbeatFiredAtByConversation.delete(conversationId)
         return false
       }
-      const runtimeView = await resolveCommanderRuntimeViewForCommander(commanderId, conversationStore)
+      const runtimeView = await resolveCommanderRuntimeViewForCommander(commanderId, conversationStore, {
+        commanderDataDir,
+        now,
+        sessionsInterface,
+      })
       const taskSnapshot = await buildHeartbeatLogTaskSnapshot(commanderId, runtimeView, questStore)
       if (session.state !== 'running') {
         if (session.state === 'idle') {
-          // Idle commanders can be resumed without recreating the loop.
+          // Idle commanders can be resumed without recreating the loop, but a
+          // skipped idle tick must not advance the successful heartbeat clock.
           await appendHeartbeatLog(
             {
               firedAt: timestamp,
@@ -1050,7 +1035,7 @@ export function buildCommandersContext(
             'commander-idle',
           )
           heartbeatFiredAtByConversation.delete(conversationId)
-          return true
+          return 'retryable'
         }
 
         await appendHeartbeatLog(
@@ -1232,6 +1217,7 @@ export function buildCommandersContext(
       const sent = await sendQueuedInternalUserMessage(runtime, sessionsInterface, sessionName, heartbeatMessage, {
         queue: true,
         priority: 'low',
+        userEventSubtype: HEARTBEAT_USER_EVENT_SUBTYPE,
       })
       if (!sent) {
         if (sessionsInterface.getSession(sessionName)) {
@@ -1282,7 +1268,11 @@ export function buildCommandersContext(
       const errorMessage = error instanceof Error ? error.message : String(error)
       void (async () => {
         try {
-          const runtimeView = await resolveCommanderRuntimeViewForCommander(commanderId, conversationStore)
+          const runtimeView = await resolveCommanderRuntimeViewForCommander(commanderId, conversationStore, {
+            commanderDataDir,
+            now,
+            sessionsInterface,
+          })
           const taskSnapshot = await buildHeartbeatLogTaskSnapshot(commanderId, runtimeView, questStore)
           await heartbeatLog.append(commanderId, {
             firedAt: heartbeatFiredAtByConversation.get(conversationId) ?? now().toISOString(),
@@ -1313,7 +1303,6 @@ export function buildCommandersContext(
       return
     }
 
-    const persistedCommanderSessions = await readPersistedCommanderSessionNames(agentsSessionStorePath)
     const allCommanders = await sessionStore.list()
     const runningCommanders = allCommanders.filter((session) => session.state === 'running')
     for (const commander of runningCommanders) {
@@ -1328,11 +1317,7 @@ export function buildCommandersContext(
       activeCommanderSessions.delete(commander.id)
       for (const conversation of conversations) {
         const sessionName = buildConversationSessionName(conversation)
-        const liveSession = persistedCommanderSessions.parseFailed
-          ? sessionsInterface.getSession(sessionName)
-          : persistedCommanderSessions.names.has(sessionName)
-            ? sessionsInterface.getSession(sessionName)
-            : undefined
+        const liveSession = sessionsInterface.getSession(sessionName)
         if (!liveSession) {
           continue
         }
@@ -1358,11 +1343,7 @@ export function buildCommandersContext(
       }
 
       if (!hasLiveConversation) {
-        const liveDefaultSession = persistedCommanderSessions.parseFailed
-          ? sessionsInterface.getSession(defaultSessionName)
-          : persistedCommanderSessions.names.has(defaultSessionName)
-            ? sessionsInterface.getSession(defaultSessionName)
-            : undefined
+        const liveDefaultSession = sessionsInterface.getSession(defaultSessionName)
         if (liveDefaultSession) {
           hasLiveConversation = true
           const activeDefaultConversation = defaultConversation.status === 'active'
@@ -1584,7 +1565,11 @@ export function buildCommandersContext(
       conversationId?: string,
     ) => resolveHeartbeatConversationForCommander(commanderId, conversationStore, conversationId),
     resolveCommanderRuntimeView: (commanderId: string) =>
-      resolveCommanderRuntimeViewForCommander(commanderId, conversationStore),
+      resolveCommanderRuntimeViewForCommander(commanderId, conversationStore, {
+        commanderDataDir,
+        now,
+        sessionsInterface,
+      }),
     ensureDefaultConversation: (
       session: CommanderSession,
       options,

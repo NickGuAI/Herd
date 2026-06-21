@@ -6,8 +6,11 @@ import type {
 } from '../../server/module-runtime.js'
 
 export function createAgentsRuntime(context: ModuleRuntimeContext): ModuleRouteRegistration {
-  const { capabilities, internalToken, options } = context
+  const { approvalBridgeSigningSecret, capabilities, internalToken, options } = context
   const initializeAgentSessionRuntimes = options.initializeAgentSessionRuntimes !== false
+  if (!options.sqliteDb) {
+    throw new Error('SQLite runtime-session database is required for agents runtime')
+  }
 
   capabilities.provide('agents.provider-registry', 'agents', { listProviders })
 
@@ -15,9 +18,11 @@ export function createAgentsRuntime(context: ModuleRuntimeContext): ModuleRouteR
     apiKeyStore: options.apiKeyStore,
     autoResumeSessions: initializeAgentSessionRuntimes,
     enableSessionPruner: initializeAgentSessionRuntimes,
+    sqliteDb: options.sqliteDb,
     getActionPolicyGate: () => capabilities.consume('policies.action-gate', 'agents'),
     maxSessions: options.maxAgentSessions,
     internalToken,
+    approvalBridgeSigningSecret,
     commanderSessionStore: capabilities.consume('commanders.store', 'agents'),
     commanderConversationStore: capabilities.consume('commanders.conversations', 'agents'),
     buildCommanderSessionSeed: capabilities.consume('commanders.session-seed-builder', 'agents'),

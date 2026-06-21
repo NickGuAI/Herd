@@ -32,8 +32,18 @@ interface CommanderWorkerDispatchOptions {
   task?: string
   cwd?: string
   sessionName: string
+  permissionMode?: PermissionMode
   skipValidation: boolean
 }
+
+interface CommandersCliDependencies {
+  fetchImpl?: typeof fetch
+  readConfig?: () => Promise<HammurabiConfig | null>
+  stdout?: Writable
+  stderr?: Writable
+}
+
+type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions'
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -97,7 +107,7 @@ function printRootUsage(stdout: Writable): void {
   stdout.write('  hammurabi commander <command>\n')
   stdout.write('  hammurabi commander transcripts <command>\n')
   stdout.write(
-    '  hammurabi commanders workers dispatch --commander <id> --host <machine-id> --agent <provider> [--task <text>] [--cwd <path>] [--name <session-name>] [--skip-validation]\n',
+    '  hammurabi commanders workers dispatch --commander <id> --host <machine-id> --agent <provider> [--task <text>] [--cwd <path>] [--name <session-name>] [--permission-mode <default|acceptEdits|bypassPermissions>] [--skip-validation]\n',
   )
   stdout.write('  hammurabi memory <command>\n')
   stdout.write('  hammurabi eval <command>\n')
@@ -109,8 +119,20 @@ function printRootUsage(stdout: Writable): void {
 
 function printCommandersUsage(stdout: Writable): void {
   stdout.write(
-    'Usage: hammurabi commanders workers dispatch --commander <id> --host <machine-id> --agent <provider> [--task <text>] [--cwd <path>] [--name <session-name>] [--skip-validation]\n',
+    'Usage: hammurabi commanders workers dispatch --commander <id> --host <machine-id> --agent <provider> [--task <text>] [--cwd <path>] [--name <session-name>] [--permission-mode <default|acceptEdits|bypassPermissions>] [--skip-validation]\n',
   )
+}
+
+function parsePermissionMode(value: string | undefined): PermissionMode | null {
+  const normalized = value?.trim()
+  if (
+    normalized === 'default' ||
+    normalized === 'acceptEdits' ||
+    normalized === 'bypassPermissions'
+  ) {
+    return normalized
+  }
+  return null
 }
 
 function parseCommandersWorkerDispatchOptions(
@@ -126,6 +148,7 @@ function parseCommandersWorkerDispatchOptions(
   let task: string | undefined
   let cwd: string | undefined
   let sessionName: string | undefined
+  let permissionMode: PermissionMode | undefined
   let skipValidation = false
 
   for (let index = 2; index < args.length; index += 1) {
@@ -142,7 +165,8 @@ function parseCommandersWorkerDispatchOptions(
       flag !== '--agent' &&
       flag !== '--task' &&
       flag !== '--cwd' &&
-      flag !== '--name'
+      flag !== '--name' &&
+      flag !== '--permission-mode'
     ) {
       return null
     }
@@ -165,6 +189,12 @@ function parseCommandersWorkerDispatchOptions(
       cwd = value
     } else if (flag === '--name') {
       sessionName = value
+    } else if (flag === '--permission-mode') {
+      const parsedMode = parsePermissionMode(value)
+      if (!parsedMode) {
+        return null
+      }
+      permissionMode = parsedMode
     }
 
     index += 1
@@ -181,6 +211,7 @@ function parseCommandersWorkerDispatchOptions(
     task,
     cwd,
     sessionName: sessionName ?? `worker-${Date.now()}`,
+    permissionMode,
     skipValidation,
   }
 }
@@ -188,12 +219,13 @@ function parseCommandersWorkerDispatchOptions(
 async function runCommandersWorkersDispatch(
   config: HammurabiConfig,
   options: CommanderWorkerDispatchOptions,
+  fetchImpl: typeof fetch,
   stdout: Writable,
   stderr: Writable,
 ): Promise<number> {
   let response: Response
   try {
-    response = await fetch(
+    response = await fetchImpl(
       buildApiUrl(
         config.endpoint,
         `/api/commanders/${encodeURIComponent(options.commanderId)}/workers`,
@@ -207,6 +239,7 @@ async function runCommandersWorkersDispatch(
           agentType: options.agentType,
           ...(options.task ? { task: options.task } : {}),
           ...(options.cwd ? { cwd: options.cwd } : {}),
+          ...(options.permissionMode ? { permissionMode: options.permissionMode } : {}),
         }),
       },
     )
@@ -243,13 +276,17 @@ async function runCommandersWorkersDispatch(
   }
 
   const data = isObject(payloadResult.data) ? payloadResult.data : {}
-  const sessionName = typeof data.sessionName === 'string' ? data.sessionName : options.sessionName
+  const sessionName = typeof data.sessionName === 'string' && data.sessionName.trim().length > 0
+    ? data.sessionName.trim()
+    : typeof data.name === 'string' && data.name.trim().length > 0
+      ? data.name.trim()
+      : null
   const routedHost = typeof data.host === 'string' && data.host.trim().length > 0
     ? data.host.trim()
-    : null
+    : options.host
 
-  if (!routedHost) {
-    stderr.write('Worker dispatch response was malformed: expected a JSON object with a string host.\n')
+  if (!sessionName) {
+    stderr.write('Worker dispatch response was malformed: expected a JSON object with a string sessionName or name.\n')
     return 1
   }
 
@@ -259,16 +296,21 @@ async function runCommandersWorkersDispatch(
   return 0
 }
 
-async function runCommandersCli(args: readonly string[]): Promise<number> {
-  const stdout = process.stdout
-  const stderr = process.stderr
+export async function runCommandersCli(
+  args: readonly string[],
+  dependencies: CommandersCliDependencies = {},
+): Promise<number> {
+  const stdout = dependencies.stdout ?? process.stdout
+  const stderr = dependencies.stderr ?? process.stderr
+  const fetchImpl = dependencies.fetchImpl ?? fetch
+  const readConfig = dependencies.readConfig ?? readHammurabiConfig
   const options = parseCommandersWorkerDispatchOptions(args)
   if (!options) {
     printCommandersUsage(stdout)
     return 1
   }
 
-  const config = await readHammurabiConfig()
+  const config = await readConfig()
   if (!config) {
     stderr.write('Hammurabi config not found. Run `hammurabi onboard` first.\n')
     return 1
@@ -276,7 +318,7 @@ async function runCommandersCli(args: readonly string[]): Promise<number> {
 
   if (!options.skipValidation) {
     try {
-      const { providers } = await loadProviderRegistry(config)
+      const { providers } = await loadProviderRegistry(config, { fetchImpl })
       const validAgentTypes = new Set(listWorkerDispatchProviderIds(providers))
       if (!validAgentTypes.has(options.agentType)) {
         stderr.write(
@@ -290,7 +332,7 @@ async function runCommandersCli(args: readonly string[]): Promise<number> {
     }
   }
 
-  return runCommandersWorkersDispatch(config, options, stdout, stderr)
+  return runCommandersWorkersDispatch(config, options, fetchImpl, stdout, stderr)
 }
 
 export async function runCli(args: readonly string[]): Promise<number> {

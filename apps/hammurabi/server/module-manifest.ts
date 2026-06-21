@@ -105,10 +105,10 @@ export const HAMMURABI_MODULE_SERVER_METADATA = [
         },
       ],
     },
-    storage: storage('agents', 'owned', 'Agent runtime state is persisted under the Hammurabi data root.', {
-      keys: ['agents.stream-sessions', 'agents.machines', 'agents.transcripts'],
-      roots: ['${HAMMURABI_DATA_DIR}/agents', '${HAMMURABI_DATA_DIR}'],
-      files: ['stream-sessions.json', 'machines.json'],
+    storage: storage('agents', 'owned', 'Agent runtime session state is persisted in SQLite; machine config and transcripts stay under the Hammurabi data root.', {
+      keys: ['agent_runtime_sessions', 'agents.machines', 'agents.transcripts'],
+      roots: ['${HAMMURABI_DATA_DIR}/hammurabi.sqlite', '${HAMMURABI_DATA_DIR}/agents', '${HAMMURABI_DATA_DIR}'],
+      files: ['hammurabi.sqlite', 'machines.json'],
     }),
     dependencies: HAMMURABI_MODULE_GRAPH[0].dependencies,
     capabilities: HAMMURABI_MODULE_GRAPH[0].capabilities,

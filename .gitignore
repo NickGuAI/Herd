@@ -11,6 +11,9 @@ apps/hammurabi/data/api-keys/
 apps/hammurabi/data/commanders/
 apps/hammurabi/data/telemetry/
 apps/hammurabi/data/automation/
+apps/hammurabi/data/hammurabi.sqlite
+apps/hammurabi/data/hammurabi.sqlite-wal
+apps/hammurabi/data/hammurabi.sqlite-shm
 apps/hammurabi/data/agents/sessions.json
 apps/hammurabi/data/agents/stream-sessions.json
 apps/hammurabi/data/machines.json

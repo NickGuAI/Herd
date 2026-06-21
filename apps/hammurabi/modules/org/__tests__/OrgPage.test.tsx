@@ -653,7 +653,7 @@ describe('OrgPage', () => {
 
     await renderOrgPage()
 
-    expect(document.body.querySelector('[data-testid="empty-org-hire-button"]')?.textContent).toBe('Open wizard')
+    expect(document.body.querySelector('[data-testid="empty-org-hire-button"]')?.textContent).toBe('Start setup chat')
     expect(document.body.querySelector('[data-testid="mock-create-commander-wizard"]')).toBeNull()
 
     await click('[data-testid="empty-org-hire-button"]')

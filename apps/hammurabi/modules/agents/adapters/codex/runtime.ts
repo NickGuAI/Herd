@@ -35,6 +35,10 @@ const CODEX_INITIALIZE_CAPABILITIES = {
   experimentalApi: true,
 } as const
 
+const CODEX_GLOBAL_NOTIFICATION_METHODS = new Set([
+  'account/rateLimits/updated',
+])
+
 export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
   readonly sessionName: string
   readonly machine: (MachineConfig & { host: string }) | null
@@ -124,6 +128,29 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
     }
   }
 
+  private deliverProtocolMessageToListeners(
+    listeners: Iterable<CodexNotificationCallback>,
+    protocolMessage: CodexProtocolMessage,
+  ): boolean {
+    let delivered = false
+    for (const cb of listeners) {
+      delivered = true
+      cb(protocolMessage)
+    }
+    return delivered
+  }
+
+  private deliverProtocolMessageToAllListeners(protocolMessage: CodexProtocolMessage): boolean {
+    let delivered = false
+    for (const listeners of this.notificationListeners.values()) {
+      if (listeners.size === 0) {
+        continue
+      }
+      delivered = this.deliverProtocolMessageToListeners(listeners, protocolMessage) || delivered
+    }
+    return delivered
+  }
+
   private handleProtocolMessage(payloadText: string): void {
     try {
       const payload = parseCodexProtocolPayload(payloadText)
@@ -135,10 +162,7 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
           if (!listeners) {
             continue
           }
-          delivered = true
-          for (const cb of listeners) {
-            cb(protocolMessage)
-          }
+          delivered = this.deliverProtocolMessageToListeners(listeners, protocolMessage) || delivered
         }
         if (delivered) {
           return
@@ -146,6 +170,13 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
       }
 
       if (protocolMessage && (!payload.threadIds || payload.threadIds.length === 0)) {
+        if (
+          CODEX_GLOBAL_NOTIFICATION_METHODS.has(protocolMessage.method)
+          && this.deliverProtocolMessageToAllListeners(protocolMessage)
+        ) {
+          return
+        }
+
         const isSingleThreadFallbackCandidate =
           protocolMessage.method.startsWith('turn/')
           || protocolMessage.method.startsWith('item/')
@@ -155,10 +186,9 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
           const listenerEntries = Array.from(this.notificationListeners.entries())
             .filter(([, listeners]) => listeners.size > 0)
           if (listenerEntries.length === 1) {
-            for (const cb of listenerEntries[0][1]) {
-              cb(protocolMessage)
+            if (this.deliverProtocolMessageToListeners(listenerEntries[0][1], protocolMessage)) {
+              return
             }
-            return
           }
         }
         this.log('info', 'Codex protocol message has method but no routable thread identifiers', {
@@ -260,8 +290,10 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
       }
       this.ws = null
       this.rejectPendingRequests(new Error(detail))
-      this.recordTerminalFailure(failure)
-      this.handleOwningSessionFailure({ kind: 'terminal', ...failure })
+      if (!this.teardownInProgress) {
+        this.recordTerminalFailure(failure)
+        this.handleOwningSessionFailure({ kind: 'terminal', ...failure })
+      }
     })
     cpEmitter.on('error', (error: Error) => {
       const failure: CodexRuntimeTerminalFailure = {
@@ -278,8 +310,10 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
       }
       this.ws = null
       this.rejectPendingRequests(error)
-      this.recordTerminalFailure(failure)
-      this.handleOwningSessionFailure({ kind: 'terminal', ...failure })
+      if (!this.teardownInProgress) {
+        this.recordTerminalFailure(failure)
+        this.handleOwningSessionFailure({ kind: 'terminal', ...failure })
+      }
     })
   }
 
@@ -592,7 +626,7 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
     })
   }
 
-  async teardown(options: { threadId?: string; reason?: string; timeoutMs?: number } = {}): Promise<void> {
+  async teardown(options: { threadId?: string; reason?: string; timeoutMs?: number; archive?: boolean } = {}): Promise<void> {
     if (this.teardownPromise) {
       return this.teardownPromise
     }
@@ -603,7 +637,7 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
       const reason = options.reason ?? 'Codex runtime teardown'
       const timeoutMs = options.timeoutMs ?? CODEX_RUNTIME_TEARDOWN_TIMEOUT_MS
 
-      if (threadId) {
+      if (threadId && options.archive === true) {
         try {
           await this.sendRequest('thread/archive', { threadId })
         } catch (error) {
@@ -669,11 +703,8 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
     }
   }
 
-  teardownOnProcessExit(threadId?: string): void {
+  teardownOnProcessExit(): void {
     this.teardownInProgress = true
-    if (threadId) {
-      void this.sendRequest('thread/archive', { threadId }).catch(() => {})
-    }
     this.detachKeepAlive()
     this.ws?.terminate()
     this.ws = null

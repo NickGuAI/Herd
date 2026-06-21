@@ -261,7 +261,7 @@ describe('Transcript sticky scroll behavior', () => {
     expect(scrollToMock).not.toHaveBeenCalled()
   })
 
-  it('keeps stick-to-bottom behavior when the user is within 120px of the bottom', async () => {
+	  it('keeps stick-to-bottom behavior when the user is within 120px of the bottom', async () => {
     const harness = await mountTranscript({ messages: buildMessages(50) })
     const metrics = installScrollMetrics(harness.host, {
       scrollHeight: 2000,
@@ -275,14 +275,81 @@ describe('Transcript sticky scroll behavior', () => {
     await dispatchScroll(harness.host)
     metrics.setScrollHeight(2400)
 
-    await harness.rerender(buildMessages(51))
-    await settleEffects()
+	    await harness.rerender(buildMessages(51))
+	    await settleEffects()
+	    await flushAnimationFrames()
 
-    expect(metrics.getScrollTop()).toBe(2000)
-    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 2400, behavior: 'smooth' })
-  })
+	    expect(metrics.getScrollTop()).toBe(2000)
+	    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 2400, behavior: 'smooth' })
+	  })
 
-  it('covers the mobile overlay shape by using Transcript as its own scroll host', async () => {
+	  it('scrolls the desktop host after a live delta extends the latest message', async () => {
+	    const initialMessages: MsgItem[] = [{
+	      id: 'agent-live',
+	      kind: 'agent',
+	      text: 'Partial',
+	      transcript: { seq: 1, source: { provider: 'claude', backend: 'cli' }, itemId: 'agent-live' },
+	    }]
+	    const harness = await mountTranscript({ messages: initialMessages })
+	    const metrics = installScrollMetrics(harness.host, {
+	      scrollHeight: 1200,
+	      clientHeight: 400,
+	    })
+
+	    await settleEffects()
+	    await flushAnimationFrames()
+
+	    metrics.setScrollTop(800)
+	    await dispatchScroll(harness.host)
+	    metrics.setScrollHeight(1500)
+
+	    await harness.rerender([{
+	      ...initialMessages[0],
+	      text: 'Partial answer completed by a live assistant delta.',
+	    }])
+	    await settleEffects()
+	    await flushAnimationFrames()
+
+	    expect(metrics.getScrollTop()).toBe(1100)
+	    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 1500, behavior: 'smooth' })
+	  })
+
+	  it('scrolls the mobile overlay after a live delta extends the latest message', async () => {
+	    const initialMessages: MsgItem[] = [{
+	      id: 'mobile-agent-live',
+	      kind: 'agent',
+	      text: 'Mobile partial',
+	      transcript: { seq: 1, source: { provider: 'claude', backend: 'cli' }, itemId: 'mobile-agent-live' },
+	    }]
+	    const harness = await mountTranscript({
+	      messages: initialMessages,
+	      mobile: true,
+	      sessionId: 'session-mobile-live',
+	    })
+	    const metrics = installScrollMetrics(harness.host, {
+	      scrollHeight: 1000,
+	      clientHeight: 400,
+	    })
+
+	    await settleEffects()
+	    await flushAnimationFrames()
+
+	    metrics.setScrollTop(600)
+	    await dispatchScroll(harness.host)
+	    metrics.setScrollHeight(1300)
+
+	    await harness.rerender([{
+	      ...initialMessages[0],
+	      text: 'Mobile partial answer completed by a live assistant delta.',
+	    }])
+	    await settleEffects()
+	    await flushAnimationFrames()
+
+	    expect(metrics.getScrollTop()).toBe(900)
+	    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 1300, behavior: 'smooth' })
+	  })
+
+	  it('covers the mobile overlay shape by using Transcript as its own scroll host', async () => {
     const harness = await mountTranscript({
       messages: buildMessages(20),
       mobile: true,

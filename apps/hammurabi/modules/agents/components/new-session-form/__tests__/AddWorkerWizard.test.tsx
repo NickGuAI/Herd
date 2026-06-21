@@ -9,12 +9,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   createMachine: vi.fn(),
   setupMachineAuth: vi.fn(),
+  verifyMachineLaunch: vi.fn(),
   useMachineAuthStatus: vi.fn(),
 }))
 
 vi.mock('@/hooks/use-agents', () => ({
   createMachine: mocks.createMachine,
   setupMachineAuth: mocks.setupMachineAuth,
+  verifyMachineLaunch: mocks.verifyMachineLaunch,
   useMachineAuthStatus: mocks.useMachineAuthStatus,
 }))
 
@@ -224,6 +226,10 @@ describe('AddWorkerWizard', () => {
       user: 'yugu',
       port: 22,
     })
+    mocks.verifyMachineLaunch.mockResolvedValue({
+      ok: true,
+      sessionName: 'verify-atlas-mac-mini',
+    })
 
     mocks.setupMachineAuth.mockImplementation(async () => {
       authStatus = {
@@ -275,6 +281,6 @@ describe('AddWorkerWizard', () => {
     expect(document.body.textContent).toContain('Gemini')
     expect(document.body.textContent).toContain('Save token and verify')
     expect(document.body.textContent).toContain('Save API key and verify')
-    expect(document.body.textContent).toContain('Finish worker setup')
+    expect(document.body.textContent).toContain('Finish machine setup')
   })
 })

@@ -26,6 +26,34 @@ export interface TranscriptProps {
   className?: string
 }
 
+function getMessageScrollSignature(message: MsgItem | undefined): string {
+  if (!message) {
+    return 'empty'
+  }
+  const transcript = message.transcript
+  const durableKey = transcript?.seq
+    ?? transcript?.itemId
+    ?? transcript?.turnId
+    ?? transcript?.providerEventId
+    ?? transcript?.envelopeId
+    ?? message.clientSendId
+    ?? message.id
+  const lastChild = message.children?.[message.children.length - 1]
+  return [
+    durableKey,
+    message.kind,
+    message.text.length,
+    message.images?.length ?? 0,
+    message.children?.length ?? 0,
+    lastChild?.id ?? '',
+    lastChild?.text.length ?? 0,
+  ].join(':')
+}
+
+function getLatestMessagesScrollSignature(messages: readonly MsgItem[]): string {
+  return `${messages.length}:${getMessageScrollSignature(messages[messages.length - 1])}`
+}
+
 export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function Transcript(
   {
     events,
@@ -50,6 +78,8 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
   const scrollHostRef = useRef<HTMLElement | null>(null)
   const isColdLoadRef = useRef(true)
   const autoScrollRef = useRef(true)
+  const latestMessagesScrollSignatureRef = useRef<string | null>(null)
+  const scrollFrameRef = useRef<number | null>(null)
   const directMessages = messages
   const useDirectMessages = directMessages !== undefined
   const renderedMessages = useDirectMessages ? directMessages : processedMessages
@@ -71,6 +101,23 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
     }
 
     host.scrollTo({ top: host.scrollHeight, behavior: 'smooth' })
+  }
+
+  function scheduleScrollToBottom(instant = false, afterScroll?: () => void): void {
+    if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(scrollFrameRef.current)
+      scrollFrameRef.current = null
+    }
+    if (typeof requestAnimationFrame !== 'function') {
+      scrollToBottom(instant)
+      afterScroll?.()
+      return
+    }
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      scrollToBottom(instant)
+      afterScroll?.()
+    })
   }
 
   useEffect(() => {
@@ -116,26 +163,35 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
   useEffect(() => {
     autoScrollRef.current = true
     isColdLoadRef.current = true
-    requestAnimationFrame(() => {
-      scrollToBottom(true)
+    latestMessagesScrollSignatureRef.current = null
+    scheduleScrollToBottom(true, () => {
       isColdLoadRef.current = false
     })
   }, [sessionId])
 
   useEffect(() => {
+    const latestSignature = getLatestMessagesScrollSignature(renderedMessages)
+    const previousSignature = latestMessagesScrollSignatureRef.current
+    latestMessagesScrollSignatureRef.current = latestSignature
     if (isColdLoadRef.current) {
       return
     }
 
-    if (autoScrollRef.current) {
-      scrollToBottom()
+    if (latestSignature !== previousSignature && autoScrollRef.current) {
+      scheduleScrollToBottom()
     }
   }, [renderedMessages])
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(scrollFrameRef.current)
+    }
+  }, [])
 
   useImperativeHandle(ref, () => ({
     resetAutoScroll() {
       autoScrollRef.current = true
-      scrollToBottom()
+      scheduleScrollToBottom()
     },
   }), [])
 

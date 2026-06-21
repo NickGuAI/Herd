@@ -15,6 +15,8 @@ describe('fetchSkills', () => {
         description: 'Parallel research',
         userInvocable: true,
         argumentHint: '<topic>',
+        supportedProviders: ['codex', 'claude code'],
+        source: 'direct-skills',
       },
       {
         name: 'notion',
@@ -31,6 +33,8 @@ describe('fetchSkills', () => {
         description: 'Parallel research',
         userInvocable: true,
         argumentHint: '<topic>',
+        supportedProviders: ['codex', 'claude code'],
+        source: 'direct-skills',
       },
     ])
     expect(fetchJson).toHaveBeenCalledWith('/api/skills')
@@ -44,6 +48,8 @@ describe('fetchSkills', () => {
           dirName: 'read_pdf',
           description: '',
           userInvocable: true,
+          supportedProviders: '',
+          source: '  bundled-skills  ',
         },
       ],
     })
@@ -55,6 +61,8 @@ describe('fetchSkills', () => {
         description: '',
         userInvocable: true,
         argumentHint: undefined,
+        supportedProviders: undefined,
+        source: 'bundled-skills',
       },
     ])
   })
