@@ -1,12 +1,12 @@
 {
   "name": "herd-workspace",
   "private": true,
-  "version": "0.0.1-beta",
+  "version": "0.0.3-beta",
   "license": "PolyForm-Noncommercial-1.0.0",
   "packageManager": "pnpm@10.23.0",
   "scripts": {
-    "build": "pnpm --filter hammurabi run build",
-    "test": "pnpm --filter hammurabi test",
-    "start": "pnpm --filter hammurabi start"
+    "build": "pnpm --filter herd run build",
+    "test": "echo \"Release source does not include tests\"",
+    "start": "pnpm --filter herd start"
   }
 }

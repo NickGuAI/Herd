@@ -1,0 +1,650 @@
+import type { StreamJsonEvent } from '../types.js'
+import {
+  isTranscriptEnvelope,
+  type TranscriptEnvelope,
+  type TranscriptMessageRole,
+} from '../../../src/types/transcript-envelope.js'
+
+export type SessionMessagePeekRoleFilter = 'assistant' | 'user' | 'all'
+
+export interface SessionMessagePeekEntry {
+  ts: string
+  type: 'assistant' | 'user' | 'system' | 'message_start' | 'content_block_start' | string
+  kind?: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'image' | 'warning'
+  tool?: string
+  preview: string
+}
+
+export interface SessionMessagePeekResponse {
+  session: string
+  total: number
+  returned: number
+  messages: SessionMessagePeekEntry[]
+}
+
+interface ExtractSessionMessagePeekOptions {
+  last: number
+  role: SessionMessagePeekRoleFilter
+  includeToolUse: boolean
+  fallbackTimestamp: string
+}
+
+interface ToolUseLike {
+  id?: string
+  name?: string
+  input?: unknown
+}
+
+interface ToolResultLike {
+  tool_use_id?: string
+  content?: unknown
+  is_error?: boolean
+}
+
+interface TranscriptTextEntryTracker {
+  indexesByKey: Map<string, number[]>
+  suppressedIndexes: Set<number>
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  return value as Record<string, unknown>
+}
+
+function normalizeIsoTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (trimmed.length === 0 || !Number.isFinite(Date.parse(trimmed))) {
+    return null
+  }
+  return trimmed
+}
+
+function collapsePreviewWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function truncatePreview(value: string, maxLength = 120): string {
+  const collapsed = collapsePreviewWhitespace(value)
+  if (collapsed.length <= maxLength) {
+    return collapsed
+  }
+  if (maxLength <= 3) {
+    return '.'.repeat(maxLength)
+  }
+  return `${collapsed.slice(0, maxLength - 3)}...`
+}
+
+function stringifyPreview(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (
+    typeof value === 'number'
+    || typeof value === 'boolean'
+    || value === null
+  ) {
+    return String(value)
+  }
+
+  try {
+    return JSON.stringify(value) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function imageBlockPreview(block: { alt?: unknown; url?: unknown; path?: unknown; source?: unknown }): string {
+  if (typeof block.alt === 'string' && block.alt.trim()) {
+    return block.alt
+  }
+  if (typeof block.url === 'string' && block.url.trim()) {
+    return block.url
+  }
+  if (typeof block.path === 'string' && block.path.trim()) {
+    return block.path
+  }
+  const source = asObject(block.source)
+  if (typeof source?.url === 'string' && source.url.trim()) {
+    return source.url
+  }
+  if (typeof source?.path === 'string' && source.path.trim()) {
+    return source.path
+  }
+  if (typeof source?.media_type === 'string' && source.media_type.trim()) {
+    return source.media_type
+  }
+  if (typeof source?.mediaType === 'string' && source.mediaType.trim()) {
+    return source.mediaType
+  }
+  return 'image'
+}
+
+function extractFirstScalar(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (
+    typeof value === 'number'
+    || typeof value === 'boolean'
+    || value === null
+  ) {
+    return String(value)
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const preview = extractFirstScalar(item)
+      if (preview.length > 0) {
+        return preview
+      }
+    }
+    return ''
+  }
+
+  const obj = asObject(value)
+  if (!obj) {
+    return ''
+  }
+
+  for (const nestedValue of Object.values(obj)) {
+    const preview = extractFirstScalar(nestedValue)
+    if (preview.length > 0) {
+      return preview
+    }
+  }
+
+  return ''
+}
+
+function shouldIncludeEntry(
+  entry: SessionMessagePeekEntry,
+  role: SessionMessagePeekRoleFilter,
+  includeToolUse: boolean,
+): boolean {
+  if (role !== 'all' && entry.type !== role) {
+    return false
+  }
+
+  if (!includeToolUse) {
+    return (entry.type === 'assistant' || entry.type === 'user') && entry.kind === 'text'
+  }
+
+  return true
+}
+
+function pushEntry(
+  entries: SessionMessagePeekEntry[],
+  entry: SessionMessagePeekEntry | null,
+  role: SessionMessagePeekRoleFilter,
+  includeToolUse: boolean,
+): number | null {
+  if (!entry || entry.preview.length === 0) {
+    return null
+  }
+  if (!shouldIncludeEntry(entry, role, includeToolUse)) {
+    return null
+  }
+  const index = entries.length
+  entries.push(entry)
+  return index
+}
+
+function resolveEventTimestamp(event: StreamJsonEvent, fallbackTimestamp: string): string {
+  if (isTranscriptEnvelope(event)) {
+    const envelopeTimestamp = normalizeIsoTimestamp(event.time)
+    if (envelopeTimestamp) {
+      return envelopeTimestamp
+    }
+  }
+
+  const directTimestamp = normalizeIsoTimestamp(event.timestamp)
+  if (directTimestamp) {
+    return directTimestamp
+  }
+
+  const source = asObject(event.source)
+  const normalizedAt = normalizeIsoTimestamp(source?.normalizedAt)
+  if (normalizedAt) {
+    return normalizedAt
+  }
+
+  return fallbackTimestamp
+}
+
+function transcriptMessageKey(envelope: TranscriptEnvelope): string {
+  return [
+    envelope.source.provider,
+    envelope.source.backend,
+    envelope.source.sessionId ?? '',
+    envelope.turnId ?? '',
+    envelope.itemId ?? '',
+    envelope.parentId ?? '',
+    envelope.subagentId ?? '',
+  ].join('\u0001')
+}
+
+function transcriptEntryType(role: TranscriptMessageRole): SessionMessagePeekEntry['type'] {
+  return role === 'assistant' || role === 'user' ? role : 'system'
+}
+
+function isAuthoritativeCodexCompletedText(envelope: TranscriptEnvelope): boolean {
+  return envelope.source.provider === 'codex'
+    && envelope.source.rawEventType === 'item/completed'
+}
+
+function transcriptTextEntryKey(
+  envelope: TranscriptEnvelope,
+  role: TranscriptMessageRole,
+): string {
+  return `${role}\u0001${transcriptMessageKey(envelope)}`
+}
+
+function inferTranscriptMessageRole(
+  envelope: TranscriptEnvelope,
+  transcriptMessageRoles: Map<string, TranscriptMessageRole>,
+): TranscriptMessageRole {
+  const role = transcriptMessageRoles.get(transcriptMessageKey(envelope))
+  if (role) {
+    return role
+  }
+  if (envelope.clientSendId || envelope.source.rawEventType === 'herd/user') {
+    return 'user'
+  }
+  return 'assistant'
+}
+
+function buildToolUseEntry(
+  rawBlock: ToolUseLike,
+  type: SessionMessagePeekEntry['type'],
+  ts: string,
+): SessionMessagePeekEntry | null {
+  const toolName = typeof rawBlock.name === 'string' ? rawBlock.name.trim() : ''
+  if (toolName.length === 0) {
+    return null
+  }
+
+  const inputPreview = extractFirstScalar(rawBlock.input)
+  const preview = inputPreview.length > 0
+    ? `${toolName}: ${inputPreview}`
+    : toolName
+
+  return {
+    ts,
+    type,
+    kind: 'tool_use',
+    tool: toolName,
+    preview: truncatePreview(preview),
+  }
+}
+
+function buildToolResultEntry(
+  rawBlock: ToolResultLike,
+  type: SessionMessagePeekEntry['type'],
+  ts: string,
+  toolNamesById: Map<string, string>,
+  fallbackResult?: unknown,
+): SessionMessagePeekEntry | null {
+  const toolUseId = typeof rawBlock.tool_use_id === 'string' ? rawBlock.tool_use_id.trim() : ''
+  const previewSource = rawBlock.content ?? fallbackResult
+  const preview = truncatePreview(stringifyPreview(previewSource))
+
+  if (preview.length === 0 && toolUseId.length === 0) {
+    return null
+  }
+
+  return {
+    ts,
+    type,
+    kind: 'tool_result',
+    tool: toolUseId.length > 0 ? toolNamesById.get(toolUseId) : undefined,
+    preview,
+  }
+}
+
+function extractContentBlockStartEntry(
+  event: Extract<StreamJsonEvent, { type: 'content_block_start' }>,
+  ts: string,
+): SessionMessagePeekEntry | null {
+  const block = event.content_block
+  if (block.type === 'tool_use') {
+    return buildToolUseEntry(block, 'content_block_start', ts)
+  }
+
+  if (block.type === 'thinking') {
+    const preview = truncatePreview(
+      typeof block.thinking === 'string' && block.thinking.trim().length > 0
+        ? block.thinking
+        : (typeof block.text === 'string' && block.text.trim().length > 0 ? block.text : 'thinking'),
+    )
+    return {
+      ts,
+      type: 'content_block_start',
+      kind: 'thinking',
+      preview,
+    }
+  }
+
+  if (block.type === 'image') {
+    return {
+      ts,
+      type: 'content_block_start',
+      kind: 'image',
+      preview: truncatePreview(imageBlockPreview(block)),
+    }
+  }
+
+  const preview = truncatePreview(typeof block.text === 'string' && block.text.trim().length > 0 ? block.text : 'text')
+  return {
+    ts,
+    type: 'content_block_start',
+    kind: 'text',
+    preview,
+  }
+}
+
+function collectAssistantEntries(
+  event: Extract<StreamJsonEvent, { type: 'assistant' }>,
+  ts: string,
+  entries: SessionMessagePeekEntry[],
+  role: SessionMessagePeekRoleFilter,
+  includeToolUse: boolean,
+  toolNamesById: Map<string, string>,
+): void {
+  for (const block of event.message.content) {
+    if (block.type === 'text') {
+      pushEntry(entries, {
+        ts,
+        type: 'assistant',
+        kind: 'text',
+        preview: truncatePreview(block.text ?? ''),
+      }, role, includeToolUse)
+      continue
+    }
+
+    if (block.type === 'thinking') {
+      pushEntry(entries, {
+        ts,
+        type: 'assistant',
+        kind: 'thinking',
+        preview: truncatePreview(block.thinking ?? block.text ?? ''),
+      }, role, includeToolUse)
+      continue
+    }
+
+    if (block.type === 'tool_use') {
+      const toolId = typeof block.id === 'string' ? block.id.trim() : ''
+      const toolName = typeof block.name === 'string' ? block.name.trim() : ''
+      if (toolId.length > 0 && toolName.length > 0) {
+        toolNamesById.set(toolId, toolName)
+      }
+      pushEntry(entries, buildToolUseEntry(block, 'assistant', ts), role, includeToolUse)
+      continue
+    }
+
+    if (block.type === 'image') {
+      pushEntry(entries, {
+        ts,
+        type: 'assistant',
+        kind: 'image',
+        preview: truncatePreview(imageBlockPreview(block)),
+      }, role, includeToolUse)
+    }
+  }
+}
+
+function collectUserEntries(
+  event: Extract<StreamJsonEvent, { type: 'user' }>,
+  ts: string,
+  entries: SessionMessagePeekEntry[],
+  role: SessionMessagePeekRoleFilter,
+  includeToolUse: boolean,
+  toolNamesById: Map<string, string>,
+): void {
+  const content = event.message.content
+  if (typeof content === 'string') {
+    pushEntry(entries, {
+      ts,
+      type: 'user',
+      kind: 'text',
+      preview: truncatePreview(content),
+    }, role, includeToolUse)
+    return
+  }
+
+  for (const block of content) {
+    if (block.type === 'text') {
+      pushEntry(entries, {
+        ts,
+        type: 'user',
+        kind: 'text',
+        preview: truncatePreview(block.text ?? ''),
+      }, role, includeToolUse)
+      continue
+    }
+
+    if (block.type === 'tool_result') {
+      pushEntry(
+        entries,
+        buildToolResultEntry(block, 'user', ts, toolNamesById, event.tool_use_result),
+        role,
+        includeToolUse,
+      )
+    }
+  }
+}
+
+function collectTranscriptEnvelopeEntry(
+  envelope: TranscriptEnvelope,
+  ts: string,
+  entries: SessionMessagePeekEntry[],
+  role: SessionMessagePeekRoleFilter,
+  includeToolUse: boolean,
+  toolNamesById: Map<string, string>,
+  transcriptMessageRoles: Map<string, TranscriptMessageRole>,
+  transcriptTextEntries: TranscriptTextEntryTracker,
+): void {
+  const ev = envelope.ev
+  if (ev.type === 'message.start') {
+    transcriptMessageRoles.set(transcriptMessageKey(envelope), ev.role)
+    return
+  }
+
+  if (ev.type === 'message.delta') {
+    const messageRole = inferTranscriptMessageRole(envelope, transcriptMessageRoles)
+    const entry = {
+      ts,
+      type: transcriptEntryType(messageRole),
+      kind: 'text',
+      preview: truncatePreview(ev.text),
+    } satisfies SessionMessagePeekEntry
+    const key = transcriptTextEntryKey(envelope, messageRole)
+    if (isAuthoritativeCodexCompletedText(envelope)) {
+      for (const index of transcriptTextEntries.indexesByKey.get(key) ?? []) {
+        transcriptTextEntries.suppressedIndexes.add(index)
+      }
+    }
+    const index = pushEntry(entries, entry, role, includeToolUse)
+    if (index !== null) {
+      const existingIndexes = isAuthoritativeCodexCompletedText(envelope)
+        ? []
+        : (transcriptTextEntries.indexesByKey.get(key) ?? [])
+      transcriptTextEntries.indexesByKey.set(key, [...existingIndexes, index])
+    }
+    return
+  }
+
+  if (ev.type === 'message.image') {
+    const messageRole = ev.role ?? inferTranscriptMessageRole(envelope, transcriptMessageRoles)
+    pushEntry(entries, {
+      ts,
+      type: transcriptEntryType(messageRole),
+      kind: 'image',
+      preview: truncatePreview(imageBlockPreview(ev.image)),
+    }, role, includeToolUse)
+    return
+  }
+
+  if (ev.type === 'thinking.delta') {
+    pushEntry(entries, {
+      ts,
+      type: 'assistant',
+      kind: 'thinking',
+      preview: truncatePreview(ev.text),
+    }, role, includeToolUse)
+    return
+  }
+
+  if (ev.type === 'tool.start') {
+    const toolId = ev.toolCallId.trim()
+    const toolName = ev.name.trim()
+    if (toolId.length > 0 && toolName.length > 0) {
+      toolNamesById.set(toolId, toolName)
+    }
+    pushEntry(
+      entries,
+      buildToolUseEntry({ id: toolId, name: toolName, input: ev.input }, 'assistant', ts),
+      role,
+      includeToolUse,
+    )
+    return
+  }
+
+  if (ev.type === 'tool.delta') {
+    pushEntry(
+      entries,
+      buildToolResultEntry({
+        tool_use_id: ev.toolCallId,
+        content: ev.output ?? ev.patch ?? ev.data,
+      }, 'user', ts, toolNamesById),
+      role,
+      includeToolUse,
+    )
+    return
+  }
+
+  if (ev.type === 'tool.end') {
+    pushEntry(
+      entries,
+      buildToolResultEntry({
+        tool_use_id: ev.toolCallId,
+        content: ev.result ?? ev.error,
+        is_error: ev.status === 'error' || ev.status === 'failed',
+      }, 'user', ts, toolNamesById),
+      role,
+      includeToolUse,
+    )
+    return
+  }
+
+  if (ev.type === 'provider.activity') {
+    const preview = truncatePreview(
+      ev.detail
+      ?? ev.title
+      ?? stringifyPreview(ev.data),
+    )
+    pushEntry(entries, {
+      ts,
+      type: 'system',
+      kind: 'text',
+      preview,
+    }, role, includeToolUse)
+  }
+}
+
+export function extractSessionMessagePeek(
+  events: StreamJsonEvent[],
+  options: ExtractSessionMessagePeekOptions,
+): SessionMessagePeekEntry[] {
+  const entries: SessionMessagePeekEntry[] = []
+  const toolNamesById = new Map<string, string>()
+  const transcriptMessageRoles = new Map<string, TranscriptMessageRole>()
+  const transcriptTextEntries: TranscriptTextEntryTracker = {
+    indexesByKey: new Map<string, number[]>(),
+    suppressedIndexes: new Set<number>(),
+  }
+  let lastTimestamp = options.fallbackTimestamp
+
+  for (const event of events) {
+    const ts = resolveEventTimestamp(event, lastTimestamp)
+    lastTimestamp = ts
+
+    if (isTranscriptEnvelope(event)) {
+      collectTranscriptEnvelopeEntry(
+        event,
+        ts,
+        entries,
+        options.role,
+        options.includeToolUse,
+        toolNamesById,
+        transcriptMessageRoles,
+        transcriptTextEntries,
+      )
+      continue
+    }
+
+    if (event.type === 'assistant') {
+      collectAssistantEntries(event, ts, entries, options.role, options.includeToolUse, toolNamesById)
+      continue
+    }
+
+    if (event.type === 'user') {
+      collectUserEntries(event, ts, entries, options.role, options.includeToolUse, toolNamesById)
+      continue
+    }
+
+    if (event.type === 'system') {
+      const preview = truncatePreview(event.text ?? '')
+      const kind = typeof event.subtype === 'string'
+        && ['warning', 'warn', 'error'].includes(event.subtype.trim().toLowerCase())
+        ? 'warning'
+        : 'text'
+      pushEntry(entries, { ts, type: 'system', kind, preview }, options.role, options.includeToolUse)
+      continue
+    }
+
+    if (event.type === 'message_start') {
+      const preview = truncatePreview(event.message.role)
+      pushEntry(entries, { ts, type: 'message_start', preview }, options.role, options.includeToolUse)
+      continue
+    }
+
+    if (event.type === 'content_block_start') {
+      pushEntry(entries, extractContentBlockStartEntry(event, ts), options.role, options.includeToolUse)
+      continue
+    }
+
+    if (event.type === 'tool_use') {
+      const toolId = typeof event.id === 'string' ? event.id.trim() : ''
+      const toolName = typeof event.name === 'string' ? event.name.trim() : ''
+      if (toolId.length > 0 && toolName.length > 0) {
+        toolNamesById.set(toolId, toolName)
+      }
+      pushEntry(entries, buildToolUseEntry(event, event.type, ts), options.role, options.includeToolUse)
+      continue
+    }
+
+    if (event.type === 'tool_result') {
+      pushEntry(
+        entries,
+        buildToolResultEntry(event, event.type, ts, toolNamesById),
+        options.role,
+        options.includeToolUse,
+      )
+    }
+  }
+
+  const visibleEntries = entries.filter((_, index) => !transcriptTextEntries.suppressedIndexes.has(index))
+
+  if (visibleEntries.length <= options.last) {
+    return visibleEntries
+  }
+
+  return visibleEntries.slice(-options.last)
+}

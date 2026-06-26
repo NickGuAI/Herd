@@ -1,0 +1,284 @@
+import {
+  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  getClaudeDisableAdaptiveThinkingEnvValue,
+  type ClaudeAdaptiveThinkingMode,
+} from '../../../claude-adaptive-thinking.js'
+import { DEFAULT_CLAUDE_EFFORT_LEVEL, type ClaudeEffortLevel } from '../../../claude-effort.js'
+import {
+  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  type ClaudeMaxThinkingTokens,
+} from '../../../claude-max-thinking-tokens.js'
+import {
+  CLAUDE_DISABLE_ADAPTIVE_THINKING_ENV,
+  CLAUDE_MAX_THINKING_TOKENS_ENV,
+} from '../../constants.js'
+import {
+  ANTHROPIC_MODEL_ENV_KEYS,
+  buildLoginShellBootstrap,
+  buildUnsetEnvironmentCommand,
+  scrubEnvironmentVariables,
+  shellEscape,
+} from '../../machines.js'
+import type { ClaudePermissionMode } from '../../types.js'
+import {
+  APPROVAL_BRIDGE_TOKEN_ENV,
+  APPROVAL_BRIDGE_TOKEN_HEADER,
+} from '../../../policies/approval-bridge-token.js'
+
+const CLAUDE_APPEND_PROMPT_FILE_ARG = '__HERD_CLAUDE_APPEND_PROMPT_FILE__'
+
+function buildPromptFileDelimiter(prompt: string): string {
+  let delimiter = 'HERD_CLAUDE_PROMPT'
+  while (
+    prompt === delimiter ||
+    prompt.startsWith(`${delimiter}\n`) ||
+    prompt.endsWith(`\n${delimiter}`) ||
+    prompt.includes(`\n${delimiter}\n`)
+  ) {
+    delimiter = `${delimiter}_END`
+  }
+  return delimiter
+}
+
+function buildAppendPromptFileBootstrap(appendSystemPrompt: string): string {
+  const delimiter = buildPromptFileDelimiter(appendSystemPrompt)
+  return [
+    'herd_prompt_file="$(mktemp "${TMPDIR:-/tmp}/herd-claude-prompt.XXXXXX")"',
+    `cat > "$herd_prompt_file" <<'${delimiter}'`,
+    appendSystemPrompt,
+    delimiter,
+    'trap \'rm -f "$herd_prompt_file"\' EXIT',
+    '',
+  ].join('\n')
+}
+
+function shellEscapeClaudeArg(arg: string): string {
+  return arg === CLAUDE_APPEND_PROMPT_FILE_ARG
+    ? '"$herd_prompt_file"'
+    : shellEscape(arg)
+}
+
+export function buildClaudeStreamArgs(
+  mode: ClaudePermissionMode,
+  resumeSessionId?: string,
+  appendSystemPromptFile?: string,
+  maxTurns?: number,
+  effort: ClaudeEffortLevel = DEFAULT_CLAUDE_EFFORT_LEVEL,
+  settingsJson?: string,
+  model?: string,
+): string[] {
+  const args = ['-p', '--verbose', '--output-format', 'stream-json', '--input-format', 'stream-json', '--effort', effort]
+  if (appendSystemPromptFile) {
+    args.push('--append-system-prompt-file', appendSystemPromptFile)
+    args.push('--exclude-dynamic-system-prompt-sections')
+  }
+  if (resumeSessionId) {
+    args.push('--resume', resumeSessionId)
+  }
+  if (maxTurns !== undefined && maxTurns > 0) {
+    args.push('--max-turns', String(maxTurns))
+  }
+  if (typeof model === 'string' && model.trim().length > 0) {
+    args.push('--model', model.trim())
+  }
+  if (typeof settingsJson === 'string' && settingsJson.trim().length > 0) {
+    args.push('--settings', settingsJson)
+  }
+  return args
+}
+
+export interface ClaudeApprovalEnvOptions {
+  port?: number | string
+  approvalBridgeToken?: string
+  baseUrl?: string
+}
+
+export function resolveClaudeApprovalPort(
+  env: NodeJS.ProcessEnv,
+  override?: number | string,
+): string {
+  if (override !== undefined && override !== null && String(override).trim().length > 0) {
+    return String(override).trim()
+  }
+  const fromHerd = env.HERD_PORT?.trim()
+  if (fromHerd) {
+    return fromHerd
+  }
+  const fromPort = env.PORT?.trim()
+  if (fromPort) {
+    return fromPort
+  }
+  return '20001'
+}
+
+/**
+ * Force Claude to emit summarized plaintext extended-thinking deltas.
+ *
+ * Anthropic flipped Opus 4-7 to encrypted-thinking by default ("display omitted"),
+ * which makes the assistant envelope ship empty `thinking: ""` plus a signed blob
+ * that the UI can't render. Setting `display: "summarized"` on the request body
+ * restores plaintext deltas. The CLI exposes this via `CLAUDE_CODE_EXTRA_BODY`.
+ *
+ * If the caller already set CLAUDE_CODE_EXTRA_BODY (e.g. user override or another
+ * harness layer), we deep-merge our `thinking` defaults into the existing JSON
+ * rather than clobbering. Caller wins on every other field; caller wins on the
+ * `thinking` sub-object too if it's already present (we only fill in defaults).
+ */
+export function mergeClaudeExtraBody(existing: string | undefined): string {
+  const ourDefaults: Record<string, unknown> = {
+    thinking: { type: 'adaptive', display: 'summarized' },
+  }
+
+  const trimmed = existing?.trim()
+  if (!trimmed) {
+    return JSON.stringify(ourDefaults)
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    // Caller's value is malformed JSON — replace it with our defaults rather
+    // than ship an unparseable env var to the CLI.
+    return JSON.stringify(ourDefaults)
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return JSON.stringify(ourDefaults)
+  }
+
+  const merged: Record<string, unknown> = { ...(parsed as Record<string, unknown>) }
+  const callerThinking = merged.thinking
+  if (callerThinking && typeof callerThinking === 'object' && !Array.isArray(callerThinking)) {
+    merged.thinking = {
+      ...(ourDefaults.thinking as Record<string, unknown>),
+      ...(callerThinking as Record<string, unknown>),
+    }
+  } else if (merged.thinking === undefined || merged.thinking === null) {
+    merged.thinking = ourDefaults.thinking
+  }
+  // If caller set thinking to a non-object (string/array/etc), leave it alone —
+  // they presumably know what they want and we shouldn't fight that.
+  return JSON.stringify(merged)
+}
+
+export function buildClaudeSpawnEnv(
+  env: NodeJS.ProcessEnv,
+  adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  approval: ClaudeApprovalEnvOptions = {},
+): NodeJS.ProcessEnv {
+  const port = resolveClaudeApprovalPort(env, approval.port)
+  const baseUrl = approval.baseUrl?.trim() || env.HERD_APPROVAL_BASE_URL?.trim() || `http://127.0.0.1:${port}`
+  const approvalBridgeToken = approval.approvalBridgeToken?.trim() || env[APPROVAL_BRIDGE_TOKEN_ENV]?.trim()
+
+  const spawnEnv: NodeJS.ProcessEnv = {
+    ...scrubEnvironmentVariables(env, ['CLAUDECODE', 'HERD_INTERNAL_TOKEN', ...ANTHROPIC_MODEL_ENV_KEYS]),
+    CLAUDECODE: undefined,
+    CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking),
+    MAX_THINKING_TOKENS: String(maxThinkingTokens),
+    CLAUDE_CODE_EXTRA_BODY: mergeClaudeExtraBody(env.CLAUDE_CODE_EXTRA_BODY),
+    HERD_PORT: port,
+    HERD_APPROVAL_BASE_URL: baseUrl,
+  }
+  if (approvalBridgeToken) {
+    spawnEnv[APPROVAL_BRIDGE_TOKEN_ENV] = approvalBridgeToken
+  }
+  return spawnEnv
+}
+
+export function buildClaudeEnvironmentPrefix(
+  adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+): string {
+  return `export ${CLAUDE_DISABLE_ADAPTIVE_THINKING_ENV}=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} ${CLAUDE_MAX_THINKING_TOKENS_ENV}=${maxThinkingTokens} && ${buildUnsetEnvironmentCommand(['CLAUDECODE', 'HERD_INTERNAL_TOKEN', ...ANTHROPIC_MODEL_ENV_KEYS])}`
+}
+
+export function buildClaudePtyCommand(
+  mode: ClaudePermissionMode,
+  effort: ClaudeEffortLevel = DEFAULT_CLAUDE_EFFORT_LEVEL,
+  adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+): string {
+  const base = `${buildClaudeEnvironmentPrefix(adaptiveThinking, maxThinkingTokens)} && claude --effort ${effort}`
+  return base
+}
+
+export function buildClaudeShellInvocation(
+  args: string[],
+  adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  appendSystemPrompt?: string,
+): string {
+  const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} MAX_THINKING_TOKENS=${maxThinkingTokens}; ${buildUnsetEnvironmentCommand(['CLAUDECODE', 'HERD_INTERNAL_TOKEN', ...ANTHROPIC_MODEL_ENV_KEYS])};`
+  const promptBootstrap = appendSystemPrompt
+    ? buildAppendPromptFileBootstrap(appendSystemPrompt)
+    : ''
+  const cliArgs = appendSystemPrompt
+    ? [
+        ...args,
+        '--append-system-prompt-file',
+        CLAUDE_APPEND_PROMPT_FILE_ARG,
+        '--exclude-dynamic-system-prompt-sections',
+      ]
+    : args
+  return `${promptBootstrap}${envPrefix} claude ${cliArgs.map((arg) => shellEscapeClaudeArg(arg)).join(' ')}`
+}
+
+const CLAUDE_APPROVAL_HOOK_INLINE_SCRIPT = `
+const process=require("node:process");
+const DEFAULT_REVIEW_RETRY_AFTER_MS=1000;
+const DEFAULT_APPROVAL_DEADLINE_MS=60*60*1000;
+function emitPreToolUseDecision(decision,reason){const hookSpecificOutput={hookEventName:"PreToolUse",permissionDecision:decision};if(typeof reason==="string"&&reason.trim().length>0){hookSpecificOutput.permissionDecisionReason=reason.trim();}process.stdout.write(JSON.stringify({hookSpecificOutput})+"\\n");process.exit(0);}
+function failOpenEnabled(){return process.env.HERD_APPROVAL_FAIL_OPEN?.trim()==="1";}
+function failClosed(reason){if(failOpenEnabled()){process.stderr.write(reason+"\\n");emitPreToolUseDecision("allow",reason);return;}process.stderr.write(reason+"\\n");process.exit(2);}
+function defaultBaseUrl(){const explicit=process.env.HERD_APPROVAL_BASE_URL?.trim();if(explicit){return explicit.replace(/\\/+$/,"");}const port=process.env.HERD_PORT?.trim()||"20001";return "http://127.0.0.1:"+port;}
+function normalizeRetryAfterMs(value){const parsed=typeof value==="number"?value:typeof value==="string"?Number.parseInt(value,10):NaN;if(!Number.isFinite(parsed)||parsed<=0){return DEFAULT_REVIEW_RETRY_AFTER_MS;}return Math.max(50,Math.min(Math.floor(parsed),60000));}
+function resolveApprovalDeadlineMs(){const raw=process.env.HERD_APPROVAL_DEADLINE_MS?.trim();if(!raw){return DEFAULT_APPROVAL_DEADLINE_MS;}const parsed=Number.parseInt(raw,10);if(!Number.isFinite(parsed)||parsed<=0){return DEFAULT_APPROVAL_DEADLINE_MS;}return parsed;}
+function sleep(ms){return new Promise((resolve)=>{setTimeout(resolve,ms);});}
+async function fetchApprovalPayload(url,init,failureContext){let response;try{response=await fetch(url,init);}catch(error){const message=error instanceof Error?error.message:String(error);failClosed(\`\${failureContext} (\${message})\`);return null;}if(!response.ok){let errorText="";try{errorText=(await response.text()).trim();}catch{}const detail=errorText?\`: \${errorText}\`:"";failClosed(\`approval service returned HTTP \${response.status}\${detail}\`);return null;}try{return await response.json();}catch(error){const message=error instanceof Error?error.message:String(error);failClosed(\`approval response was not valid JSON (\${message})\`);return null;}}
+async function pollForTerminalDecision(requestId,retryAfterMs,headers){const deadlineMs=resolveApprovalDeadlineMs();const deadlineAt=Date.now()+deadlineMs;let nextDelayMs=normalizeRetryAfterMs(retryAfterMs);while(true){const remainingMs=deadlineAt-Date.now();if(remainingMs<=0){failClosed(\`approval review deadline exceeded after \${deadlineMs}ms (request \${requestId})\`);return null;}await sleep(Math.min(nextDelayMs,remainingMs));const payload=await fetchApprovalPayload(\`\${defaultBaseUrl()}/api/approval/check/\${encodeURIComponent(requestId)}\`,{method:"GET",headers},\`approval polling failed for request \${requestId}\`);if(!payload){return null;}if(payload?.decision!=="pending"){return payload;}nextDelayMs=normalizeRetryAfterMs(payload?.retry_after_ms);}}
+async function readStdin(){const chunks=[];for await(const chunk of process.stdin){chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(String(chunk)));}return Buffer.concat(chunks).toString("utf8");}
+(async()=>{const raw=await readStdin();if(!raw.trim()){process.exit(0);}let payload;try{payload=JSON.parse(raw);}catch{payload=raw;}if(payload&&typeof payload==="object"&&!Array.isArray(payload)&&process.env.HERD_SESSION_NAME&&typeof payload.herd_session_name!=="string"){payload.herd_session_name=process.env.HERD_SESSION_NAME;}const headers={"content-type":"application/json"};const bridgeToken=process.env.${APPROVAL_BRIDGE_TOKEN_ENV}?.trim();if(bridgeToken){headers["${APPROVAL_BRIDGE_TOKEN_HEADER}"]=bridgeToken;}let responsePayload=await fetchApprovalPayload(\`\${defaultBaseUrl()}/api/approval/check\`,{method:"POST",headers,body:typeof payload==="string"?payload:JSON.stringify(payload)},"approval service unreachable");if(!responsePayload){return;}if(responsePayload?.decision==="pending"){const requestId=typeof responsePayload.request_id==="string"?responsePayload.request_id.trim():"";if(!requestId){failClosed("approval service returned pending without request_id");return;}responsePayload=await pollForTerminalDecision(requestId,responsePayload?.retry_after_ms,headers);if(!responsePayload){return;}}const reason=typeof responsePayload?.reason==="string"&&responsePayload.reason.trim().length>0?responsePayload.reason.trim():undefined;if(responsePayload?.decision==="allow"){emitPreToolUseDecision("allow",reason);return;}process.stderr.write((reason??"Action rejected by Herd policy.")+"\\n");process.exit(2);})().catch((error)=>{const message=error instanceof Error?error.message:String(error);failClosed(\`hook crashed (\${message})\`);});
+`.trim()
+
+export function buildClaudeApprovalHookCommand(): string {
+  return `node -e ${shellEscape(CLAUDE_APPROVAL_HOOK_INLINE_SCRIPT)}`
+}
+
+export function buildClaudeLocalLoginShellSpawn(
+  args: string[],
+  adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+  maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+  cwd?: string,
+  envFile?: string,
+  shellPath?: string,
+  appendSystemPrompt?: string,
+): { command: string; args: string[] } {
+  const normalizedScript = cwd
+    ? `cd ${shellEscape(cwd)} && ${buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)}`
+    : buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)
+  const script = `${buildLoginShellBootstrap(envFile)}; ${normalizedScript}`
+  return {
+    command: shellPath?.trim() || '/bin/bash',
+    args: ['-lc', script],
+  }
+}
+
+export function buildClaudeApprovalSettingsJson(): string {
+  return JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: '*',
+          hooks: [
+            {
+              type: 'command',
+              command: buildClaudeApprovalHookCommand(),
+            },
+          ],
+        },
+      ],
+    },
+  })
+}

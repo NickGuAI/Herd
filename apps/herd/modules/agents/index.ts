@@ -1,0 +1,33 @@
+export { createAgentsRouter } from './routes.js'
+export type {
+  AgentSession,
+  AgentType,
+  AgentsRouterOptions,
+  AgentsRouterResult,
+  ClaudePermissionMode,
+  CommanderSessionsInterface,
+  MachineConfig,
+  PtyHandle,
+  PtySpawner,
+  SessionType,
+  WorldAgent,
+} from './types.js'
+export type {
+  HerdAssistantContent,
+  HerdAssistantMessage,
+  HerdBackend,
+  HerdContentBlock,
+  HerdContentDelta,
+  HerdEvent,
+  HerdEventSource,
+  HerdImageSource,
+  HerdProvider,
+  HerdToolExecution,
+  HerdToolResult,
+  HerdToolUse,
+  HerdTranscriptLine,
+  HerdUsage,
+  HerdUserContent,
+  HerdUserMessage,
+  PlanningEvent,
+} from './types/index.js'

@@ -1,4 +1,4 @@
-const DEFAULT_BASE_URL = process.env.HAMMURABI_API_BASE_URL?.trim() || 'http://127.0.0.1:3000'
+const DEFAULT_BASE_URL = process.env.HERD_API_BASE_URL?.trim() || 'http://127.0.0.1:3000'
 const DEFAULT_POLL_INTERVAL_MS = 60_000
 const DEFAULT_MAX_POLL_ATTEMPTS = 30
 
@@ -400,12 +400,12 @@ export class AgentSessionClient {
       headers.set('content-type', 'application/json')
     }
     if (this.internalToken) {
-      headers.set('x-hammurabi-internal-token', this.internalToken)
+      headers.set('x-herd-internal-token', this.internalToken)
     }
     if (this.bearerToken && !headers.has('authorization')) {
       headers.set('authorization', this.bearerToken)
-    } else if (this.apiKey && !headers.has('x-hammurabi-api-key')) {
-      headers.set('x-hammurabi-api-key', this.apiKey)
+    } else if (this.apiKey && !headers.has('x-herd-api-key')) {
+      headers.set('x-herd-api-key', this.apiKey)
     }
     return headers
   }

@@ -1,0 +1,44 @@
+{
+  "name": "@gehirn/herd-cli",
+  "version": "0.0.3-beta",
+  "private": false,
+  "description": "Herd onboarding CLI — configure agents to send telemetry.",
+  "type": "module",
+  "bin": {
+    "herd": "./bin/herd.mjs"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    },
+    "./commander-runtime-config": {
+      "import": "./dist/commander-runtime-config.js"
+    },
+    "./commander-runtime-config-node": {
+      "import": "./dist/commander-runtime-config-node.js"
+    },
+    "./session-contract": {
+      "import": "./dist/session-contract.js"
+    },
+    "./tailscale-status": {
+      "import": "./dist/tailscale-status.js"
+    }
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"Release source does not include tests\""
+  },
+  "devDependencies": {
+    "@gehirn/tsconfig": "workspace:*",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "smol-toml": "^1.6.0"
+  }
+}

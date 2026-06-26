@@ -19,6 +19,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "echo \"No tests yet for @gehirn/sse-streaming\""
+    "test": "echo \"Release source does not include tests\""
   }
 }
