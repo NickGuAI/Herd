@@ -1,21 +1,33 @@
-import { Router } from 'express'
+import { Router, type Response } from 'express'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import { parseSessionId } from '../commanders/route-parsers.js'
 import { CommanderSessionStore } from '../commanders/store.js'
 import { CommanderSecretsStore } from '../commanders/secrets-store.js'
-import { listChannelProviderDescriptors } from './descriptors.js'
+import { getChannelProviderDescriptor, listChannelProviderDescriptors } from './descriptors.js'
 import {
   prepareEmailChannelConfigForStorage,
   stripEmailCredentialInputs,
 } from './email/config.js'
+import {
+  prepareDiscordChannelConfigForStorage,
+  stripDiscordCredentialInputs,
+} from './discord/config.js'
 import {
   prepareWhatsAppChannelConfigForStorage,
 } from './whatsapp/config.js'
 import {
   prepareGoogleChatChannelConfigForStorage,
 } from './googlechat/config.js'
+import {
+  prepareSlackChannelConfigForStorage,
+  stripSlackCredentialInputs,
+} from './slack/config.js'
+import {
+  prepareTelegramChannelConfigForStorage,
+  stripTelegramCredentialInputs,
+} from './telegram/config.js'
 import { isGoogleChatChannelAdapter } from './googlechat/adapter.js'
 import { getChannelAdapter } from './registry.js'
 import {
@@ -25,6 +37,13 @@ import {
 } from './store.js'
 import type { CommanderChannelBinding, CommanderChannelBindingConfig } from './types.js'
 import { validateChannelConfigForDescriptor } from './validation.js'
+import {
+  buildChannelConfigFromFormIntent,
+  formStateFromRawIntent,
+  getChannelFormFieldErrors,
+  getFirstChannelFormError,
+  type ChannelFieldErrors,
+} from './form-contract.js'
 
 export interface CommanderChannelsRouterOptions {
   store?: CommanderChannelBindingStore
@@ -45,6 +64,79 @@ export interface CommanderChannelsRouterOptions {
 function parseId(value: unknown): string | null {
   const normalized = typeof value === 'string' ? value.trim() : ''
   return normalized.length > 0 ? normalized : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+class CommanderChannelFormValidationError extends CommanderChannelValidationError {
+  readonly fieldErrors: ChannelFieldErrors
+
+  constructor(message: string, fieldErrors: ChannelFieldErrors) {
+    super(message)
+    this.fieldErrors = fieldErrors
+  }
+}
+
+function hasStoredCredential(config: CommanderChannelBindingConfig | undefined): boolean {
+  return Boolean(
+    config?.credentialConfigured === true
+    || config?.accessTokenConfigured === true
+    || config?.botTokenConfigured === true
+    || config?.appTokenConfigured === true
+    || parseId(config?.credentialRef)
+    || parseId(config?.botTokenRef)
+    || parseId(config?.appTokenRef),
+  )
+}
+
+function asChannelConfig(value: unknown): CommanderChannelBindingConfig {
+  return isRecord(value) ? value as CommanderChannelBindingConfig : {}
+}
+
+function normalizeChannelFormRequest(input: {
+  provider: unknown
+  body: unknown
+  existingConfig?: CommanderChannelBindingConfig
+}): {
+  accountId: string | null
+  displayName: string | null
+  config: unknown
+} {
+  const body = isRecord(input.body) ? input.body : {}
+  const provider = typeof input.provider === 'string' ? input.provider.trim().toLowerCase() : ''
+  const descriptor = getChannelProviderDescriptor(provider)
+  const formState = descriptor ? formStateFromRawIntent(descriptor, body.formValues) : null
+  if (!descriptor || !formState) {
+    return {
+      accountId: parseId(body.accountId),
+      displayName: parseId(body.displayName),
+      config: body.config,
+    }
+  }
+
+  const fieldErrors = getChannelFormFieldErrors(descriptor, formState, {
+    existingCredentialConfigured: hasStoredCredential(input.existingConfig),
+  })
+  const firstError = getFirstChannelFormError(fieldErrors)
+  if (firstError) {
+    throw new CommanderChannelFormValidationError(firstError, fieldErrors)
+  }
+
+  return {
+    accountId: parseId(formState.accountId) ?? parseId(body.accountId),
+    displayName: parseId(formState.displayName) ?? parseId(body.displayName),
+    config: buildChannelConfigFromFormIntent(descriptor, formState),
+  }
+}
+
+function sendChannelValidationError(res: Response, error: CommanderChannelValidationError): void {
+  if (error instanceof CommanderChannelFormValidationError) {
+    res.status(400).json({ error: error.message, fieldErrors: error.fieldErrors })
+    return
+  }
+  res.status(400).json({ error: error.message })
 }
 
 export function createCommanderChannelsRouter(options: CommanderChannelsRouterOptions = {}): Router {
@@ -100,10 +192,7 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
     }
 
     res.json({
-      providers: listChannelProviderDescriptors({
-        commanderId,
-        bindings: await store.listByCommander(commanderId),
-      }),
+      providers: listChannelProviderDescriptors(),
     })
   })
 
@@ -135,8 +224,17 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
     }
 
     try {
-      const accountId = req.body?.accountId
       const provider = req.body?.provider
+      const normalized = normalizeChannelFormRequest({
+        provider,
+        body: req.body,
+      })
+      const accountId = normalized.accountId
+      if (!accountId) {
+        throw new CommanderChannelFormValidationError('Account ID is required.', {
+          accountId: 'Account ID is required.',
+        })
+      }
       const duplicate = await store.getByCommanderProviderAccount({
         commanderId,
         provider,
@@ -151,7 +249,7 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
         commanderId,
         provider,
         accountId,
-        incomingConfig: req.body?.config,
+        incomingConfig: normalized.config,
         secretsStore,
         dataDir,
         deferCredentialWrite: true,
@@ -160,7 +258,7 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
         commanderId,
         provider,
         accountId,
-        displayName: req.body?.displayName,
+        displayName: normalized.displayName ?? req.body?.displayName,
         enabled: req.body?.enabled,
         config: preparedConfig.config,
       })
@@ -174,7 +272,7 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
       res.status(201).json(created)
     } catch (error) {
       if (error instanceof CommanderChannelValidationError) {
-        res.status(400).json({ error: error.message })
+        sendChannelValidationError(res, error)
         return
       }
       if (error instanceof CommanderChannelBindingConflictError) {
@@ -198,7 +296,11 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
       return
     }
 
-    const provider = parseId(req.body?.provider) ?? 'whatsapp'
+    const provider = parseId(req.body?.provider)
+    if (!provider) {
+      res.status(400).json({ error: 'provider is required' })
+      return
+    }
     const adapter = getChannelAdapter(provider)
     if (!adapter) {
       res.status(404).json({ error: `No channel adapter registered for provider "${provider}"` })
@@ -206,20 +308,28 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
     }
 
     try {
+      const normalized = normalizeChannelFormRequest({
+        provider,
+        body: req.body,
+      })
       validateChannelConfigForDescriptor({
         provider,
-        incomingConfig: req.body?.config ?? {},
+        incomingConfig: normalized.config ?? {},
       })
       const challenge = await adapter.beginPairing({
         provider,
         commanderId,
-        accountId: parseId(req.body?.accountId) ?? undefined,
-        displayName: parseId(req.body?.displayName) ?? undefined,
-        config: req.body?.config,
+        accountId: normalized.accountId ?? undefined,
+        displayName: normalized.displayName ?? undefined,
+        config: asChannelConfig(normalized.config),
         metadata: req.body?.metadata,
       })
       res.status(201).json(challenge)
     } catch (error) {
+      if (error instanceof CommanderChannelValidationError) {
+        sendChannelValidationError(res, error)
+        return
+      }
       res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to begin channel pairing' })
     }
   })
@@ -238,7 +348,11 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
       return
     }
 
-    const provider = parseId(req.query.provider) ?? 'whatsapp'
+    const provider = parseId(req.query.provider)
+    if (!provider) {
+      res.status(400).json({ error: 'provider is required' })
+      return
+    }
     const adapter = getChannelAdapter(provider)
     if (!adapter) {
       res.status(404).json({ error: `No channel adapter registered for provider "${provider}"` })
@@ -276,7 +390,11 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
       return
     }
 
-    const provider = parseId(req.body?.provider) ?? 'whatsapp'
+    const provider = parseId(req.body?.provider)
+    if (!provider) {
+      res.status(400).json({ error: 'provider is required' })
+      return
+    }
     const adapter = getChannelAdapter(provider)
     if (!adapter) {
       res.status(404).json({ error: `No channel adapter registered for provider "${provider}"` })
@@ -284,23 +402,27 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
     }
 
     try {
+      const normalized = normalizeChannelFormRequest({
+        provider,
+        body: req.body,
+      })
       validateChannelConfigForDescriptor({
         provider,
-        incomingConfig: req.body?.config ?? {},
+        incomingConfig: normalized.config ?? {},
       })
       const binding = await adapter.completePairing(
         {
           provider,
           commanderId,
           id: challengeId,
-          accountId: parseId(req.body?.accountId) ?? undefined,
+          accountId: normalized.accountId ?? undefined,
         },
         {
           provider,
           challengeId,
-          accountId: parseId(req.body?.accountId) ?? undefined,
-          displayName: parseId(req.body?.displayName) ?? undefined,
-          config: req.body?.config,
+          accountId: normalized.accountId ?? undefined,
+          displayName: normalized.displayName ?? undefined,
+          config: asChannelConfig(normalized.config),
           metadata: req.body?.metadata,
         },
       )
@@ -309,6 +431,10 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
     } catch (error) {
       if (error instanceof CommanderChannelBindingConflictError) {
         res.status(409).json({ error: error.message })
+        return
+      }
+      if (error instanceof CommanderChannelValidationError) {
+        sendChannelValidationError(res, error)
         return
       }
       res.status(400).json({ error: error instanceof Error ? error.message : 'Failed to complete channel pairing' })
@@ -359,20 +485,26 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
         res.status(404).json({ error: `Channel binding "${bindingId}" not found` })
         return
       }
-      const preparedConfig = req.body?.config === undefined
+      const normalized = normalizeChannelFormRequest({
+        provider: existing.provider,
+        body: req.body,
+        existingConfig: existing.config,
+      })
+      const hasIncomingConfig = req.body?.config !== undefined || req.body?.formValues !== undefined
+      const preparedConfig = !hasIncomingConfig
         ? undefined
         : await prepareChannelConfigForStorage({
             commanderId,
             provider: existing.provider,
             accountId: existing.accountId,
-            incomingConfig: req.body?.config,
+            incomingConfig: normalized.config,
             existingConfig: existing.config,
             secretsStore,
             dataDir,
             deferCredentialWrite: true,
           })
       const updated = await store.update(commanderId, bindingId, {
-        displayName: req.body?.displayName,
+        displayName: normalized.displayName ?? req.body?.displayName,
         enabled: req.body?.enabled,
         ...(preparedConfig !== undefined ? { config: preparedConfig.config } : {}),
       })
@@ -394,7 +526,7 @@ export function createCommanderChannelsRouter(options: CommanderChannelsRouterOp
       res.json(updated)
     } catch (error) {
       if (error instanceof CommanderChannelValidationError) {
-        res.status(400).json({ error: error.message })
+        sendChannelValidationError(res, error)
         return
       }
       throw error
@@ -453,7 +585,6 @@ async function prepareChannelConfigForStorage(input: {
         accountId,
         incomingConfig: input.incomingConfig,
         existingConfig: input.existingConfig,
-        secretsStore: input.secretsStore,
         dataDir: input.dataDir,
         deferCredentialWrite: input.deferCredentialWrite,
       })
@@ -476,11 +607,59 @@ async function prepareChannelConfigForStorage(input: {
         ...(prepared.commitCredential ? { commitCredential: prepared.commitCredential } : {}),
       }
     }
+    if (provider === 'telegram') {
+      const prepared = await prepareTelegramChannelConfigForStorage({
+        commanderId: input.commanderId,
+        accountId,
+        incomingConfig: input.incomingConfig,
+        existingConfig: input.existingConfig,
+        secretsStore: input.secretsStore,
+        deferCredentialWrite: input.deferCredentialWrite,
+      })
+      return {
+        config: prepared.config,
+        ...(prepared.commitCredential ? { commitCredential: prepared.commitCredential } : {}),
+      }
+    }
+    if (provider === 'discord') {
+      const prepared = await prepareDiscordChannelConfigForStorage({
+        commanderId: input.commanderId,
+        accountId,
+        incomingConfig: input.incomingConfig,
+        existingConfig: input.existingConfig,
+        secretsStore: input.secretsStore,
+        deferCredentialWrite: input.deferCredentialWrite,
+      })
+      return {
+        config: prepared.config,
+        ...(prepared.commitCredential ? { commitCredential: prepared.commitCredential } : {}),
+      }
+    }
+    if (provider === 'slack') {
+      const prepared = await prepareSlackChannelConfigForStorage({
+        commanderId: input.commanderId,
+        accountId,
+        incomingConfig: input.incomingConfig,
+        existingConfig: input.existingConfig,
+        secretsStore: input.secretsStore,
+        deferCredentialWrite: input.deferCredentialWrite,
+      })
+      return {
+        config: prepared.config,
+        ...(prepared.commitCredential ? { commitCredential: prepared.commitCredential } : {}),
+      }
+    }
     return {
-      config: stripEmailCredentialInputs(
-        input.incomingConfig && typeof input.incomingConfig === 'object'
-          ? input.incomingConfig as CommanderChannelBindingConfig
-          : {},
+      config: stripSlackCredentialInputs(
+        stripDiscordCredentialInputs(
+          stripTelegramCredentialInputs(
+            stripEmailCredentialInputs(
+              input.incomingConfig && typeof input.incomingConfig === 'object'
+                ? input.incomingConfig as CommanderChannelBindingConfig
+                : {},
+            ),
+          ),
+        ),
       ),
     }
   }

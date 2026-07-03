@@ -1,5 +1,10 @@
 import cron from 'node-cron'
-import { getProvider, parseProviderId } from '../../agents/providers/registry.js'
+import {
+  getProvider,
+  parseProviderId,
+  resolveAutomationDefaultProviderId,
+  resolveProviderIdForRequest,
+} from '../../agents/providers/registry.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
 import {
   buildGitHubHeaders,
@@ -160,26 +165,6 @@ function parsePositiveInteger(raw: unknown): number | null | undefined {
     return null
   }
   return parsed
-}
-
-function parseOptionalModel(
-  raw: unknown,
-  options: { allowClear: boolean },
-): string | null | undefined {
-  if (raw === undefined) {
-    return undefined
-  }
-  if (raw === null) {
-    return options.allowClear ? null : undefined
-  }
-  if (typeof raw !== 'string') {
-    return undefined
-  }
-  const trimmed = raw.trim()
-  if (trimmed.length > 0) {
-    return trimmed
-  }
-  return options.allowClear ? null : undefined
 }
 
 function toIsoString(value: Date | null | undefined): string | null {
@@ -426,7 +411,17 @@ export function registerCommandRoomRoutes(
       return
     }
 
-    const agentType = parseProviderId(req.body?.agentType) ?? 'claude'
+    const providerResolution = resolveProviderIdForRequest(req.body?.agentType, {
+      defaultProviderId: resolveAutomationDefaultProviderId(),
+    })
+    if (providerResolution.error || !providerResolution.providerId) {
+      res.status(400).json({
+        error: providerResolution.error ?? 'agentType must be a registered provider id',
+        validIds: providerResolution.validIds,
+      })
+      return
+    }
+    const agentType = providerResolution.providerId
     if (!getProvider(agentType)?.capabilities.supportsAutomation) {
       res.status(400).json({ error: `Provider ${agentType} cannot run automations` })
       return

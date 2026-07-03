@@ -90,6 +90,7 @@ export interface PendingApproval {
   id: string
   commanderId?: string
   sessionId?: string
+  conversationId?: string
   actionId: string
   actionLabel: string
   toolName: string
@@ -144,6 +145,7 @@ export interface ApprovalHistoryEntry {
   actionLabel?: string
   commanderId?: string
   sessionId?: string
+  conversationId?: string
   source?: PendingApprovalSource
   toolName?: string
   summary?: string
@@ -164,6 +166,7 @@ export interface ApprovalHistoryFilter {
 export interface ActionPolicySessionContext {
   commanderId?: string
   sessionId?: string
+  conversationId?: string
   cwd?: string
   currentSkillId?: string
   currentSkillName?: string
@@ -191,6 +194,7 @@ export interface ResolvedActionPolicy {
 export interface PendingApprovalFilter {
   commanderId?: string
   sessionId?: string
+  conversationId?: string
   actionId?: string
   source?: PendingApprovalSource
 }

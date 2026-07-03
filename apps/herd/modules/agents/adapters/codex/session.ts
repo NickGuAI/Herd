@@ -1,3 +1,5 @@
+import { homedir } from 'node:os'
+import path from 'node:path'
 import { mapCodexToTranscriptEnvelopes } from '../../event-normalizers/codex.js'
 import {
   codexApprovalAdapter,
@@ -111,7 +113,7 @@ export interface CodexSessionDeps {
   ): CodexSessionRuntimeHandle
   schedulePersistedSessionsWrite(): void
   scheduleTurnWatchdog(session: StreamSession): void
-  setCompletedSession(sessionName: string, session: CompletedSession): void
+  setCompletedSession(sessionName: string, session: CompletedSession): void | Promise<void>
   setExitedSession(sessionName: string, session: ExitedStreamSessionState): void
   writeTranscriptMeta(session: StreamSession): void
   getActionPolicyGate?(): ActionPolicyGate | null
@@ -166,6 +168,14 @@ function resolveCodexSessionModel(options: CodexSessionCreateOptions): string | 
     ? options.model.trim()
     : undefined
   return explicitModel ?? (options.resumeSessionId ? undefined : DEFAULT_CODEX_MODEL_ID)
+}
+
+function resolveCodexHomeForProviderContext(options: CodexSessionCreateOptions): string {
+  const configuredHome = options.providerAuth?.env?.CODEX_HOME?.trim()
+    || process.env.CODEX_HOME?.trim()
+  return path.resolve(configuredHome && configuredHome.length > 0
+    ? configuredHome
+    : path.join(process.env.HOME?.trim() || homedir(), '.codex'))
 }
 
 function buildCodexTransportRecoveredEvent(session: StreamSession, reason: string): StreamJsonEvent {
@@ -653,7 +663,7 @@ export async function failCodexSession(
   deps.appendEvent(session, resultEvent)
   deps.broadcastEvent(session, resultEvent)
 
-  deps.setCompletedSession(
+  await deps.setCompletedSession(
     sessionName,
     toCompletedSession(
       sessionName,
@@ -999,9 +1009,11 @@ async function createCodexSessionFromThread(
     queuedMessageDrainPendingForce: false,
     providerContext: createCodexProviderContext({
       threadId,
+      codexHome: resolveCodexHomeForProviderContext(options),
       runtime,
     }),
     providerAuthSnapshot: options.providerAuth?.snapshot,
+    credentialPoolId: options.providerAuth?.credentialPoolId,
     activeTurnId: undefined,
     adapter: createCodexSessionAdapter(deps),
     resumedFrom: options.resumedFrom,

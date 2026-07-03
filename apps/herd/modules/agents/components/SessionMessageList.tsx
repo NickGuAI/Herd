@@ -17,6 +17,7 @@ import { groupMessages } from './session-message-list/render-items'
 export interface SessionMessageListProps {
   messages: MsgItem[]
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
+  sessionName?: string
   emptyLabel?: string
   agentAvatarUrl?: string | null
   agentAccentColor?: string | null
@@ -26,6 +27,7 @@ export interface SessionMessageListProps {
 export function SessionMessageList({
   messages,
   onAnswer,
+  sessionName,
   emptyLabel = 'No messages yet.',
   agentAvatarUrl,
   agentAccentColor,
@@ -44,7 +46,14 @@ export function SessionMessageList({
       <RunningAgentsPanel messages={messages} />
       {groupMessages(messages).map((item) => {
         if (item.type === 'activity-group') {
-          return <AgentActivityGroup key={item.id} messages={item.messages} onAnswer={onAnswer} />
+          return (
+            <AgentActivityGroup
+              key={item.id}
+              messages={item.messages}
+              onAnswer={onAnswer}
+              sessionName={sessionName}
+            />
+          )
         }
 
         const message = item.msg
@@ -76,13 +85,13 @@ export function SessionMessageList({
               />
             )
           case 'tool':
-            return <ToolBlock key={message.id} msg={message} onAnswer={onAnswer} />
+            return <ToolBlock key={message.id} msg={message} onAnswer={onAnswer} sessionName={sessionName} />
           case 'ask':
             return <AskUserQuestionBlock key={message.id} msg={message} onAnswer={onAnswer} />
           case 'provider':
             return <ProviderActivityBlock key={message.id} msg={message} />
           case 'error':
-            return <ProviderErrorBlock key={message.id} msg={message} />
+            return <ProviderErrorBlock key={message.id} msg={message} sessionName={sessionName} />
           default:
             return null
         }

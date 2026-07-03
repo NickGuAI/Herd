@@ -10,6 +10,7 @@ import {
   QrCode,
   Save,
   Send,
+  Slack,
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
@@ -33,183 +34,77 @@ import type {
   CommanderChannelBinding,
   CommanderChannelProvider,
 } from './types'
+import {
+  formStateFromDescriptor,
+  getChannelFormFieldErrors,
+  getFirstChannelFormError,
+  isIdentityField,
+  normalizeChannelFormValue,
+  type ChannelFieldErrors,
+  type ChannelFormState,
+  type ChannelFormValue,
+} from './form-contract'
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-[16px] text-sumi-black focus:outline-none focus:border-ink-border-hover md:text-sm'
 const CHECKBOX_CLASS = 'h-4 w-4 rounded border-ink-border text-sumi-black focus:ring-sumi-black/20'
 
-type ChannelFormValue = string | boolean
-type ChannelFormState = Record<string, ChannelFormValue>
-
-function fieldFormKey(field: ChannelDescriptorField): string {
-  return field.formKey ?? field.key
+const SECTION_LABELS: Record<string, string> = {
+  advanced: 'Advanced (optional)',
+  binding: 'Routing',
+  configuration: 'Configuration',
+  credentials: 'Credentials',
+  outbound: 'Message limits',
+  policy: 'Who can reach the agent',
 }
 
-function isIdentityField(field: ChannelDescriptorField): boolean {
-  const key = fieldFormKey(field)
-  return field.section === 'identity' || key === 'accountId' || key === 'displayName'
+function modalTitleForProvider(descriptor: ChannelProviderDescriptor | null): string {
+  if (!descriptor) {
+    return 'Connect Channel'
+  }
+  return descriptor.pairing.mode === 'qr'
+    ? `Pair ${descriptor.label}`
+    : `Connect ${descriptor.label}`
 }
 
-function isEmptyFormValue(value: ChannelFormValue | undefined): boolean {
-  return typeof value === 'boolean'
-    ? false
-    : !value?.trim()
-}
-
-function normalizeFormValue(field: ChannelDescriptorField, value: unknown): ChannelFormValue {
-  if (field.kind === 'checkbox') {
-    return typeof value === 'boolean' ? value : false
-  }
-  if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).join('\n')
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    if (field.configPath?.endsWith('Ms') && fieldFormKey(field).endsWith('Seconds')) {
-      return String(Math.max(1, Math.trunc(value / 1000)))
-    }
-    return String(value)
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false'
-  }
-  return typeof value === 'string' ? value : ''
-}
-
-function readPath(source: Record<string, unknown>, path: string): unknown {
-  return path.split('.').reduce<unknown>((current, part) => {
-    if (!current || typeof current !== 'object' || Array.isArray(current)) {
-      return undefined
-    }
-    return (current as Record<string, unknown>)[part]
-  }, source)
-}
-
-function setPath(target: Record<string, unknown>, path: string, value: unknown): void {
-  const parts = path.split('.')
-  let cursor = target
-  for (const part of parts.slice(0, -1)) {
-    const next = cursor[part]
-    if (!next || typeof next !== 'object' || Array.isArray(next)) {
-      cursor[part] = {}
-    }
-    cursor = cursor[part] as Record<string, unknown>
-  }
-  cursor[parts[parts.length - 1] ?? path] = value
-}
-
-function cloneConfigDefaults(value: Record<string, unknown>): Record<string, unknown> {
-  return structuredClone(value)
-}
-
-function textareaToList(value: string): string[] {
-  return [...new Set(value
-    .split(/[\n,]/u)
-    .map((entry) => entry.trim())
-    .filter(Boolean))]
-}
-
-function formValueForConfig(field: ChannelDescriptorField, value: ChannelFormValue | undefined): unknown {
-  if (field.kind === 'checkbox') {
-    return value === true
-  }
-  if (field.kind === 'textarea') {
-    return textareaToList(typeof value === 'string' ? value : '')
-  }
-  const text = typeof value === 'string' ? value.trim() : ''
-  if (field.secret && !text) {
-    return undefined
-  }
-  if (!text && field.defaultValue === undefined) {
-    return undefined
-  }
-  if (field.kind === 'number') {
-    const parsed = Number(text || field.defaultValue)
-    const normalized = Number.isFinite(parsed) ? Math.trunc(parsed) : undefined
-    if (normalized === undefined) {
-      return undefined
-    }
-    return field.configPath?.endsWith('Ms') && fieldFormKey(field).endsWith('Seconds')
-      ? Math.max(1, normalized) * 1000
-      : normalized
-  }
-  return text || normalizeFormValue(field, field.defaultValue)
-}
-
-function formStateFromDescriptor(
-  descriptor: ChannelProviderDescriptor,
-  commanderId: string,
-  binding?: CommanderChannelBinding,
-): ChannelFormState {
-  const state: ChannelFormState = {}
-  for (const field of descriptor.fields) {
-    const key = fieldFormKey(field)
-    const defaultValue = descriptor.formDefaults[key] ?? field.defaultValue ?? ''
-    state[key] = normalizeFormValue(field, defaultValue)
-  }
-  const commanderBindingKey = descriptor.commanderBinding.fieldKey
-  if (commanderBindingKey) {
-    state[commanderBindingKey] = descriptor.bindingState?.defaultCommanderId ?? commanderId
-  }
-  if (!binding) {
-    return state
-  }
-
-  state.accountId = binding.accountId
-  state.displayName = binding.displayName
-  const config = binding.config && typeof binding.config === 'object'
-    ? binding.config as Record<string, unknown>
-    : {}
-  for (const field of descriptor.fields) {
-    const key = fieldFormKey(field)
-    if (key === 'accountId' || key === 'displayName') {
-      continue
-    }
-    const configValue = field.configPath ? readPath(config, field.configPath) : config[key]
-    if (configValue !== undefined) {
-      state[key] = normalizeFormValue(field, configValue)
-    }
-  }
-  return state
-}
-
-function buildConfigFromDescriptor(
-  descriptor: ChannelProviderDescriptor,
-  state: ChannelFormState,
-): Record<string, unknown> {
-  const config = cloneConfigDefaults(descriptor.configDefaults)
-  for (const field of descriptor.fields) {
-    const key = fieldFormKey(field)
-    if (key === 'accountId' || key === 'displayName') {
-      continue
-    }
-    const value = formValueForConfig(field, state[key])
-    if (value === undefined) {
-      continue
-    }
-    setPath(config, field.configPath ?? key, value)
-  }
-  return config
-}
-
-function requiredFieldError(
-  descriptor: ChannelProviderDescriptor,
-  state: ChannelFormState,
-  options: { existingCredentialConfigured?: boolean } = {},
-): string | null {
-  const missing = descriptor.fields.find((field) => {
-    if (!field.required) {
-      return false
-    }
-    if (field.secret && options.existingCredentialConfigured && isEmptyFormValue(state[fieldFormKey(field)])) {
-      return false
-    }
-    return isEmptyFormValue(state[fieldFormKey(field)])
-  })
-  return missing ? `${missing.label} is required.` : null
+function sectionLabel(section: string): string {
+  return SECTION_LABELS[section] ?? section
 }
 
 function providerLabel(descriptor: ChannelProviderDescriptor | null, fallback: string): string {
   return descriptor?.label ?? fallback
+}
+
+function parseChannelMutationError(error: unknown, fallback: string): {
+  message: string
+  fieldErrors: ChannelFieldErrors
+} {
+  if (!(error instanceof Error)) {
+    return { message: fallback, fieldErrors: {} }
+  }
+
+  const jsonStart = error.message.indexOf('{')
+  if (jsonStart >= 0) {
+    try {
+      const payload = JSON.parse(error.message.slice(jsonStart)) as {
+        error?: unknown
+        fieldErrors?: unknown
+      }
+      const fieldErrors = payload.fieldErrors && typeof payload.fieldErrors === 'object' && !Array.isArray(payload.fieldErrors)
+        ? Object.fromEntries(Object.entries(payload.fieldErrors).filter((entry): entry is [string, string] => (
+            typeof entry[0] === 'string' && typeof entry[1] === 'string'
+          )))
+        : {}
+      return {
+        message: typeof payload.error === 'string' ? payload.error : error.message,
+        fieldErrors,
+      }
+    } catch {
+      return { message: error.message, fieldErrors: {} }
+    }
+  }
+
+  return { message: error.message, fieldErrors: {} }
 }
 
 function providerIcon(provider: CommanderChannelProvider): LucideIcon {
@@ -224,13 +119,20 @@ function providerIcon(provider: CommanderChannelProvider): LucideIcon {
       return Send
     case 'discord':
       return Hash
+    case 'slack':
+      return Slack
     default:
       return Plug
   }
 }
 
-function providerIsConnected(bindings: CommanderChannelBinding[] | undefined): boolean {
-  return bindings?.some((binding) => binding.enabled) ?? false
+function providerHasBindingStatus(descriptor: ChannelProviderDescriptor | null | undefined): boolean {
+  return typeof descriptor?.pairing.statusPollIntervalMs === 'number'
+}
+
+function formatChannelDropTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
 function channelErrorMessage(error: unknown, fallback: string): string {
@@ -283,6 +185,7 @@ export default function ChannelsPage() {
   const [formByProvider, setFormByProvider] = useState<Record<string, ChannelFormState>>({})
   const [pairingChallenge, setPairingChallenge] = useState<ChannelPairingChallenge | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<ChannelFieldErrors>({})
   const [channelModalOpen, setChannelModalOpen] = useState(false)
   const completingPairingIdRef = useRef<string | null>(null)
 
@@ -295,7 +198,7 @@ export default function ChannelsPage() {
   const providerDescriptors = providerDescriptorResponse?.providers ?? []
   const selectedProviderDescriptor = providerDescriptors.find((entry) => entry.provider === provider) ?? null
   const selectedForm = selectedProviderDescriptor
-    ? formByProvider[provider] ?? formStateFromDescriptor(selectedProviderDescriptor, selectedCommanderId)
+    ? formByProvider[provider] ?? formStateFromDescriptor(selectedProviderDescriptor)
     : {}
 
   useEffect(() => {
@@ -324,9 +227,9 @@ export default function ChannelsPage() {
     }
     setFormByProvider((current) => ({
       ...current,
-      [provider]: formStateFromDescriptor(selectedProviderDescriptor, selectedCommanderId),
+      [provider]: formStateFromDescriptor(selectedProviderDescriptor),
     }))
-  }, [formByProvider, provider, selectedCommanderId, selectedProviderDescriptor])
+  }, [formByProvider, provider, selectedProviderDescriptor])
 
   const selectedCommander = useMemo(
     () => commanders.find((commander) => commander.id === selectedCommanderId) ?? null,
@@ -350,7 +253,7 @@ export default function ChannelsPage() {
     : []
   const selectedEnabledBinding = selectedProviderBindings.find((binding) => binding.enabled) ?? null
   const shouldPollSelectedProviderStatus = Boolean(
-    selectedEnabledBinding && selectedProviderDescriptor?.pairing.mode !== 'none',
+    selectedEnabledBinding && providerHasBindingStatus(selectedProviderDescriptor),
   )
   const { data: selectedProviderStatus } = useChannelStatus(
     selectedEnabledBinding?.commanderId ?? '',
@@ -382,7 +285,7 @@ export default function ChannelsPage() {
       return
     }
     setFormByProvider((current) => {
-      const previous = current[provider] ?? formStateFromDescriptor(selectedProviderDescriptor, selectedCommanderId)
+      const previous = current[provider] ?? formStateFromDescriptor(selectedProviderDescriptor)
       return { ...current, [provider]: updater(previous) }
     })
   }
@@ -406,6 +309,7 @@ export default function ChannelsPage() {
     setProvider(nextProvider)
     setPairingChallenge(null)
     setFormError(null)
+    setFieldErrors({})
     setChannelModalOpen(true)
     completingPairingIdRef.current = null
   }
@@ -414,11 +318,13 @@ export default function ChannelsPage() {
     setChannelModalOpen(false)
     setPairingChallenge(null)
     setFormError(null)
+    setFieldErrors({})
     completingPairingIdRef.current = null
   }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const formElement = event.currentTarget
     if (!selectedCommanderId) {
       setFormError('Select a commander.')
       return
@@ -427,17 +333,21 @@ export default function ChannelsPage() {
       setFormError('Select a provider.')
       return
     }
-    const validationError = requiredFieldError(selectedProviderDescriptor, selectedForm)
-    if (validationError) {
-      setFormError(validationError)
+    const validationErrors = getChannelFormFieldErrors(selectedProviderDescriptor, selectedForm)
+    const firstMissingField = Object.keys(validationErrors)[0]
+    if (firstMissingField) {
+      setFieldErrors(validationErrors)
+      setFormError('Fill the required fields marked below.')
+      window.requestAnimationFrame(() => {
+        formElement.querySelector<HTMLElement>(`[data-channel-field-key="${firstMissingField}"]`)?.focus()
+      })
       return
     }
 
     const nextAccountId = typeof selectedForm.accountId === 'string' ? selectedForm.accountId.trim() : ''
     const nextDisplayName = typeof selectedForm.displayName === 'string' ? selectedForm.displayName.trim() : ''
-    const config = buildConfigFromDescriptor(selectedProviderDescriptor, selectedForm)
-
     setFormError(null)
+    setFieldErrors({})
     try {
       if (selectedProviderDescriptor.pairing.mode !== 'none') {
         const challenge = await beginPairingMutation.mutateAsync({
@@ -445,7 +355,7 @@ export default function ChannelsPage() {
           provider,
           accountId: nextAccountId || undefined,
           displayName: nextDisplayName,
-          config,
+          formValues: selectedForm,
         })
         setPairingChallenge(challenge)
         completingPairingIdRef.current = null
@@ -458,15 +368,23 @@ export default function ChannelsPage() {
         accountId: nextAccountId,
         displayName: nextDisplayName,
         enabled: true,
-        config,
+        formValues: selectedForm,
       })
       setFormByProvider((current) => ({
         ...current,
-        [provider]: formStateFromDescriptor(selectedProviderDescriptor, selectedCommanderId),
+        [provider]: formStateFromDescriptor(selectedProviderDescriptor),
       }))
       setPairingChallenge(null)
     } catch (createError) {
-      setFormError(createError instanceof Error ? createError.message : 'Failed to add channel.')
+      const parsed = parseChannelMutationError(createError, 'Failed to add channel.')
+      setFieldErrors(parsed.fieldErrors)
+      setFormError(parsed.message)
+      const firstFieldError = Object.keys(parsed.fieldErrors)[0]
+      if (firstFieldError) {
+        window.requestAnimationFrame(() => {
+          formElement.querySelector<HTMLElement>(`[data-channel-field-key="${firstFieldError}"]`)?.focus()
+        })
+      }
     }
   }
 
@@ -483,17 +401,19 @@ export default function ChannelsPage() {
         challengeId: pairingChallenge.id,
         accountId: (pairingChallenge.accountId ?? (typeof selectedForm.accountId === 'string' ? selectedForm.accountId.trim() : '')) || undefined,
         displayName: typeof selectedForm.displayName === 'string' ? selectedForm.displayName.trim() : '',
-        config: buildConfigFromDescriptor(selectedProviderDescriptor, selectedForm),
+        formValues: selectedForm,
       })
       setFormByProvider((current) => ({
         ...current,
-        [provider]: formStateFromDescriptor(selectedProviderDescriptor, selectedCommanderId),
+        [provider]: formStateFromDescriptor(selectedProviderDescriptor),
       }))
       setPairingChallenge(null)
       completingPairingIdRef.current = null
     } catch (completeError) {
       completingPairingIdRef.current = null
-      setFormError(completeError instanceof Error ? completeError.message : 'Failed to complete channel pairing.')
+      const parsed = parseChannelMutationError(completeError, 'Failed to complete channel pairing.')
+      setFieldErrors(parsed.fieldErrors)
+      setFormError(parsed.message)
     }
   }
 
@@ -605,13 +525,13 @@ export default function ChannelsPage() {
 
         <ModalFormContainer
           open={channelModalOpen && Boolean(selectedProviderDescriptor)}
-          title={selectedProviderDescriptor ? `Pair ${selectedProviderDescriptor.label}` : 'Pair Channel'}
+          title={modalTitleForProvider(selectedProviderDescriptor)}
           onClose={handleCloseChannelModal}
           desktopClassName="max-w-5xl"
           mobileClassName="max-h-[96dvh]"
         >
           {selectedProviderDescriptor ? (
-            <form onSubmit={(event) => void handleCreate(event)} className="grid gap-4">
+            <form onSubmit={(event) => void handleCreate(event)} className="grid gap-4" noValidate>
               <section className="rounded-lg border border-ink-border bg-washi-aged px-3 py-2">
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
@@ -637,13 +557,29 @@ export default function ChannelsPage() {
                 </div>
               </section>
 
+              <ChannelSetupGuide
+                key={`${selectedProviderDescriptor.provider}-${selectedProviderConnected ? 'connected' : 'new'}`}
+                descriptor={selectedProviderDescriptor}
+                defaultOpen={!selectedProviderConnected}
+              />
+
               <div className="grid gap-4 md:grid-cols-3">
                 <DescriptorFields
                   fields={selectedProviderDescriptor.fields.filter(isIdentityField)}
                   state={selectedForm}
                   descriptor={selectedProviderDescriptor}
-                  commanders={commanders}
+                  fieldErrors={fieldErrors}
                   onChange={updateSelectedForm}
+                  onFieldErrorClear={(fieldKey) => {
+                    setFieldErrors((current) => {
+                      if (!current[fieldKey]) {
+                        return current
+                      }
+                      const next = { ...current }
+                      delete next[fieldKey]
+                      return next
+                    })
+                  }}
                 />
               </div>
 
@@ -651,8 +587,18 @@ export default function ChannelsPage() {
                 fields={selectedProviderDescriptor.fields.filter((field) => !isIdentityField(field))}
                 state={selectedForm}
                 descriptor={selectedProviderDescriptor}
-                commanders={commanders}
+                fieldErrors={fieldErrors}
                 onChange={updateSelectedForm}
+                onFieldErrorClear={(fieldKey) => {
+                  setFieldErrors((current) => {
+                    if (!current[fieldKey]) {
+                      return current
+                    }
+                    const next = { ...current }
+                    delete next[fieldKey]
+                    return next
+                  })
+                }}
               />
 
               {activePairingChallenge ? (
@@ -699,7 +645,7 @@ export default function ChannelsPage() {
                 <p className="text-sm text-accent-vermillion" role="alert">{mutationError}</p>
               ) : null}
 
-              <div className="mt-4 flex justify-end">
+              <div className="sticky bottom-0 z-10 mt-4 flex justify-end border-t border-ink-border bg-washi-white/95 py-3 backdrop-blur">
                 <button
                   type="submit"
                   disabled={createMutation.isPending || beginPairingMutation.isPending || !selectedCommander || !selectedProviderDescriptor}
@@ -726,7 +672,6 @@ export default function ChannelsPage() {
                       key={binding.id}
                       binding={binding}
                       commanderId={selectedCommanderId}
-                      commanders={commanders}
                       updateBinding={(input) => updateMutation.mutateAsync(input)}
                       deleteBinding={(bindingId) => deleteMutation.mutateAsync({
                         commanderId: selectedCommanderId,
@@ -771,7 +716,6 @@ export default function ChannelsPage() {
                 key={binding.id}
                 binding={binding}
                 commanderId={selectedCommanderId}
-                commanders={commanders}
                 updateBinding={(input) => updateMutation.mutateAsync(input)}
                 deleteBinding={(bindingId) => deleteMutation.mutateAsync({
                   commanderId: selectedCommanderId,
@@ -836,9 +780,12 @@ function ChannelProviderButton(props: {
 }) {
   const Icon = providerIcon(props.descriptor.provider)
   const binding = props.bindings.find((candidate) => candidate.enabled) ?? null
-  const shouldPollStatus = Boolean(binding && props.descriptor.pairing.mode !== 'none')
+  const shouldPollStatus = Boolean(binding && providerHasBindingStatus(props.descriptor))
   const { data: channelStatus } = useChannelStatus(binding?.commanderId ?? '', binding?.id ?? '', shouldPollStatus)
   const connected = Boolean(binding && (!shouldPollStatus || channelStatus?.connected === true))
+  const openAction = props.descriptor.pairing.mode === 'qr'
+    ? 'Open pairing and configuration.'
+    : 'Open configuration.'
 
   return (
     <button
@@ -846,7 +793,7 @@ function ChannelProviderButton(props: {
       data-testid={`channel-provider-${props.descriptor.provider}`}
       data-connected={connected ? 'true' : 'false'}
       aria-pressed={props.active}
-      aria-label={`${props.descriptor.label} channel for ${props.commanderName}: ${connected ? 'connected' : 'not connected'}. Open pairing and configuration.`}
+      aria-label={`${props.descriptor.label} channel for ${props.commanderName}: ${connected ? 'connected' : 'not connected'}. ${openAction}`}
       title={`${props.descriptor.label} ${connected ? 'connected' : 'not connected'}`}
       disabled={props.disabled}
       onClick={() => props.onOpen(props.descriptor.provider)}
@@ -869,12 +816,74 @@ function ChannelProviderButton(props: {
   )
 }
 
+function ChannelSetupGuide(props: {
+  descriptor: ChannelProviderDescriptor
+  defaultOpen: boolean
+}) {
+  const guide = props.descriptor.setupGuide
+  const [open, setOpen] = useState(props.defaultOpen)
+  if (!guide || guide.steps.length === 0) {
+    return null
+  }
+
+  return (
+    <details
+      className="rounded-lg border border-ink-border bg-washi-white px-4 py-3"
+      data-testid={`channel-setup-guide-${props.descriptor.provider}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer select-none text-sm font-medium text-sumi-black">
+        {guide.summary}
+      </summary>
+      <div className="mt-3 grid gap-3 text-sm text-sumi-black">
+        {guide.steps.map((step, index) => (
+          <div key={`${step.title}-${index}`} className="border-t border-ink-border pt-3 first:border-t-0 first:pt-0">
+            <p className="font-medium">{index + 1}. {step.title}</p>
+            <p className="mt-1 text-sumi-diluted">{renderGuideText(step.body)}</p>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function renderGuideText(text: string) {
+  const nodes = []
+  const linkPattern = /https?:\/\/[^\s),.]+(?:[),.][^\s),.]+)*/gu
+  let cursor = 0
+  for (const match of text.matchAll(linkPattern)) {
+    const href = match[0]
+    const index = match.index ?? 0
+    if (index > cursor) {
+      nodes.push(text.slice(cursor, index))
+    }
+    nodes.push(
+      <a
+        key={`${href}-${index}`}
+        href={href}
+        target="_blank"
+        rel="noopener"
+        className="font-medium text-[color:var(--hv-accent-info)] underline decoration-[color:var(--hv-accent-info)]/30 underline-offset-2 hover:decoration-current"
+      >
+        {href.replace(/^https?:\/\//u, '')}
+      </a>,
+    )
+    cursor = index + href.length
+  }
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor))
+  }
+  return nodes
+}
+
 function DescriptorFieldSections(props: {
   fields: ChannelDescriptorField[]
   state: ChannelFormState
   descriptor: ChannelProviderDescriptor
-  commanders: Array<{ id: string; displayName: string }>
+  fieldErrors?: ChannelFieldErrors
   onChange: (updater: (current: ChannelFormState) => ChannelFormState) => void
+  onFieldErrorClear?: (fieldKey: string) => void
 }) {
   const sections = props.fields.reduce<Record<string, ChannelDescriptorField[]>>((grouped, field) => {
     const section = field.section ?? 'configuration'
@@ -884,20 +893,42 @@ function DescriptorFieldSections(props: {
 
   return (
     <div className="grid gap-4 border-t border-ink-border pt-4">
-      {Object.entries(sections).map(([section, fields]) => (
-        <section key={section} className="grid gap-3">
-          <p className="section-title">{section}</p>
+      {Object.entries(sections).map(([section, fields]) => {
+        const sectionHasErrors = fields.some((field) => Boolean(props.fieldErrors?.[field.key]))
+        const fieldsGrid = (
           <div className="grid gap-4 md:grid-cols-3">
             <DescriptorFields
               fields={fields}
               state={props.state}
               descriptor={props.descriptor}
-              commanders={props.commanders}
+              fieldErrors={props.fieldErrors}
               onChange={props.onChange}
+              onFieldErrorClear={props.onFieldErrorClear}
             />
           </div>
-        </section>
-      ))}
+        )
+        if (section === 'advanced') {
+          return (
+            <details
+              key={`${section}-${sectionHasErrors ? 'errors' : 'clean'}`}
+              className="rounded-lg border border-ink-border bg-washi-white px-4 py-3"
+              open={sectionHasErrors || undefined}
+            >
+              <summary className="cursor-pointer select-none">
+                <span className="section-title">{sectionLabel(section)}</span>
+                <span className="ml-2 text-xs font-normal text-sumi-diluted">Defaults are safe for most users.</span>
+              </summary>
+              <div className="mt-3">{fieldsGrid}</div>
+            </details>
+          )
+        }
+        return (
+          <section key={section} className="grid gap-3">
+            <p className="section-title">{sectionLabel(section)}</p>
+            {fieldsGrid}
+          </section>
+        )
+      })}
     </div>
   )
 }
@@ -906,23 +937,28 @@ function DescriptorFields(props: {
   fields: ChannelDescriptorField[]
   state: ChannelFormState
   descriptor: ChannelProviderDescriptor
-  commanders: Array<{ id: string; displayName: string }>
+  fieldErrors?: ChannelFieldErrors
   onChange: (updater: (current: ChannelFormState) => ChannelFormState) => void
+  onFieldErrorClear?: (fieldKey: string) => void
 }) {
   return (
     <>
-      {props.fields.map((field) => (
-        <DescriptorField
-          key={fieldFormKey(field)}
-          field={field}
-          value={props.state[fieldFormKey(field)]}
-          descriptor={props.descriptor}
-          commanders={props.commanders}
-          onChange={(value) => {
-            props.onChange((current) => ({ ...current, [fieldFormKey(field)]: value }))
-          }}
-        />
-      ))}
+      {props.fields.map((field) => {
+        const key = field.key
+        return (
+          <DescriptorField
+            key={key}
+            field={field}
+            value={props.state[key]}
+            error={props.fieldErrors?.[key]}
+            descriptor={props.descriptor}
+            onChange={(value) => {
+              props.onFieldErrorClear?.(key)
+              props.onChange((current) => ({ ...current, [key]: value }))
+            }}
+          />
+        )
+      })}
     </>
   )
 }
@@ -930,66 +966,95 @@ function DescriptorFields(props: {
 function DescriptorField(props: {
   field: ChannelDescriptorField
   value: ChannelFormValue | undefined
+  error?: string
   descriptor: ChannelProviderDescriptor
-  commanders: Array<{ id: string; displayName: string }>
   onChange: (value: ChannelFormValue) => void
 }) {
   const { field } = props
-  const value = props.value ?? normalizeFormValue(field, props.descriptor.formDefaults[fieldFormKey(field)] ?? field.defaultValue ?? '')
-  const commanderBindingKey = props.descriptor.commanderBinding.fieldKey
+  const key = field.key
+  const value = props.value ?? normalizeChannelFormValue(field, props.descriptor.formDefaults[field.key] ?? field.defaultValue ?? '')
+  const errorId = `channel-field-${props.descriptor.provider}-${key}-error`
+  const helperId = `channel-field-${props.descriptor.provider}-${key}-helper`
+  const describedBy = [
+    field.helperText ? helperId : null,
+    props.error ? errorId : null,
+  ].filter(Boolean).join(' ') || undefined
+  const requiredMarker = field.required ? (
+    <>
+      <span aria-hidden="true" className="ml-1 text-accent-vermillion">*</span>
+      <span className="sr-only"> required</span>
+    </>
+  ) : null
+  const helperText = field.helperText ? (
+    <span id={helperId} className="mt-1 block text-xs leading-5 text-sumi-diluted">{field.helperText}</span>
+  ) : null
+  const errorText = props.error ? (
+    <span id={errorId} className="mt-1 block text-xs font-medium text-accent-vermillion" role="alert">{props.error}</span>
+  ) : null
 
   if (field.kind === 'checkbox') {
     return (
-      <label className="flex items-center gap-2 text-sm text-sumi-black">
-        <input
-          type="checkbox"
-          checked={value === true}
-          onChange={(event) => props.onChange(event.target.checked)}
-          className={CHECKBOX_CLASS}
-        />
-        {field.label}
-      </label>
+      <div>
+        <label className="flex items-center gap-2 text-sm text-sumi-black">
+          <input
+            type="checkbox"
+            checked={value === true}
+            onChange={(event) => props.onChange(event.target.checked)}
+            className={CHECKBOX_CLASS}
+            aria-describedby={describedBy}
+            aria-invalid={Boolean(props.error)}
+            data-channel-field-key={key}
+          />
+          <span>{field.label}{requiredMarker}</span>
+        </label>
+        {helperText}
+        {errorText}
+      </div>
     )
   }
 
   if (field.kind === 'textarea') {
     return (
       <label className="block">
-        <span className="section-title block">{field.label}</span>
+        <span className="section-title block">{field.label}{requiredMarker}</span>
         <textarea
           value={typeof value === 'string' ? value : ''}
           onChange={(event) => props.onChange(event.target.value)}
           className={`${INPUT_CLASS} min-h-28`}
           placeholder={field.placeholder}
           required={field.required}
+          aria-required={field.required}
+          aria-invalid={Boolean(props.error)}
+          aria-describedby={describedBy}
+          data-channel-field-key={key}
         />
-        {field.helperText ? (
-          <span className="mt-1 block font-mono text-xs text-sumi-diluted">{field.helperText}</span>
-        ) : null}
+        {helperText}
+        {errorText}
       </label>
     )
   }
 
-  if (field.kind === 'select' || fieldFormKey(field) === commanderBindingKey) {
-    const options = fieldFormKey(field) === commanderBindingKey
-      ? [
-          { value: '', label: props.descriptor.commanderBinding.emptyLabel ?? 'None' },
-          ...props.commanders.map((commander) => ({ value: commander.id, label: commander.displayName })),
-        ]
-      : field.options ?? []
+  if (field.kind === 'select') {
+    const options = field.options ?? []
     return (
       <label className="block">
-        <span className="section-title block">{field.label}</span>
+        <span className="section-title block">{field.label}{requiredMarker}</span>
         <select
           value={typeof value === 'string' ? value : ''}
           onChange={(event) => props.onChange(event.target.value)}
           className={INPUT_CLASS}
           required={field.required}
+          aria-required={field.required}
+          aria-invalid={Boolean(props.error)}
+          aria-describedby={describedBy}
+          data-channel-field-key={key}
         >
           {options.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
+        {helperText}
+        {errorText}
       </label>
     )
   }
@@ -1000,27 +1065,38 @@ function DescriptorField(props: {
       : field.options?.find((option) => option.value === field.defaultValue)?.label ?? String(field.defaultValue ?? '')
     return (
       <label className="block">
-        <span className="section-title block">{field.label}</span>
-        <div className={INPUT_CLASS}>{text}</div>
+        <span className="section-title block">{field.label}{requiredMarker}</span>
+        <div
+          className={INPUT_CLASS}
+          aria-describedby={describedBy}
+          data-channel-field-key={key}
+        >
+          {text}
+        </div>
+        {helperText}
+        {errorText}
       </label>
     )
   }
 
   return (
     <label className="block">
-      <span className="section-title block">{field.label}</span>
+      <span className="section-title block">{field.label}{requiredMarker}</span>
       <input
         value={typeof value === 'string' ? value : ''}
         onChange={(event) => props.onChange(event.target.value)}
         placeholder={field.placeholder}
         className={INPUT_CLASS}
         required={field.required}
+        aria-required={field.required}
+        aria-invalid={Boolean(props.error)}
+        aria-describedby={describedBy}
+        data-channel-field-key={key}
         type={field.kind === 'password' ? 'password' : field.kind}
         min={field.min}
       />
-      {field.helperText ? (
-        <span className="mt-1 block font-mono text-xs text-sumi-diluted">{field.helperText}</span>
-      ) : null}
+      {helperText}
+      {errorText}
     </label>
   )
 }
@@ -1028,56 +1104,69 @@ function DescriptorField(props: {
 function BindingRow(props: {
   binding: CommanderChannelBinding
   commanderId: string
-  commanders: Array<{ id: string; displayName: string }>
   updateBinding: ReturnType<typeof useUpdateChannelBinding>['mutateAsync']
   deleteBinding: (bindingId: string) => Promise<unknown>
 }) {
-  const { binding, commanderId, commanders, updateBinding, deleteBinding } = props
+  const { binding, commanderId, updateBinding, deleteBinding } = props
   const [expanded, setExpanded] = useState(false)
   const { data: providerDescriptorResponse } = useChannelProviderDescriptors(commanderId || null)
   const descriptor = providerDescriptorResponse?.providers.find((entry) => entry.provider === binding.provider) ?? null
   const [formState, setFormState] = useState<ChannelFormState>({})
-  const shouldPollStatus = expanded && descriptor?.pairing.mode !== 'none'
+  const [fieldErrors, setFieldErrors] = useState<ChannelFieldErrors>({})
+  const [configError, setConfigError] = useState<string | null>(null)
+  const shouldPollStatus = providerHasBindingStatus(descriptor)
   const { data: channelStatus } = useChannelStatus(commanderId, binding.id, shouldPollStatus)
+  const lastDrop = channelStatus?.lastDrop
 
   useEffect(() => {
     if (!descriptor) {
       return
     }
-    setFormState(formStateFromDescriptor(descriptor, commanderId, binding))
-  }, [binding, commanderId, descriptor])
+    setFormState(formStateFromDescriptor(descriptor, binding))
+  }, [binding, descriptor])
 
   async function saveConfig() {
     if (!descriptor) {
       return
     }
-    const validationError = requiredFieldError(descriptor, formState, {
+    const validationErrors = getChannelFormFieldErrors(descriptor, formState, {
       existingCredentialConfigured: credentialConfigured,
     })
+    const validationError = getFirstChannelFormError(validationErrors)
     if (validationError) {
-      throw new Error(validationError)
+      setFieldErrors(validationErrors)
+      setConfigError(validationError)
+      return
     }
-    await updateBinding({
-      commanderId,
-      bindingId: binding.id,
-      displayName: typeof formState.displayName === 'string' && formState.displayName.trim()
-        ? formState.displayName.trim()
-        : binding.displayName,
-      config: buildConfigFromDescriptor(descriptor, formState),
-    })
-    setFormState((current) => {
-      const next = { ...current }
-      for (const field of descriptor.fields) {
-        if (field.secret) {
-          next[fieldFormKey(field)] = ''
+    setFieldErrors({})
+    setConfigError(null)
+    try {
+      await updateBinding({
+        commanderId,
+        bindingId: binding.id,
+        displayName: typeof formState.displayName === 'string' && formState.displayName.trim()
+          ? formState.displayName.trim()
+          : binding.displayName,
+        formValues: formState,
+      })
+      setFormState((current) => {
+        const next = { ...current }
+        for (const field of descriptor.fields) {
+          if (field.secret) {
+            next[field.key] = ''
+          }
         }
-      }
-      return next
-    })
+        return next
+      })
+    } catch (error) {
+      const parsed = parseChannelMutationError(error, 'Failed to update channel.')
+      setFieldErrors(parsed.fieldErrors)
+      setConfigError(parsed.message)
+    }
   }
 
   const credentialConfigured = binding.config?.credentialConfigured === true || binding.config?.accessTokenConfigured === true
-  const configurableFields = descriptor?.fields.filter((field) => fieldFormKey(field) !== 'accountId') ?? []
+  const configurableFields = descriptor?.fields.filter((field) => field.key !== 'accountId') ?? []
 
   return (
     <div className="rounded-2xl border border-ink-border p-4">
@@ -1089,6 +1178,13 @@ function BindingRow(props: {
             {credentialConfigured ? ' · credential set' : ''}
             {channelStatus ? ` · ${channelStatus.state}` : ''}
           </p>
+          {lastDrop ? (
+            <p className="mt-2 text-xs text-accent-vermillion" data-testid={`channel-last-drop-${binding.id}`}>
+              Last drop: {lastDrop.reason} · {formatChannelDropTime(lastDrop.at)}
+              {lastDrop.chatType ? ` · ${lastDrop.chatType}` : ''}
+              {lastDrop.sourceHash ? ` · source ${lastDrop.sourceHash}` : ''}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {descriptor ? (
@@ -1142,9 +1238,18 @@ function BindingRow(props: {
             fields={configurableFields}
             state={formState}
             descriptor={descriptor}
-            commanders={commanders}
-            onChange={(updater) => setFormState((current) => updater(current))}
+            fieldErrors={fieldErrors}
+            onChange={(updater) => {
+              setFormState((current) => updater(current))
+              setConfigError(null)
+              setFieldErrors({})
+            }}
           />
+          {configError ? (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {configError}
+            </div>
+          ) : null}
           <div className="mt-4 flex justify-end">
             <button
               type="button"

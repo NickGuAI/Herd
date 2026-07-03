@@ -25,6 +25,7 @@ interface SessionFieldsSectionProps {
   beforeTaskField?: ReactNode
   createError: string | null
   isCreating: boolean
+  submitDisabled?: boolean
   submitLabel: string
 }
 
@@ -50,6 +51,7 @@ export function SessionFieldsSection({
   beforeTaskField,
   createError,
   isCreating,
+  submitDisabled = false,
   submitLabel,
 }: SessionFieldsSectionProps) {
   return (
@@ -108,7 +110,7 @@ export function SessionFieldsSection({
 
       <button
         type="submit"
-        disabled={isCreating}
+        disabled={isCreating || submitDisabled}
         className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
       >
         <Plus size={14} />

@@ -5,17 +5,20 @@ import remarkGfm from 'remark-gfm'
 import { fetchJson } from '@/lib/api'
 import { formatCost } from '@/lib/utils'
 import {
+  findProviderEntry,
+  getProviderControlDefaults,
+  getProviderLabel,
+  useProviderRegistry,
+} from '@/hooks/use-providers'
+import {
   CLAUDE_ADAPTIVE_THINKING_MODES,
-  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   type ClaudeAdaptiveThinkingMode,
 } from '../../claude-adaptive-thinking.js'
 import {
   CLAUDE_EFFORT_LEVELS,
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '../../claude-effort.js'
 import {
-  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   MAX_CLAUDE_MAX_THINKING_TOKENS,
   MIN_CLAUDE_MAX_THINKING_TOKENS,
 } from '../../claude-max-thinking-tokens.js'
@@ -176,14 +179,21 @@ export function CommanderIdentityTab({
   commander: CommanderSession
 }) {
   const queryClient = useQueryClient()
+  const { data: providers = [] } = useProviderRegistry()
+  const commanderAgentType = commander.agentType ?? null
+  const currentProvider = findProviderEntry(providers, commanderAgentType)
+  const agentLabel = commanderAgentType
+    ? getProviderLabel(providers, commanderAgentType)
+    : 'Unavailable'
+  const providerDefaults = getProviderControlDefaults(currentProvider)
   const [effort, setEffort] = useState<ClaudeEffortLevel>(
-    commander.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+    commander.effort ?? providerDefaults.effort,
   )
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
-    commander.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+    commander.adaptiveThinking ?? providerDefaults.adaptiveThinking,
   )
   const [maxThinkingTokens, setMaxThinkingTokens] = useState(String(
-    commander.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+    commander.maxThinkingTokens ?? providerDefaults.maxThinkingTokens,
   ))
   const [maxTurns, setMaxTurns] = useState(String(commander.maxTurns ?? FALLBACK_RUNTIME_CONFIG.defaults.maxTurns))
   const [costCapUsd, setCostCapUsd] = useState(
@@ -220,9 +230,9 @@ export function CommanderIdentityTab({
   })
 
   useEffect(() => {
-    setEffort(commander.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL)
-    setAdaptiveThinking(commander.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
-    setMaxThinkingTokens(String(commander.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS))
+    setEffort(commander.effort ?? providerDefaults.effort)
+    setAdaptiveThinking(commander.adaptiveThinking ?? providerDefaults.adaptiveThinking)
+    setMaxThinkingTokens(String(commander.maxThinkingTokens ?? providerDefaults.maxThinkingTokens))
     setMaxTurns(String(
       commander.maxTurns
       ?? detailQuery.data?.runtimeConfig?.defaults.maxTurns
@@ -251,6 +261,9 @@ export function CommanderIdentityTab({
     detailQuery.data?.contextConfig?.fatPinInterval,
     detailQuery.data?.contextMode,
     detailQuery.data?.runtimeConfig?.defaults.maxTurns,
+    providerDefaults.adaptiveThinking,
+    providerDefaults.effort,
+    providerDefaults.maxThinkingTokens,
   ])
 
   async function handleSaveRuntime(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -352,7 +365,7 @@ export function CommanderIdentityTab({
           <div className="grid gap-3 md:grid-cols-2">
             <MetadataField
               label="Agent"
-              value={commander.agentType ?? 'claude'}
+              value={agentLabel}
             />
             <MetadataField
               label="Heartbeat Interval"
@@ -519,12 +532,12 @@ export function CommanderIdentityTab({
             </div>
             <p className={NOTE_CLASS}>
               Global default {runtimeConfig.defaults.maxTurns} turns · limit {runtimeConfig.limits.maxTurns}.
-              Claude defaults are effort `{DEFAULT_CLAUDE_EFFORT_LEVEL}`, adaptive thinking `{DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE}`,
-              and {DEFAULT_CLAUDE_MAX_THINKING_TOKENS} thinking tokens. Changes apply to the next Claude launch.
+              Current provider defaults are effort `{providerDefaults.effort}`, adaptive thinking `{providerDefaults.adaptiveThinking}`,
+              and {providerDefaults.maxThinkingTokens} thinking tokens. Changes apply to the next compatible provider launch.
             </p>
             {commander.agentType !== 'claude' && (
               <p className={SUBTLE_NOTE_CLASS}>
-                Current agent type is `{commander.agentType ?? 'claude'}`. Claude reasoning settings apply when the commander runs with Claude.
+                Current agent type is `{agentLabel}`. Reasoning settings apply only when that provider supports them.
               </p>
             )}
             <button
@@ -548,7 +561,7 @@ export function CommanderIdentityTab({
               <div className="h-3 w-3 animate-breathe rounded-full bg-[var(--hv-fg-faint)]" />
             </div>
           ) : workflowMd ? (
-            <div className="herd-prose max-w-none break-words">
+            <div className="hervald-prose max-w-none break-words">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{workflowMd}</ReactMarkdown>
             </div>
           ) : (

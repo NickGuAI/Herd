@@ -2,6 +2,7 @@ import { Router } from 'express'
 import {
   API_KEY_SCOPES,
   ApiKeyJsonStore,
+  DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES,
   isApiKeyScope,
   type ApiKeyScope,
 } from '../api-keys/store.js'
@@ -23,6 +24,12 @@ interface ApiKeyView {
   expiresAt: string | null
   lastUsedAt: string | null
   scopes: string[]
+}
+
+interface ApiKeyScopeCatalogView {
+  scopes: ApiKeyScope[]
+  defaultBootstrapScopes: ApiKeyScope[]
+  mobilePairingScopes: ApiKeyScope[]
 }
 
 interface ApiKeysRouterOptions extends Auth0Options {
@@ -193,6 +200,16 @@ export function createApiKeysRouter(options: ApiKeysRouterOptions = {}): Router 
     requiredApiKeyScopes: [],
     requiredAuth0Permissions: MOBILE_PAIRING_SCOPES,
     auth0PermissionMode: 'any',
+  })
+
+  router.get('/scopes', masterKeyAuth, (_req, res) => {
+    const catalog: ApiKeyScopeCatalogView = {
+      scopes: [...API_KEY_SCOPES],
+      defaultBootstrapScopes: [...DEFAULT_BOOTSTRAP_MASTER_KEY_SCOPES],
+      mobilePairingScopes: [...MOBILE_PAIRING_SCOPES],
+    }
+
+    res.json(catalog)
   })
 
   router.post('/keys', masterKeyAuth, async (req, res) => {

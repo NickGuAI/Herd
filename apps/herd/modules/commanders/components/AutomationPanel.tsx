@@ -12,7 +12,7 @@ import {
   type AutomationScope,
   type AutomationTriggerFilter,
 } from '../../automations/hooks/useAutomations'
-import { SentinelCreateForm } from '../../sentinels/components/SentinelCreateForm'
+import { SentinelCreateForm } from '../../automations/components/SentinelCreateForm'
 import { CreateAutomationTaskForm } from './CreateAutomationTaskForm'
 
 type CreateMode = null | 'chooser' | 'task' | 'monitor'

@@ -82,7 +82,7 @@ export interface ClaudeStreamSessionDeps {
   getActiveSession(sessionName: string): AnySession | undefined
   resetActiveTurnState(session: StreamSession): void
   schedulePersistedSessionsWrite(): void
-  setCompletedSession(sessionName: string, session: CompletedSession): void
+  setCompletedSession(sessionName: string, session: CompletedSession): void | Promise<void>
   setExitedSession(sessionName: string, session: ExitedStreamSessionState): void
   spawnImpl?: typeof spawn
   daemonRegistry?: Pick<MachineDaemonRegistry, 'attachProcess' | 'spawnProcess'>
@@ -473,6 +473,7 @@ export function createClaudeStreamSession(
       maxThinkingTokens,
     }),
     providerAuthSnapshot: options.providerAuth?.snapshot,
+    credentialPoolId: options.providerAuth?.credentialPoolId,
     activeTurnId: undefined,
     adapter: createClaudeSessionAdapter(deps),
     resumedFrom: options.resumedFrom,
@@ -561,8 +562,17 @@ export function createClaudeStreamSession(
     | { kind: 'exit'; exitEvent: ExitCompletionEvent }
     | { kind: 'error'; errorEvent: ExitCompletionEvent }
     | null = null
+  let clientsClosed = false
 
-  function finalizeCompletionIfReady(): void {
+  function closeSessionClients(): void {
+    if (clientsClosed) return
+    clientsClosed = true
+    for (const client of session.clients) {
+      client.close(1000, 'Session ended')
+    }
+  }
+
+  async function finalizeCompletionIfReady(): Promise<void> {
     if (completionFinalized) return
     if (!processExited || !stdoutEnded) return
     if (!finalizationContext) return
@@ -573,7 +583,7 @@ export function createClaudeStreamSession(
     }
 
     if (session.finalResultEvent) {
-      deps.setCompletedSession(
+      await deps.setCompletedSession(
         sessionName,
         toCompletedSession(
           sessionName,
@@ -603,7 +613,7 @@ export function createClaudeStreamSession(
         finalizationContext.kind === 'exit'
           ? finalizationContext.exitEvent
           : finalizationContext.errorEvent
-      deps.setCompletedSession(
+      await deps.setCompletedSession(
         sessionName,
         toExitBasedCompletedSession(sessionName, fallbackEvent, session.usage.costUsd, {
           sessionType: session.sessionType,
@@ -614,6 +624,7 @@ export function createClaudeStreamSession(
       )
     }
 
+    closeSessionClients()
     deps.setExitedSession(sessionName, snapshotExitedStreamSession(session))
     deps.deleteLiveSession(sessionName)
 
@@ -633,7 +644,7 @@ export function createClaudeStreamSession(
   childProcess.stdout?.on('end', () => {
     drainTrailingStdoutBuffer()
     stdoutEnded = true
-    finalizeCompletionIfReady()
+    void finalizeCompletionIfReady()
   })
 
   childProcess.stderr?.on('data', (chunk: Buffer) => {
@@ -674,6 +685,9 @@ export function createClaudeStreamSession(
     if (deps.getActiveSession(sessionName) !== session) {
       return
     }
+    if (completionFinalized || finalizationContext?.kind === 'error') {
+      return
+    }
 
     if (!session.lastTurnCompleted) {
       ensureClaudeProviderContext(session).sessionId = undefined
@@ -700,13 +714,9 @@ export function createClaudeStreamSession(
     deps.appendEvent(session, exitEnvelope)
     deps.broadcastEvent(session, exitEnvelope)
 
-    for (const client of session.clients) {
-      client.close(1000, 'Session ended')
-    }
-
     finalizationContext = { kind: 'exit', exitEvent }
     processExited = true
-    finalizeCompletionIfReady()
+    void finalizeCompletionIfReady()
   })
 
   // 'close' is guaranteed to fire AFTER 'exit' (or 'error' on spawn failure)
@@ -724,7 +734,7 @@ export function createClaudeStreamSession(
       drainTrailingStdoutBuffer()
       stdoutEnded = true
     }
-    finalizeCompletionIfReady()
+    void finalizeCompletionIfReady()
   })
 
   cpEmitter.on('error', (error: Error) => {
@@ -746,10 +756,6 @@ export function createClaudeStreamSession(
     deps.appendEvent(session, errorEnvelope)
     deps.broadcastEvent(session, errorEnvelope)
 
-    for (const client of session.clients) {
-      client.close(1000, 'Session ended')
-    }
-
     if (!finalizationContext) {
       finalizationContext = { kind: 'error', errorEvent }
     }
@@ -764,7 +770,7 @@ export function createClaudeStreamSession(
       drainTrailingStdoutBuffer()
       stdoutEnded = true
     }
-    finalizeCompletionIfReady()
+    void finalizeCompletionIfReady()
   })
 
   if (task.length > 0) {

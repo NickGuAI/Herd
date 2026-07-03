@@ -1,6 +1,9 @@
 import { createCommanderChannelsRouter } from './route.js'
 import { EmailChannelAdapter } from './email/adapter.js'
+import { DiscordChannelAdapter } from './discord/adapter.js'
 import { GoogleChatChannelAdapter } from './googlechat/adapter.js'
+import { SlackChannelAdapter } from './slack/adapter.js'
+import { TelegramChannelAdapter } from './telegram/adapter.js'
 import { WhatsAppChannelAdapter } from './whatsapp/adapter.js'
 import { replaceChannelAdapter } from './registry.js'
 import { ChannelAdapterRuntimeManager } from './runtime-manager.js'
@@ -37,6 +40,21 @@ export function createChannelsRuntime(context: ModuleRuntimeContext): ModuleRout
     secretsStore,
     internalToken,
     dataDir: commanderDataDir,
+  }))
+  replaceChannelAdapter(new TelegramChannelAdapter({
+    bindingStore,
+    secretsStore,
+    internalToken,
+  }))
+  replaceChannelAdapter(new DiscordChannelAdapter({
+    bindingStore,
+    secretsStore,
+    internalToken,
+  }))
+  replaceChannelAdapter(new SlackChannelAdapter({
+    bindingStore,
+    secretsStore,
+    internalToken,
   }))
   const runtimeManager = new ChannelAdapterRuntimeManager({ bindingStore })
   const channels = createCommanderChannelsRouter({

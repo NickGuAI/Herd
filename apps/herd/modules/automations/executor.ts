@@ -7,8 +7,8 @@ import {
   type AgentSessionMonitorOptions,
 } from '@gehirn/ai-services'
 import { resolveCommanderPaths } from '../commanders/paths.js'
-import { resolveSkills } from '../sentinels/skills.js'
 import { AutomationStore, type UpdateAutomationInput } from './store.js'
+import { resolveSkills } from './skills.js'
 import type {
   Automation,
   AutomationExecutionSource,

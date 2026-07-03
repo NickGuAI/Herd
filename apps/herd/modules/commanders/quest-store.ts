@@ -203,36 +203,6 @@ function appendQuestNote(current: string | undefined, note: string): string {
   return current ? `${current}\n${note}` : note
 }
 
-interface QuestMigrationRecord {
-  id: string
-  commanderId: string
-  aliasLiteral: string
-}
-
-const PERMISSION_MODE_ALIAS_LITERALS = new Set([
-  'dangerouslySkipPermissions',
-  'bypassPermissions',
-  'acceptEdits',
-])
-
-function coerceStoredPermissionMode(
-  raw: unknown,
-): { value: unknown; aliasLiteral?: string } {
-  if (typeof raw !== 'string') {
-    return { value: raw }
-  }
-
-  const trimmed = raw.trim()
-  if (!PERMISSION_MODE_ALIAS_LITERALS.has(trimmed)) {
-    return { value: raw }
-  }
-
-  return {
-    value: 'default',
-    aliasLiteral: trimmed,
-  }
-}
-
 function parseDefaultPermissionMode(raw: unknown): 'default' | null {
   if (raw === undefined || raw === null || raw === '') {
     return 'default'
@@ -240,16 +210,9 @@ function parseDefaultPermissionMode(raw: unknown): 'default' | null {
   return raw === 'default' ? 'default' : null
 }
 
-function normalizeContract(
-  raw: unknown,
-): { contract: CommanderQuestContract | null; aliasLiteral?: string } {
+function normalizeContract(raw: unknown): CommanderQuestContract | null {
   if (!isObject(raw)) {
-    return { contract: null }
-  }
-
-  const permissionModeInput = coerceStoredPermissionMode(raw.permissionMode)
-  if (permissionModeInput.aliasLiteral !== undefined) {
-    raw.permissionMode = permissionModeInput.value
+    return null
   }
 
   const cwd = asTrimmedString(raw.cwd)
@@ -260,25 +223,19 @@ function normalizeContract(
     : asTrimmedString(raw.model) ?? undefined
   const skillsToUse = normalizeSkillsToUse(raw.skillsToUse)
   if (!cwd || permissionMode === null || !agentType || skillsToUse === null) {
-    return { contract: null }
+    return null
   }
 
   return {
-    contract: {
-      cwd,
-      permissionMode,
-      agentType,
-      ...(model !== undefined ? { model } : {}),
-      skillsToUse,
-    },
-    aliasLiteral: permissionModeInput.aliasLiteral,
+    cwd,
+    permissionMode,
+    agentType,
+    ...(model !== undefined ? { model } : {}),
+    skillsToUse,
   }
 }
 
-function parseQuest(
-  raw: unknown,
-  migrations?: QuestMigrationRecord[],
-): CommanderQuest | null {
+function parseQuest(raw: unknown): CommanderQuest | null {
   if (!isObject(raw)) {
     return null
   }
@@ -291,7 +248,7 @@ function parseQuest(
   const blockedAt = asTrimmedString(raw.blockedAt) ?? undefined
   const blockedReason = isQuestBlockedReason(raw.blockedReason) ? raw.blockedReason : undefined
   const instruction = asTrimmedString(raw.instruction)
-  const { contract, aliasLiteral } = normalizeContract(raw.contract)
+  const contract = normalizeContract(raw.contract)
   const artifacts = normalizeQuestArtifacts(raw.artifacts) ?? []
 
   if (
@@ -308,10 +265,6 @@ function parseQuest(
 
   const githubIssueUrl = asTrimmedString(raw.githubIssueUrl) ?? undefined
   const note = asTrimmedString(raw.note) ?? undefined
-
-  if (aliasLiteral !== undefined && migrations) {
-    migrations.push({ id, commanderId, aliasLiteral })
-  }
 
   return {
     id,
@@ -331,21 +284,14 @@ function parseQuest(
   }
 }
 
-interface ParsedCommanderQuests extends PersistedCommanderQuests {
-  migrationsApplied: QuestMigrationRecord[]
-}
-
-function parsePersistedQuests(raw: unknown): ParsedCommanderQuests {
-  const migrationsApplied: QuestMigrationRecord[] = []
-  const candidates: unknown[] = Array.isArray(raw)
-    ? raw
-    : (isObject(raw) && Array.isArray(raw.quests) ? raw.quests : [])
+function parsePersistedQuests(raw: unknown): PersistedCommanderQuests {
+  const candidates: unknown[] = isObject(raw) && Array.isArray(raw.quests) ? raw.quests : []
 
   const quests = candidates
-    .map((entry) => parseQuest(entry, migrationsApplied))
+    .map((entry) => parseQuest(entry))
     .filter((entry): entry is CommanderQuest => entry !== null)
 
-  return { quests, migrationsApplied }
+  return { quests }
 }
 
 function cloneQuest(quest: CommanderQuest): CommanderQuest {
@@ -485,7 +431,7 @@ export class QuestStore {
       }
       artifacts = parsedArtifacts
     }
-    const { contract } = normalizeContract(input.contract)
+    const contract = normalizeContract(input.contract)
     if (!commanderId) {
       throw new Error('commanderId is required')
     }
@@ -636,7 +582,7 @@ export class QuestStore {
         }
       }
       if (update.contract !== undefined) {
-        const { contract } = normalizeContract(update.contract)
+        const contract = normalizeContract(update.contract)
         if (!contract) {
           throw new Error('contract is invalid')
         }
@@ -845,36 +791,7 @@ export class QuestStore {
       return []
     }
 
-    const { quests, migrationsApplied } = parsePersistedQuests(parsed)
-
-    // One-time, idempotent on-disk backfill of retired permissionMode
-    // literals. Emit a structured warn per migrated row, then persist the
-    // upgraded collection so subsequent reads are a no-op. See #1222.
-    if (migrationsApplied.length > 0) {
-      for (const migration of migrationsApplied) {
-        console.warn(
-          '[commanders/quest-store] migrated retired permissionMode',
-          {
-            questId: migration.id,
-            commanderId: migration.commanderId,
-            filePath,
-            from: migration.aliasLiteral,
-            to: 'default',
-          },
-        )
-      }
-      try {
-        await this.writeQuestsForCommander(commanderId, quests)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.warn(
-          '[commanders/quest-store] failed to persist permissionMode migration',
-          { commanderId, filePath, error: message },
-        )
-      }
-    }
-
-    return quests
+    return parsePersistedQuests(parsed).quests
   }
 
   private async writeQuestsForCommander(commanderId: string, quests: CommanderQuest[]): Promise<void> {

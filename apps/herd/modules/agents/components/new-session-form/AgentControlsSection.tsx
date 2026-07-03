@@ -1,19 +1,17 @@
 import { AlertTriangle } from 'lucide-react'
 import type { ProviderRegistryEntry } from '@/types'
 import { cn } from '@/lib/utils'
+import { getProviderControlDefaults } from '@/hooks/use-providers'
 import type { AgentType, SessionTransportType } from '@/types'
 import {
   CLAUDE_ADAPTIVE_THINKING_MODES,
-  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   type ClaudeAdaptiveThinkingMode,
 } from '../../../claude-adaptive-thinking.js'
 import {
   CLAUDE_EFFORT_LEVELS,
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '../../../claude-effort.js'
 import {
-  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   MAX_CLAUDE_MAX_THINKING_TOKENS,
   MIN_CLAUDE_MAX_THINKING_TOKENS,
   type ClaudeMaxThinkingTokens,
@@ -49,10 +47,7 @@ export function AgentControlsSection({
   setMaxThinkingTokens,
 }: AgentControlsSectionProps) {
   const currentProvider = providers.find((provider) => provider.id === agentType) ?? null
-  const providerDefaults = currentProvider?.defaults
-  const defaultEffort = providerDefaults?.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
-  const defaultAdaptiveThinking = providerDefaults?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE
-  const defaultMaxThinkingTokens = providerDefaults?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
+  const providerDefaults = getProviderControlDefaults(currentProvider)
   const sessionTypeOptions = currentProvider?.uiCapabilities.forcedTransport === 'stream'
     ? [{ value: 'stream', label: 'Stream', description: 'ACP chat UI, supports resume' }]
     : [
@@ -153,7 +148,7 @@ export function AgentControlsSection({
               ))}
             </select>
             <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
-              Default is `{defaultEffort}`. Resume reuses the selected session’s Claude effort.
+              Default is `{providerDefaults.effort}`. Resume reuses the selected session’s Claude effort.
             </p>
           </div>
 
@@ -173,7 +168,7 @@ export function AgentControlsSection({
               ))}
             </select>
             <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
-              Default is `{defaultAdaptiveThinking}` for fixed `MAX_THINKING_TOKENS`; enable only when the smaller adaptive budget is wanted.
+              Default is `{providerDefaults.adaptiveThinking}` for fixed `MAX_THINKING_TOKENS`; enable only when the smaller adaptive budget is wanted.
             </p>
           </div>
 
@@ -195,7 +190,7 @@ export function AgentControlsSection({
                 )}
               />
               <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
-                Default is `{defaultMaxThinkingTokens}`. Valid range is 1024-256000.
+                Default is `{providerDefaults.maxThinkingTokens}`. Valid range is 1024-256000.
               </p>
             </div>
           ) : null}

@@ -58,7 +58,7 @@ export function MobileAutomations({
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="mobile-automations">
       <div className="px-5 pb-3 pt-4">
-        <p className="text-[10px] uppercase tracking-[0.18em] text-sumi-diluted">herd</p>
+        <p className="text-[10px] uppercase tracking-[0.18em] text-sumi-diluted">hervald</p>
         <h1 className="mt-1 font-display text-4xl text-sumi-black">Automations</h1>
         <p className="mt-2 text-sm italic text-sumi-diluted">how commanders wake up on their own</p>
       </div>

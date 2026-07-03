@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { workerLifecycle } from '@gehirn/herd-cli/session-contract'
+import { workerLifecycleWithRuntimeState } from '@modules/agents/session-lifecycle'
 import { useAgentSessions } from '@/hooks/use-agents'
 
 export interface SessionLifecycleCounts {
@@ -8,24 +8,35 @@ export interface SessionLifecycleCounts {
   exited: number
 }
 
+export interface SessionLifecycleCountInput {
+  state?: 'active' | 'paused' | 'archived'
+  status?: string | null
+  processAlive?: boolean | null
+}
+
+export function countSessionLifecycles(sessions: readonly SessionLifecycleCountInput[]): SessionLifecycleCounts {
+  let running = 0
+  let stale = 0
+  let exited = 0
+
+  for (const session of sessions) {
+    const lifecycle = workerLifecycleWithRuntimeState({
+      state: session.state,
+      status: session.status,
+      processAlive: session.processAlive,
+    })
+    if (lifecycle === 'running') running += 1
+    if (lifecycle === 'stale') stale += 1
+    if (lifecycle === 'exited') exited += 1
+  }
+
+  return { running, stale, exited }
+}
+
 export function useSessionLifecycleCounts(): SessionLifecycleCounts {
   const { data: sessions = [] } = useAgentSessions()
 
   return useMemo(() => {
-    let running = 0
-    let stale = 0
-    let exited = 0
-
-    for (const session of sessions) {
-      const lifecycle = workerLifecycle({
-        status: session.status,
-        processAlive: session.processAlive,
-      })
-      if (lifecycle === 'running') running += 1
-      if (lifecycle === 'stale') stale += 1
-      if (lifecycle === 'exited') exited += 1
-    }
-
-    return { running, stale, exited }
+    return countSessionLifecycles(sessions)
   }, [sessions])
 }

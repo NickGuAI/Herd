@@ -4,6 +4,7 @@ import type { Operator } from '../operators/types.js'
 export const FOUNDER_SETUP_PATH = '/welcome'
 export const FOUNDER_SETUP_COMPLETED_PATH = '/org'
 export const FOUNDER_SETUP_EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+export const FOUNDER_DISPLAY_NAME_MAX_LENGTH = 120
 
 export interface FounderOrgSetupFormValues {
   orgDisplayName: string
@@ -167,6 +168,8 @@ export function validateFounderOrgSetupFormValues(
 
   if (!founderDisplayName) {
     errors.founderDisplayName = 'Founder display name is required.'
+  } else if (founderDisplayName.length > FOUNDER_DISPLAY_NAME_MAX_LENGTH) {
+    errors.founderDisplayName = `Founder display name must be ${FOUNDER_DISPLAY_NAME_MAX_LENGTH} characters or fewer.`
   }
 
   if (!founderEmail) {

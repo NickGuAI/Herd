@@ -5,6 +5,7 @@ import type { Duplex } from 'node:stream'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store.js'
 import type { ProviderSecretsStoreLike } from '../../../server/api-keys/provider-secrets-store.js'
 import type { CommanderSessionsInterface } from '../../agents/routes.js'
+import type { StreamJsonEvent } from '../../agents/types.js'
 import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import type { AutomationStore } from '../../automations/store.js'
 import type { AutomationScheduler } from '../../automations/scheduler.js'
@@ -146,6 +147,16 @@ export interface CommanderRuntime {
   unsubscribeEvents?: () => void
 }
 
+export interface ChannelReplyForwarder {
+  unsubscribe: () => void
+  pendingClientSendIds: Set<string>
+  activeClientSendId: string | null
+  activeTurnId: string | null
+  turnEvents: StreamJsonEvent[]
+  skippedTurnIds: Set<string>
+  skippedCompletedTurns: number
+}
+
 export interface CommanderSessionStats {
   questCount: number
   scheduleCount: number
@@ -164,7 +175,7 @@ export interface CommanderConversationRuntimeView {
   providerContext?: ProviderSessionContext
 }
 
-export type CommanderSessionResponseBase = Omit<CommanderSession, 'remoteOrigin' | 'persona'> & CommanderConversationRuntimeView & {
+export type CommanderSessionResponseBase = Omit<CommanderSession, 'remoteOrigin'> & CommanderConversationRuntimeView & {
   name: string
   remoteOrigin?: {
     machineId: string
@@ -224,7 +235,7 @@ export interface CommanderRoutesContext {
   heartbeatManager: CommanderHeartbeatManager
   runtimes: Map<string, CommanderRuntime>
   activeCommanderSessions: Map<string, { sessionName: string; startedAt: string }>
-  channelReplyForwarders: Map<string, () => void>
+  channelReplyForwarders: Map<string, ChannelReplyForwarder>
   heartbeatFiredAtByConversation: Map<string, string>
   avatarUpload: { single(fieldname: string): RequestHandler }
   automationStore: AutomationStore
@@ -288,7 +299,5 @@ export interface CommanderRoutesContext {
       currentTask?: CommanderCurrentTask | null
     },
   ) => Promise<Conversation>
-  migrateCommanderConfigSource: (commanderId: string) => Promise<void>
-  migrateLegacyCommanderConfig: () => Promise<void>
   reconcileCommanderSessions: () => Promise<void>
 }

@@ -23,6 +23,7 @@ export interface ClaudeProviderContext extends ProviderSessionContext {
 export interface CodexProviderContext extends ProviderSessionContext {
   providerId: 'codex'
   threadId?: string
+  codexHome?: string
   runtime?: CodexSessionRuntimeHandle
   notificationCleanup?: () => void
   runtimeTeardownPromise?: Promise<void>
@@ -103,7 +104,7 @@ export function createProviderContextForAgentType(
 ): ProviderSessionContext {
   if (agentType === 'codex') {
     return createCodexProviderContext({
-      threadId: init.threadId ?? init.sessionId,
+      threadId: init.threadId,
     })
   }
   if (agentType === 'gemini') {

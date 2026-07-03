@@ -65,7 +65,7 @@ function readDocumentTheme(): AppTheme {
   return document.documentElement.classList.contains('hv-dark') ? 'dark' : 'light'
 }
 
-export function getHerdThemeClassName(theme: AppTheme): 'hv-light' | 'hv-dark' {
+export function getHervaldThemeClassName(theme: AppTheme): 'hv-light' | 'hv-dark' {
   if (typeof document !== 'undefined') {
     if (document.documentElement.classList.contains('hv-dark')) {
       return 'hv-dark'

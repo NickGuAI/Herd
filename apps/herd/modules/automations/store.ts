@@ -3,9 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseProviderId } from '../agents/providers/registry.js'
 import type { AgentType } from '../agents/types.js'
-import { resolveCommanderDataDir } from '../commanders/paths.js'
 import { resolveAutomationsDataDir } from '../data-dir.js'
-import { migrateLegacyAutomations } from './migrate.js'
 import { resolveFounderOperatorId } from './resolve-founder-operator.js'
 import type {
   Automation,
@@ -72,7 +70,6 @@ export interface UpdateAutomationInput {
 
 export interface AutomationStoreOptions {
   dirPath?: string
-  commanderDataDir?: string
 }
 
 interface AutomationFilter {
@@ -278,20 +275,17 @@ export function defaultAutomationStoreDir(): string {
 
 export class AutomationStore {
   private readonly dirPath: string
-  private readonly commanderDataDir: string
   private loaded = false
   private loadPromise: Promise<void> | null = null
-  private legacyMigrationDeferred = false
   private mutationQueue: Promise<void> = Promise.resolve()
   private automations = new Map<string, Automation>()
 
   constructor(options: AutomationStoreOptions = {}) {
     this.dirPath = path.resolve(options.dirPath ?? defaultAutomationStoreDir())
-    this.commanderDataDir = path.resolve(options.commanderDataDir ?? resolveCommanderDataDir())
   }
 
   async ensureLoaded(): Promise<void> {
-    if (this.loaded && !this.legacyMigrationDeferred) {
+    if (this.loaded) {
       return
     }
     if (this.loadPromise) {
@@ -299,11 +293,6 @@ export class AutomationStore {
       return
     }
     this.loadPromise = (async () => {
-      const migration = await migrateLegacyAutomations({
-        automationsDir: this.dirPath,
-        commanderDataDir: this.commanderDataDir,
-      })
-      this.legacyMigrationDeferred = migration.deferred
       this.automations = await this.readFromDisk()
       this.loaded = true
     })()

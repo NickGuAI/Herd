@@ -9,6 +9,7 @@ import type { FrontendModuleBinding, FrontendNavItem } from '@/types'
 import type { HerdModuleGraphResponse } from '@/types/module-graph-api'
 import { Shell } from '@/surfaces/desktop/Shell'
 import { useShellCounts } from './use-shell-counts'
+import { BootstrapKeyRotationPrompt } from './BootstrapKeyRotationPrompt'
 
 interface ModuleRoute {
   path: string
@@ -65,6 +66,7 @@ function AppShell({
   const shellCounts = useShellCounts()
   return (
     <Shell modules={modules} counts={shellCounts}>
+      <BootstrapKeyRotationPrompt />
       {children}
     </Shell>
   )

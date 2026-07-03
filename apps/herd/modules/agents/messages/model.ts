@@ -34,6 +34,7 @@ export interface ProviderErrorMessageMeta {
   classification: ProviderErrorClassification
   code?: string
   hint?: string
+  resetAt?: string
   retryable?: boolean
 }
 

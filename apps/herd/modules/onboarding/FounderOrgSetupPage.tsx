@@ -17,22 +17,40 @@ import {
   type ProviderOnboardingReadiness,
 } from '@modules/onboarding/contracts'
 
-function formatSetupError(error: unknown): string {
+function parseSetupError(error: unknown): {
+  message: string
+  fieldErrors: FounderOrgSetupValidationErrors
+} {
   if (!(error instanceof Error)) {
-    return 'Unable to update onboarding.'
+    return { message: 'Unable to update onboarding.', fieldErrors: {} }
   }
 
   const payload = error.message.match(/^Request failed \(\d+\): (.+)$/)?.[1]
   if (!payload) {
-    return error.message
+    return { message: error.message, fieldErrors: {} }
   }
 
   try {
-    const parsed = JSON.parse(payload) as { error?: unknown }
-    return typeof parsed.error === 'string' ? parsed.error : error.message
+    const parsed = JSON.parse(payload) as {
+      error?: unknown
+      fieldErrors?: unknown
+    }
+    const fieldErrors = parsed.fieldErrors && typeof parsed.fieldErrors === 'object' && !Array.isArray(parsed.fieldErrors)
+      ? Object.fromEntries(Object.entries(parsed.fieldErrors).filter((entry): entry is [keyof FounderOrgSetupValidationErrors, string] => (
+          typeof entry[0] === 'string' && typeof entry[1] === 'string'
+        ))) as FounderOrgSetupValidationErrors
+      : {}
+    return {
+      message: typeof parsed.error === 'string' ? parsed.error : error.message,
+      fieldErrors,
+    }
   } catch {
-    return error.message
+    return { message: error.message, fieldErrors: {} }
   }
+}
+
+function formatSetupError(error: unknown): string {
+  return parseSetupError(error).message
 }
 
 function stateGlyph(state: OnboardingReadinessState | 'complete' | 'current' | 'pending' | 'warning') {
@@ -148,6 +166,9 @@ export function FounderOrgSetupPage() {
   const seedStarterWorkforce = useSeedStarterWorkforce()
   const skipStarterWorkforce = useSkipStarterWorkforce()
   const submissionLockRef = useRef(false)
+  const seedGaiaLockRef = useRef(false)
+  const seedStarterWorkforceLockRef = useRef(false)
+  const skipStarterWorkforceLockRef = useRef(false)
   const defaultsAppliedRef = useRef(false)
   const hasEditedRef = useRef(false)
   const [activeStepId, setActiveStepId] = useState<OnboardingStepId | null>(null)
@@ -162,7 +183,6 @@ export function FounderOrgSetupPage() {
   const currentStepId = activeStepId ?? status?.currentStepId ?? 'founder-org'
   const currentStepIndex = Math.max(0, steps.findIndex((step) => step.id === currentStepId))
   const previousStep = currentStepIndex > 0 ? steps[currentStepIndex - 1] : null
-  const nextStep = currentStepIndex >= 0 ? steps[currentStepIndex + 1] : null
 
   const providerSummary = useMemo(() => {
     if (!status) return []
@@ -224,43 +244,66 @@ export function FounderOrgSetupPage() {
       defaultsAppliedRef.current = false
       setActiveStepId('gaia')
     } catch (error) {
-      setActionError(formatSetupError(error))
+      const parsed = parseSetupError(error)
+      setErrors((current) => ({ ...current, ...parsed.fieldErrors }))
+      setActionError(parsed.message)
     } finally {
       submissionLockRef.current = false
     }
   }
 
   async function handleSeedGaia() {
+    if (seedGaiaLockRef.current) {
+      return
+    }
+    seedGaiaLockRef.current = true
     setActionError(null)
     try {
       await seedGaia.mutateAsync()
       setActiveStepId('starter-workforce')
     } catch (error) {
       setActionError(formatSetupError(error))
+    } finally {
+      seedGaiaLockRef.current = false
     }
   }
 
   async function handleSeedStarterWorkforce() {
+    if (seedStarterWorkforceLockRef.current) {
+      return
+    }
+    seedStarterWorkforceLockRef.current = true
     setActionError(null)
     try {
       await seedStarterWorkforce.mutateAsync()
       setActiveStepId('providers-machines')
     } catch (error) {
       setActionError(formatSetupError(error))
+    } finally {
+      seedStarterWorkforceLockRef.current = false
     }
   }
 
   async function handleSkipStarterWorkforce() {
+    if (skipStarterWorkforceLockRef.current) {
+      return
+    }
+    skipStarterWorkforceLockRef.current = true
     setActionError(null)
     try {
       await skipStarterWorkforce.mutateAsync()
       setActiveStepId('providers-machines')
     } catch (error) {
       setActionError(formatSetupError(error))
+    } finally {
+      skipStarterWorkforceLockRef.current = false
     }
   }
 
   const isSubmitting = createFounderOrg.isPending || submissionLockRef.current
+  const isGaiaPending = seedGaia.isPending || seedGaiaLockRef.current
+  const isStarterWorkforcePending = seedStarterWorkforce.isPending || seedStarterWorkforceLockRef.current
+  const isSkipStarterWorkforcePending = skipStarterWorkforce.isPending || skipStarterWorkforceLockRef.current
 
   if (onboarding.isLoading && !status) {
     return (
@@ -509,6 +552,10 @@ export function FounderOrgSetupPage() {
           border-radius: var(--hv-radius-soft);
           padding: 4px 7px;
         }
+        .hv-onboarding-muted {
+          color: var(--hv-fg-subtle);
+          font-size: var(--hv-text-small);
+        }
         .hv-onboarding-badge {
           align-self: start;
           border-radius: var(--hv-radius-carved-sm);
@@ -522,7 +569,8 @@ export function FounderOrgSetupPage() {
           color: var(--hv-badge-success-fg);
         }
         .hv-onboarding-badge-warning,
-        .hv-onboarding-badge-missing {
+        .hv-onboarding-badge-missing,
+        .hv-onboarding-badge-pending {
           background: var(--hv-badge-warning-bg);
           color: var(--hv-badge-warning-fg);
         }
@@ -675,7 +723,12 @@ export function FounderOrgSetupPage() {
             <>
               <h2>Founder and organization</h2>
               <p>Create the local founder profile and organization identity. This still writes through the existing org API.</p>
-              <form className="hv-onboarding-form" onSubmit={handleFounderSubmit} data-testid="founder-org-setup-form">
+              <form
+                className="hv-onboarding-form"
+                onSubmit={handleFounderSubmit}
+                data-testid="founder-org-setup-form"
+                aria-busy={isSubmitting}
+              >
                 <label className="hv-onboarding-field">
                   <span>Org display name</span>
                   <input
@@ -720,6 +773,7 @@ export function FounderOrgSetupPage() {
                 </label>
 
                 {actionError ? <div className="hv-onboarding-error" role="alert">{actionError}</div> : null}
+                {isSubmitting ? <p className="hv-onboarding-muted" role="status">Saving founder and organization...</p> : null}
 
                 <div className="hv-onboarding-actions">
                   <button type="button" className="hv-onboarding-button hv-onboarding-button-ghost" disabled>
@@ -739,7 +793,7 @@ export function FounderOrgSetupPage() {
           ) : null}
 
           {currentStepId === 'gaia' ? (
-            <>
+            <section aria-busy={isGaiaPending} data-testid="gaia-onboarding-section">
               <h2>Gaia, mother of commanders</h2>
               <p>
                 Seed Gaia as the first commander for onboarding, commander creation, provider setup, and ongoing maintenance.
@@ -763,7 +817,7 @@ export function FounderOrgSetupPage() {
                 </div>
                 <div className="hv-onboarding-receipt-row">
                   <span>Default provider</span>
-                  <strong>{status?.gaia.defaultProviderId ?? 'claude'}</strong>
+                  <strong>{status?.gaia.defaultProviderId ?? 'Unavailable'}</strong>
                 </div>
                 <div className="hv-onboarding-receipt-row">
                   <span>State</span>
@@ -771,18 +825,22 @@ export function FounderOrgSetupPage() {
                 </div>
               </div>
               {actionError ? <div className="hv-onboarding-error" role="alert">{actionError}</div> : null}
+              {isGaiaPending ? <p className="hv-onboarding-muted" role="status">Creating Gaia and preparing her onboarding chat...</p> : null}
               <SectionActions
                 onBack={() => setActiveStepId(previousStep?.id ?? 'founder-org')}
                 onNext={status?.gaia.exists ? () => setActiveStepId('starter-workforce') : handleSeedGaia}
-                nextDisabled={seedGaia.isPending}
-                nextLabel={status?.gaia.exists ? 'Continue' : seedGaia.isPending ? 'Creating...' : 'Create Gaia'}
+                nextDisabled={isGaiaPending}
+                nextLabel={status?.gaia.exists ? 'Continue' : isGaiaPending ? 'Creating...' : 'Create Gaia'}
                 nextTestId="seed-gaia-submit"
               />
-            </>
+            </section>
           ) : null}
 
           {currentStepId === 'starter-workforce' ? (
-            <>
+            <section
+              aria-busy={isStarterWorkforcePending || isSkipStarterWorkforcePending}
+              data-testid="starter-workforce-onboarding-section"
+            >
               <h2>Starter workforce</h2>
               <p>
                 Install the bundled commanders that make a fresh Herd instance useful immediately.
@@ -800,25 +858,40 @@ export function FounderOrgSetupPage() {
                       <p>{pkg.role}</p>
                       <p>{pkg.summary}</p>
                     </div>
-                    <div className={`hv-onboarding-badge ${pkg.installed ? 'hv-onboarding-badge-ready' : 'hv-onboarding-badge-skipped'}`}>
-                      {pkg.installed ? 'installed' : status?.starterWorkforce.skipped ? 'skipped' : 'ready'}
+                    <div className={`hv-onboarding-badge ${pkg.installed
+                      ? 'hv-onboarding-badge-ready'
+                      : isStarterWorkforcePending
+                        ? 'hv-onboarding-badge-pending'
+                        : 'hv-onboarding-badge-skipped'}`}
+                    >
+                      {pkg.installed
+                        ? 'installed'
+                        : isStarterWorkforcePending
+                          ? 'pending'
+                          : status?.starterWorkforce.skipped ? 'skipped' : 'ready'}
                     </div>
                   </article>
                 ))}
               </section>
               {actionError ? <div className="hv-onboarding-error" role="alert">{actionError}</div> : null}
+              {isStarterWorkforcePending
+                ? <p className="hv-onboarding-muted" role="status">Installing starter commander packages...</p>
+                : null}
+              {isSkipStarterWorkforcePending
+                ? <p className="hv-onboarding-muted" role="status">Skipping starter workforce setup...</p>
+                : null}
               <SectionActions
                 onBack={() => setActiveStepId(previousStep?.id ?? 'gaia')}
                 onNext={status?.starterWorkforce.complete ? () => setActiveStepId('providers-machines') : handleSeedStarterWorkforce}
-                nextDisabled={seedStarterWorkforce.isPending || skipStarterWorkforce.isPending}
-                nextLabel={status?.starterWorkforce.complete ? 'Continue' : seedStarterWorkforce.isPending ? 'Installing...' : 'Install starter workforce'}
+                nextDisabled={isStarterWorkforcePending || isSkipStarterWorkforcePending}
+                nextLabel={status?.starterWorkforce.complete ? 'Continue' : isStarterWorkforcePending ? 'Installing...' : 'Install starter workforce'}
                 nextTestId="seed-starter-workforce-submit"
                 secondaryAction={!status?.starterWorkforce.complete ? handleSkipStarterWorkforce : undefined}
-                secondaryDisabled={seedStarterWorkforce.isPending || skipStarterWorkforce.isPending}
-                secondaryLabel={skipStarterWorkforce.isPending ? 'Skipping...' : 'Skip for now'}
+                secondaryDisabled={isStarterWorkforcePending || isSkipStarterWorkforcePending}
+                secondaryLabel={isSkipStarterWorkforcePending ? 'Skipping...' : 'Skip for now'}
                 secondaryTestId="skip-starter-workforce-submit"
               />
-            </>
+            </section>
           ) : null}
 
           {currentStepId === 'providers-machines' ? (

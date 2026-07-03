@@ -16,8 +16,16 @@ export interface LaunchStateResetResult {
 
 type ActiveRuntimeRow = {
   name: string
+  session_type: string
+  creator_kind: string
+  creator_id: string | null
+  conversation_id: string | null
   provider_resume_json: string
   runtime_state_json: string
+}
+
+interface RuntimeSessionPauseSummary {
+  paused: number
 }
 
 function parseRecordJson(value: string): Record<string, unknown> | null {
@@ -113,16 +121,23 @@ function clearBootProviderResume(value: string): string {
   return JSON.stringify(payload)
 }
 
-function pauseSqliteRuntimeSessions(sqliteDb: DatabaseSync): number {
+function isActiveCommanderConversationRuntime(row: ActiveRuntimeRow): boolean {
+  return row.session_type === 'commander'
+    && row.creator_kind === 'commander'
+    && typeof row.conversation_id === 'string'
+    && row.conversation_id.trim().length > 0
+}
+
+function pauseSqliteRuntimeSessions(sqliteDb: DatabaseSync): RuntimeSessionPauseSummary {
   const now = new Date().toISOString()
   const rows = sqliteDb.prepare(
-    `SELECT name, provider_resume_json, runtime_state_json
+    `SELECT name, session_type, creator_kind, creator_id, conversation_id, provider_resume_json, runtime_state_json
      FROM agent_runtime_sessions
      WHERE state = 'active'
      ORDER BY name ASC`,
   ).all() as ActiveRuntimeRow[]
   if (rows.length === 0) {
-    return 0
+    return { paused: 0 }
   }
 
   const update = sqliteDb.prepare(
@@ -134,11 +149,29 @@ function pauseSqliteRuntimeSessions(sqliteDb: DatabaseSync): number {
          archived_at = NULL
      WHERE name = ? AND state = 'active'`,
   )
+  const resetActiveConversation = sqliteDb.prepare(
+    `UPDATE agent_runtime_sessions
+     SET provider_resume_json = ?,
+         runtime_state_json = ?,
+         updated_at = ?,
+         archived_at = NULL
+     WHERE name = ? AND state = 'active'`,
+  )
 
   sqliteDb.exec('BEGIN IMMEDIATE')
   try {
     let paused = 0
     for (const row of rows) {
+      if (isActiveCommanderConversationRuntime(row)) {
+        resetActiveConversation.run(
+          clearBootProviderResume(row.provider_resume_json),
+          clearBootRuntimeState(row.runtime_state_json),
+          now,
+          row.name,
+        )
+        continue
+      }
+
       const result = update.run(
         clearBootProviderResume(row.provider_resume_json),
         clearBootRuntimeState(row.runtime_state_json),
@@ -148,7 +181,7 @@ function pauseSqliteRuntimeSessions(sqliteDb: DatabaseSync): number {
       paused += Number(result.changes)
     }
     sqliteDb.exec('COMMIT')
-    return paused
+    return { paused }
   } catch (error) {
     sqliteDb.exec('ROLLBACK')
     throw error
@@ -197,7 +230,8 @@ export async function resetActiveRuntimeStateForLaunch(
   }
 
   try {
-    result.runtimeSessionsPaused = pauseSqliteRuntimeSessions(options.sqliteDb)
+    const pauseSummary = pauseSqliteRuntimeSessions(options.sqliteDb)
+    result.runtimeSessionsPaused = pauseSummary.paused
   } catch (error) {
     result.errors.push(formatResetError('agent runtime sessions', error))
   }

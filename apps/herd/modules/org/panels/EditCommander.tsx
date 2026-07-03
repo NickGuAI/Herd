@@ -1,7 +1,12 @@
 import { useContext, useEffect, useState } from 'react'
 import { QueryClientContext, type QueryClient } from '@tanstack/react-query'
-import { useProviderRegistry } from '@/hooks/use-providers'
-import { DEFAULT_CLAUDE_EFFORT_LEVEL, type ClaudeEffortLevel } from '@modules/claude-effort.js'
+import {
+  findProviderEntry,
+  getProviderControlDefaults,
+  resolveDefaultProviderId,
+  useProviderRegistry,
+} from '@/hooks/use-providers'
+import { type ClaudeEffortLevel } from '@modules/claude-effort.js'
 import { COMMANDERS_QUERY_KEY, generateCommanderAvatar } from '@modules/commanders/hooks/useCommander'
 import {
   COMMANDER_PORTRAIT_STYLE_OPTIONS,
@@ -75,11 +80,15 @@ function normalizeName(value: string): string {
 function buildFormValues(
   detail: OrgCommanderDetail,
   commanderDisplayName: string,
+  defaults: {
+    agentType: OrgAgentType
+    effort: ClaudeEffortLevel
+  },
 ): EditCommanderValues {
   return {
     displayName: detail.displayName?.trim() || commanderDisplayName,
-    agentType: detail.agentType ?? 'claude',
-    effort: detail.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+    agentType: detail.agentType ?? defaults.agentType,
+    effort: detail.effort ?? defaults.effort,
     cwd: detail.cwd ?? '',
     maxTurns: typeof detail.maxTurns === 'number' && Number.isInteger(detail.maxTurns)
       ? String(detail.maxTurns)
@@ -170,8 +179,15 @@ export function EditCommander({
   onClose,
   onUpdated,
 }: EditCommanderProps) {
-  const { data: providers = [] } = useProviderRegistry()
+  const { data: providers = [], defaultProviderId } = useProviderRegistry()
   const agentTypeOptions = listSupportedCommanderConversationProviders(providers)
+  const defaultAgentType = resolveDefaultProviderId(
+    providers,
+    defaultProviderId,
+    { predicate: (provider) => provider.capabilities.supportsCommanderConversation },
+  ) ?? agentTypeOptions[0]?.value ?? ''
+  const defaultProvider = findProviderEntry(providers, defaultAgentType)
+  const defaultControls = getProviderControlDefaults(defaultProvider)
   const queryClient = useContext(
     QueryClientContext as Parameters<typeof useContext>[0],
   ) as QueryClient | undefined
@@ -208,7 +224,10 @@ export function EditCommander({
           return
         }
 
-        const nextValues = buildFormValues(detail, commanderDisplayName)
+        const nextValues = buildFormValues(detail, commanderDisplayName, {
+          agentType: defaultAgentType,
+          effort: defaultControls.effort,
+        })
         setInitialValues(nextValues)
         setValues(nextValues)
         setMetadata(buildMetadata(detail, fallbackOperatorId))
@@ -238,7 +257,14 @@ export function EditCommander({
     return () => {
       cancelled = true
     }
-  }, [open, commanderId, commanderDisplayName, fallbackOperatorId])
+  }, [
+    open,
+    commanderId,
+    commanderDisplayName,
+    fallbackOperatorId,
+    defaultAgentType,
+    defaultControls.effort,
+  ])
 
   function requestClose() {
     setIsPending(false)

@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveHerdDataDir } from '../data-dir.js'
 import type { MachineConfig } from './types.js'
@@ -384,7 +384,7 @@ export function prepareDaemonMachineLaunchEnvironment(
   }
 }
 
-async function encryptMachineEnvFile(machine: MachineConfig, filePath: string): Promise<string> {
+export async function encryptMachineEnvFile(machine: MachineConfig, filePath: string): Promise<string> {
   const contents = await readFile(filePath, 'utf8')
   const parsed = parseMachineEnvContents(contents)
   if (!parsed) {
@@ -521,45 +521,4 @@ export async function updateMachineEnvEntries(
   }
 
   return next
-}
-
-export async function migrateMachineEnvFiles(
-  machines: readonly MachineConfig[],
-): Promise<{ machines: MachineConfig[]; changed: boolean }> {
-  let changed = false
-  const nextMachines: MachineConfig[] = []
-
-  for (const machine of machines) {
-    const envFile = machine.envFile?.trim()
-    if (!envFile || envFile.endsWith('.enc')) {
-      nextMachines.push(machine)
-      continue
-    }
-
-    try {
-      const stats = await stat(envFile)
-      if (!stats.isFile()) {
-        nextMachines.push(machine)
-        continue
-      }
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code === 'ENOENT' || code === 'ENOTDIR') {
-        nextMachines.push(machine)
-        continue
-      }
-      throw error
-    }
-
-    const migratedEnvFile = await encryptMachineEnvFile(machine, envFile)
-    if (migratedEnvFile !== envFile) {
-      nextMachines.push({ ...machine, envFile: migratedEnvFile })
-      changed = true
-      continue
-    }
-
-    nextMachines.push(machine)
-  }
-
-  return { machines: nextMachines, changed }
 }

@@ -3,20 +3,20 @@ node_modules/
 .turbo/
 .DS_Store
 
-apps/hammurabi/.env
-apps/hammurabi/node_modules/
-apps/hammurabi/dist/
-apps/hammurabi/dist-server/
-apps/hammurabi/data/api-keys/
-apps/hammurabi/data/commanders/
-apps/hammurabi/data/telemetry/
-apps/hammurabi/data/automation/
-apps/hammurabi/data/hammurabi.sqlite
-apps/hammurabi/data/hammurabi.sqlite-wal
-apps/hammurabi/data/hammurabi.sqlite-shm
-apps/hammurabi/data/agents/sessions.json
-apps/hammurabi/data/agents/stream-sessions.json
-apps/hammurabi/data/machines.json
+apps/herd/.env
+apps/herd/node_modules/
+apps/herd/dist/
+apps/herd/dist-server/
+apps/herd/data/api-keys/
+apps/herd/data/commanders/
+apps/herd/data/telemetry/
+apps/herd/data/automation/
+apps/herd/data/herd.sqlite
+apps/herd/data/herd.sqlite-wal
+apps/herd/data/herd.sqlite-shm
+apps/herd/data/agents/sessions.json
+apps/herd/data/agents/stream-sessions.json
+apps/herd/data/machines.json
 
 packages/*/node_modules/
 packages/*/dist/

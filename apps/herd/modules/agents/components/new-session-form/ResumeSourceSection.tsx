@@ -27,7 +27,7 @@ export function ResumeSourceSection({
         <option value="">— Start fresh —</option>
         {(resumeOptions ?? []).map((session) => (
           <option key={session.name} value={session.name}>
-            {session.name} · {session.agentType ?? 'claude'} · {getResumeSourceStateLabel(session)}
+            {session.name} · {session.agentType ?? 'Unavailable'} · {getResumeSourceStateLabel(session)}
           </option>
         ))}
       </select>

@@ -176,7 +176,6 @@ export function profileForApiResponse(
   portraitStyleId: CommanderPortraitStyleId
 } {
   const cleanProfile = ensureCommanderVisualProfile(
-    commanderId,
     profile,
   )
   return {

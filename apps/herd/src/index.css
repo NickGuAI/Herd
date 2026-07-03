@@ -1,5 +1,5 @@
-@import './styles/herd/tokens.css';
-@import './styles/herd/animations.css';
+@import './styles/hervald/tokens.css';
+@import './styles/hervald/animations.css';
 
 @tailwind base;
 @tailwind components;
@@ -16,8 +16,8 @@
 
   /* Herd surfaces need a visible selection wash on both paper and dark ink backgrounds. */
   .hv-light ::selection,
-  .herd ::selection,
-  .herd-chat-pane ::selection {
+  .hervald ::selection,
+  .hervald-chat-pane ::selection {
     background: var(--hv-accent-danger-wash);
     color: inherit;
   }
@@ -31,9 +31,9 @@
    * choice (vermillion at 22% on cream paper); see issue/1065.
    */
   .hv-dark ::selection,
-  .hv-dark.herd ::selection,
-  .hv-dark .herd ::selection,
-  .hv-dark .herd-chat-pane ::selection {
+  .hv-dark.hervald ::selection,
+  .hv-dark .hervald ::selection,
+  .hv-dark .hervald-chat-pane ::selection {
     background: var(--hv-accent-danger-wash);
     color: var(--hv-fg);
   }
@@ -118,14 +118,14 @@
     background: var(--hv-ink-wash-01);
   }
 
-  .herd-prose {
+  .hervald-prose {
     color: var(--hv-fg);
     font-family: var(--hv-font-body);
     font-size: var(--hv-text-small);
     line-height: var(--hv-leading-normal);
   }
 
-  .herd-prose :where(h1, h2, h3, h4, h5, h6) {
+  .hervald-prose :where(h1, h2, h3, h4, h5, h6) {
     color: var(--hv-fg);
     font-family: var(--hv-font-primary);
     font-weight: 400;
@@ -134,22 +134,22 @@
     margin: var(--hv-space-3) 0 var(--hv-space-2);
   }
 
-  .herd-prose :where(p, ul, ol, blockquote, pre, table) {
+  .hervald-prose :where(p, ul, ol, blockquote, pre, table) {
     margin: 0 0 var(--hv-space-3);
   }
 
-  .herd-prose :where(strong, b) {
+  .hervald-prose :where(strong, b) {
     color: var(--hv-fg);
     font-weight: 500;
   }
 
-  .herd-prose :where(a) {
+  .hervald-prose :where(a) {
     color: var(--hv-accent-info);
     text-decoration-color: var(--hv-border-soft);
     text-underline-offset: 3px;
   }
 
-  .herd-prose :where(code) {
+  .hervald-prose :where(code) {
     border: 1px solid var(--hv-border-hair);
     border-radius: var(--hv-radius-soft);
     background: var(--hv-ink-wash-02);
@@ -158,7 +158,7 @@
     padding: 0.1em 0.32em;
   }
 
-  .herd-prose :where(pre) {
+  .hervald-prose :where(pre) {
     border: 1px solid var(--hv-border-hair);
     border-radius: var(--hv-radius-carved);
     background: var(--hv-ink-wash-02);
@@ -167,19 +167,19 @@
     padding: var(--hv-space-3);
   }
 
-  .herd-prose :where(pre code) {
+  .hervald-prose :where(pre code) {
     border: 0;
     background: transparent;
     padding: 0;
   }
 
-  .herd-prose :where(blockquote) {
+  .hervald-prose :where(blockquote) {
     border-left: 3px solid var(--hv-border-soft);
     color: var(--hv-fg-muted);
     padding-left: var(--hv-space-3);
   }
 
-  .herd-prose :where(th, td) {
+  .hervald-prose :where(th, td) {
     border: 1px solid var(--hv-border-hair);
     padding: var(--hv-space-2);
   }
@@ -252,33 +252,33 @@
     transform: translateY(0);
   }
 
-  .sheet-backdrop--herd {
+  .sheet-backdrop--hervald {
     background: var(--hv-bg-overlay, var(--hv-ink-wash-02));
     backdrop-filter: blur(6px);
   }
 
-  .sheet-backdrop--herd-dark {
+  .sheet-backdrop--hervald-dark {
     background: var(--hv-bg-overlay);
   }
 
-  .sheet--herd {
+  .sheet--hervald {
     background: var(--hv-bg);
     border: 1px solid var(--hv-border-hair, var(--hv-ink-wash-02));
     border-bottom: none;
     box-shadow: var(--hv-shadow-modal, 0 12px 48px var(--hv-ink-wash-02));
   }
 
-  .sheet--herd-dark {
+  .sheet--hervald-dark {
     background: var(--hv-bg);
     border-color: var(--hv-border-hair);
     box-shadow: var(--hv-shadow-modal);
   }
 
-  .sheet--herd .sheet-handle-bar {
+  .sheet--hervald .sheet-handle-bar {
     background: var(--hv-fg-faint);
   }
 
-  .sheet-title--herd {
+  .sheet-title--hervald {
     font-family: var(--hv-font-primary, serif);
     font-size: 20px;
     font-weight: 400;
@@ -286,15 +286,15 @@
     color: var(--hv-fg);
   }
 
-  .sheet-close--herd:hover {
+  .sheet-close--hervald:hover {
     background: var(--hv-ink-wash-02, var(--hv-ink-wash-02));
   }
 
-  .sheet-close-icon--herd {
+  .sheet-close-icon--hervald {
     color: var(--hv-fg-subtle);
   }
 
-  .sheet-search--herd {
+  .sheet-search--hervald {
     border-radius: var(--hv-radius-carved, 2px 12px 2px 12px);
     border-color: var(--hv-border-hair, var(--hv-ink-wash-02));
     background: var(--hv-bg-raised);
@@ -303,11 +303,11 @@
     box-shadow: var(--hv-shadow-inner-hi, inset 0 1px 0 var(--hv-ink-wash-03));
   }
 
-  .sheet-search--herd::placeholder {
+  .sheet-search--hervald::placeholder {
     color: var(--hv-fg-faint);
   }
 
-  .sheet-skill--herd {
+  .sheet-skill--hervald {
     border-radius: var(--hv-radius-carved, 2px 12px 2px 12px);
     border-color: var(--hv-border-hair, var(--hv-ink-wash-02));
     background: var(--hv-bg);
@@ -316,25 +316,25 @@
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .sheet-skill--herd:hover {
+    .sheet-skill--hervald:hover {
       background: var(--hv-bg-raised);
       border-color: var(--hv-border-soft, var(--hv-ink-wash-02));
     }
   }
 
-  .sheet-skill-icon--herd {
+  .sheet-skill-icon--hervald {
     color: var(--vermillion-seal, var(--hv-accent-danger));
   }
 
-  .sheet-skill-name--herd {
+  .sheet-skill-name--hervald {
     color: var(--hv-fg);
   }
 
-  .sheet-skill-description--herd {
+  .sheet-skill-description--hervald {
     color: var(--hv-fg-muted);
   }
 
-  .sheet-skill-args--herd {
+  .sheet-skill-args--hervald {
     color: var(--hv-fg-faint);
   }
 
@@ -856,7 +856,7 @@
     white-space: pre;
   }
 
-  .herd-chat-pane {
+  .hervald-chat-pane {
     --hv-chat-card: var(--hv-bg);
     --hv-chat-card-raised: var(--hv-bg-raised);
     --hv-chat-card-muted: var(--hv-ink-wash-01);
@@ -871,7 +871,7 @@
     color: var(--hv-fg);
   }
 
-  .hv-dark .herd-chat-pane {
+  .hv-dark .hervald-chat-pane {
     --hv-chat-inline-code-bg: var(--hv-ink-wash-02);
     --hv-chat-pre-bg: var(--hv-ink-wash-02);
     --hv-chat-user-inline-code-bg: var(--hv-bg-overlay);
@@ -879,17 +879,17 @@
     --hv-chat-user-pre-border: var(--hv-bg-overlay);
   }
 
-  .herd-chat-pane .session-message-list {
+  .hervald-chat-pane .session-message-list {
     display: flex;
     flex-direction: column;
     gap: 16px;
   }
 
-  .herd-chat-pane .message {
+  .hervald-chat-pane .message {
     animation: msg-in 0.35s var(--hv-ease-gentle) forwards;
   }
 
-  .herd-chat-pane .session-message-empty {
+  .hervald-chat-pane .session-message-empty {
     border: 1px solid var(--hv-border-hair);
     border-radius: var(--hv-radius-carved-sm);
     background: var(--hv-chat-card-muted);
@@ -897,31 +897,31 @@
     font-family: var(--hv-font-mono);
   }
 
-  .herd-chat-pane .msg-system {
+  .hervald-chat-pane .msg-system {
     display: flex;
     align-items: center;
     gap: 14px;
     padding: 2px 0;
   }
 
-  .herd-chat-pane .msg-system-line {
+  .hervald-chat-pane .msg-system-line {
     background: var(--hv-border-hair);
   }
 
-  .herd-chat-pane .msg-system-text {
+  .hervald-chat-pane .msg-system-text {
     color: var(--hv-fg-faint);
     letter-spacing: 0.18em;
   }
 
-  .herd-chat-pane .msg-agent-row {
+  .hervald-chat-pane .msg-agent-row {
     display: block;
   }
 
-  .herd-chat-pane .msg-agent-avatar {
+  .hervald-chat-pane .msg-agent-avatar {
     display: none;
   }
 
-  .herd-chat-pane .msg-agent {
+  .hervald-chat-pane .msg-agent {
     display: block;
     width: fit-content;
     max-width: min(82%, 100%);
@@ -936,18 +936,18 @@
     line-height: 1.7;
   }
 
-  .herd-chat-pane .msg-user-row {
+  .hervald-chat-pane .msg-user-row {
     display: flex;
     justify-content: flex-end;
   }
 
-  .herd-chat-pane .msg-user-stack {
+  .hervald-chat-pane .msg-user-stack {
     width: 85%;
     min-width: 0;
     max-width: 85%;
   }
 
-  .herd-chat-pane .msg-user {
+  .hervald-chat-pane .msg-user {
     width: fit-content;
     max-width: 100%;
     padding: 12px 18px;
@@ -960,27 +960,27 @@
     line-height: 1.6;
   }
 
-  .hv-dark .herd-chat-pane .msg-user {
+  .hv-dark .hervald-chat-pane .msg-user {
     border-color: var(--hv-border-soft);
   }
 
-  .herd-chat-pane .msg-attachments {
+  .hervald-chat-pane .msg-attachments {
     margin-bottom: 10px;
   }
 
-  .herd-chat-pane .msg-attachment {
+  .hervald-chat-pane .msg-attachment {
     border-radius: var(--hv-radius-carved-sm);
     border-color: var(--hv-border-soft);
     box-shadow: var(--hv-shadow-whisper);
   }
 
-  .herd-chat-pane .msg-running-agents,
-  .herd-chat-pane .msg-thinking,
-  .herd-chat-pane .msg-plan,
-  .herd-chat-pane .msg-tool,
-  .herd-chat-pane .msg-tool-group,
-  .herd-chat-pane .msg-ask,
-  .herd-chat-pane .msg-ask-done {
+  .hervald-chat-pane .msg-running-agents,
+  .hervald-chat-pane .msg-thinking,
+  .hervald-chat-pane .msg-plan,
+  .hervald-chat-pane .msg-tool,
+  .hervald-chat-pane .msg-tool-group,
+  .hervald-chat-pane .msg-ask,
+  .hervald-chat-pane .msg-ask-done {
     border-color: var(--hv-border-hair);
     border-radius: var(--hv-radius-carved);
     background: var(--hv-chat-card-raised);
@@ -988,26 +988,26 @@
     color: var(--hv-fg);
   }
 
-  .herd-chat-pane .running-agents-label,
-  .herd-chat-pane .msg-thinking-label,
-  .herd-chat-pane .msg-plan-label,
-  .herd-chat-pane .msg-ask-label,
-  .herd-chat-pane .msg-tool-section-label,
-  .herd-chat-pane .msg-tool-title,
-  .herd-chat-pane .msg-tool-group-count,
-  .herd-chat-pane .msg-system-text {
+  .hervald-chat-pane .running-agents-label,
+  .hervald-chat-pane .msg-thinking-label,
+  .hervald-chat-pane .msg-plan-label,
+  .hervald-chat-pane .msg-ask-label,
+  .hervald-chat-pane .msg-tool-section-label,
+  .hervald-chat-pane .msg-tool-title,
+  .hervald-chat-pane .msg-tool-group-count,
+  .hervald-chat-pane .msg-system-text {
     font-family: var(--hv-font-mono);
   }
 
-  .herd-chat-pane .running-agents-label {
+  .hervald-chat-pane .running-agents-label {
     color: var(--hv-fg-subtle);
   }
 
-  .herd-chat-pane .running-agent-item {
+  .hervald-chat-pane .running-agent-item {
     color: var(--hv-fg-muted);
   }
 
-  .herd-chat-pane .msg-thinking {
+  .hervald-chat-pane .msg-thinking {
     margin-left: 0;
     border-left: 2px solid var(--hv-border-soft);
     background: var(--hv-chat-card-muted);
@@ -1015,124 +1015,124 @@
     font-style: normal;
   }
 
-  .herd-chat-pane .msg-thinking-toggle,
-  .herd-chat-pane .msg-plan-toggle,
-  .herd-chat-pane .msg-tool-header,
-  .herd-chat-pane .msg-tool-group-header {
+  .hervald-chat-pane .msg-thinking-toggle,
+  .hervald-chat-pane .msg-plan-toggle,
+  .hervald-chat-pane .msg-tool-header,
+  .hervald-chat-pane .msg-tool-group-header {
     align-items: center;
   }
 
-  .herd-chat-pane .msg-thinking-label,
-  .herd-chat-pane .msg-plan-label,
-  .herd-chat-pane .msg-ask-label,
-  .herd-chat-pane .msg-tool-section-label {
+  .hervald-chat-pane .msg-thinking-label,
+  .hervald-chat-pane .msg-plan-label,
+  .hervald-chat-pane .msg-ask-label,
+  .hervald-chat-pane .msg-tool-section-label {
     color: var(--hv-fg-faint);
     letter-spacing: 0.16em;
   }
 
-  .herd-chat-pane .msg-thinking-body,
-  .herd-chat-pane .msg-plan-body {
+  .hervald-chat-pane .msg-thinking-body,
+  .hervald-chat-pane .msg-plan-body {
     border-top-color: var(--hv-border-hair);
     color: var(--hv-fg-muted);
     line-height: 1.7;
   }
 
-  .herd-chat-pane .msg-plan-icon,
-  .herd-chat-pane .msg-thinking-icon {
+  .hervald-chat-pane .msg-plan-icon,
+  .hervald-chat-pane .msg-thinking-icon {
     color: var(--vermillion-seal);
   }
 
-  .herd-chat-pane .msg-plan-decision {
+  .hervald-chat-pane .msg-plan-decision {
     border-radius: var(--hv-radius-carved-sm);
     letter-spacing: 0.12em;
   }
 
-  .herd-chat-pane .msg-tool-header,
-  .herd-chat-pane .msg-tool-group-header {
+  .hervald-chat-pane .msg-tool-header,
+  .hervald-chat-pane .msg-tool-group-header {
     padding: 12px 14px;
   }
 
-  .herd-chat-pane .msg-tool-title,
-  .herd-chat-pane .msg-tool-group-count {
+  .hervald-chat-pane .msg-tool-title,
+  .hervald-chat-pane .msg-tool-group-count {
     color: var(--hv-fg);
     font-size: 11.5px;
   }
 
-  .herd-chat-pane .msg-tool-path,
-  .herd-chat-pane .msg-tool-group-progress {
+  .hervald-chat-pane .msg-tool-path,
+  .hervald-chat-pane .msg-tool-group-progress {
     color: var(--hv-fg-faint);
   }
 
-  .herd-chat-pane .msg-tool-body,
-  .herd-chat-pane .msg-tool-group-body {
+  .hervald-chat-pane .msg-tool-body,
+  .hervald-chat-pane .msg-tool-group-body {
     border-top-color: var(--hv-border-hair);
     color: var(--hv-fg-muted);
   }
 
-  .herd-chat-pane .msg-tool-input,
-  .herd-chat-pane .msg-tool-output-text {
+  .hervald-chat-pane .msg-tool-input,
+  .hervald-chat-pane .msg-tool-output-text {
     line-height: 1.6;
   }
 
-  .herd-chat-pane .msg-tool-diff-old,
-  .herd-chat-pane .msg-tool-diff-new,
-  .herd-chat-pane .msg-tool-activity {
+  .hervald-chat-pane .msg-tool-diff-old,
+  .hervald-chat-pane .msg-tool-diff-new,
+  .hervald-chat-pane .msg-tool-activity {
     border-radius: var(--hv-radius-carved-sm);
   }
 
-  .herd-chat-pane .msg-tool-activity {
+  .hervald-chat-pane .msg-tool-activity {
     border-color: var(--hv-border-hair);
     background: var(--hv-bg);
   }
 
-  .herd-chat-pane .msg-tool[data-nested] {
+  .hervald-chat-pane .msg-tool[data-nested] {
     border-radius: var(--hv-radius-carved-sm);
     box-shadow: none;
   }
 
-  .herd-chat-pane .msg-ask {
+  .hervald-chat-pane .msg-ask {
     gap: 12px;
   }
 
-  .herd-chat-pane .msg-ask-question-text {
+  .hervald-chat-pane .msg-ask-question-text {
     color: var(--hv-fg);
   }
 
-  .herd-chat-pane .msg-ask-chip {
+  .hervald-chat-pane .msg-ask-chip {
     border-radius: 999px;
     border-color: var(--hv-border-hair);
     background: var(--hv-bg);
     color: var(--hv-fg-muted);
   }
 
-  .herd-chat-pane .msg-ask-chip:hover {
+  .hervald-chat-pane .msg-ask-chip:hover {
     border-color: var(--hv-border-soft);
     background: var(--hv-ink-wash-02);
     color: var(--hv-fg);
   }
 
-  .herd-chat-pane .msg-ask-chip.selected {
+  .hervald-chat-pane .msg-ask-chip.selected {
     border-color: var(--hv-accent-danger-wash);
     background: var(--hv-accent-danger-wash);
     color: var(--vermillion-seal);
   }
 
-  .herd-chat-pane .msg-ask-other {
+  .hervald-chat-pane .msg-ask-other {
     border-color: var(--hv-border-hair);
     border-radius: var(--hv-radius-carved-sm);
     background: var(--hv-bg);
     color: var(--hv-fg);
   }
 
-  .herd-chat-pane .msg-ask-other::placeholder {
+  .hervald-chat-pane .msg-ask-other::placeholder {
     color: var(--hv-fg-faint);
   }
 
-  .herd-chat-pane .msg-ask-other:focus {
+  .hervald-chat-pane .msg-ask-other:focus {
     border-color: var(--hv-border-firm);
   }
 
-  .herd-chat-pane .msg-ask-submit {
+  .hervald-chat-pane .msg-ask-submit {
     border-color: var(--hv-fg);
     border-radius: var(--hv-radius-carved-sm);
     background: var(--hv-fg);
@@ -1140,114 +1140,114 @@
     letter-spacing: 0.12em;
   }
 
-  .herd-chat-pane .msg-ask-submit:not(:disabled):hover {
+  .hervald-chat-pane .msg-ask-submit:not(:disabled):hover {
     opacity: 0.88;
   }
 
-  .herd-chat-pane .msg-agent-md > * + *,
-  .herd-chat-pane .msg-user-md > * + *,
-  .herd-chat-pane .msg-plan-markdown > * + * {
+  .hervald-chat-pane .msg-agent-md > * + *,
+  .hervald-chat-pane .msg-user-md > * + *,
+  .hervald-chat-pane .msg-plan-markdown > * + * {
     margin-top: 0.75rem;
   }
-  .herd-chat-pane .msg-agent-md strong,
-  .herd-chat-pane .msg-user-md strong,
-  .herd-chat-pane .msg-plan-markdown strong {
+  .hervald-chat-pane .msg-agent-md strong,
+  .hervald-chat-pane .msg-user-md strong,
+  .hervald-chat-pane .msg-plan-markdown strong {
     font-weight: 500;
     color: currentColor;
   }
-  .herd-chat-pane .msg-agent-md h1,
-  .herd-chat-pane .msg-agent-md h2,
-  .herd-chat-pane .msg-agent-md h3,
-  .herd-chat-pane .msg-agent-md h4,
-  .herd-chat-pane .msg-agent-md h5,
-  .herd-chat-pane .msg-agent-md h6,
-  .herd-chat-pane .msg-user-md h1,
-  .herd-chat-pane .msg-user-md h2,
-  .herd-chat-pane .msg-user-md h3,
-  .herd-chat-pane .msg-user-md h4,
-  .herd-chat-pane .msg-user-md h5,
-  .herd-chat-pane .msg-user-md h6,
-  .herd-chat-pane .msg-plan-markdown h1,
-  .herd-chat-pane .msg-plan-markdown h2,
-  .herd-chat-pane .msg-plan-markdown h3,
-  .herd-chat-pane .msg-plan-markdown h4,
-  .herd-chat-pane .msg-plan-markdown h5,
-  .herd-chat-pane .msg-plan-markdown h6 {
+  .hervald-chat-pane .msg-agent-md h1,
+  .hervald-chat-pane .msg-agent-md h2,
+  .hervald-chat-pane .msg-agent-md h3,
+  .hervald-chat-pane .msg-agent-md h4,
+  .hervald-chat-pane .msg-agent-md h5,
+  .hervald-chat-pane .msg-agent-md h6,
+  .hervald-chat-pane .msg-user-md h1,
+  .hervald-chat-pane .msg-user-md h2,
+  .hervald-chat-pane .msg-user-md h3,
+  .hervald-chat-pane .msg-user-md h4,
+  .hervald-chat-pane .msg-user-md h5,
+  .hervald-chat-pane .msg-user-md h6,
+  .hervald-chat-pane .msg-plan-markdown h1,
+  .hervald-chat-pane .msg-plan-markdown h2,
+  .hervald-chat-pane .msg-plan-markdown h3,
+  .hervald-chat-pane .msg-plan-markdown h4,
+  .hervald-chat-pane .msg-plan-markdown h5,
+  .hervald-chat-pane .msg-plan-markdown h6 {
     font-weight: 500;
     line-height: 1.3;
     color: currentColor;
   }
-  .herd-chat-pane .msg-agent-md h1,
-  .herd-chat-pane .msg-user-md h1,
-  .herd-chat-pane .msg-plan-markdown h1 { font-size: 1.25rem; }
-  .herd-chat-pane .msg-agent-md h2,
-  .herd-chat-pane .msg-user-md h2,
-  .herd-chat-pane .msg-plan-markdown h2 { font-size: 1.125rem; }
-  .herd-chat-pane .msg-agent-md h3,
-  .herd-chat-pane .msg-user-md h3,
-  .herd-chat-pane .msg-plan-markdown h3 { font-size: 1rem; }
-  .herd-chat-pane .msg-agent-md h4,
-  .herd-chat-pane .msg-agent-md h5,
-  .herd-chat-pane .msg-agent-md h6,
-  .herd-chat-pane .msg-user-md h4,
-  .herd-chat-pane .msg-user-md h5,
-  .herd-chat-pane .msg-user-md h6,
-  .herd-chat-pane .msg-plan-markdown h4,
-  .herd-chat-pane .msg-plan-markdown h5,
-  .herd-chat-pane .msg-plan-markdown h6 { font-size: 0.9375rem; }
-  .herd-chat-pane .msg-agent-md ul,
-  .herd-chat-pane .msg-agent-md ol,
-  .herd-chat-pane .msg-user-md ul,
-  .herd-chat-pane .msg-user-md ol,
-  .herd-chat-pane .msg-plan-markdown ul,
-  .herd-chat-pane .msg-plan-markdown ol {
+  .hervald-chat-pane .msg-agent-md h1,
+  .hervald-chat-pane .msg-user-md h1,
+  .hervald-chat-pane .msg-plan-markdown h1 { font-size: 1.25rem; }
+  .hervald-chat-pane .msg-agent-md h2,
+  .hervald-chat-pane .msg-user-md h2,
+  .hervald-chat-pane .msg-plan-markdown h2 { font-size: 1.125rem; }
+  .hervald-chat-pane .msg-agent-md h3,
+  .hervald-chat-pane .msg-user-md h3,
+  .hervald-chat-pane .msg-plan-markdown h3 { font-size: 1rem; }
+  .hervald-chat-pane .msg-agent-md h4,
+  .hervald-chat-pane .msg-agent-md h5,
+  .hervald-chat-pane .msg-agent-md h6,
+  .hervald-chat-pane .msg-user-md h4,
+  .hervald-chat-pane .msg-user-md h5,
+  .hervald-chat-pane .msg-user-md h6,
+  .hervald-chat-pane .msg-plan-markdown h4,
+  .hervald-chat-pane .msg-plan-markdown h5,
+  .hervald-chat-pane .msg-plan-markdown h6 { font-size: 0.9375rem; }
+  .hervald-chat-pane .msg-agent-md ul,
+  .hervald-chat-pane .msg-agent-md ol,
+  .hervald-chat-pane .msg-user-md ul,
+  .hervald-chat-pane .msg-user-md ol,
+  .hervald-chat-pane .msg-plan-markdown ul,
+  .hervald-chat-pane .msg-plan-markdown ol {
     padding-left: 1.25rem;
   }
-  .herd-chat-pane .msg-agent-md li + li,
-  .herd-chat-pane .msg-user-md li + li,
-  .herd-chat-pane .msg-plan-markdown li + li {
+  .hervald-chat-pane .msg-agent-md li + li,
+  .hervald-chat-pane .msg-user-md li + li,
+  .hervald-chat-pane .msg-plan-markdown li + li {
     margin-top: 0.25rem;
   }
-  .herd-chat-pane .msg-agent-md a,
-  .herd-chat-pane .msg-user-md a,
-  .herd-chat-pane .msg-plan-markdown a {
+  .hervald-chat-pane .msg-agent-md a,
+  .hervald-chat-pane .msg-user-md a,
+  .hervald-chat-pane .msg-plan-markdown a {
     color: currentColor;
     text-decoration: underline;
     text-underline-offset: 2px;
   }
-  .herd-chat-pane .msg-agent-md a:hover,
-  .herd-chat-pane .msg-user-md a:hover,
-  .herd-chat-pane .msg-plan-markdown a:hover {
+  .hervald-chat-pane .msg-agent-md a:hover,
+  .hervald-chat-pane .msg-user-md a:hover,
+  .hervald-chat-pane .msg-plan-markdown a:hover {
     opacity: 0.85;
   }
-  .herd-chat-pane .msg-inline-image,
-  .herd-chat-pane .msg-attachment {
+  .hervald-chat-pane .msg-inline-image,
+  .hervald-chat-pane .msg-attachment {
     display: block;
     width: auto;
     height: auto;
     max-width: min(100%, 36rem);
     object-fit: contain;
   }
-  .herd-chat-pane .msg-agent-md .msg-inline-image,
-  .herd-chat-pane .msg-agent-attachment {
+  .hervald-chat-pane .msg-agent-md .msg-inline-image,
+  .hervald-chat-pane .msg-agent-attachment {
     max-height: min(20rem, 55vh);
   }
-  .herd-chat-pane .msg-user-md .msg-inline-image,
-  .herd-chat-pane .msg-user .msg-attachment {
+  .hervald-chat-pane .msg-user-md .msg-inline-image,
+  .hervald-chat-pane .msg-user .msg-attachment {
     max-height: min(12rem, 45vh);
   }
-  .herd-chat-pane .msg-agent-md blockquote,
-  .herd-chat-pane .msg-user-md blockquote,
-  .herd-chat-pane .msg-plan-markdown blockquote {
+  .hervald-chat-pane .msg-agent-md blockquote,
+  .hervald-chat-pane .msg-user-md blockquote,
+  .hervald-chat-pane .msg-plan-markdown blockquote {
     margin: 0;
     padding: 0.1rem 0 0.1rem 0.75rem;
     border-left: 2px solid var(--hv-border-hair);
     color: currentColor;
     opacity: 0.8;
   }
-  .herd-chat-pane .msg-agent-md table,
-  .herd-chat-pane .msg-user-md table,
-  .herd-chat-pane .msg-plan-markdown table {
+  .hervald-chat-pane .msg-agent-md table,
+  .hervald-chat-pane .msg-user-md table,
+  .hervald-chat-pane .msg-plan-markdown table {
     width: 100%;
     border-collapse: collapse;
     display: block;
@@ -1255,26 +1255,26 @@
     -webkit-overflow-scrolling: touch;
     max-width: 100%;
   }
-  .herd-chat-pane .msg-agent-md th,
-  .herd-chat-pane .msg-agent-md td,
-  .herd-chat-pane .msg-user-md th,
-  .herd-chat-pane .msg-user-md td,
-  .herd-chat-pane .msg-plan-markdown th,
-  .herd-chat-pane .msg-plan-markdown td {
+  .hervald-chat-pane .msg-agent-md th,
+  .hervald-chat-pane .msg-agent-md td,
+  .hervald-chat-pane .msg-user-md th,
+  .hervald-chat-pane .msg-user-md td,
+  .hervald-chat-pane .msg-plan-markdown th,
+  .hervald-chat-pane .msg-plan-markdown td {
     border: 1px solid var(--hv-border-hair);
     padding: 6px 8px;
     text-align: left;
     white-space: normal;
     font-size: 12px;
   }
-  .herd-chat-pane .msg-agent-md th,
-  .herd-chat-pane .msg-user-md th,
-  .herd-chat-pane .msg-plan-markdown th {
+  .hervald-chat-pane .msg-agent-md th,
+  .hervald-chat-pane .msg-user-md th,
+  .hervald-chat-pane .msg-plan-markdown th {
     color: currentColor;
     background: var(--hv-chat-pre-bg);
   }
-  .herd-chat-pane .msg-agent-md pre,
-  .herd-chat-pane .msg-plan-markdown pre {
+  .hervald-chat-pane .msg-agent-md pre,
+  .hervald-chat-pane .msg-plan-markdown pre {
     margin: 0;
     padding: 10px 12px;
     background: var(--hv-chat-pre-bg);
@@ -1282,7 +1282,7 @@
     border-radius: 8px;
     overflow-x: auto;
   }
-  .herd-chat-pane .msg-user-md pre {
+  .hervald-chat-pane .msg-user-md pre {
     margin: 0;
     padding: 10px 12px;
     background: var(--hv-chat-user-pre-bg);
@@ -1290,28 +1290,28 @@
     border-radius: 8px;
     overflow-x: auto;
   }
-  .herd-chat-pane .msg-agent-md code,
-  .herd-chat-pane .msg-user-md code,
-  .herd-chat-pane .msg-plan-markdown code {
+  .hervald-chat-pane .msg-agent-md code,
+  .hervald-chat-pane .msg-user-md code,
+  .hervald-chat-pane .msg-plan-markdown code {
     font-family: var(--hv-font-mono);
     font-size: 12px;
   }
-  .herd-chat-pane .msg-agent-md :not(pre) > code,
-  .herd-chat-pane .msg-plan-markdown :not(pre) > code {
+  .hervald-chat-pane .msg-agent-md :not(pre) > code,
+  .hervald-chat-pane .msg-plan-markdown :not(pre) > code {
     padding: 2px 6px;
     background: var(--hv-chat-inline-code-bg);
     border-radius: 4px;
     color: var(--vermillion-seal);
   }
-  .herd-chat-pane .msg-user-md :not(pre) > code {
+  .hervald-chat-pane .msg-user-md :not(pre) > code {
     padding: 2px 6px;
     background: var(--hv-chat-user-inline-code-bg);
     border-radius: 4px;
     color: currentColor;
   }
-  .herd-chat-pane .msg-agent-md pre code,
-  .herd-chat-pane .msg-user-md pre code,
-  .herd-chat-pane .msg-plan-markdown pre code {
+  .hervald-chat-pane .msg-agent-md pre code,
+  .hervald-chat-pane .msg-user-md pre code,
+  .hervald-chat-pane .msg-plan-markdown pre code {
     display: block;
     color: currentColor;
     font-size: 11px;
@@ -1752,7 +1752,7 @@
     flex-shrink: 0;
   }
   /* Chip styling is global so the "Add to context" chip renders on every surface
-     (mobile session-view-overlay, desktop herd-session-composer, future shells). */
+     (mobile session-view-overlay, desktop hervald-session-composer, future shells). */
   .file-chip {
     display: inline-flex;
     align-items: center;
@@ -1832,7 +1832,7 @@
   .session-view-overlay .send-btn:active { transform: scale(0.92); background: var(--msg-text-secondary); }
   .session-view-overlay .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  .herd-session-composer {
+  .hervald-session-composer {
     --msg-bg: var(--hv-bg);
     --msg-surface: var(--hv-bg);
     --msg-surface-elevated: var(--hv-bg-raised);
@@ -1850,7 +1850,7 @@
     --font-mono: var(--hv-font-mono);
   }
 
-  .herd-session-composer .input-bar {
+  .hervald-session-composer .input-bar {
     display: flex;
     flex-direction: column;
     gap: 0;
@@ -1859,20 +1859,20 @@
     border-top: 1px solid var(--msg-border);
     flex-shrink: 0;
   }
-  .herd-session-composer .composer-attachments {
+  .hervald-session-composer .composer-attachments {
     padding-left: 0;
     padding-right: 0;
   }
-  .herd-session-composer .composer-attachment img {
+  .hervald-session-composer .composer-attachment img {
     border-color: var(--hv-border-soft);
     border-radius: var(--hv-radius-carved-sm);
     box-shadow: var(--hv-shadow-whisper);
   }
-  .herd-session-composer .composer-attachment-remove {
+  .hervald-session-composer .composer-attachment-remove {
     background: var(--hv-fg);
     color: var(--hv-fg-inverse);
   }
-  .herd-session-composer .composer-image-error {
+  .hervald-session-composer .composer-image-error {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1886,18 +1886,18 @@
     font-size: 11px;
     line-height: 1.4;
   }
-  .herd-session-composer .composer-image-error span {
+  .hervald-session-composer .composer-image-error span {
     min-width: 0;
   }
-  .herd-session-composer .composer-toolbar {
+  .hervald-session-composer .composer-toolbar {
     margin-bottom: 8px;
     padding: 0;
   }
-  .herd-session-composer .composer-row {
+  .hervald-session-composer .composer-row {
     align-items: center;
     gap: 10px;
   }
-  .herd-session-composer .input-field {
+  .hervald-session-composer .input-field {
     flex: 1;
     min-height: 40px;
     max-height: 120px;
@@ -1914,8 +1914,8 @@
     box-shadow: none;
     transition: color 0.2s ease;
   }
-  .herd-session-composer .input-field::placeholder { color: var(--msg-text-muted); }
-  .herd-session-composer .input-field:focus { color: var(--hv-fg); }
+  .hervald-session-composer .input-field::placeholder { color: var(--msg-text-muted); }
+  .hervald-session-composer .input-field:focus { color: var(--hv-fg); }
 
   /*
    * iOS Safari auto-zooms into any form control whose computed font-size is
@@ -1925,19 +1925,19 @@
    * ensures desktop rendering is unaffected.
    */
   @media (max-width: 767px) {
-    .herd-session-composer .input-field {
+    .hervald-session-composer .input-field {
       font-size: 16px;
     }
   }
-  .herd-session-composer .composer-icon-btn {
+  .hervald-session-composer .composer-icon-btn {
     border-radius: var(--hv-radius-carved-sm);
   }
-  .herd-session-composer .composer-ability-chip {
+  .hervald-session-composer .composer-ability-chip {
     display: inline-flex;
     align-items: center;
     flex-shrink: 0;
   }
-  .herd-session-composer .composer-ability-btn {
+  .hervald-session-composer .composer-ability-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1955,35 +1955,35 @@
     cursor: pointer;
     transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
   }
-  .herd-session-composer .composer-ability-btn span {
+  .hervald-session-composer .composer-ability-btn span {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .herd-session-composer .composer-ability-btn:hover:not(:disabled) {
+  .hervald-session-composer .composer-ability-btn:hover:not(:disabled) {
     background: var(--hv-bg-raised);
     color: var(--hv-fg);
   }
-  .herd-session-composer .composer-ability-btn:active {
+  .hervald-session-composer .composer-ability-btn:active {
     transform: scale(0.96);
   }
-  .herd-session-composer .composer-ability-btn:disabled {
+  .hervald-session-composer .composer-ability-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
-  .herd-session-composer .composer-ability-btn--active {
+  .hervald-session-composer .composer-ability-btn--active {
     border-color: var(--hv-fg-muted);
     background: var(--hv-bg-raised);
     color: var(--hv-fg);
   }
-  .herd-session-composer .composer-ability-btn--custom {
+  .hervald-session-composer .composer-ability-btn--custom {
     max-width: 110px;
   }
-  .herd-session-composer .composer-ability-btn--with-remove {
+  .hervald-session-composer .composer-ability-btn--with-remove {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
   }
-  .herd-session-composer .composer-ability-remove-btn {
+  .hervald-session-composer .composer-ability-remove-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1995,13 +1995,13 @@
     background: var(--hv-chat-card-muted, var(--hv-ink-wash-01));
     color: var(--hv-fg-faint);
   }
-  .herd-session-composer .composer-custom-ability-form {
+  .hervald-session-composer .composer-custom-ability-form {
     display: grid;
     gap: 8px;
     padding: 8px 0 12px;
   }
-  .herd-session-composer .composer-custom-ability-form input,
-  .herd-session-composer .composer-custom-ability-form textarea {
+  .hervald-session-composer .composer-custom-ability-form input,
+  .hervald-session-composer .composer-custom-ability-form textarea {
     width: 100%;
     border: 1px solid var(--hv-border-hair);
     border-radius: var(--hv-radius-carved-sm);
@@ -2011,15 +2011,15 @@
     padding: 8px 10px;
     outline: none;
   }
-  .herd-session-composer .composer-custom-ability-form textarea {
+  .hervald-session-composer .composer-custom-ability-form textarea {
     resize: vertical;
   }
-  .herd-session-composer .composer-custom-ability-actions {
+  .hervald-session-composer .composer-custom-ability-actions {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
   }
-  .herd-session-composer .composer-custom-ability-actions button {
+  .hervald-session-composer .composer-custom-ability-actions button {
     min-height: 32px;
     padding: 0 12px;
     border: 1px solid var(--hv-border-hair);
@@ -2029,7 +2029,7 @@
     font-family: var(--hv-font-mono);
     font-size: 11px;
   }
-  .herd-session-composer .mic-btn {
+  .hervald-session-composer .mic-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2043,24 +2043,24 @@
     cursor: pointer;
     transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
   }
-  .herd-session-composer .mic-btn:active { transform: scale(0.92); }
-  .herd-session-composer .mic-btn.recording {
+  .hervald-session-composer .mic-btn:active { transform: scale(0.92); }
+  .hervald-session-composer .mic-btn.recording {
     color: var(--msg-accent-red);
     border-color: var(--hv-accent-danger-wash);
     background: var(--hv-accent-danger-wash);
     animation: pulse-mic 1.3s ease-in-out infinite;
   }
-  .herd-session-composer .composer-queue-btn {
+  .hervald-session-composer .composer-queue-btn {
     border-radius: var(--hv-radius-carved-sm);
     color: var(--hv-fg-faint);
     border-color: var(--hv-border-hair);
     background: var(--hv-chat-card-muted, var(--hv-ink-wash-01));
   }
-  .herd-session-composer .composer-queue-btn:hover:not(:disabled) {
+  .hervald-session-composer .composer-queue-btn:hover:not(:disabled) {
     background: var(--hv-bg-raised);
     color: var(--hv-fg);
   }
-  .herd-session-composer .composer-queue-btn--mobile {
+  .hervald-session-composer .composer-queue-btn--mobile {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2072,7 +2072,7 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .herd-session-composer .send-btn {
+  .hervald-session-composer .send-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2086,20 +2086,20 @@
     cursor: pointer;
     transition: all 0.3s var(--ease-gentle);
   }
-  .herd-session-composer .send-btn:active {
+  .hervald-session-composer .send-btn:active {
     transform: scale(0.92);
     background: var(--hv-fg-muted);
   }
-  .herd-session-composer .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .herd-session-composer .composer-footer {
+  .hervald-session-composer .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .hervald-session-composer .composer-footer {
     padding: 8px 0 0;
   }
-  .herd-session-composer .composer-field-stack {
+  .hervald-session-composer .composer-field-stack {
     display: flex;
     align-items: stretch;
     min-height: 40px;
   }
-  .herd-session-composer .composer-queueing-overlay {
+  .hervald-session-composer .composer-queueing-overlay {
     display: flex;
     width: 100%;
     min-height: 40px;
@@ -2114,35 +2114,35 @@
     cursor: wait;
     user-select: none;
   }
-  .herd-session-composer .composer-row--mobile {
+  .hervald-session-composer .composer-row--mobile {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     padding-top: 10px;
   }
-  .herd-session-composer .composer-row--desktop {
+  .hervald-session-composer .composer-row--desktop {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     padding-top: 10px;
   }
-  .herd-session-composer .composer-mobile-actions {
+  .hervald-session-composer .composer-mobile-actions {
     display: flex;
     align-items: center;
     gap: 10px;
     margin-left: auto;
     min-width: 0;
   }
-  .herd-session-composer .composer-row--mobile .composer-ability-btn {
+  .hervald-session-composer .composer-row--mobile .composer-ability-btn {
     width: 36px;
     max-width: 36px;
     padding: 0;
     gap: 0;
     flex-shrink: 0;
   }
-  .herd-session-composer .composer-row--mobile .composer-ability-btn span {
+  .hervald-session-composer .composer-row--mobile .composer-ability-btn span {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -2150,17 +2150,17 @@
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
   }
-  .herd-session-composer .composer-desktop-actions {
+  .hervald-session-composer .composer-desktop-actions {
     display: flex;
     min-width: 0;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
   }
-  .herd-session-composer .composer-desktop-actions--right {
+  .hervald-session-composer .composer-desktop-actions--right {
     margin-left: auto;
   }
-  .herd-session-composer .composer-add-btn {
+  .hervald-session-composer .composer-add-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2174,53 +2174,53 @@
     cursor: pointer;
     transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
   }
-  .herd-session-composer .composer-add-btn:hover:not(:disabled) {
+  .hervald-session-composer .composer-add-btn:hover:not(:disabled) {
     background: var(--hv-bg-raised);
     color: var(--hv-fg);
   }
-  .herd-session-composer .composer-add-btn:active {
+  .hervald-session-composer .composer-add-btn:active {
     transform: scale(0.92);
   }
-  .herd-session-composer .composer-add-btn:disabled {
+  .hervald-session-composer .composer-add-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
-  .herd-session-composer--mobile {
+  .hervald-session-composer--mobile {
     border-top: 1px solid var(--msg-border);
     background: var(--msg-surface);
   }
-  .herd-session-composer--mobile .input-bar {
+  .hervald-session-composer--mobile .input-bar {
     gap: 8px;
     padding: 10px 16px calc(8px + env(safe-area-inset-bottom));
     border-top: 0;
     background: transparent;
   }
-  .herd-session-composer--mobile .composer-row--mobile {
+  .hervald-session-composer--mobile .composer-row--mobile {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
     padding: 0 2px;
   }
-  .herd-session-composer--mobile .composer-mobile-utility-actions,
-  .herd-session-composer--mobile .composer-mobile-primary-actions {
+  .hervald-session-composer--mobile .composer-mobile-utility-actions,
+  .hervald-session-composer--mobile .composer-mobile-primary-actions {
     display: flex;
     min-width: 0;
     align-items: center;
     gap: 6px;
   }
-  .herd-session-composer--mobile .composer-mobile-utility-actions {
+  .hervald-session-composer--mobile .composer-mobile-utility-actions {
     flex: 1;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .herd-session-composer--mobile .composer-mobile-utility-actions::-webkit-scrollbar {
+  .hervald-session-composer--mobile .composer-mobile-utility-actions::-webkit-scrollbar {
     display: none;
   }
-  .herd-session-composer--mobile .composer-mobile-primary-actions {
+  .hervald-session-composer--mobile .composer-mobile-primary-actions {
     flex-shrink: 0;
   }
-  .herd-session-composer--mobile .composer-field-stack {
+  .hervald-session-composer--mobile .composer-field-stack {
     flex: 1;
     min-width: 0;
     min-height: 56px;
@@ -2232,62 +2232,62 @@
       var(--hv-shadow-lift),
       0 2px 0 var(--hv-ink-wash-02);
   }
-  .herd-session-composer--mobile .input-field {
+  .hervald-session-composer--mobile .input-field {
     min-height: 38px;
     max-height: 148px;
     padding: 7px 0 8px;
     line-height: 1.45;
     overflow-y: auto;
   }
-  .herd-session-composer--mobile .composer-add-btn,
-  .herd-session-composer--mobile .composer-queue-message-btn,
-  .herd-session-composer--mobile .mic-btn,
-  .herd-session-composer--mobile .send-btn,
-  .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn {
+  .hervald-session-composer--mobile .composer-add-btn,
+  .hervald-session-composer--mobile .composer-queue-message-btn,
+  .hervald-session-composer--mobile .mic-btn,
+  .hervald-session-composer--mobile .send-btn,
+  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn {
     width: 36px;
     height: 36px;
     min-height: 36px;
     border-radius: 999px;
   }
-  .herd-session-composer--mobile .composer-add-btn,
-  .herd-session-composer--mobile .composer-queue-message-btn,
-  .herd-session-composer--mobile .mic-btn,
-  .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn {
+  .hervald-session-composer--mobile .composer-add-btn,
+  .hervald-session-composer--mobile .composer-queue-message-btn,
+  .hervald-session-composer--mobile .mic-btn,
+  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn {
     border-color: transparent;
     background: transparent;
   }
-  .herd-session-composer--mobile .composer-add-btn:hover:not(:disabled),
-  .herd-session-composer--mobile .composer-queue-message-btn:hover:not(:disabled),
-  .herd-session-composer--mobile .mic-btn:hover:not(:disabled),
-  .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn:hover:not(:disabled) {
+  .hervald-session-composer--mobile .composer-add-btn:hover:not(:disabled),
+  .hervald-session-composer--mobile .composer-queue-message-btn:hover:not(:disabled),
+  .hervald-session-composer--mobile .mic-btn:hover:not(:disabled),
+  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn:hover:not(:disabled) {
     background: var(--hv-ink-wash-01);
   }
-  .herd-session-composer--mobile .composer-add-btn.composer-add-btn--active,
-  .herd-session-composer--mobile .composer-add-btn[aria-pressed="true"],
-  .herd-session-composer--mobile .mic-btn[aria-pressed="true"],
-  .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn.composer-ability-btn--active,
-  .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn[aria-pressed="true"] {
+  .hervald-session-composer--mobile .composer-add-btn.composer-add-btn--active,
+  .hervald-session-composer--mobile .composer-add-btn[aria-pressed="true"],
+  .hervald-session-composer--mobile .mic-btn[aria-pressed="true"],
+  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn.composer-ability-btn--active,
+  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn[aria-pressed="true"] {
     border-color: var(--hv-fg-muted);
     background: var(--hv-bg-raised);
     color: var(--hv-fg);
   }
   @media (hover: none) {
-    .herd-session-composer--mobile .composer-add-btn:active:not(:disabled),
-    .herd-session-composer--mobile .composer-queue-message-btn:active:not(:disabled),
-    .herd-session-composer--mobile .mic-btn:active:not(:disabled),
-    .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn:active:not(:disabled) {
+    .hervald-session-composer--mobile .composer-add-btn:active:not(:disabled),
+    .hervald-session-composer--mobile .composer-queue-message-btn:active:not(:disabled),
+    .hervald-session-composer--mobile .mic-btn:active:not(:disabled),
+    .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn:active:not(:disabled) {
       background: var(--hv-ink-wash-02);
       color: var(--hv-fg);
     }
-    .herd-session-composer--mobile .composer-add-btn.composer-add-btn--active:active:not(:disabled),
-    .herd-session-composer--mobile .composer-add-btn[aria-pressed="true"]:active:not(:disabled),
-    .herd-session-composer--mobile .mic-btn[aria-pressed="true"]:active:not(:disabled),
-    .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn.composer-ability-btn--active:active:not(:disabled),
-    .herd-session-composer--mobile .composer-row--mobile .composer-ability-btn[aria-pressed="true"]:active:not(:disabled) {
+    .hervald-session-composer--mobile .composer-add-btn.composer-add-btn--active:active:not(:disabled),
+    .hervald-session-composer--mobile .composer-add-btn[aria-pressed="true"]:active:not(:disabled),
+    .hervald-session-composer--mobile .mic-btn[aria-pressed="true"]:active:not(:disabled),
+    .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn.composer-ability-btn--active:active:not(:disabled),
+    .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn[aria-pressed="true"]:active:not(:disabled) {
       background: var(--hv-bg-raised);
     }
   }
-  .herd-session-composer--mobile .composer-queue-message-btn {
+  .hervald-session-composer--mobile .composer-queue-message-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2296,14 +2296,14 @@
     cursor: pointer;
     transition: color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
   }
-  .herd-session-composer--mobile .composer-queue-message-btn:active:not(:disabled) {
+  .hervald-session-composer--mobile .composer-queue-message-btn:active:not(:disabled) {
     transform: scale(0.92);
   }
-  .herd-session-composer--mobile .composer-queue-message-btn:disabled {
+  .hervald-session-composer--mobile .composer-queue-message-btn:disabled {
     opacity: 0.35;
     cursor: not-allowed;
   }
-  .herd-session-composer--mobile .composer-queue-btn--mobile {
+  .hervald-session-composer--mobile .composer-queue-btn--mobile {
     min-height: 36px;
     max-width: 72px;
     gap: 4px;
@@ -2313,23 +2313,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .herd-session-composer--mobile .composer-queue-btn--mobile span {
+  .hervald-session-composer--mobile .composer-queue-btn--mobile span {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .herd-session-composer--mobile .composer-footer {
+  .hervald-session-composer--mobile .composer-footer {
     padding: 0 18px;
   }
   @media (max-width: 390px) {
-    .herd-session-composer--mobile .input-bar {
+    .hervald-session-composer--mobile .input-bar {
       padding-left: 10px;
       padding-right: 10px;
     }
-    .herd-session-composer--mobile .composer-row--mobile {
+    .hervald-session-composer--mobile .composer-row--mobile {
       gap: 4px;
       padding: 0;
     }
-    .herd-session-composer--mobile .composer-queue-btn--mobile {
+    .hervald-session-composer--mobile .composer-queue-btn--mobile {
       max-width: 64px;
       padding: 0 7px;
     }

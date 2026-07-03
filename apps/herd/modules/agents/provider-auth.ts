@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, stat, writeFile, access } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { resolveHerdDataDir } from '../data-dir.js'
@@ -10,11 +11,13 @@ import { HERD_MACHINE_ENV_PREFIX } from './machine-credentials.js'
 
 const PROVIDER_AUTH_STORE_VERSION = 1
 const REFRESH_BUFFER_MS = 60_000
+export const DEFAULT_CREDENTIAL_POOL_EXHAUSTION_COOLDOWN_MS = 60 * 60 * 1000
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 const CODEX_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize'
 const CODEX_REDIRECT_PORT = 1455
 export const HERD_CODEX_AUTH_JSON_B64 = 'HERD_CODEX_AUTH_JSON_B64'
+const nodeSqlite = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')
 
 export type ProviderAuthStatus = 'ready' | 'auth_required' | 'unknown'
 export type ProviderAuthMethod = 'oauth' | 'api-key' | 'login' | 'missing'
@@ -47,6 +50,7 @@ export interface ProviderSpawnAuth {
   provider: AgentType
   snapshot: ProviderAuthSnapshot
   env?: NodeJS.ProcessEnv
+  credentialPoolId?: string
 }
 
 export interface PersistedProviderAuthStore {
@@ -54,6 +58,68 @@ export interface PersistedProviderAuthStore {
   providers: Record<string, Record<string, ProviderTokenRecord>>
   snapshots: Record<string, ProviderAuthSnapshot>
   oauthFlows?: Record<string, ProviderOAuthFlowRecord>
+  credentialPools?: Partial<Record<CredentialPoolProvider, CredentialPoolState>>
+}
+
+export type CredentialPoolProvider = 'claude' | 'codex'
+export type CredentialPoolCredentialStatus = 'active' | 'available' | 'exhausted' | 'auth_required'
+
+export interface CredentialPoolCredential {
+  id: string
+  label: string
+  dir: string
+  email?: string
+  createdAt?: string
+  lastUsedAt?: string
+  exhaustedAt?: string
+  exhaustedUntil?: string
+}
+
+export interface CredentialPoolState {
+  active?: string
+  credentials: Record<string, CredentialPoolCredential>
+  exhausted: string[]
+}
+
+export interface CredentialPoolCredentialView extends CredentialPoolCredential {
+  absoluteDir: string
+  active: boolean
+  exhausted: boolean
+  status: CredentialPoolCredentialStatus
+}
+
+export interface CredentialPoolView {
+  provider: CredentialPoolProvider
+  root: string
+  active?: string
+  credentials: CredentialPoolCredentialView[]
+  nextCredential?: CredentialPoolCredentialView
+  readyCount: number
+  earliestExhaustedUntil?: string
+}
+
+export interface CredentialPoolInstructions {
+  directory: string
+  commands: string[]
+}
+
+export interface CredentialPoolRegisterResult {
+  provider: CredentialPoolProvider
+  credential: CredentialPoolCredentialView
+  pool: CredentialPoolView
+  instructions: CredentialPoolInstructions
+}
+
+export interface CredentialPoolSwitchResult {
+  provider: CredentialPoolProvider
+  switched: boolean
+  previousCredential?: CredentialPoolCredentialView
+  activeCredential?: CredentialPoolCredentialView
+  blocked?: {
+    reason: 'no_ready_credentials'
+    earliestExhaustedUntil?: string
+  }
+  pool: CredentialPoolView
 }
 
 export interface ProviderOAuthFlowRecord {
@@ -103,12 +169,25 @@ export function defaultProviderAuthStorePath(env: NodeJS.ProcessEnv = process.en
   return path.join(resolveHerdDataDir(env), 'provider-secrets.json')
 }
 
+export function defaultCredentialPoolsRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveHerdDataDir(env), 'credential-pools')
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function asTrimmedString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function normalizeIsoTimestamp(value: unknown): string | undefined {
+  const text = asTrimmedString(value)
+  if (!text) {
+    return undefined
+  }
+  const parsed = new Date(text)
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString()
 }
 
 function normalizeTokenRecord(raw: unknown): ProviderTokenRecord | null {
@@ -192,8 +271,97 @@ function normalizeFlow(raw: unknown): ProviderOAuthFlowRecord | null {
   return { provider, scopeId, host, state, codeVerifier, codeChallenge, redirectUri, createdAt, expiresAt }
 }
 
+const CREDENTIAL_POOL_PROVIDERS: readonly CredentialPoolProvider[] = ['claude', 'codex']
+
+function isCredentialPoolProvider(provider: AgentType): provider is CredentialPoolProvider {
+  return CREDENTIAL_POOL_PROVIDERS.includes(provider as CredentialPoolProvider)
+}
+
+function normalizeCredentialId(value: unknown): string | null {
+  const id = asTrimmedString(value)
+  return id && /^[a-z0-9][a-z0-9._-]{0,79}$/iu.test(id) ? id : null
+}
+
+function normalizeCredentialPoolDir(
+  provider: CredentialPoolProvider,
+  id: string,
+  raw: unknown,
+): string {
+  const fallback = `${provider}/${id}`
+  const value = asTrimmedString(raw)?.replace(/\\/gu, '/')
+  if (!value || path.isAbsolute(value)) {
+    return fallback
+  }
+  const parts = value.split('/')
+  if (
+    parts.length !== 2
+    || parts[0] !== provider
+    || parts.some((part) => !part || part === '.' || part === '..')
+  ) {
+    return fallback
+  }
+  return value
+}
+
+function normalizePoolCredential(
+  provider: CredentialPoolProvider,
+  id: string,
+  raw: unknown,
+): CredentialPoolCredential | null {
+  if (!isObject(raw)) {
+    return null
+  }
+  const label = asTrimmedString(raw.label) ?? id
+  return {
+    id,
+    label,
+    dir: normalizeCredentialPoolDir(provider, id, raw.dir),
+    ...(asTrimmedString(raw.email) ? { email: asTrimmedString(raw.email) } : {}),
+    ...(asTrimmedString(raw.createdAt) ? { createdAt: asTrimmedString(raw.createdAt) } : {}),
+    ...(asTrimmedString(raw.lastUsedAt) ? { lastUsedAt: asTrimmedString(raw.lastUsedAt) } : {}),
+    ...(normalizeIsoTimestamp(raw.exhaustedAt) ? { exhaustedAt: normalizeIsoTimestamp(raw.exhaustedAt) } : {}),
+    ...(normalizeIsoTimestamp(raw.exhaustedUntil) ? { exhaustedUntil: normalizeIsoTimestamp(raw.exhaustedUntil) } : {}),
+  }
+}
+
+function normalizeCredentialPool(
+  provider: CredentialPoolProvider,
+  raw: unknown,
+): CredentialPoolState {
+  const state: CredentialPoolState = { credentials: {}, exhausted: [] }
+  if (!isObject(raw)) {
+    return state
+  }
+  if (isObject(raw.credentials)) {
+    for (const [rawId, value] of Object.entries(raw.credentials)) {
+      const id = normalizeCredentialId(rawId)
+      if (!id) {
+        continue
+      }
+      const credential = normalizePoolCredential(provider, id, value)
+      if (credential) {
+        state.credentials[id] = credential
+      }
+    }
+  }
+  if (Array.isArray(raw.exhausted)) {
+    state.exhausted = [...new Set(raw.exhausted.map(normalizeCredentialId).filter((id): id is string => Boolean(id)))]
+      .filter((id) => Boolean(state.credentials[id]))
+  }
+  const active = normalizeCredentialId(raw.active)
+  if (active && state.credentials[active]) {
+    state.active = active
+  }
+  return state
+}
+
 function emptyStore(): PersistedProviderAuthStore {
-  return { version: PROVIDER_AUTH_STORE_VERSION, providers: {}, snapshots: {} }
+  return {
+    version: PROVIDER_AUTH_STORE_VERSION,
+    providers: {},
+    snapshots: {},
+    credentialPools: {},
+  }
 }
 
 function normalizeStore(raw: unknown): PersistedProviderAuthStore {
@@ -233,6 +401,15 @@ function normalizeStore(raw: unknown): PersistedProviderAuthStore {
       }
     }
   }
+  if (isObject(raw.credentialPools)) {
+    for (const provider of CREDENTIAL_POOL_PROVIDERS) {
+      const normalized = normalizeCredentialPool(provider, raw.credentialPools[provider])
+      if (Object.keys(normalized.credentials).length > 0) {
+        store.credentialPools ??= {}
+        store.credentialPools[provider] = normalized
+      }
+    }
+  }
   return store
 }
 
@@ -252,10 +429,125 @@ function cloneSnapshot(snapshot: ProviderAuthSnapshot): ProviderAuthSnapshot {
   return { ...snapshot }
 }
 
+function cloneCredential(credential: CredentialPoolCredential): CredentialPoolCredential {
+  return { ...credential }
+}
+
+function cloneCredentialPool(state: CredentialPoolState): CredentialPoolState {
+  return {
+    ...(state.active ? { active: state.active } : {}),
+    credentials: Object.fromEntries(
+      Object.entries(state.credentials).map(([id, credential]) => [id, cloneCredential(credential)]),
+    ),
+    exhausted: [...state.exhausted],
+  }
+}
+
+function slugCredentialLabel(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 48) || 'credential'
+}
+
+function nextCredentialId(label: string, existing: Record<string, CredentialPoolCredential>): string {
+  const base = slugCredentialLabel(label)
+  if (!existing[base]) {
+    return base
+  }
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}-${index}`
+    if (!existing[candidate]) {
+      return candidate
+    }
+  }
+  return `${base}-${randomUrlSafe(4).toLowerCase()}`
+}
+
+function orderedCredentials(pool: CredentialPoolState): CredentialPoolCredential[] {
+  return Object.values(pool.credentials).sort((left, right) => left.id.localeCompare(right.id))
+}
+
+function resolveCredentialExhaustedUntil(
+  credential: CredentialPoolCredential,
+): string | undefined {
+  if (credential.exhaustedUntil) {
+    return credential.exhaustedUntil
+  }
+  if (!credential.exhaustedAt) {
+    return undefined
+  }
+  const exhaustedAtMs = Date.parse(credential.exhaustedAt)
+  if (!Number.isFinite(exhaustedAtMs)) {
+    return undefined
+  }
+  return new Date(exhaustedAtMs + DEFAULT_CREDENTIAL_POOL_EXHAUSTION_COOLDOWN_MS).toISOString()
+}
+
+function isCredentialTemporarilyExhausted(
+  credential: CredentialPoolCredential,
+  nowMs = Date.now(),
+): boolean {
+  const exhaustedUntil = resolveCredentialExhaustedUntil(credential)
+  return exhaustedUntil ? Date.parse(exhaustedUntil) > nowMs : false
+}
+
+function exhaustedIds(pool: CredentialPoolState, nowMs = Date.now()): Set<string> {
+  return new Set(
+    Object.values(pool.credentials)
+      .filter((credential) => isCredentialTemporarilyExhausted(credential, nowMs))
+      .map((credential) => credential.id),
+  )
+}
+
+function clearCredentialExhaustion(credential: CredentialPoolCredential): void {
+  delete credential.exhaustedAt
+  delete credential.exhaustedUntil
+}
+
+function pruneExpiredCredentialExhaustion(pool: CredentialPoolState, nowMs = Date.now()): void {
+  for (const credential of Object.values(pool.credentials)) {
+    if (credential.exhaustedAt && !isCredentialTemporarilyExhausted(credential, nowMs)) {
+      clearCredentialExhaustion(credential)
+    }
+  }
+  const exhausted = exhaustedIds(pool, nowMs)
+  pool.exhausted = pool.exhausted.filter((id) => exhausted.has(id))
+}
+
+function resolveExhaustedUntil(resetAt: string | undefined, nowMs = Date.now()): string {
+  const parsedResetAt = resetAt ? Date.parse(resetAt) : Number.NaN
+  if (Number.isFinite(parsedResetAt) && parsedResetAt > nowMs) {
+    return new Date(parsedResetAt).toISOString()
+  }
+  return new Date(nowMs + DEFAULT_CREDENTIAL_POOL_EXHAUSTION_COOLDOWN_MS).toISOString()
+}
+
+function earliestFutureIso(values: Array<string | undefined>, nowMs = Date.now()): string | undefined {
+  const earliest = values
+    .map((value) => value ? Date.parse(value) : Number.NaN)
+    .filter((value) => Number.isFinite(value) && value > nowMs)
+    .sort((left, right) => left - right)[0]
+  return earliest ? new Date(earliest).toISOString() : undefined
+}
+
+function firstCredentialId(pool: CredentialPoolState): string | undefined {
+  return orderedCredentials(pool)[0]?.id
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`
+}
+
 export class ProviderAuthStore {
   private queue = Promise.resolve()
 
-  constructor(private readonly filePath = defaultProviderAuthStorePath()) {}
+  constructor(
+    private readonly filePath = defaultProviderAuthStorePath(),
+    private readonly credentialPoolsRoot = defaultCredentialPoolsRoot(),
+  ) {}
 
   async read(): Promise<PersistedProviderAuthStore> {
     try {
@@ -325,6 +617,263 @@ export class ProviderAuthStore {
     return consumed
   }
 
+  async listPoolCredentials(provider: AgentType): Promise<CredentialPoolView> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const store = await this.read()
+    return this.buildPoolView(poolProvider, store.credentialPools?.[poolProvider] ?? { credentials: {}, exhausted: [] })
+  }
+
+  async getActivePoolCredential(provider: AgentType): Promise<CredentialPoolCredentialView | null> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const pool = await this.listPoolCredentials(poolProvider)
+    if (pool.credentials.length === 0) {
+      return null
+    }
+    return pool.credentials.find((credential) => credential.id === pool.active && isReadyCredentialView(credential))
+      ?? pool.credentials.find(isReadyCredentialView)
+      ?? null
+  }
+
+  async getPoolCredential(provider: AgentType, id: string): Promise<CredentialPoolCredentialView | null> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const credentialId = requireCredentialId(id)
+    const pool = await this.listPoolCredentials(poolProvider)
+    return pool.credentials.find((credential) => credential.id === credentialId) ?? null
+  }
+
+  async registerPoolCredential(
+    provider: AgentType,
+    label = 'Credential',
+    email?: string,
+  ): Promise<CredentialPoolRegisterResult> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    let credential!: CredentialPoolCredential
+    await this.mutate((store) => {
+      store.credentialPools ??= {}
+      const pool = store.credentialPools[poolProvider] ?? { credentials: {}, exhausted: [] }
+      const id = nextCredentialId(label, pool.credentials)
+      const now = new Date().toISOString()
+      credential = {
+        id,
+        label: label.trim() || id,
+        dir: `${poolProvider}/${id}`,
+        createdAt: now,
+        ...(email?.trim() ? { email: email.trim() } : {}),
+      }
+      pool.credentials[id] = credential
+      if (!pool.active) {
+        pool.active = id
+      }
+      store.credentialPools[poolProvider] = pool
+    })
+    const absoluteDir = this.resolveCredentialPoolCredentialDir(credential)
+    await mkdir(absoluteDir, { recursive: true, mode: 0o700 })
+    await chmod(absoluteDir, 0o700)
+    const pool = await this.listPoolCredentials(poolProvider)
+    const view = pool.credentials.find((entry) => entry.id === credential.id)
+    if (!view) {
+      throw new Error('Credential pool registration did not persist')
+    }
+    return {
+      provider: poolProvider,
+      credential: view,
+      pool,
+      instructions: buildPoolInstructions(poolProvider, absoluteDir),
+    }
+  }
+
+  async markPoolCredentialExhausted(
+    provider: AgentType,
+    id: string,
+    resetAt?: string,
+  ): Promise<CredentialPoolView> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const credentialId = requireCredentialId(id)
+    await this.mutate((store) => {
+      const pool = getMutableCredentialPool(store, poolProvider)
+      pruneExpiredCredentialExhaustion(pool)
+      const credential = pool.credentials[credentialId]
+      if (!credential) {
+        throw new Error(`Credential "${credentialId}" is not registered for ${poolProvider}`)
+      }
+      const now = Date.now()
+      credential.exhaustedAt = new Date(now).toISOString()
+      credential.exhaustedUntil = resolveExhaustedUntil(resetAt, now)
+      pool.exhausted = [...new Set([...pool.exhausted, credentialId])]
+    })
+    return this.listPoolCredentials(poolProvider)
+  }
+
+  async switchToNextPoolCredential(
+    provider: AgentType,
+    exhaustedId?: string,
+    options: { resetAt?: string } = {},
+  ): Promise<CredentialPoolSwitchResult> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const exhaustedCredentialId = exhaustedId ? requireCredentialId(exhaustedId) : undefined
+    let previousId: string | undefined
+    let activeId: string | undefined
+    let switched = false
+    let blocked: CredentialPoolSwitchResult['blocked'] | undefined
+    await this.mutateAsync(async (store) => {
+      const pool = getMutableCredentialPool(store, poolProvider)
+      const now = Date.now()
+      pruneExpiredCredentialExhaustion(pool, now)
+      previousId = pool.active ?? firstCredentialId(pool)
+      if (exhaustedCredentialId) {
+        const exhaustedCredential = pool.credentials[exhaustedCredentialId]
+        if (!exhaustedCredential) {
+          throw new Error(`Credential "${exhaustedCredentialId}" is not registered for ${poolProvider}`)
+        }
+        exhaustedCredential.exhaustedAt = new Date(now).toISOString()
+        exhaustedCredential.exhaustedUntil = resolveExhaustedUntil(options.resetAt, now)
+        pool.exhausted = [...new Set([...pool.exhausted, exhaustedCredentialId])]
+        if (!previousId) {
+          previousId = exhaustedCredentialId
+        }
+        if (previousId && exhaustedCredentialId !== previousId) {
+          activeId = pool.active
+          return
+        }
+      } else if (previousId && pool.credentials[previousId]) {
+        pool.credentials[previousId].exhaustedAt = new Date(now).toISOString()
+        pool.credentials[previousId].exhaustedUntil = resolveExhaustedUntil(options.resetAt, now)
+        pool.exhausted = [...new Set([...pool.exhausted, previousId])]
+      }
+      const view = await this.buildPoolView(poolProvider, pool)
+      const next = view.credentials.find((credential) => (
+        credential.id !== previousId && isReadyCredentialView(credential)
+      ))
+      if (next) {
+        pool.active = next.id
+        pool.credentials[next.id].lastUsedAt = new Date(now).toISOString()
+        activeId = next.id
+        switched = true
+      } else if (previousId && pool.credentials[previousId]) {
+        pool.active = previousId
+        activeId = previousId
+        blocked = {
+          reason: 'no_ready_credentials',
+          ...(view.earliestExhaustedUntil ? { earliestExhaustedUntil: view.earliestExhaustedUntil } : {}),
+        }
+      }
+    })
+    const pool = await this.listPoolCredentials(poolProvider)
+    return {
+      provider: poolProvider,
+      switched,
+      ...(previousId ? { previousCredential: pool.credentials.find((credential) => credential.id === previousId) } : {}),
+      ...(activeId ? { activeCredential: pool.credentials.find((credential) => credential.id === activeId) } : {}),
+      ...(blocked ? { blocked } : {}),
+      pool,
+    }
+  }
+
+  async removePoolCredential(provider: AgentType, id: string): Promise<CredentialPoolView> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const credentialId = requireCredentialId(id)
+    let dir: string | undefined
+    await this.mutate((store) => {
+      const pool = getMutableCredentialPool(store, poolProvider)
+      pruneExpiredCredentialExhaustion(pool)
+      const credential = pool.credentials[credentialId]
+      if (!credential) {
+        throw new Error(`Credential "${credentialId}" is not registered for ${poolProvider}`)
+      }
+      dir = credential.dir
+      delete pool.credentials[credentialId]
+      pool.exhausted = pool.exhausted.filter((entry) => entry !== credentialId)
+      if (pool.active === credentialId) {
+        const exhausted = exhaustedIds(pool)
+        pool.active = orderedCredentials(pool).find((entry) => !exhausted.has(entry.id))?.id
+          ?? firstCredentialId(pool)
+      }
+      if (Object.keys(pool.credentials).length === 0) {
+        delete store.credentialPools?.[poolProvider]
+      }
+    })
+    if (dir) {
+      await rm(this.resolveCredentialPoolDir(dir), { recursive: true, force: true })
+    }
+    return this.listPoolCredentials(poolProvider)
+  }
+
+  async markPoolCredentialUsed(provider: AgentType, id: string): Promise<void> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const credentialId = requireCredentialId(id)
+    await this.mutate((store) => {
+      const pool = getMutableCredentialPool(store, poolProvider)
+      const credential = pool.credentials[credentialId]
+      if (!credential) {
+        throw new Error(`Credential "${credentialId}" is not registered for ${poolProvider}`)
+      }
+      pool.active = credentialId
+      clearCredentialExhaustion(credential)
+      pool.exhausted = pool.exhausted.filter((entry) => entry !== credentialId)
+      credential.lastUsedAt = new Date().toISOString()
+    })
+  }
+
+  resolveCredentialPoolCredentialDir(credential: CredentialPoolCredential): string {
+    return this.resolveCredentialPoolDir(credential.dir)
+  }
+
+  private resolveCredentialPoolDir(relativeDir: string): string {
+    const root = path.resolve(this.credentialPoolsRoot)
+    const absolute = path.resolve(root, relativeDir)
+    if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) {
+      throw new Error('Credential pool directory escaped the configured root')
+    }
+    return absolute
+  }
+
+  private async buildPoolView(
+    provider: CredentialPoolProvider,
+    state: CredentialPoolState,
+  ): Promise<CredentialPoolView> {
+    const pool = cloneCredentialPool(state)
+    pruneExpiredCredentialExhaustion(pool)
+    const exhausted = exhaustedIds(pool)
+    const active = pool.active && pool.credentials[pool.active] ? pool.active : firstCredentialId(pool)
+    const credentials = await Promise.all(orderedCredentials(pool).map(async (credential): Promise<CredentialPoolCredentialView> => {
+      const readiness = await readCredentialPoolCredentialReadiness(
+        provider,
+        this.resolveCredentialPoolCredentialDir(credential),
+      )
+      const isExhausted = exhausted.has(credential.id)
+      const isReady = readiness === 'ready'
+      const isActive = credential.id === active
+      const exhaustedUntil = resolveCredentialExhaustedUntil(credential)
+      const status: CredentialPoolCredentialStatus = !isReady
+        ? 'auth_required'
+        : isExhausted
+        ? 'exhausted'
+        : isActive ? 'active' : 'available'
+      return {
+        ...credential,
+        ...(exhaustedUntil ? { exhaustedUntil } : {}),
+        absoluteDir: this.resolveCredentialPoolCredentialDir(credential),
+        active: isActive,
+        exhausted: isExhausted,
+        status,
+      }
+    }))
+    const readyCredentials = credentials.filter(isReadyCredentialView)
+    const nextCredential = readyCredentials.find((credential) => credential.id !== active)
+    const earliestExhaustedUntil = earliestFutureIso(
+      credentials.map((credential) => credential.exhaustedUntil),
+    )
+    return {
+      provider,
+      root: path.resolve(this.credentialPoolsRoot),
+      ...(active ? { active } : {}),
+      credentials,
+      readyCount: readyCredentials.length,
+      ...(nextCredential ? { nextCredential } : {}),
+      ...(earliestExhaustedUntil ? { earliestExhaustedUntil } : {}),
+    }
+  }
+
   private async mutate(mutator: (store: PersistedProviderAuthStore) => void): Promise<void> {
     const next = this.queue.then(async () => {
       const store = await this.read()
@@ -334,6 +883,43 @@ export class ProviderAuthStore {
     this.queue = next.catch(() => undefined)
     await next
   }
+
+  private async mutateAsync(mutator: (store: PersistedProviderAuthStore) => Promise<void> | void): Promise<void> {
+    const next = this.queue.then(async () => {
+      const store = await this.read()
+      await mutator(store)
+      await this.write(store)
+    })
+    this.queue = next.catch(() => undefined)
+    await next
+  }
+}
+
+function requireCredentialPoolProvider(provider: AgentType): CredentialPoolProvider {
+  if (!isCredentialPoolProvider(provider)) {
+    throw new Error(`${provider} does not support credential pools`)
+  }
+  return provider
+}
+
+function requireCredentialId(value: string): string {
+  const id = normalizeCredentialId(value)
+  if (!id) {
+    throw new Error('Credential id is invalid')
+  }
+  return id
+}
+
+function getMutableCredentialPool(
+  store: PersistedProviderAuthStore,
+  provider: CredentialPoolProvider,
+): CredentialPoolState {
+  store.credentialPools ??= {}
+  const pool = store.credentialPools[provider]
+  if (!pool) {
+    throw new Error(`No credential pool is configured for ${provider}`)
+  }
+  return pool
 }
 
 function providerHost(machine: MachineConfig | undefined): string {
@@ -393,6 +979,90 @@ function buildSnapshot(
   }
 }
 
+function buildPoolInstructions(
+  provider: CredentialPoolProvider,
+  absoluteDir: string,
+): CredentialPoolInstructions {
+  const quotedDir = shellQuote(absoluteDir)
+  return {
+    directory: absoluteDir,
+    commands: provider === 'claude'
+      ? [
+          `mkdir -p ${quotedDir}`,
+          `CLAUDE_CONFIG_DIR=${quotedDir} claude auth login`,
+        ]
+      : [
+          `mkdir -p ${quotedDir}`,
+          `CODEX_HOME=${quotedDir} codex login --device-auth`,
+        ],
+  }
+}
+
+function credentialPoolEnv(provider: CredentialPoolProvider, absoluteDir: string): NodeJS.ProcessEnv {
+  return provider === 'claude'
+    ? { CLAUDE_CONFIG_DIR: absoluteDir }
+    : { CODEX_HOME: absoluteDir }
+}
+
+function isReadyCredentialView(credential: CredentialPoolCredentialView): boolean {
+  return credential.status === 'active' || credential.status === 'available'
+}
+
+function credentialPoolUnavailableDetail(
+  provider: CredentialPoolProvider,
+  credential: CredentialPoolCredentialView,
+): string {
+  return credential.status === 'exhausted'
+    ? `Credential pool "${credential.label}" is cooling down${credential.exhaustedUntil ? ` until ${credential.exhaustedUntil}` : ''}.`
+    : `${provider} credential pool "${credential.label}" is missing login auth. Re-run the provider login command for that credential directory.`
+}
+
+async function throwCredentialPoolUnavailable(args: {
+  provider: CredentialPoolProvider
+  scopeId: string
+  host: string
+  store: ProviderAuthStore
+  credential: CredentialPoolCredentialView
+}): Promise<never> {
+  const snapshot = buildSnapshot(
+    args.provider,
+    args.scopeId,
+    args.host,
+    'auth_required',
+    'login',
+    credentialPoolUnavailableDetail(args.provider, args.credential),
+  )
+  await args.store.upsertSnapshot(snapshot)
+  throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
+}
+
+async function hasNonEmptyFile(filePath: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(filePath)
+    return fileStat.isFile() && fileStat.size > 0
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return false
+    }
+    throw error
+  }
+}
+
+async function readCredentialPoolCredentialReadiness(
+  provider: CredentialPoolProvider,
+  absoluteDir: string,
+): Promise<ProviderAuthStatus> {
+  if (provider === 'claude') {
+    return await hasNonEmptyFile(path.join(absoluteDir, '.credentials.json'))
+      ? 'ready'
+      : 'auth_required'
+  }
+  return await hasNonEmptyFile(path.join(absoluteDir, 'auth.json'))
+    ? 'ready'
+    : 'auth_required'
+}
+
 function hasApiKeyAuth(provider: AgentType, env: NodeJS.ProcessEnv): boolean {
   if (provider === 'claude') {
     return Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN)
@@ -414,6 +1084,71 @@ function resolveCodexHome(env: NodeJS.ProcessEnv): string {
   return path.resolve(configuredHome && configuredHome.length > 0
     ? configuredHome
     : path.join(env.HOME?.trim() || homedir(), '.codex'))
+}
+
+function normalizeCodexHome(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? path.resolve(trimmed) : undefined
+}
+
+async function codexStateHasThread(codexHome: string, threadId: string): Promise<boolean> {
+  const dbPath = path.join(codexHome, 'state_5.sqlite')
+  try {
+    await access(dbPath)
+  } catch {
+    return false
+  }
+
+  let db: import('node:sqlite').DatabaseSync | null = null
+  try {
+    db = new nodeSqlite.DatabaseSync(dbPath, { readOnly: true })
+    const row = db.prepare('SELECT 1 FROM threads WHERE id = ? LIMIT 1').get(threadId)
+    return Boolean(row)
+  } catch {
+    return false
+  } finally {
+    db?.close()
+  }
+}
+
+function addUniquePath(paths: string[], rawPath: string | undefined): void {
+  const normalized = normalizeCodexHome(rawPath)
+  if (!normalized || paths.includes(normalized)) {
+    return
+  }
+  paths.push(normalized)
+}
+
+export async function findLocalCodexHomeForThread(args: {
+  threadId: string
+  store: ProviderAuthStore
+  env?: NodeJS.ProcessEnv
+}): Promise<string | undefined> {
+  const threadId = args.threadId.trim()
+  if (!threadId) {
+    return undefined
+  }
+
+  const env = args.env ?? process.env
+  const candidates: string[] = []
+  addUniquePath(candidates, resolveCodexHome(env))
+
+  try {
+    const pool = await args.store.listPoolCredentials('codex')
+    for (const credential of pool.credentials) {
+      addUniquePath(candidates, credential.absoluteDir)
+    }
+  } catch {
+    // Credential pools are optional. Fall back to the host Codex home.
+  }
+
+  for (const codexHome of candidates) {
+    if (await codexStateHasThread(codexHome, threadId)) {
+      return codexHome
+    }
+  }
+
+  return undefined
 }
 
 async function readCodexLoginAuthEnv(
@@ -615,6 +1350,8 @@ export async function prepareProviderSpawnAuth(args: {
   machine?: MachineConfig
   store: ProviderAuthStore
   env?: NodeJS.ProcessEnv
+  codexHome?: string
+  credentialPoolId?: string
   fetchImpl?: typeof fetch
   nowMs?: number
 }): Promise<ProviderSpawnAuth> {
@@ -622,15 +1359,175 @@ export async function prepareProviderSpawnAuth(args: {
   const fetchImpl = args.fetchImpl ?? fetch
   const nowMs = args.nowMs ?? Date.now()
   const host = providerHost(args.machine)
+  const codexHome = args.provider === 'codex' && host === 'local'
+    ? normalizeCodexHome(args.codexHome)
+    : undefined
+  const baseEnv = codexHome ? { ...env, CODEX_HOME: codexHome } : env
+  const requestedPoolCredential = isCredentialPoolProvider(args.provider) && host === 'local' && args.credentialPoolId
+    ? await args.store.getPoolCredential(args.provider, args.credentialPoolId)
+    : null
+  if (isCredentialPoolProvider(args.provider) && host === 'local' && args.credentialPoolId && !requestedPoolCredential) {
+    const snapshot = buildSnapshot(
+      args.provider,
+      args.scopeId,
+      host,
+      'auth_required',
+      'login',
+      `Persisted ${args.provider} credential pool "${args.credentialPoolId}" is not registered. Restore the credential or migrate the session before resuming.`,
+    )
+    await args.store.upsertSnapshot(snapshot)
+    throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
+  }
+
+  if (codexHome) {
+    if (requestedPoolCredential && normalizeCodexHome(requestedPoolCredential.absoluteDir) !== codexHome) {
+      const snapshot = buildSnapshot(
+        args.provider,
+        args.scopeId,
+        host,
+        'auth_required',
+        'login',
+        `Persisted codexHome "${codexHome}" does not match credential pool "${requestedPoolCredential.id}". Run the one-off Herd migration before resuming.`,
+      )
+      await args.store.upsertSnapshot(snapshot)
+      throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
+    }
+    const loginEnv = await readCodexLoginAuthEnv(baseEnv, host)
+    if (loginEnv) {
+      if (requestedPoolCredential && !isReadyCredentialView(requestedPoolCredential)) {
+        await throwCredentialPoolUnavailable({
+          provider: 'codex',
+          scopeId: args.scopeId,
+          host,
+          store: args.store,
+          credential: requestedPoolCredential,
+        })
+      }
+      if (requestedPoolCredential) {
+        await args.store.markPoolCredentialUsed(args.provider, requestedPoolCredential.id)
+      }
+      const snapshot = buildSnapshot(
+        args.provider,
+        args.scopeId,
+        host,
+        'ready',
+        'login',
+        'Using Codex CLI credentials from the persisted thread home.',
+      )
+      await args.store.upsertSnapshot(snapshot)
+      return {
+        provider: args.provider,
+        snapshot,
+        env: { CODEX_HOME: codexHome, ...loginEnv },
+        ...(requestedPoolCredential ? { credentialPoolId: requestedPoolCredential.id } : {}),
+      }
+    }
+    if (requestedPoolCredential) {
+      const snapshot = buildSnapshot(
+        args.provider,
+        args.scopeId,
+        host,
+        'auth_required',
+        'login',
+        `Codex credential pool "${requestedPoolCredential.label}" is missing login auth. Run \`CODEX_HOME=${requestedPoolCredential.absoluteDir} codex login --device-auth\`.`,
+      )
+      await args.store.upsertSnapshot(snapshot)
+      throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
+    }
+  }
+
+  if (isCredentialPoolProvider(args.provider) && host === 'local' && !codexHome) {
+    const pool = await args.store.listPoolCredentials(args.provider)
+    const credential = requestedPoolCredential
+      ? requestedPoolCredential
+      : pool.credentials.find((candidate) => candidate.id === pool.active && isReadyCredentialView(candidate))
+        ?? pool.credentials.find(isReadyCredentialView)
+        ?? null
+    if (requestedPoolCredential && !isReadyCredentialView(requestedPoolCredential)) {
+      await throwCredentialPoolUnavailable({
+        provider: args.provider,
+        scopeId: args.scopeId,
+        host,
+        store: args.store,
+        credential: requestedPoolCredential,
+      })
+    }
+    if (!credential && pool.credentials.length > 0) {
+      const snapshot = buildSnapshot(
+        args.provider,
+        args.scopeId,
+        host,
+        'auth_required',
+        'login',
+        pool.earliestExhaustedUntil
+          ? `No ${args.provider} credential pool credentials are ready. Earliest reset: ${pool.earliestExhaustedUntil}.`
+          : `No ${args.provider} credential pool credentials are ready. Re-run provider login for an auth_required credential.`,
+      )
+      await args.store.upsertSnapshot(snapshot)
+      throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
+    }
+    if (credential) {
+      const poolEnv = credentialPoolEnv(args.provider, credential.absoluteDir)
+      let spawnEnv = poolEnv
+      if (args.provider === 'codex') {
+        const codexLoginEnv = await readCodexLoginAuthEnv({ ...env, ...poolEnv }, host)
+        if (!codexLoginEnv) {
+          const snapshot = buildSnapshot(
+            args.provider,
+            args.scopeId,
+            host,
+            'auth_required',
+            'login',
+            `Codex credential pool "${credential.label}" is missing login auth. Run \`CODEX_HOME=${credential.absoluteDir} codex login --device-auth\`.`,
+          )
+          await args.store.upsertSnapshot(snapshot)
+          throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
+        }
+        spawnEnv = { ...poolEnv, ...codexLoginEnv }
+      } else if (args.provider === 'claude' && !(await hasNonEmptyFile(path.join(credential.absoluteDir, '.credentials.json')))) {
+        const snapshot = buildSnapshot(
+          args.provider,
+          args.scopeId,
+          host,
+          'auth_required',
+          'login',
+          `Claude credential pool "${credential.label}" is missing login auth. Run \`CLAUDE_CONFIG_DIR=${credential.absoluteDir} claude auth login\`.`,
+        )
+        await args.store.upsertSnapshot(snapshot)
+        throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
+      }
+      await args.store.markPoolCredentialUsed(args.provider, credential.id)
+      const snapshot = buildSnapshot(
+        args.provider,
+        args.scopeId,
+        host,
+        'ready',
+        'login',
+        `Using ${args.provider} credential pool "${credential.label}".`,
+        credential.email ? {
+          access: 'credential-pool',
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          email: credential.email,
+        } : undefined,
+      )
+      await args.store.upsertSnapshot(snapshot)
+      return {
+        provider: args.provider,
+        snapshot,
+        env: spawnEnv,
+        credentialPoolId: credential.id,
+      }
+    }
+  }
 
   if (!providerUsesManagedOAuth(args.provider)) {
     if (args.provider === 'claude') {
-      if (hasApiKeyAuth(args.provider, env)) {
+      if (hasApiKeyAuth(args.provider, baseEnv)) {
         const snapshot = buildSnapshot(args.provider, args.scopeId, host, 'ready', 'api-key')
         await args.store.upsertSnapshot(snapshot)
         return { provider: args.provider, snapshot }
       }
-      const loginEnv = await existingLoginAuthEnv(args.provider, env, host)
+      const loginEnv = await existingLoginAuthEnv(args.provider, baseEnv, host)
       if (loginEnv) {
         const snapshot = buildSnapshot(
           args.provider,
@@ -656,12 +1553,16 @@ export async function prepareProviderSpawnAuth(args: {
     }
 
     if (args.provider === 'codex') {
-      if (hasApiKeyAuth(args.provider, env)) {
+      if (hasApiKeyAuth(args.provider, baseEnv)) {
         const snapshot = buildSnapshot(args.provider, args.scopeId, host, 'ready', 'api-key')
         await args.store.upsertSnapshot(snapshot)
-        return { provider: args.provider, snapshot }
+        return {
+          provider: args.provider,
+          snapshot,
+          ...(codexHome ? { env: { CODEX_HOME: codexHome } } : {}),
+        }
       }
-      const loginEnv = await existingLoginAuthEnv(args.provider, env, host)
+      const loginEnv = await existingLoginAuthEnv(args.provider, baseEnv, host)
       if (loginEnv) {
         const snapshot = buildSnapshot(
           args.provider,
@@ -672,9 +1573,15 @@ export async function prepareProviderSpawnAuth(args: {
           'Using Codex CLI credentials from the target environment.',
         )
         await args.store.upsertSnapshot(snapshot)
-        return { provider: args.provider, snapshot, env: loginEnv }
+        return {
+          provider: args.provider,
+          snapshot,
+          env: codexHome ? { CODEX_HOME: codexHome, ...loginEnv } : loginEnv,
+        }
       }
-      const detail = buildProviderNativeAuthDetail(args.provider, host) ?? undefined
+      const detail = codexHome
+        ? `Codex thread home "${codexHome}" has no login auth and OPENAI_API_KEY is not set. Run \`CODEX_HOME=${codexHome} codex login --device-auth\` or provide OPENAI_API_KEY.`
+        : buildProviderNativeAuthDetail(args.provider, host) ?? undefined
       const status: ProviderAuthStatus = host === 'local' ? 'auth_required' : 'unknown'
       const snapshot = buildSnapshot(args.provider, args.scopeId, host, status, 'login', detail)
       await args.store.upsertSnapshot(snapshot)
@@ -693,7 +1600,7 @@ export async function prepareProviderSpawnAuth(args: {
     return { provider: args.provider, snapshot }
   }
 
-  if (hasApiKeyAuth(args.provider, env)) {
+  if (hasApiKeyAuth(args.provider, baseEnv)) {
     const snapshot = buildSnapshot(args.provider, args.scopeId, host, 'ready', 'api-key')
     await args.store.upsertSnapshot(snapshot)
     return { provider: args.provider, snapshot }
@@ -705,7 +1612,7 @@ export async function prepareProviderSpawnAuth(args: {
       provider: args.provider,
       scopeId: args.scopeId,
       store: args.store,
-      env,
+      env: baseEnv,
       fetchImpl,
       nowMs,
     })
@@ -717,7 +1624,7 @@ export async function prepareProviderSpawnAuth(args: {
   }
 
   if (!token) {
-    const loginEnv = await existingLoginAuthEnv(args.provider, env, host)
+    const loginEnv = await existingLoginAuthEnv(args.provider, baseEnv, host)
     if (loginEnv) {
       const snapshot = buildSnapshot(
         args.provider,

@@ -6,9 +6,10 @@ import { bearerTokenFromHeader, type AuthUser } from '@gehirn/auth-providers'
 import type { TranscriptionProvider } from '@gehirn/transcription'
 import type { ApiKeyStoreLike } from '../api-keys/store.js'
 import {
-  OpenAITranscriptionKeyStore,
-  type OpenAITranscriptionKeyStoreLike,
-} from '../api-keys/transcription-store.js'
+  OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID,
+  ProviderSecretsStore,
+  type ProviderSecretsStoreLike,
+} from '../api-keys/provider-secrets-store.js'
 import { combinedAuth } from '../middleware/combined-auth.js'
 import { createAuth0Verifier } from '../middleware/auth0.js'
 import {
@@ -48,7 +49,7 @@ interface RealtimeClientErrorMessage {
 
 export interface RealtimeProxyOptions {
   apiKeyStore?: ApiKeyStoreLike
-  transcriptionKeyStore?: OpenAITranscriptionKeyStoreLike
+  providerSecretsStore?: ProviderSecretsStoreLike
   auth0Domain?: string
   auth0Audience?: string
   auth0ClientId?: string
@@ -227,8 +228,7 @@ function attachWebSocketKeepAlive(
 export function createRealtimeProxy(options: RealtimeProxyOptions = {}): RealtimeProxyResult {
   const router = Router()
   const wss = new WebSocketServer({ noServer: true })
-  const transcriptionKeyStore =
-    options.transcriptionKeyStore ?? new OpenAITranscriptionKeyStore()
+  const providerSecretsStore = options.providerSecretsStore ?? new ProviderSecretsStore()
   const wsKeepAliveIntervalMs = parseKeepAliveIntervalMs(options.wsKeepAliveIntervalMs)
   const finalizeTimeoutMs = parseFinalizeTimeoutMs(options.finalizeTimeoutMs)
   const createClient =
@@ -262,7 +262,9 @@ export function createRealtimeProxy(options: RealtimeProxyOptions = {}): Realtim
 
   router.get('/config', requireRealtimeAccess, async (_req, res) => {
     try {
-      const status = await transcriptionKeyStore.getStatus()
+      const status = await providerSecretsStore.getSecretStatus(
+        OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID,
+      )
       res.json({
         openaiConfigured: status.configured,
       })
@@ -342,7 +344,9 @@ export function createRealtimeProxy(options: RealtimeProxyOptions = {}): Realtim
         return
       }
 
-      const openaiApiKey = await transcriptionKeyStore.getOpenAIApiKey()
+      const openaiApiKey = await providerSecretsStore.getSecret(
+        OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID,
+      )
       if (!openaiApiKey) {
         socket.write('HTTP/1.1 412 Precondition Failed\r\n\r\n')
         socket.destroy()

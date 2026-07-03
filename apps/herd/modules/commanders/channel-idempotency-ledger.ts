@@ -11,6 +11,10 @@ export interface ChannelMessageIdempotencyClaimInput {
   provider: string
   accountId: string
   rawSourceId: string
+  commanderId?: string
+  conversationId?: string
+  sessionKey?: string
+  surfaceKey?: string
   now?: Date
 }
 
@@ -28,11 +32,15 @@ export type ChannelMessageIdempotencyClaimResult =
     expiresAt?: string
   }
 
-interface PersistedChannelMessageIdempotencyEntry {
+export interface PersistedChannelMessageIdempotencyEntry {
   key: string
   provider: string
   accountId: string
   rawSourceId: string
+  commanderId?: string
+  conversationId?: string
+  sessionKey?: string
+  surfaceKey?: string
   firstSeenAt: string
   expiresAt: string
 }
@@ -42,6 +50,10 @@ interface NormalizedChannelMessageIdempotencyInput {
   provider: string
   accountId: string
   rawSourceId: string
+  commanderId?: string
+  conversationId?: string
+  sessionKey?: string
+  surfaceKey?: string
 }
 
 export function channelMessageIdempotencyLedgerPathForDataRoot(dataRoot: string): string {
@@ -70,11 +82,19 @@ function normalizeInput(input: ChannelMessageIdempotencyClaimInput): NormalizedC
   const provider = normalizeNonEmpty(input.provider, 'provider').toLowerCase()
   const accountId = normalizeNonEmpty(input.accountId, 'accountId')
   const rawSourceId = normalizeNonEmpty(input.rawSourceId, 'rawSourceId')
+  const commanderId = input.commanderId?.trim()
+  const conversationId = input.conversationId?.trim()
+  const sessionKey = input.sessionKey?.trim()
+  const surfaceKey = input.surfaceKey?.trim()
   return {
     provider,
     accountId,
     rawSourceId,
     key: entryKey({ provider, accountId, rawSourceId }),
+    ...(commanderId ? { commanderId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(surfaceKey ? { surfaceKey } : {}),
   }
 }
 
@@ -87,6 +107,10 @@ function parsePersistedEntry(raw: unknown): PersistedChannelMessageIdempotencyEn
   const provider = typeof record.provider === 'string' ? record.provider.trim() : ''
   const accountId = typeof record.accountId === 'string' ? record.accountId.trim() : ''
   const rawSourceId = typeof record.rawSourceId === 'string' ? record.rawSourceId.trim() : ''
+  const commanderId = typeof record.commanderId === 'string' ? record.commanderId.trim() : ''
+  const conversationId = typeof record.conversationId === 'string' ? record.conversationId.trim() : ''
+  const sessionKey = typeof record.sessionKey === 'string' ? record.sessionKey.trim() : ''
+  const surfaceKey = typeof record.surfaceKey === 'string' ? record.surfaceKey.trim() : ''
   const firstSeenAt = typeof record.firstSeenAt === 'string' ? record.firstSeenAt.trim() : ''
   const expiresAt = typeof record.expiresAt === 'string' ? record.expiresAt.trim() : ''
   if (!key || !provider || !accountId || !rawSourceId || !firstSeenAt || !expiresAt) {
@@ -97,6 +121,10 @@ function parsePersistedEntry(raw: unknown): PersistedChannelMessageIdempotencyEn
     provider,
     accountId,
     rawSourceId,
+    ...(commanderId ? { commanderId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(surfaceKey ? { surfaceKey } : {}),
     firstSeenAt,
     expiresAt,
   }
@@ -136,19 +164,23 @@ export class ChannelMessageIdempotencyLedger {
   }
 
   async has(input: ChannelMessageIdempotencyClaimInput): Promise<boolean> {
+    return (await this.get(input)) !== null
+  }
+
+  async get(input: ChannelMessageIdempotencyClaimInput): Promise<PersistedChannelMessageIdempotencyEntry | null> {
     const normalized = normalizeInput(input)
     const now = input.now ?? new Date()
     await this.pruneIfDue(now)
     const filePath = this.entryPath(normalized.key)
     const existing = await this.readEntry(filePath)
     if (!existing) {
-      return false
+      return null
     }
     if (isExpired(existing, now.getTime())) {
       await rm(filePath, { force: true })
-      return false
+      return null
     }
-    return true
+    return existing
   }
 
   private async claimNormalized(

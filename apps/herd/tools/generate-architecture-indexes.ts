@@ -290,7 +290,7 @@ const features: FeatureMapping[] = [
     ],
     storage: ['agent_runtime_sessions', 'commanders.conversations', 'workspace.conversation-targets', 'approvals.pending'],
     tests: [
-      'modules/command-room/__tests__/herd-routing.test.ts',
+      'modules/command-room/__tests__/hervald-routing.test.ts',
       'modules/command-room/components/desktop/__tests__/CommandRoom.chat-start.test.tsx',
       'modules/command-room/components/mobile/__tests__/MobileCommandRoom.workspace.test.tsx',
     ],
@@ -355,7 +355,7 @@ const features: FeatureMapping[] = [
       'modules/agents/__tests__/queue-mutation.test.ts',
       'modules/agents/__tests__/queue-capability.test.ts',
       'modules/agents/components/__tests__/SessionComposer.test.tsx',
-      'modules/command-room/__tests__/herd-transcript.test.ts',
+      'modules/command-room/__tests__/hervald-transcript.test.ts',
     ],
     notes: ['Queued backlog is deliberately not merged into the transcript. It appears in chat once when the runtime processes it.'],
   },
@@ -403,7 +403,6 @@ const features: FeatureMapping[] = [
       'modules/commanders/components/QuestBoard.tsx',
       'modules/commanders/components/HeartbeatMonitor.tsx',
       'modules/conversation/components/CreateConversationPanel.tsx',
-      'modules/conversation/components/ConversationRow.tsx',
     ],
     hooks: ['modules/commanders/hooks/useCommander.ts', 'modules/conversation/hooks/use-conversations.ts'],
     api: ['/api/commanders', '/api/commanders/:id/quests', '/api/conversations', '/api/commanders/:id/workers'],
@@ -505,7 +504,7 @@ const features: FeatureMapping[] = [
     name: 'Automations, Scheduled Work, And Quest Board',
     route: '/automations and command-room quest tabs',
     userVisible: 'Users create scheduled automation work, see run history, filter mobile automations, and manage commander quests.',
-    modules: ['automations', 'commanders', 'quests', 'sentinels'],
+    modules: ['automations', 'commanders', 'quests'],
     ui: [
       'modules/automations/page.tsx',
       'modules/automations/MobileAutomations.tsx',
@@ -525,7 +524,7 @@ const features: FeatureMapping[] = [
     ],
     storage: ['automations.definitions', 'automations.runs', 'automations.memory', 'commanders.quests'],
     tests: ['modules/automations/__tests__/scheduler-lifecycle.test.ts', 'modules/automations/__tests__/AutomationsPage.test.tsx', 'modules/commanders/__tests__/quest-store.test.ts'],
-    notes: ['Sentinels is classified as retired legacy code and should not be treated as the active scheduler surface.'],
+    notes: ['Automations owns current scheduler behavior, run history, and quest-triggered work.'],
   },
   {
     id: 'telemetry',
@@ -601,7 +600,7 @@ const features: FeatureMapping[] = [
     hooks: ['src/hooks/use-openai-transcription.ts', 'src/hooks/use-speech-recognition.ts'],
     api: ['/api/realtime', '/api/realtime/transcription', '/api/auth/transcription/openai'],
     runtime: ['modules/realtime/runtime.ts', 'server/realtime/proxy.ts', 'server/realtime/openai-realtime.ts', 'server/voice/stt.ts', 'server/voice/tts.ts'],
-    storage: ['realtime.transcription-key-store'],
+    storage: ['api-keys.provider-secrets'],
     tests: ['server/realtime/__tests__/proxy.test.ts', 'src/hooks/__tests__/use-openai-transcription.test.ts', 'modules/channels/__tests__/voice-stt.test.ts'],
     notes: ['Realtime is stateless. Credentials are owned by api-keys.'],
   },
@@ -761,15 +760,6 @@ const concepts: ConceptMapping[] = [
     avoidConfusingWith: 'Use module-owned tools and module-owned data roots instead of root scripts or migrations.',
   },
   {
-    id: 'sentinels-legacy',
-    name: 'Sentinels Legacy Source',
-    meaning: 'A retained legacy scheduler/API/UI source tree that is classified as retired in the manifest and is not part of the active runtime mount path.',
-    userEffect: 'Users should use Automations for current scheduled work; searches may still find sentinel source and tests, but those are not the active product path.',
-    owners: ['sentinels legacy source', 'automations active scheduler'],
-    files: ['modules/sentinels/routes.ts', 'modules/sentinels/scheduler.ts', 'modules/sentinels/page.tsx', 'server/module-manifest.ts', 'server/module-runtime-factories.ts'],
-    avoidConfusingWith: 'Automations owns current scheduler behavior, run history, and quest-triggered work.',
-  },
-  {
     id: 'mobile-route-embedding',
     name: 'Mobile Route Embedding',
     meaning: 'Some mobile routes are declared in module metadata but rendered under the command-room wildcard shell rather than direct static top-level bindings.',
@@ -804,14 +794,6 @@ const observations: SourceObservation[] = [
     userEffect: 'Users choose skills from composer, automation, policy, and quest pickers rather than a standalone skills management page.',
     evidence: ['src/module-manifest.ts', 'src/module-registry.ts', 'modules/skills/routes.ts', 'modules/agents/components/SkillsPicker.tsx'],
     recommendation: 'Do not infer a standalone skills route or skills config API unless the module manifest and router add them back.',
-  },
-  {
-    id: 'sentinels-source-retained',
-    kind: 'legacy',
-    summary: 'Sentinel source, tests, routes, scheduler, and UI remain in the repository, but the module is manifest-retired and not part of current runtime setup.',
-    userEffect: 'Current scheduled work appears through Automations; legacy sentinel files can mislead code search and architecture diagrams.',
-    evidence: ['modules/sentinels', 'src/module-manifest.ts', 'server/module-manifest.ts', 'server/module-runtime-factories.ts'],
-    recommendation: 'Document sentinel references as legacy unless a future issue explicitly reactivates them.',
   },
 ]
 

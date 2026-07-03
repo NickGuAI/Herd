@@ -1,5 +1,5 @@
 import type { Request } from 'express'
-import { parseProviderId } from '../agents/providers/registry.js'
+import { parseProviderId, resolveDefaultProviderId } from '../agents/providers/registry.js'
 import { parseOptionalClaudeEffort, type ClaudeEffortLevel } from '../claude-effort.js'
 import {
   DEFAULT_COMMANDER_CONTEXT_MODE,
@@ -114,14 +114,6 @@ export function parseMachineId(raw: unknown): string | null {
   }
 
   return trimmed
-}
-
-export function buildCommanderMemoryCompactTaskName(commanderId: string): string {
-  const normalizedCommanderId = parseSessionId(commanderId)
-  if (!normalizedCommanderId) {
-    throw new Error('Invalid commander id')
-  }
-  return `${normalizedCommanderId}-memory-compact`
 }
 
 export function parseLabel(raw: unknown): string | null {
@@ -505,20 +497,6 @@ export function parseChannelMessageInput(
   }
 }
 
-export function formatChannelCommanderDisplayName(meta: CommanderChannelMeta): string {
-  const providerLabels: Record<string, string> = {
-    whatsapp: 'WhatsApp',
-    slack: 'Slack',
-    telegram: 'Telegram',
-    discord: 'Discord',
-    email: 'Email',
-    circle: 'Circle',
-    imessage: 'iMessage',
-    matrix: 'Matrix',
-  }
-  return `${providerLabels[meta.provider] ?? meta.provider} • ${meta.displayName}`
-}
-
 export function parseOptionalCommanderAgentType(
   raw: unknown,
 ): string | undefined | null {
@@ -609,7 +587,7 @@ export function parseQuestContract(raw: unknown): CommanderQuestContract | null 
     return {
       cwd: process.cwd(),
       permissionMode: 'default',
-      agentType: 'claude',
+      agentType: resolveDefaultProviderId(),
       model: null,
       skillsToUse: [],
     }
@@ -621,7 +599,7 @@ export function parseQuestContract(raw: unknown): CommanderQuestContract | null 
 
   const cwd = parseMessage(raw.cwd) ?? process.cwd()
   const permissionMode = parseOptionalDefaultPermissionMode(raw.permissionMode)
-  const agentType = parseProviderId(raw.agentType) ?? 'claude'
+  const agentType = parseProviderId(raw.agentType) ?? resolveDefaultProviderId()
   const model = raw.model === null
     ? null
     : (parseMessage(raw.model) ?? undefined)
@@ -830,24 +808,4 @@ export function parseOptionalEnabled(rawEnabled: unknown): boolean | undefined |
   }
 
   return rawEnabled
-}
-
-export function parseTriggerInstruction(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') {
-    return null
-  }
-
-  const directInstruction = parseCronInstruction(
-    (payload as { instruction?: unknown }).instruction,
-  )
-  if (directInstruction) {
-    return directInstruction
-  }
-
-  const detail = (payload as { detail?: unknown }).detail
-  if (!detail || typeof detail !== 'object') {
-    return null
-  }
-
-  return parseCronInstruction((detail as { instruction?: unknown }).instruction)
 }

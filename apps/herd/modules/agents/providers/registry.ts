@@ -11,6 +11,9 @@ export async function loadRegisteredProviders(): Promise<void> {
 
 export {
   getProvider,
+  resolveAutomationDefaultProviderId,
+  resolveDefaultProviderId,
+  resolveProviderIdForRequest,
   listProviderIds,
   listProviders,
   parseProviderId,

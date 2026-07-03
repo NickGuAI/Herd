@@ -1,15 +1,12 @@
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   getClaudeDisableAdaptiveThinkingEnvValue,
-  isClaudeAdaptiveThinkingMode,
 } from '../../../claude-adaptive-thinking.js'
 import {
   DEFAULT_CLAUDE_EFFORT_LEVEL,
-  isClaudeEffortLevel,
 } from '../../../claude-effort.js'
 import {
   DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
-  isClaudeMaxThinkingTokens,
 } from '../../../claude-max-thinking-tokens.js'
 import { isTranscriptEnvelope } from '../../../../src/types/transcript-envelope.js'
 import { registerProvider } from '../../providers/registry-core.js'
@@ -34,61 +31,6 @@ import { claudeMachineProvider } from './machine-adapter.js'
 import { claudeApprovalAdapter } from './approval-adapter.js'
 import { availableModels } from './models.js'
 import { createClaudeSessionAdapter, createClaudeStreamSession } from './session.js'
-
-function asObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0
-    ? value.trim()
-    : undefined
-}
-
-function migrateLegacyClaudeProviderContext(rawProviderContext: unknown) {
-  const raw = asObject(rawProviderContext)
-  if (!raw) {
-    return null
-  }
-
-  const nested = asObject(raw.providerContext)
-  const agentType = readOptionalString(raw.agentType)
-  const sessionId = readOptionalString(raw.claudeSessionId)
-    ?? readOptionalString(nested?.sessionId)
-  const effort = isClaudeEffortLevel(nested?.effort)
-    ? nested.effort
-    : (isClaudeEffortLevel(raw.effort) ? raw.effort : undefined)
-  const adaptiveThinking = isClaudeAdaptiveThinkingMode(nested?.adaptiveThinking)
-    ? nested.adaptiveThinking
-    : (
-        isClaudeAdaptiveThinkingMode(raw.adaptiveThinking)
-          ? raw.adaptiveThinking
-          : undefined
-      )
-  const maxThinkingTokens = isClaudeMaxThinkingTokens(nested?.maxThinkingTokens)
-    ? nested.maxThinkingTokens
-    : (
-        isClaudeMaxThinkingTokens(raw.maxThinkingTokens)
-          ? raw.maxThinkingTokens
-          : undefined
-      )
-
-  if (agentType && agentType !== 'claude') {
-    return null
-  }
-  if (!sessionId && !effort && !adaptiveThinking && !maxThinkingTokens) {
-    return null
-  }
-
-  return createClaudeProviderContext({
-    ...(sessionId ? { sessionId } : {}),
-    ...(effort ? { effort } : {}),
-    ...(adaptiveThinking ? { adaptiveThinking } : {}),
-    ...(maxThinkingTokens ? { maxThinkingTokens } : {}),
-  })
-}
 
 function extractClaudeSessionId(event: StreamJsonEvent | undefined): string | undefined {
   if (!event) {
@@ -146,6 +88,8 @@ function snapshotClaudeSession(session: StreamSession): PersistedStreamSession |
       adaptiveThinking: context?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
       maxThinkingTokens: context?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     }),
+    credentialPoolId: session.credentialPoolId,
+    credentialPoolRecovery: session.credentialPoolRecovery,
     approvalBridgeNonce: session.approvalBridgeNonce,
     spawnedBy: session.spawnedBy,
     spawnedWorkers: [...session.spawnedWorkers],
@@ -189,6 +133,8 @@ function snapshotExitedClaudeSession(session: StreamSession): ExitedStreamSessio
       adaptiveThinking: context.adaptiveThinking,
       maxThinkingTokens: context.maxThinkingTokens,
     }),
+    credentialPoolId: session.credentialPoolId,
+    credentialPoolRecovery: session.credentialPoolRecovery,
     resumedFrom: session.resumedFrom,
     conversationEntryCount: session.conversationEntryCount,
     events: [...session.events],
@@ -268,7 +214,7 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       deps,
     )
   },
-  restore(entry, machine, deps) {
+  restore(entry, machine, deps, providerAuth) {
     const context = asClaudeProviderContext(entry.providerContext)
     return this.create({
       sessionName: entry.name,
@@ -291,6 +237,7 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       adaptiveThinking: context?.adaptiveThinking,
       maxThinkingTokens: context?.maxThinkingTokens,
       daemonProcess: entry.daemonProcess,
+      providerAuth,
     }, deps)
   },
   snapshotForPersist(session) {
@@ -318,8 +265,5 @@ export const claudeProvider: ProviderAdapter = registerProvider({
     } catch {
       // Best effort only.
     }
-  },
-  migrateLegacyContext(rawProviderContext) {
-    return migrateLegacyClaudeProviderContext(rawProviderContext)
   },
 })

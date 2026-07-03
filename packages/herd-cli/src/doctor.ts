@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import {
@@ -10,11 +11,14 @@ import {
 import {
   APP_PATH_FILE,
   BOOTSTRAP_KEY_FILE,
+  loadDotenv,
+  readAppPathFileValue,
   resolveAppDir,
+  resolveAppPathFileCandidates,
 } from './up.js'
 import {
   formatStatusLine,
-  printHerdBrand,
+  printHervaldBrand,
 } from './terminal-style.js'
 
 export type DoctorState = 'pass' | 'warn' | 'fail'
@@ -35,7 +39,25 @@ export interface DoctorOptions {
   fetchImpl?: typeof fetch
   env?: NodeJS.ProcessEnv
   configPath?: string
+  runCommand?: DoctorCommandRunner
 }
+
+interface DoctorCommandResult {
+  status?: number | null
+  stdout?: string | Buffer | null
+  stderr?: string | Buffer | null
+  error?: Error
+}
+
+type DoctorCommandRunner = (
+  command: string,
+  args: string[],
+  options: {
+    cwd: string
+    env: Record<string, string>
+    encoding: 'utf8'
+  },
+) => DoctorCommandResult
 
 function stateLabel(state: DoctorState): string {
   return state === 'pass' ? 'ready' : state === 'warn' ? 'needs attention' : 'missing'
@@ -45,12 +67,34 @@ function localMachineEnvFile(env: NodeJS.ProcessEnv): string {
   return env.HERD_LOCAL_MACHINE_ENV_FILE?.trim() || path.join(homedir(), '.herd-env')
 }
 
-function readAppPathFile(): string | null {
-  try {
-    return readFileSync(APP_PATH_FILE, 'utf8').trim() || null
-  } catch {
-    return null
+function expandHome(value: string): string {
+  return value.replace(/^~(?=$|\/)/u, homedir())
+}
+
+function resolveDoctorDbPath(env: NodeJS.ProcessEnv, dataDir: string): string {
+  const configured = env.HERD_DB_PATH?.trim()
+  return path.resolve(configured ? expandHome(configured) : path.join(dataDir, 'herd.sqlite'))
+}
+
+function commandOutputToString(output: string | Buffer | null | undefined): string {
+  if (!output) {
+    return ''
   }
+  return typeof output === 'string' ? output : output.toString('utf8')
+}
+
+function oneLineOutput(output: string): string {
+  return output.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(' · ')
+}
+
+function readAppPathFile(env: NodeJS.ProcessEnv): string | null {
+  for (const candidate of resolveAppPathFileCandidates(env)) {
+    const value = readAppPathFileValue(candidate)
+    if (value) {
+      return value
+    }
+  }
+  return null
 }
 
 function buildAuthHeaders(config: HerdConfig): HeadersInit {
@@ -104,16 +148,89 @@ async function fetchOnboardingStatus(
   }
 }
 
+function buildSqliteRuntimeSessionsCheck(input: {
+  appDir: string | null
+  dataDir: string
+  dbPath: string
+  env: NodeJS.ProcessEnv
+  runCommand: DoctorCommandRunner
+}): DoctorCheck {
+  const { appDir, dataDir, dbPath, env, runCommand } = input
+  const baseDetail = `data=${dataDir} · db=${dbPath}`
+  if (!appDir || !existsSync(path.join(appDir, 'package.json'))) {
+    return {
+      label: 'SQLite runtime sessions',
+      state: 'fail',
+      detail: `${baseDetail} · app path unavailable; cannot run pnpm run db:ready`,
+    }
+  }
+
+  const result = runCommand('pnpm', [
+    'run',
+    'db:ready',
+    '--',
+    '--source-root',
+    dataDir,
+    '--db',
+    dbPath,
+    '--no-init',
+  ], {
+    cwd: appDir,
+    env: {
+      ...process.env,
+      ...env,
+      HERD_APP_DIR: appDir,
+      HERD_DATA_DIR: dataDir,
+      HERD_DB_PATH: dbPath,
+    } as Record<string, string>,
+    encoding: 'utf8',
+  })
+
+  if (result.error) {
+    return {
+      label: 'SQLite runtime sessions',
+      state: 'fail',
+      detail: `${baseDetail} · db:ready could not start: ${result.error.message}`,
+    }
+  }
+
+  const output = oneLineOutput([
+    commandOutputToString(result.stdout),
+    commandOutputToString(result.stderr),
+  ].filter(Boolean).join('\n'))
+  const outputDetail = output ? ` · ${output}` : ''
+  if (result.status === 0) {
+    return {
+      label: 'SQLite runtime sessions',
+      state: 'pass',
+      detail: `${baseDetail} · required schema=current${outputDetail}`,
+    }
+  }
+
+  return {
+    label: 'SQLite runtime sessions',
+    state: 'fail',
+    detail: `${baseDetail} · required schema=see db:ready output${outputDetail}`,
+  }
+}
+
 export async function buildDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
   const env = options.env ?? process.env
   const configPath = options.configPath ?? defaultConfigPath()
   const fetchImpl = options.fetchImpl ?? fetch
+  const runCommand = options.runCommand ?? ((command, args, commandOptions) => spawnSync(command, args, commandOptions))
   const checks: DoctorCheck[] = []
   const config = await readHerdConfig(configPath)
   const appDir = resolveAppDir(env)
-  const appPathFileValue = readAppPathFile()
-  const dataDir = env.HERD_DATA_DIR?.trim() || path.join(homedir(), '.herd')
-  const envFile = localMachineEnvFile(env)
+  const appEnv = appDir && existsSync(path.join(appDir, 'package.json'))
+    ? loadDotenv(appDir)
+    : {}
+  const effectiveEnv = { ...env, ...appEnv }
+  const appPathFileValue = readAppPathFile(env)
+  const appPathFileCandidates = resolveAppPathFileCandidates(env)
+  const dataDir = path.resolve(expandHome(effectiveEnv.HERD_DATA_DIR?.trim() || path.join(homedir(), '.herd')))
+  const dbPath = resolveDoctorDbPath(effectiveEnv, dataDir)
+  const envFile = localMachineEnvFile(effectiveEnv)
 
   checks.push({
     label: 'CLI config',
@@ -124,7 +241,7 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
   checks.push({
     label: 'App path',
     state: appDir && existsSync(path.join(appDir, 'package.json')) ? 'pass' : 'fail',
-    detail: appDir ?? appPathFileValue ?? `missing ${APP_PATH_FILE}; set HERD_APP_DIR or run apps/herd/install.sh`,
+    detail: appDir ?? appPathFileValue ?? `missing ${appPathFileCandidates.join(' or ')}; set HERD_APP_DIR or run apps/herd/install.sh`,
   })
 
   checks.push({
@@ -132,6 +249,14 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     state: existsSync(dataDir) ? 'pass' : 'warn',
     detail: dataDir,
   })
+
+  checks.push(buildSqliteRuntimeSessionsCheck({
+    appDir,
+    dataDir,
+    dbPath,
+    env: effectiveEnv,
+    runCommand,
+  }))
 
   checks.push({
     label: 'Bootstrap key',
@@ -165,7 +290,7 @@ export function printDoctorReport(
   report: DoctorReport,
   write: (chunk: string) => void = (chunk) => process.stdout.write(chunk),
 ): void {
-  printHerdBrand('Herd Doctor', write)
+  printHervaldBrand('Herd Doctor', write)
 
   for (const check of report.checks) {
     write(`${formatStatusLine(check.state, check.label, stateLabel(check.state), check.detail)}\n`)

@@ -5,6 +5,7 @@ import {
   CircleUserRound,
   Eye,
   Info,
+  KeyRound,
   Monitor,
   RadioTower,
 } from 'lucide-react'
@@ -35,6 +36,7 @@ const MOBILE_SETTINGS_ICON_COMPONENTS = {
   'radio-tower': RadioTower,
   bell: Bell,
   monitor: Monitor,
+  'key-round': KeyRound,
   eye: Eye,
   info: Info,
 } satisfies Record<MobileSettingsSectionIcon, LucideIcon>

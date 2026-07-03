@@ -14,6 +14,7 @@ import {
 import { CodexSessionRuntime, GeminiAcpRuntime, OpenCodeAcpRuntime } from '../launchers/runtimes.js'
 import {
   prepareProviderSpawnAuth,
+  findLocalCodexHomeForThread,
   ProviderAuthRequiredError,
   resolveProviderAuthScopeId,
   type ProviderAuthStore,
@@ -21,12 +22,23 @@ import {
   type ProviderSpawnAuth,
 } from '../provider-auth.js'
 import {
+  extractProviderLimitDetails,
+  type ProviderLimitDetails,
+} from '../provider-errors.js'
+import {
+  asCodexProviderContext,
   readCodexRuntime,
   readCodexThreadId,
 } from '../providers/provider-session-context.js'
 import { mapCodexToTranscriptEnvelopes } from '../event-normalizers/codex.js'
 import { createTranscriptId } from '../transcript-id.js'
 import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
+import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
+import {
+  isTranscriptExitRecord,
+  isTranscriptTurnEndRecord,
+  isTranscriptTurnStartRecord,
+} from '../transcript-records.js'
 import {
   getProvider,
   listProviders,
@@ -46,17 +58,26 @@ import type {
   CodexPendingApprovalRequest,
   CodexRuntimeFailure,
   CompletedSession,
+  CredentialPoolRecoveryRequest,
   ExitedStreamSessionState,
   MachineConfig,
   PersistedStreamSession,
   StreamJsonEvent,
   StreamSession,
 } from '../types.js'
+import type { QueuedMessage } from '../message-queue.js'
 
 type ProviderStreamSessionOptions = Omit<
   ProviderCreateOptions,
   'sessionName' | 'mode' | 'task' | 'cwd' | 'machine'
 >
+
+export interface UsageLimitRecoveryOptions {
+  resetAt?: string
+  interruptedMessage?: QueuedMessage
+  interruptedTurnHadSideEffects?: boolean
+  interruptedTurnId?: string
+}
 
 interface ProviderRuntimeApprovalQueue {
   notifyApprovalEnqueued(
@@ -89,6 +110,8 @@ interface ProviderSessionRuntimeDeps {
   broadcastStreamEvent(session: StreamSession, event: StreamJsonEvent): void
   resetActiveTurnState(session: StreamSession): void
   schedulePersistedSessionsWrite(): void
+  markCredentialRecoveryRequest?(sessionName: string, request: CredentialPoolRecoveryRequest): void
+  scheduleCredentialRecoveryReplacement?(sessionName: string): void
   writeToStdin(session: StreamSession, data: string): boolean
   writeTranscriptMeta(session: StreamSession): void
   markProviderAuthRequired(
@@ -123,6 +146,334 @@ export interface ProviderSessionRuntime {
     reason: string
   }
   scheduleCodexTurnWatchdog(session: StreamSession): void
+  handleUsageLimitSignal(
+    session: StreamSession,
+    options?: UsageLimitRecoveryOptions,
+  ): void
+  restoreCredentialPoolRecovery(session: StreamSession): void
+}
+
+function collectUnknownErrorText(value: unknown, seen: Set<object>): string[] {
+  if (typeof value === 'string') {
+    return [value]
+  }
+  if (value instanceof Error) {
+    return [value.message]
+  }
+  const record = asObject(value)
+  if (!record) {
+    return []
+  }
+  if (seen.has(record)) {
+    return []
+  }
+  seen.add(record)
+
+  return [
+    typeof record.message === 'string' ? record.message : '',
+    typeof record.error === 'string' ? record.error : '',
+    typeof record.detail === 'string' ? record.detail : '',
+    typeof record.reason === 'string' ? record.reason : '',
+    ...collectUnknownErrorText(record.error, seen),
+    ...collectUnknownErrorText(record.cause, seen),
+  ].filter(Boolean)
+}
+
+export function unknownToErrorText(value: unknown): string {
+  return collectUnknownErrorText(value, new Set()).join('\n')
+}
+
+export function unknownToErrorCode(value: unknown): string | undefined {
+  const record = asObject(value)
+  if (!record) {
+    return undefined
+  }
+  if (typeof record.code === 'string') {
+    return record.code
+  }
+  if (typeof record.type === 'string') {
+    return record.type
+  }
+  return unknownToErrorCode(record.error)
+}
+
+function eventUsageLimitDetails(event: StreamJsonEvent): ProviderLimitDetails | null {
+  if (!isTranscriptEnvelope(event)) return null
+  if (event.ev.type === 'provider.error') {
+    return event.ev.classification === 'usage_limit'
+      ? {
+          classification: 'usage_limit',
+          ...(event.ev.resetAt ? { resetAt: event.ev.resetAt } : {}),
+        }
+      : null
+  }
+  if (event.ev.type !== 'turn.end') {
+    return null
+  }
+  const errorText = [
+    unknownToErrorText(event.ev.error),
+    unknownToErrorText(event.ev.result),
+  ].filter(Boolean).join('\n')
+  const code = unknownToErrorCode(event.ev.error) ?? unknownToErrorCode(event.ev.result)
+  const details = extractProviderLimitDetails(errorText, code, { referenceTime: event.time })
+  return Boolean(errorText || code) && details.classification === 'usage_limit' ? details : null
+}
+
+function activeUsageLimitScanStartIndex(events: readonly StreamJsonEvent[]): number {
+  for (let index = events.length - 2; index >= 0; index -= 1) {
+    const candidate = events[index]!
+    if (isTranscriptTurnStartRecord(candidate)) {
+      return index
+    }
+    if (isTranscriptTurnEndRecord(candidate) || isTranscriptExitRecord(candidate)) {
+      return index + 1
+    }
+  }
+  return 0
+}
+
+function latestUsageLimitDetails(session: StreamSession): ProviderLimitDetails | null {
+  const startIndex = activeUsageLimitScanStartIndex(session.events)
+  for (let index = session.events.length - 1; index >= startIndex; index -= 1) {
+    const details = eventUsageLimitDetails(session.events[index]!)
+    if (details) {
+      return details
+    }
+  }
+  return null
+}
+
+type UsageLimitRecoveryDeps = Pick<
+  ProviderSessionRuntimeDeps,
+  | 'providerAuthStore'
+  | 'appendStreamEvent'
+  | 'broadcastStreamEvent'
+  | 'markCredentialRecoveryRequest'
+  | 'scheduleCredentialRecoveryReplacement'
+> & {
+  schedulePersistedSessionsWrite?: () => void
+}
+
+type RestoredCredentialPoolRecoveryDeps = Pick<
+  ProviderSessionRuntimeDeps,
+  | 'markCredentialRecoveryRequest'
+  | 'scheduleCredentialRecoveryReplacement'
+>
+
+function buildRecoveryRequest(
+  session: StreamSession,
+  credentialPoolId: string | undefined,
+  options: UsageLimitRecoveryOptions,
+): CredentialPoolRecoveryRequest {
+  return {
+    provider: session.agentType as CredentialPoolRecoveryRequest['provider'],
+    ...(credentialPoolId ? { credentialPoolId } : {}),
+    ...(session.credentialPoolId ? { previousCredentialPoolId: session.credentialPoolId } : {}),
+    clearResumeProviderContext: true,
+    reason: 'usage_limit',
+    requestedAt: new Date().toISOString(),
+    ...(options.resetAt ? { resetAt: options.resetAt } : {}),
+    ...(options.interruptedMessage ? { interruptedMessage: options.interruptedMessage } : {}),
+    ...(options.interruptedTurnHadSideEffects !== undefined
+      ? { interruptedTurnHadSideEffects: options.interruptedTurnHadSideEffects }
+      : {}),
+    ...(options.interruptedTurnId ? { interruptedTurnId: options.interruptedTurnId } : {}),
+  }
+}
+
+export function markUsageLimitRecoveryPending(
+  session: StreamSession,
+  options: UsageLimitRecoveryOptions = {},
+): CredentialPoolRecoveryRequest | null {
+  if (!session.credentialPoolId || session.credentialPoolRecovery?.credentialPoolId) {
+    return null
+  }
+
+  const latestDetails = latestUsageLimitDetails(session)
+  const resetAt = options.resetAt ?? latestDetails?.resetAt
+  const existing = session.credentialPoolRecovery
+  const request = buildRecoveryRequest(session, undefined, {
+    ...options,
+    ...(resetAt ? { resetAt } : {}),
+  })
+  session.credentialPoolRecovery = existing && !existing.credentialPoolId
+    ? {
+        ...request,
+        requestedAt: existing.requestedAt,
+        ...(existing.blockedUntil ? { blockedUntil: existing.blockedUntil } : {}),
+      }
+    : request
+  return session.credentialPoolRecovery
+}
+
+export function installBlockedCredentialPoolRecovery(
+  deps: UsageLimitRecoveryDeps,
+  session: StreamSession,
+  options: UsageLimitRecoveryOptions & {
+    reason?: CredentialPoolRecoveryRequest['reason']
+    blockedUntil?: string
+  } = {},
+): CredentialPoolRecoveryRequest | null {
+  if (!session.credentialPoolId || session.credentialPoolRecovery?.credentialPoolId) {
+    return null
+  }
+
+  const request = buildRecoveryRequest(session, undefined, options)
+  request.reason = options.reason ?? 'usage_limit'
+  if (options.blockedUntil) {
+    request.blockedUntil = options.blockedUntil
+  }
+  session.credentialPoolRecovery = request
+  deps.markCredentialRecoveryRequest?.(session.name, request)
+  const event = createCredentialPoolBlockedEvent(session, options.blockedUntil)
+  deps.appendStreamEvent(session, event)
+  deps.broadcastStreamEvent(session, event)
+  deps.schedulePersistedSessionsWrite?.()
+  return request
+}
+
+function createCredentialRecoverySystemEvent(
+  session: StreamSession,
+  result: Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>,
+  resetAt: string | undefined,
+): StreamJsonEvent {
+  const previousLabel = result.previousCredential?.label ?? session.credentialPoolId ?? 'previous credential'
+  const activeLabel = result.activeCredential?.label ?? result.activeCredential?.id ?? 'next credential'
+  return {
+    type: 'system',
+    subtype: 'credential_pool_recovery',
+    reason: 'credential-usage-limit',
+    provider: session.agentType,
+    previousCredentialId: result.previousCredential?.id ?? session.credentialPoolId,
+    activeCredentialId: result.activeCredential?.id,
+    ...(resetAt ? { resetAt } : {}),
+    text: `${previousLabel} hit a usage limit${resetAt ? ` until ${resetAt}` : ''}; recovering in place on ${activeLabel}.`,
+  }
+}
+
+function createCredentialPoolBlockedEvent(
+  session: StreamSession,
+  resetAt: string | undefined,
+): TranscriptEnvelope {
+  return {
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: new Date().toISOString(),
+    source: {
+      provider: session.agentType,
+      backend: 'herd',
+      rawEventType: 'credential-pool/blocked',
+    },
+    ev: {
+      type: 'provider.error',
+      message: resetAt
+        ? `All ${session.agentType} credential-pool credentials are cooling down until ${resetAt}.`
+        : `All ${session.agentType} credential-pool credentials are unavailable.`,
+      classification: 'usage_limit',
+      code: 'credential_pool_exhausted',
+      ...(resetAt ? { resetAt } : {}),
+      retryable: false,
+      data: {
+        provider: session.agentType,
+        credentialPoolId: session.credentialPoolId,
+        ...(resetAt ? { resetAt } : {}),
+      },
+    },
+  }
+}
+
+function isReadyCredentialPoolRecoveryTarget(
+  session: StreamSession,
+  credential: Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>['activeCredential'],
+): credential is NonNullable<Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>['activeCredential']> {
+  return Boolean(
+    credential
+    && credential.id !== session.credentialPoolId
+    && !credential.exhausted
+    && (credential.status === 'active' || credential.status === 'available'),
+  )
+}
+
+export function registerRestoredCredentialPoolRecovery(
+  deps: RestoredCredentialPoolRecoveryDeps,
+  session: StreamSession,
+): void {
+  const request = session.credentialPoolRecovery
+  if (!request) {
+    return
+  }
+
+  deps.markCredentialRecoveryRequest?.(session.name, request)
+  if (request.credentialPoolId) {
+    deps.scheduleCredentialRecoveryReplacement?.(session.name)
+  }
+}
+
+export async function switchCredentialAfterUsageLimit(
+  deps: UsageLimitRecoveryDeps,
+  session: StreamSession,
+  options: UsageLimitRecoveryOptions = {},
+): Promise<void> {
+  if (!session.credentialPoolId || session.credentialPoolRecovery?.credentialPoolId) {
+    return
+  }
+  const latestDetails = latestUsageLimitDetails(session)
+  const resetAt = options.resetAt ?? latestDetails?.resetAt
+  if (!latestDetails && !options.resetAt) {
+    return
+  }
+  const result = await deps.providerAuthStore.switchToNextPoolCredential(
+    session.agentType,
+    session.credentialPoolId,
+    { resetAt },
+  ).catch((error) => {
+    console.warn(
+      '[agents/provider-auth] failed to switch credential pool after usage limit',
+      { session: session.name, provider: session.agentType, error: error instanceof Error ? error.message : String(error) },
+    )
+    return null
+  })
+  if (!result) {
+    return
+  }
+
+  const recoveryTarget = result.activeCredential
+  if (!result.switched && isReadyCredentialPoolRecoveryTarget(session, recoveryTarget)) {
+    const request = buildRecoveryRequest(session, recoveryTarget.id, {
+      ...options,
+      resetAt,
+    })
+    session.credentialPoolRecovery = request
+    deps.markCredentialRecoveryRequest?.(session.name, request)
+    const event = createCredentialRecoverySystemEvent(session, result, resetAt)
+    deps.appendStreamEvent(session, event)
+    deps.broadcastStreamEvent(session, event)
+    deps.schedulePersistedSessionsWrite?.()
+    deps.scheduleCredentialRecoveryReplacement?.(session.name)
+    return
+  }
+
+  if (!result.switched || !recoveryTarget) {
+    const blockedUntil = result.blocked?.earliestExhaustedUntil ?? result.pool.earliestExhaustedUntil
+    installBlockedCredentialPoolRecovery(deps, session, {
+      ...options,
+      ...(resetAt ? { resetAt } : {}),
+      ...(blockedUntil ? { blockedUntil } : {}),
+    })
+    return
+  }
+
+  const request = buildRecoveryRequest(session, recoveryTarget.id, {
+    ...options,
+    resetAt,
+  })
+  session.credentialPoolRecovery = request
+  deps.markCredentialRecoveryRequest?.(session.name, request)
+  const event = createCredentialRecoverySystemEvent(session, result, resetAt)
+  deps.appendStreamEvent(session, event)
+  deps.broadcastStreamEvent(session, event)
+  deps.schedulePersistedSessionsWrite?.()
+  deps.scheduleCredentialRecoveryReplacement?.(session.name)
 }
 
 export function createProviderSessionRuntime(
@@ -152,7 +503,11 @@ export function createProviderSessionRuntime(
     getActiveSession: (name: string) => deps.sessions.get(name),
     resetActiveTurnState: deps.resetActiveTurnState,
     schedulePersistedSessionsWrite: deps.schedulePersistedSessionsWrite,
-    setCompletedSession: (name: string, session: CompletedSession) => {
+    setCompletedSession: async (name: string, session: CompletedSession) => {
+      const active = deps.sessions.get(name)
+      if (active?.kind === 'stream') {
+        await switchCredentialAfterUsageLimit(deps, active)
+      }
       deps.completedSessions.set(name, session)
     },
     setExitedSession: (name: string, session: ExitedStreamSessionState) => {
@@ -225,6 +580,46 @@ export function createProviderSessionRuntime(
     return providerSessionBaseDeps as unknown as ProviderAdapterDeps
   }
 
+  async function prepareSessionProviderAuth(
+    agentType: AgentType,
+    machine: MachineConfig | undefined,
+    creator: ProviderStreamSessionOptions['creator'],
+    resumeProviderContext?: ProviderStreamSessionOptions['resumeProviderContext'],
+    credentialPoolId?: string,
+  ): Promise<ProviderSpawnAuth> {
+    try {
+      const codexContext = agentType === 'codex'
+        ? asCodexProviderContext(resumeProviderContext)
+        : null
+      const codexHome = codexContext?.codexHome
+        ?? (codexContext?.threadId && !machine
+          ? await findLocalCodexHomeForThread({
+            threadId: codexContext.threadId,
+            store: deps.providerAuthStore,
+            env: process.env,
+          })
+          : undefined)
+      return await prepareProviderSpawnAuth({
+        provider: agentType,
+        scopeId: resolveProviderAuthScopeId(creator),
+        machine,
+        store: deps.providerAuthStore,
+        env: process.env,
+        codexHome,
+        credentialPoolId,
+      })
+    } catch (error) {
+      if (
+        error instanceof ProviderAuthRequiredError
+        && creator?.kind === 'commander'
+        && creator.id
+      ) {
+        await deps.questStore?.blockActiveForAuthRequired(creator.id, error.message)
+      }
+      throw error
+    }
+  }
+
   async function createProviderStreamSession(
     sessionName: string,
     mode: ClaudePermissionMode,
@@ -239,25 +634,13 @@ export function createProviderSessionRuntime(
       throw new Error(`Unknown provider: ${agentType}`)
     }
 
-    let providerAuth
-    try {
-      providerAuth = await prepareProviderSpawnAuth({
-        provider: agentType,
-        scopeId: resolveProviderAuthScopeId(sessionOptions.creator),
-        machine,
-        store: deps.providerAuthStore,
-        env: process.env,
-      })
-    } catch (error) {
-      if (
-        error instanceof ProviderAuthRequiredError
-        && sessionOptions.creator?.kind === 'commander'
-        && sessionOptions.creator.id
-      ) {
-        await deps.questStore?.blockActiveForAuthRequired(sessionOptions.creator.id, error.message)
-      }
-      throw error
-    }
+    const providerAuth = await prepareSessionProviderAuth(
+      agentType,
+      machine,
+      sessionOptions.creator,
+      sessionOptions.resumeProviderContext,
+      sessionOptions.credentialPoolId,
+    )
 
     return await provider.create({
       sessionName,
@@ -278,7 +661,14 @@ export function createProviderSessionRuntime(
     if (!provider) {
       throw new Error(`Unknown provider: ${entry.agentType}`)
     }
-    return await provider.restore(entry, machine, getProviderSessionDeps(entry.agentType))
+    const providerAuth = await prepareSessionProviderAuth(
+      entry.agentType,
+      machine,
+      entry.creator,
+      entry.providerContext,
+      entry.credentialPoolId,
+    )
+    return await provider.restore(entry, machine, getProviderSessionDeps(entry.agentType), providerAuth)
   }
 
   async function teardownProviderSession(
@@ -543,6 +933,27 @@ export function createProviderSessionRuntime(
     }, deps.codexTurnWatchdogTimeoutMs)
   }
 
+  function handleUsageLimitSignal(
+    session: StreamSession,
+    options: UsageLimitRecoveryOptions = {},
+  ): void {
+    const pending = markUsageLimitRecoveryPending(session, options)
+    if (pending) {
+      deps.markCredentialRecoveryRequest?.(session.name, pending)
+      deps.schedulePersistedSessionsWrite()
+    }
+    void switchCredentialAfterUsageLimit(deps, session, options).catch((error) => {
+      console.warn(
+        '[agents/provider-auth] failed to recover after usage limit',
+        { session: session.name, provider: session.agentType, error: error instanceof Error ? error.message : String(error) },
+      )
+    })
+  }
+
+  function restoreCredentialPoolRecovery(session: StreamSession): void {
+    registerRestoredCredentialPoolRecovery(deps, session)
+  }
+
   return {
     createProviderStreamSession,
     restoreProviderStreamSession,
@@ -550,5 +961,7 @@ export function createProviderSessionRuntime(
     shutdownProviderRuntimes,
     applyCodexApprovalDecision,
     scheduleCodexTurnWatchdog,
+    handleUsageLimitSignal,
+    restoreCredentialPoolRecovery,
   }
 }

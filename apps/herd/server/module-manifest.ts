@@ -602,42 +602,6 @@ export const HERD_MODULE_SERVER_METADATA = [
     capabilities: HERD_MODULE_GRAPH[15].capabilities,
   },
   {
-    id: 'sentinels',
-    directory: 'sentinels',
-    serverOnly: true,
-    routes: [
-      {
-        id: 'sentinels.legacy-api',
-        surface: 'api',
-        mount: '/api/sentinels',
-        methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-        auth: 'api-key-or-auth0',
-        ownerModuleId: 'sentinels',
-        notes: 'Legacy route factory exists but is not mounted by the current module registry.',
-      },
-    ],
-    parsers: [],
-    websockets: [],
-    lifecycle: {
-      mode: 'background',
-      startup: [],
-      background: [
-        {
-          id: 'sentinels.legacy-scheduler',
-          ownerModuleId: 'sentinels',
-          notes: 'Legacy scheduler remains classified as retired until reactivated by a later task.',
-        },
-      ],
-      shutdown: [],
-    },
-    storage: storage('sentinels', 'owned', 'Retired sentinel data has explicit legacy ownership for migration or deletion.', {
-      keys: ['sentinels.legacy'],
-      roots: ['${HERD_DATA_DIR}/sentinels'],
-    }),
-    dependencies: HERD_MODULE_GRAPH[16].dependencies,
-    capabilities: HERD_MODULE_GRAPH[16].capabilities,
-  },
-  {
     id: 'settings',
     directory: 'settings',
     serverOnly: true,
@@ -659,8 +623,8 @@ export const HERD_MODULE_SERVER_METADATA = [
       roots: ['${HERD_DATA_DIR}/settings'],
       files: ['app-settings.json'],
     }),
-    dependencies: HERD_MODULE_GRAPH[17].dependencies,
-    capabilities: HERD_MODULE_GRAPH[17].capabilities,
+    dependencies: HERD_MODULE_GRAPH[16].dependencies,
+    capabilities: HERD_MODULE_GRAPH[16].capabilities,
   },
   {
     id: 'skills',
@@ -671,7 +635,7 @@ export const HERD_MODULE_SERVER_METADATA = [
         id: 'skills.api',
         surface: 'api',
         mount: '/api/skills',
-        methods: ['GET'],
+        methods: ['GET', 'POST', 'DELETE'],
         auth: 'api-key-or-auth0',
         ownerModuleId: 'skills',
       },
@@ -679,12 +643,12 @@ export const HERD_MODULE_SERVER_METADATA = [
     parsers: [],
     websockets: [],
     lifecycle: noLifecycle(),
-    storage: storage('skills', 'external', 'Skills reads installed skill directories for discovery only.', {
+    storage: storage('skills', 'external', 'Skills reads installed skill directories and can scaffold/delete local skill packages through explicit write routes.', {
       roots: ['agent-skills', '~/.claude/skills', '~/.codex/skills', '~/.openclaw/skills'],
-      files: ['*/SKILL.md'],
+      files: ['*/SKILL.md', '*/references/*', '*/scripts/*', '*/tests/*'],
     }),
-    dependencies: HERD_MODULE_GRAPH[18].dependencies,
-    capabilities: HERD_MODULE_GRAPH[18].capabilities,
+    dependencies: HERD_MODULE_GRAPH[17].dependencies,
+    capabilities: HERD_MODULE_GRAPH[17].capabilities,
   },
   {
     id: 'telemetry',
@@ -743,8 +707,8 @@ export const HERD_MODULE_SERVER_METADATA = [
       roots: ['${HERD_DATA_DIR}/telemetry'],
       files: ['events.jsonl'],
     }),
-    dependencies: HERD_MODULE_GRAPH[19].dependencies,
-    capabilities: HERD_MODULE_GRAPH[19].capabilities,
+    dependencies: HERD_MODULE_GRAPH[18].dependencies,
+    capabilities: HERD_MODULE_GRAPH[18].capabilities,
   },
   {
     id: 'workspace',
@@ -768,8 +732,8 @@ export const HERD_MODULE_SERVER_METADATA = [
       roots: ['${HERD_DATA_DIR}/workspace'],
       files: ['conversation-targets.json', 'preferences.json'],
     }),
-    dependencies: HERD_MODULE_GRAPH[20].dependencies,
-    capabilities: HERD_MODULE_GRAPH[20].capabilities,
+    dependencies: HERD_MODULE_GRAPH[19].dependencies,
+    capabilities: HERD_MODULE_GRAPH[19].capabilities,
   },
   {
     id: 'module-graph',
@@ -789,8 +753,8 @@ export const HERD_MODULE_SERVER_METADATA = [
     websockets: [],
     lifecycle: noLifecycle(),
     storage: storage('module-graph', 'none', 'Module graph is derived from manifests and runtime provider registry summaries.'),
-    dependencies: HERD_MODULE_GRAPH[21].dependencies,
-    capabilities: HERD_MODULE_GRAPH[21].capabilities,
+    dependencies: HERD_MODULE_GRAPH[20].dependencies,
+    capabilities: HERD_MODULE_GRAPH[20].capabilities,
   },
   {
     id: 'realtime',
@@ -818,8 +782,8 @@ export const HERD_MODULE_SERVER_METADATA = [
     ],
     lifecycle: noLifecycle(),
     storage: storage('realtime', 'none', 'Realtime proxy is stateless; transcription credentials are owned by api-keys.'),
-    dependencies: HERD_MODULE_GRAPH[22].dependencies,
-    capabilities: HERD_MODULE_GRAPH[22].capabilities,
+    dependencies: HERD_MODULE_GRAPH[21].dependencies,
+    capabilities: HERD_MODULE_GRAPH[21].capabilities,
   },
   {
     id: 'eval',
@@ -843,8 +807,8 @@ export const HERD_MODULE_SERVER_METADATA = [
       roots: ['${HERD_EVAL_ROOT}', '~/.herd/eval'],
       files: ['*/**/config.json', '*/**/result.json', '*/**/summary.md', '*/**/leaderboard.json', '*/**/trajectories/*'],
     }),
-    dependencies: HERD_MODULE_GRAPH[23].dependencies,
-    capabilities: HERD_MODULE_GRAPH[23].capabilities,
+    dependencies: HERD_MODULE_GRAPH[22].dependencies,
+    capabilities: HERD_MODULE_GRAPH[22].capabilities,
   },
 ] as const satisfies readonly HerdModuleServerMetadata[]
 

@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { access, mkdir, readFile, rename } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveModuleDataDir } from '../../modules/data-dir.js'
 import {
@@ -43,20 +43,9 @@ export interface ProviderSecretsStoreLike {
   listSecrets(): Promise<ProviderSecretSummary[]>
 }
 
-export interface OpenAITranscriptionKeyStatus extends ProviderSecretStatus {}
-
-export interface OpenAITranscriptionKeyStoreLike {
-  getStatus(): Promise<OpenAITranscriptionKeyStatus>
-  getOpenAIApiKey(): Promise<string | null>
-  setOpenAIApiKey(rawKey: string, options?: { now?: Date }): Promise<void>
-  clearOpenAIApiKey(): Promise<boolean>
-}
-
 export interface ProviderSecretsStoreOptions {
   filePath?: string
   keyFilePath?: string
-  legacyFilePath?: string
-  legacyKeyFilePath?: string
   encryptionKey?: string | Buffer
   envKeyName?: string
 }
@@ -163,19 +152,6 @@ function decryptSecret(record: EncryptedSecretRecord, key: Buffer): string | nul
   }
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await access(filePath)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function inferLegacyPath(filePath: string, basename: string): string {
-  return path.join(path.dirname(filePath), basename)
-}
-
 export function defaultProviderSecretStorePath(): string {
   return path.join(resolveModuleDataDir('api-keys'), 'provider-secrets.json')
 }
@@ -184,34 +160,19 @@ export function defaultProviderSecretKeyPath(): string {
   return path.join(resolveModuleDataDir('api-keys'), 'provider-secrets.key')
 }
 
-export function defaultTranscriptionSecretStorePath(): string {
-  return path.join(resolveModuleDataDir('api-keys'), 'transcription-secrets.json')
-}
-
-export function defaultTranscriptionSecretKeyPath(): string {
-  return path.join(resolveModuleDataDir('api-keys'), 'transcription-secrets.key')
-}
-
 export class ProviderSecretsStore
-  implements ProviderSecretsStoreLike, OpenAITranscriptionKeyStoreLike
+  implements ProviderSecretsStoreLike
 {
   private mutationQueue: Promise<void> = Promise.resolve()
   private encryptionKeyPromise: Promise<Buffer> | null = null
-  private migrationPromise: Promise<void> | null = null
   private readonly filePath: string
   private readonly keyFilePath: string
-  private readonly legacyFilePath: string
-  private readonly legacyKeyFilePath: string
   private readonly encryptionKeyInput?: string | Buffer
   private readonly envKeyName: string
 
   constructor(options: ProviderSecretsStoreOptions = {}) {
     this.filePath = options.filePath ?? defaultProviderSecretStorePath()
     this.keyFilePath = options.keyFilePath ?? defaultProviderSecretKeyPath()
-    this.legacyFilePath = options.legacyFilePath
-      ?? inferLegacyPath(this.filePath, 'transcription-secrets.json')
-    this.legacyKeyFilePath = options.legacyKeyFilePath
-      ?? inferLegacyPath(this.keyFilePath, 'transcription-secrets.key')
     this.encryptionKeyInput = options.encryptionKey
     this.envKeyName = options.envKeyName ?? DEFAULT_ENV_KEY_NAME
   }
@@ -226,10 +187,6 @@ export class ProviderSecretsStore
     }
   }
 
-  async getStatus(): Promise<OpenAITranscriptionKeyStatus> {
-    return this.getSecretStatus(OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID)
-  }
-
   async getSecret(providerId: string): Promise<string | null> {
     const normalizedProviderId = this.requireProviderId(providerId)
     const state = await this.readCollectionConsistent()
@@ -240,10 +197,6 @@ export class ProviderSecretsStore
 
     const encryptionKey = await this.getEncryptionKey()
     return decryptSecret(secret, encryptionKey)
-  }
-
-  async getOpenAIApiKey(): Promise<string | null> {
-    return this.getSecret(OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID)
   }
 
   async setSecret(
@@ -268,24 +221,8 @@ export class ProviderSecretsStore
     })
   }
 
-  async setOpenAIApiKey(
-    rawKey: string,
-    options: { now?: Date } = {},
-  ): Promise<void> {
-    const normalizedKey = asNonEmptyString(rawKey)
-    if (!normalizedKey) {
-      throw new Error('OpenAI API key must not be empty')
-    }
-
-    await this.setSecret(OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID, normalizedKey, options)
-  }
-
   async deleteSecret(providerId: string): Promise<void> {
     await this.deleteSecretInternal(providerId)
-  }
-
-  async clearOpenAIApiKey(): Promise<boolean> {
-    return this.deleteSecretInternal(OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID)
   }
 
   async listSecrets(): Promise<ProviderSecretSummary[]> {
@@ -342,41 +279,7 @@ export class ProviderSecretsStore
     return this.readOrCreateKeyFile()
   }
 
-  private async ensureLegacyMigration(): Promise<void> {
-    if (!this.migrationPromise) {
-      this.migrationPromise = this.runLegacyMigration()
-    }
-
-    await this.migrationPromise
-  }
-
-  private async runLegacyMigration(): Promise<void> {
-    await this.migrateLegacyPath(this.legacyFilePath, this.filePath)
-    await this.migrateLegacyPath(this.legacyKeyFilePath, this.keyFilePath)
-  }
-
-  private async migrateLegacyPath(legacyPath: string, nextPath: string): Promise<void> {
-    if (legacyPath === nextPath) {
-      return
-    }
-
-    const nextExists = await pathExists(nextPath)
-    if (nextExists) {
-      return
-    }
-
-    const legacyExists = await pathExists(legacyPath)
-    if (!legacyExists) {
-      return
-    }
-
-    await mkdir(path.dirname(nextPath), { recursive: true })
-    await rename(legacyPath, nextPath)
-  }
-
   private async readOrCreateKeyFile(): Promise<Buffer> {
-    await this.ensureLegacyMigration()
-
     try {
       const existing = await readFile(this.keyFilePath, 'utf8')
       const normalized = existing.trim()
@@ -417,8 +320,6 @@ export class ProviderSecretsStore
   }
 
   private async readCollection(): Promise<PersistedSecretCollection> {
-    await this.ensureLegacyMigration()
-
     const parsed = await readJsonFileFailClosed(this.filePath)
     if (parsed === null) {
       return { secrets: {} }
@@ -430,5 +331,3 @@ export class ProviderSecretsStore
     await writeJsonFileAtomically(this.filePath, collection, { trailingNewline: true })
   }
 }
-
-export class OpenAITranscriptionKeyStore extends ProviderSecretsStore {}

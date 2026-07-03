@@ -1,7 +1,12 @@
 import { Router } from 'express'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
-import { getProvider, parseProviderId } from '../agents/providers/registry.js'
+import {
+  getProvider,
+  listProviders,
+  parseProviderId,
+  resolveAutomationDefaultProviderId,
+} from '../agents/providers/registry.js'
 import { validateModelForAgentType } from '../agents/providers/validate-model.js'
 import type { AgentType } from '../agents/types.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
@@ -139,6 +144,14 @@ function parseOptionalAgentType(raw: unknown): AgentType | null | undefined {
   return agentType && getProvider(agentType)?.capabilities.supportsAutomation
     ? agentType
     : null
+}
+
+function resolveDefaultAutomationAgentType(): AgentType | null {
+  const projectedDefault = resolveAutomationDefaultProviderId()
+  if (getProvider(projectedDefault)?.capabilities.supportsAutomation) {
+    return projectedDefault
+  }
+  return listProviders().find((provider) => provider.capabilities.supportsAutomation)?.id ?? null
 }
 
 function parseOptionalSessionType(raw: unknown): 'stream' | 'pty' | null | undefined {
@@ -393,9 +406,14 @@ export function createAutomationsRouter(options: AutomationsRouterOptions = {}):
       res.status(400).json({ error: 'instruction is required' })
       return
     }
-    const agentType = parseOptionalAgentType(req.body?.agentType)
-    if (!agentType) {
+    const parsedAgentType = parseOptionalAgentType(req.body?.agentType)
+    if (parsedAgentType === null) {
       res.status(400).json({ error: 'agentType must be a supported provider' })
+      return
+    }
+    const agentType = parsedAgentType ?? resolveDefaultAutomationAgentType()
+    if (!agentType) {
+      res.status(400).json({ error: 'No automation-capable provider is registered' })
       return
     }
     const permissionMode = parseOptionalPermissionMode(req.body?.permissionMode)

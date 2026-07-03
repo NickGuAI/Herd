@@ -15,7 +15,6 @@ export interface GoogleChatChannelConfig extends CommanderChannelBindingConfig {
   projectId?: string
   projectNumber?: string
   botUserName?: string
-  defaultCommanderId?: string
   webhookAudience: string
   webhookAudienceType: GoogleChatWebhookAudienceType
   credentialRef?: string
@@ -148,7 +147,6 @@ export function parseGoogleChatChannelConfig(
     ...(trimString(source.projectId) ? { projectId: trimString(source.projectId) } : {}),
     ...(trimString(source.projectNumber) ? { projectNumber: trimString(source.projectNumber) } : {}),
     ...(trimString(source.botUserName) ? { botUserName: trimString(source.botUserName) } : {}),
-    ...(trimString(source.defaultCommanderId) ? { defaultCommanderId: trimString(source.defaultCommanderId) } : {}),
     webhookAudience,
     webhookAudienceType: parseAudienceType(source.webhookAudienceType),
     ...(credentialRef ? { credentialRef } : {}),
@@ -211,7 +209,6 @@ export async function prepareGoogleChatChannelConfigForStorage(input: {
       ...(parsed.projectId ? { projectId: parsed.projectId } : {}),
       ...(parsed.projectNumber ? { projectNumber: parsed.projectNumber } : {}),
       ...(parsed.botUserName ? { botUserName: parsed.botUserName } : {}),
-      ...(parsed.defaultCommanderId ? { defaultCommanderId: parsed.defaultCommanderId } : {}),
       webhookAudience: parsed.webhookAudience,
       webhookAudienceType: parsed.webhookAudienceType,
       dmPolicy: parsed.dmPolicy,

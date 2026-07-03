@@ -7,7 +7,9 @@ import {
   ExternalLink,
   LogOut,
   Moon,
+  Plus,
   Sun,
+  Trash2,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -53,6 +55,47 @@ const APP_VERSION = (import.meta.env?.VITE_APP_VERSION as string | undefined) ??
 const BUILD_COMMIT = (import.meta.env?.VITE_BUILD_COMMIT as string | undefined) ?? ''
 
 type WorkspacePanelDefault = 'open' | 'closed' | 'last-used'
+type CredentialPoolProvider = 'claude' | 'codex'
+type CredentialPoolCredentialStatus = 'active' | 'available' | 'exhausted' | 'auth_required'
+
+interface CredentialPoolCredentialDto {
+  id: string
+  label: string
+  email?: string
+  absoluteDir: string
+  active: boolean
+  exhausted: boolean
+  exhaustedUntil?: string
+  status: CredentialPoolCredentialStatus
+}
+
+interface CredentialPoolDto {
+  provider: CredentialPoolProvider
+  active?: string
+  credentials: CredentialPoolCredentialDto[]
+  nextCredential?: CredentialPoolCredentialDto
+  readyCount?: number
+  earliestExhaustedUntil?: string
+}
+
+interface CredentialPoolRegisterResponse {
+  credential: CredentialPoolCredentialDto
+  pool: CredentialPoolDto
+  instructions: {
+    directory: string
+    commands: string[]
+  }
+}
+
+const CREDENTIAL_POOL_PROVIDER_IDS: readonly CredentialPoolProvider[] = ['claude', 'codex']
+const CREDENTIAL_POOL_LABELS: Record<CredentialPoolProvider, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+}
+
+function credentialPoolQueryKey(provider: CredentialPoolProvider): readonly string[] {
+  return ['agents', 'provider-auth', 'pool', provider]
+}
 
 function useWorkspacePreferences() {
   return useQuery({
@@ -76,6 +119,14 @@ function useUpdateWorkspacePreferences() {
       queryClient.setQueryData(['workspace', 'preferences'], preferences)
     },
   })
+}
+
+function fetchCredentialPool(provider: CredentialPoolProvider): Promise<CredentialPoolDto> {
+  return fetchJson<CredentialPoolDto>(`/api/agents/provider-auth/pool/${provider}`)
+}
+
+function defaultCredentialLabel(provider: CredentialPoolProvider, count: number): string {
+  return `${CREDENTIAL_POOL_LABELS[provider]} ${count + 1}`
 }
 
 interface MobileSettingsProfile {
@@ -133,7 +184,7 @@ function SettingsHeader({
           <ArrowLeft size={16} />
         </Link>
       ) : (
-        <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">herd</p>
+        <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">hervald</p>
       )}
       <h1 className="mt-1 font-display text-4xl text-[color:var(--hv-fg)]">{title}</h1>
     </div>
@@ -420,6 +471,148 @@ function MachinesPanel() {
   )
 }
 
+function CredentialPoolsPanel() {
+  return (
+    <div className="space-y-4">
+      {CREDENTIAL_POOL_PROVIDER_IDS.map((provider) => (
+        <CredentialPoolProviderPanel key={provider} provider={provider} />
+      ))}
+    </div>
+  )
+}
+
+function credentialStatusLabel(credential: CredentialPoolCredentialDto): string {
+  if (credential.status === 'auth_required') {
+    return 'auth required'
+  }
+  if (credential.active && credential.exhausted) {
+    return 'active, exhausted'
+  }
+  if (credential.active) {
+    return 'active'
+  }
+  if (credential.exhausted) {
+    return credential.exhaustedUntil ? 'cooling down' : 'exhausted'
+  }
+  return credential.status
+}
+
+function CredentialPoolProviderPanel({ provider }: { provider: CredentialPoolProvider }) {
+  const queryClient = useQueryClient()
+  const [lastInstructions, setLastInstructions] = useState<CredentialPoolRegisterResponse['instructions'] | null>(null)
+  const poolQuery = useQuery({
+    queryKey: credentialPoolQueryKey(provider),
+    queryFn: () => fetchCredentialPool(provider),
+  })
+  const pool = poolQuery.data
+  const credentials = pool?.credentials ?? []
+  const addCredential = useMutation({
+    mutationFn: () => fetchJson<CredentialPoolRegisterResponse>('/api/agents/provider-auth/pool/credentials', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider,
+        label: defaultCredentialLabel(provider, credentials.length),
+      }),
+    }),
+    onSuccess: async (response) => {
+      setLastInstructions(response.instructions)
+      queryClient.setQueryData(credentialPoolQueryKey(provider), response.pool)
+      await queryClient.invalidateQueries({ queryKey: credentialPoolQueryKey(provider) })
+    },
+  })
+  const removeCredential = useMutation({
+    mutationFn: (credentialId: string) => fetchJson<CredentialPoolDto>(
+      `/api/agents/provider-auth/pool/credentials/${provider}/${encodeURIComponent(credentialId)}`,
+      { method: 'DELETE' },
+    ),
+    onSuccess: async (nextPool) => {
+      setLastInstructions(null)
+      queryClient.setQueryData(credentialPoolQueryKey(provider), nextPool)
+      await queryClient.invalidateQueries({ queryKey: credentialPoolQueryKey(provider) })
+    },
+  })
+
+  return (
+    <SettingsPanel>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-[color:var(--hv-fg)]">
+            {CREDENTIAL_POOL_LABELS[provider]}
+          </p>
+          <p className="mt-1 text-xs text-[color:var(--hv-fg-subtle)]">
+            {poolQuery.isLoading && !pool ? 'Loading credentials' : `${credentials.length} credential${credentials.length === 1 ? '' : 's'}`}
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={addCredential.isPending}
+          onClick={() => addCredential.mutate()}
+          className="inline-flex shrink-0 items-center gap-2 rounded-[2px_8px] border border-[color:var(--hv-fg)] px-3 py-1.5 text-[11px] text-[color:var(--hv-fg)] shadow-[2px_2px_0_var(--hv-fg)] disabled:opacity-50"
+        >
+          <Plus size={13} />
+          Add credential
+        </button>
+      </div>
+
+      {poolQuery.error && !pool ? (
+        <p className="mt-3 text-sm text-[color:var(--hv-accent-danger)]">Credential pool is unavailable.</p>
+      ) : null}
+
+      {credentials.length === 0 && !poolQuery.isLoading ? (
+        <p className="mt-3 text-sm text-[color:var(--hv-fg-subtle)]">No credentials are configured.</p>
+      ) : null}
+
+      {credentials.length > 0 ? (
+        <div className="mt-3 divide-y divide-[color:var(--hv-border-hair)] border-y border-[color:var(--hv-border-hair)]">
+          {credentials.map((credential) => (
+            <div key={credential.id} className="py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-[color:var(--hv-fg)]">{credential.label}</p>
+                  <p className="mt-1 truncate font-mono text-[10px] text-[color:var(--hv-fg-faint)]">
+                    {credential.email ?? credential.absoluteDir}
+                  </p>
+                </div>
+                <span className={cn(
+                  'shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em]',
+                  credential.exhausted
+                    ? 'border-[color:var(--hv-accent-danger)] text-[color:var(--hv-accent-danger)]'
+                    : credential.active
+                      ? 'border-[color:var(--hv-accent-success)] text-[color:var(--hv-accent-success)]'
+                      : 'border-[color:var(--hv-border-soft)] text-[color:var(--hv-fg-muted)]',
+                )}>
+                  {credentialStatusLabel(credential)}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={removeCredential.isPending}
+                onClick={() => removeCredential.mutate(credential.id)}
+                className="mt-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)] transition-colors hover:text-[color:var(--hv-accent-danger)] disabled:opacity-50"
+              >
+                <Trash2 size={12} />
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {lastInstructions ? (
+        <div className="mt-3 space-y-2">
+          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)]">
+            Login command
+          </p>
+          <code className="block whitespace-pre-wrap break-words rounded border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-2 text-[10px] text-[color:var(--hv-fg-subtle)]">
+            {lastInstructions.commands.join('\n')}
+          </code>
+        </div>
+      ) : null}
+    </SettingsPanel>
+  )
+}
+
 function MachineCard({
   machine,
 }: {
@@ -701,6 +894,7 @@ function MobileSettingsDetail({
         {section.id === 'telemetry' ? <TelemetryPanel section={section} /> : null}
         {section.id === 'notifications' ? <NotificationsPanel section={section} /> : null}
         {section.id === 'machines' ? <MachinesPanel /> : null}
+        {section.id === 'credential-pools' ? <CredentialPoolsPanel /> : null}
         {section.id === 'appearance' ? <AppearancePanel /> : null}
         {section.id === 'about' ? <AboutPanel /> : null}
         <VersionFooter />
@@ -712,7 +906,7 @@ function MobileSettingsDetail({
 function VersionFooter() {
   return (
     <div className="px-6 pt-4 text-center text-[10px] uppercase tracking-[0.14em] text-[color:var(--hv-fg-faint)]">
-      herd · v{APP_VERSION}{BUILD_COMMIT ? ` · build ${BUILD_COMMIT}` : ''}
+      hervald · v{APP_VERSION}{BUILD_COMMIT ? ` · build ${BUILD_COMMIT}` : ''}
     </div>
   )
 }

@@ -70,6 +70,7 @@ export type TranscriptEnvelopeEvent =
       classification: ProviderErrorClassification
       code?: string
       hint?: string
+      resetAt?: string
       retryable?: boolean
       data?: unknown
     }

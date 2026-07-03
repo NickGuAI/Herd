@@ -1,9 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { useProviderRegistry } from '@/hooks/use-providers'
+import {
+  findProviderEntry,
+  getProviderControlDefaults,
+  resolveDefaultProviderId,
+  useProviderRegistry,
+} from '@/hooks/use-providers'
 import type { AgentType } from '@/types'
 import {
   CLAUDE_EFFORT_LEVELS,
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '../../claude-effort.js'
 import type { CommanderCreateInput } from '../hooks/useCommander'
@@ -20,29 +24,6 @@ const MIN_HEARTBEAT_MINUTES = 1
 const DEFAULT_HEARTBEAT_MINUTES = 15
 const MS_PER_MINUTE = 60_000
 const FALLBACK_RUNTIME_CONFIG = createDefaultCommanderRuntimeConfig()
-
-declare module '../hooks/useCommander' {
-  interface CommanderCreateInput {
-    displayName?: string
-    agentType?: AgentType
-    effort?: ClaudeEffortLevel
-    identityOperatingStyle?: string
-    avatarSeed?: string
-    heartbeat?: {
-      intervalMs: number
-      messageTemplate?: string
-    }
-    contextConfig?: {
-      fatPinInterval?: number
-    }
-    taskSource?: {
-      owner: string
-      repo: string
-      label?: string
-      project?: string
-    }
-  }
-}
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-ink-border px-3 py-2 text-[16px] md:text-sm bg-washi-white focus:outline-none focus:ring-1 focus:ring-sumi-black/20 placeholder:text-sumi-mist'
@@ -66,11 +47,12 @@ export function CreateCommanderForm({
   // Identity
   const [host, setHost] = useState('')
   const [displayName, setDisplayName] = useState('')
-  const [agentType, setAgentType] = useState<AgentType>('claude')
+  const [agentType, setAgentType] = useState<AgentType>('')
   const [model, setModel] = useState<string | null>(null)
-  const [effort, setEffort] = useState<ClaudeEffortLevel>(DEFAULT_CLAUDE_EFFORT_LEVEL)
-  const { data: providers = [] } = useProviderRegistry()
-  const currentProvider = providers.find((provider) => provider.id === agentType) ?? null
+  const [effort, setEffort] = useState<ClaudeEffortLevel>(getProviderControlDefaults(null).effort)
+  const { data: providers = [], defaultProviderId } = useProviderRegistry()
+  const defaultAgentType = resolveDefaultProviderId(providers, defaultProviderId)
+  const currentProvider = findProviderEntry(providers, agentType)
   const availableModels = resolveProviderModelOptions(providers, agentType)
 
   // Working directory
@@ -105,10 +87,17 @@ export function CreateCommanderForm({
   }, [effectiveRuntimeConfig.defaults.maxTurns, maxTurnsDirty])
 
   useEffect(() => {
-    if (providers.length > 0 && !currentProvider) {
-      setAgentType(providers[0]!.id)
+    if (defaultAgentType && !currentProvider) {
+      setAgentType(defaultAgentType)
     }
-  }, [currentProvider, providers])
+  }, [currentProvider, defaultAgentType])
+
+  useEffect(() => {
+    if (!currentProvider) {
+      return
+    }
+    setEffort(getProviderControlDefaults(currentProvider).effort)
+  }, [currentProvider])
 
   useEffect(() => {
     if (model && !availableModels.some((option) => option.id === model)) {
@@ -160,6 +149,10 @@ export function CreateCommanderForm({
 
     setActionError(null)
     try {
+      if (!currentProvider) {
+        setActionError('Select an available provider.')
+        return
+      }
       const createInput: CommanderCreateInput = {
         host: trimmedHost,
         displayName: displayName.trim() || undefined,
@@ -193,9 +186,11 @@ export function CreateCommanderForm({
       // Reset all fields on success
       setHost('')
       setDisplayName('')
-      setAgentType('claude')
+      if (defaultAgentType) {
+        setAgentType(defaultAgentType)
+      }
       setModel(null)
-      setEffort(DEFAULT_CLAUDE_EFFORT_LEVEL)
+      setEffort(getProviderControlDefaults(currentProvider).effort)
       setCwd('')
       setIdentityOperatingStyle('')
       setAvatarSeed('')
@@ -269,8 +264,12 @@ export function CreateCommanderForm({
           <select
             value={agentType}
             onChange={(event) => setAgentType(event.target.value)}
+            required
             className={INPUT_CLASS}
           >
+            <option value="" disabled>
+              — Select provider —
+            </option>
             {providers.map((provider) => (
               <option key={provider.id} value={provider.id}>
                 {provider.label.toLowerCase()}

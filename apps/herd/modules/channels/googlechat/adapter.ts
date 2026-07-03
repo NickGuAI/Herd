@@ -1,11 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { checkAccountInboundPolicy } from '../policy.js'
+import {
+  bindingRoutesToCommander,
+  effectiveBindingCommanderId,
+} from '../binding-routing.js'
+import { buildChannelLastDrop, readDroppedChannelResponse } from '../drop-status.js'
 import type { CommanderChannelBindingStore } from '../store.js'
 import type {
   ChannelAdapter,
   ChannelAdapterStatus,
   ChannelInboundDecision,
   ChannelInboundEvent,
+  ChannelLastDrop,
   ChannelOutboundPayload,
   ChannelPairingChallenge,
   ChannelRuntime,
@@ -38,6 +44,7 @@ interface GoogleChatRuntime extends ChannelRuntime<GoogleChatChannelConfig> {
   startedAt: string
   lastEventAt?: string
   lastError?: string
+  lastDrop?: ChannelLastDrop
 }
 
 interface GoogleChatChannelMessagePayload {
@@ -181,6 +188,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
   private readonly logger: Pick<Console, 'error' | 'warn' | 'log'>
   private readonly dedupeTtlMs: number
   private readonly runtimesByAccount = new Map<string, GoogleChatRuntime>()
+  private readonly lastDropsByAccount = new Map<string, ChannelLastDrop>()
   private readonly recentInboundSourceIds = new Map<string, number>()
 
   constructor(options: GoogleChatChannelAdapterOptions) {
@@ -320,6 +328,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
 
   async getStatus(binding: CommanderChannelBinding): Promise<ChannelAdapterStatus> {
     const runtime = this.runtimesByAccount.get(binding.accountId)
+    const lastDrop = runtime?.lastDrop ?? this.lastDropsByAccount.get(binding.accountId)
     const config = parseGoogleChatChannelConfig(binding.config, binding.accountId)
     return {
       provider: 'googlechat',
@@ -329,6 +338,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
       connected: binding.enabled && config.credentialConfigured && Boolean(config.webhookAudience),
       ...(runtime?.lastError ? { lastError: runtime.lastError } : {}),
       ...(runtime?.lastEventAt ? { lastEventAt: runtime.lastEventAt } : {}),
+      ...(lastDrop ? { lastDrop } : {}),
       metadata: {
         credentialConfigured: config.credentialConfigured,
         webhookAudienceType: config.webhookAudienceType,
@@ -379,6 +389,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
 
     const decision = checkGoogleChatInboundPolicy(verified.binding, normalized, verified.config)
     if (!decision.allowed) {
+      this.recordDroppedInbound(verified.binding.accountId, normalized, decision.reason ?? 'policy-denied')
       return {
         status: 200,
         body: {
@@ -395,7 +406,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
       return { status: 200, body: { accepted: true, delivered: false, duplicate: true } }
     }
 
-    const payload = this.toChannelMessagePayload(verified.binding, normalized)
+    const payload = this.toChannelMessagePayload(verified.binding, normalized, input.commanderId)
     const response = await this.postInboundPayload(payload)
     if (!response.ok) {
       const text = await response.text().catch(() => '')
@@ -412,6 +423,19 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
         },
       }
     }
+    const droppedReason = await readDroppedChannelResponse(response)
+    if (droppedReason) {
+      this.recordDroppedInbound(verified.binding.accountId, normalized, droppedReason)
+      return {
+        status: 200,
+        body: {
+          accepted: true,
+          delivered: false,
+          dropped: true,
+          reason: droppedReason,
+        },
+      }
+    }
 
     this.markRecentInbound(dedupeKey)
     const runtime = this.runtimesByAccount.get(verified.binding.accountId)
@@ -420,6 +444,24 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
       runtime.lastError = undefined
     }
     return { status: 200, body: { accepted: true, delivered: true } }
+  }
+
+  private recordDroppedInbound(
+    accountId: string,
+    event: ChannelInboundEvent,
+    reason: string,
+  ): void {
+    const at = new Date().toISOString()
+    const lastDrop = buildChannelLastDrop(event, reason, at)
+    this.lastDropsByAccount.set(accountId, lastDrop)
+    const runtime = this.runtimesByAccount.get(accountId)
+    if (runtime) {
+      runtime.lastEventAt = at
+      runtime.lastDrop = lastDrop
+    }
+    this.logger.warn(
+      `[channels/googlechat] Dropped Google Chat message ${event.rawSourceId}: inbound denied ${reason} (${event.chatType} ${event.peerId})`,
+    )
   }
 
   private async resolveVerifiedBinding(input: {
@@ -431,7 +473,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
       binding.enabled
       && binding.provider === 'googlechat'
       && (!input.accountId || binding.accountId === input.accountId)
-      && (!input.commanderId || binding.commanderId === input.commanderId)
+      && (!input.commanderId || bindingRoutesToCommander(binding, input.commanderId))
     ))
     const verified: Array<{ binding: CommanderChannelBinding; config: GoogleChatChannelConfig }> = []
     for (const binding of candidates) {
@@ -493,6 +535,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
   private toChannelMessagePayload(
     binding: CommanderChannelBinding,
     event: ChannelInboundEvent,
+    requestedCommanderId?: string,
   ): GoogleChatChannelMessagePayload {
     const metadata = googleChatMetadata(event)
     return {
@@ -503,7 +546,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
       displayName: event.peerDisplayName ?? event.peerId,
       message: event.text ?? '',
       mode: 'followup',
-      commanderId: binding.commanderId,
+      commanderId: effectiveBindingCommanderId(binding, requestedCommanderId),
       ...(event.groupId ? { groupId: event.groupId } : {}),
       ...(event.threadId ? { threadId: event.threadId } : {}),
       ...(metadataString(metadata, 'spaceName') ? { space: metadataString(metadata, 'spaceName') } : {}),

@@ -30,7 +30,7 @@ import {
   unsupportedProviderPermissionModeError,
   type ProviderCreateOptions,
 } from './providers/provider-adapter.js'
-import { getProvider, parseProviderId } from './providers/registry.js'
+import { getProvider, resolveProviderIdForRequest } from './providers/registry.js'
 import { validateModelForAgentType } from './providers/validate-model.js'
 import type {
   ActiveSkillInvocation,
@@ -59,16 +59,6 @@ export const COMMANDER_WORKER_LAUNCH_BODY_KEYS = new Set([
   'task',
 ])
 
-export const LEGACY_DISPATCH_WORKER_BODY_KEYS = new Set([
-  'agentType',
-  'currentSkillInvocation',
-  'cwd',
-  'host',
-  'permissionMode',
-  'spawnedBy',
-  'task',
-])
-
 interface WorkerLaunchSourceDefaults {
   agentType?: AgentType
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
@@ -94,7 +84,6 @@ interface ParseWorkerLaunchRequestOptions {
   routeLabel: string
   sourceDefaults?: WorkerLaunchSourceDefaults
   spawnedBy?: string
-  unknownKeyStyle: 'legacy' | 'quoted'
 }
 
 export interface ParsedWorkerLaunchRequest {
@@ -159,20 +148,14 @@ function hasOwn(body: WorkerLaunchBody, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(body, key)
 }
 
-function renderUnknownKeys(keys: string[], style: 'legacy' | 'quoted'): string {
-  if (style === 'legacy') {
-    return keys.join(', ')
-  }
+function renderUnknownKeys(keys: string[]): string {
   return keys.map((key) => `"${key}"`).join(', ')
 }
 
-function unknownBodyPropertiesError(
-  keys: string[],
-  style: 'legacy' | 'quoted',
-): Record<string, unknown> {
-  const noun = style === 'legacy' || keys.length !== 1 ? 'properties' : 'property'
+function unknownBodyPropertiesError(keys: string[]): Record<string, unknown> {
+  const noun = keys.length === 1 ? 'property' : 'properties'
   return {
-    error: `Unknown request body ${noun}: ${renderUnknownKeys(keys, style)}`,
+    error: `Unknown request body ${noun}: ${renderUnknownKeys(keys)}`,
   }
 }
 
@@ -205,7 +188,7 @@ export function parseWorkerLaunchRequest(
     return {
       ok: false,
       status: 400,
-      body: unknownBodyPropertiesError(unknownKeys, options.unknownKeyStyle),
+      body: unknownBodyPropertiesError(unknownKeys),
     }
   }
 
@@ -311,18 +294,20 @@ export function parseWorkerLaunchRequest(
     return { ok: false, status: 400, body: { error: 'Invalid host: expected machine ID string' } }
   }
 
-  const hasRequestedAgentType = hasOwn(body, 'agentType')
-    && typeof body.agentType === 'string'
-    && body.agentType.trim().length > 0
-  const parsedAgentType = parseProviderId(body.agentType)
-  if (hasRequestedAgentType && parsedAgentType === null) {
+  const providerResolution = resolveProviderIdForRequest(body.agentType, {
+    defaultProviderId: options.sourceDefaults?.agentType,
+  })
+  if (providerResolution.error || !providerResolution.providerId) {
     return {
       ok: false,
       status: 400,
-      body: { error: `Unknown provider: ${String(body.agentType)}` },
+      body: {
+        error: providerResolution.error ?? 'agentType must be a registered provider id',
+        validIds: providerResolution.validIds,
+      },
     }
   }
-  const agentType = (parsedAgentType ?? options.sourceDefaults?.agentType ?? 'claude') as AgentType
+  const agentType = providerResolution.providerId as AgentType
   const provider = getProvider(agentType)
   if (!provider?.capabilities.supportsWorkerDispatch) {
     return {

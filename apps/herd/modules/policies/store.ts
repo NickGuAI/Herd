@@ -96,8 +96,7 @@ function normalizePolicyRecord(
       {
         now: normalizedNow,
         default_added_at: updatedAt ?? normalizedNow.toISOString(),
-        default_added_by: updatedBy ?? 'email-allowlist-migration',
-        default_reason: 'Migrated standing approval entry.',
+        default_added_by: updatedBy ?? 'unknown',
         expiry_days: standingApprovalExpiryDays,
       },
     )

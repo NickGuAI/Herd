@@ -24,10 +24,12 @@ import {
 import { useProviderRegistry } from '@/hooks/use-providers'
 import { cn, formatCost } from '@/lib/utils'
 import { ConfirmModal } from '@modules/components/ConfirmModal'
+import { ModalFormContainer } from '@modules/components/ModalFormContainer'
 import type { AgentType, ProviderModelOption, ProviderRegistryEntry, SessionQueueSnapshot } from '@/types'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import { AddToChatSheet } from '@modules/agents/components/AddToChatSheet'
 import Transcript from '@modules/agents/components/Transcript'
+import ApprovalCard from '@modules/approvals/ApprovalCard'
 import {
   SessionComposer,
   type SessionComposerContextAttachments,
@@ -133,6 +135,32 @@ function hasConversationAction(
   return conversation?.allowedActions?.[action] === true
 }
 
+function conversationHasStoppableRuntime(conversation: ConversationRecord | null | undefined): boolean {
+  if (!conversation) {
+    return false
+  }
+  const runtimeState = conversation.displayState?.runtimeState ?? conversation.runtimeState
+  const hasLiveSession = conversation.displayState
+    ? conversation.displayState.hasLiveSession
+    : Boolean(conversation.liveSession) || conversation.status === 'active'
+  return runtimeState === 'starting' || (conversation.status === 'active' && hasLiveSession)
+}
+
+function resolveConversationLifecycleAction(
+  conversation: ConversationRecord | null | undefined,
+): 'start' | 'stop' | null {
+  const canStop = hasConversationAction(conversation, 'pause') && conversationHasStoppableRuntime(conversation)
+  if (canStop) {
+    return 'stop'
+  }
+
+  if (hasConversationAction(conversation, 'resume') || hasConversationAction(conversation, 'start')) {
+    return 'start'
+  }
+
+  return null
+}
+
 export function MobileSessionShell({
   sessionName,
   sessionLabel,
@@ -201,22 +229,27 @@ export function MobileSessionShell({
   const [showLoadOlderControl, setShowLoadOlderControl] = useState(false)
   const [isKilling, setIsKilling] = useState(false)
   const [confirmKillOpen, setConfirmKillOpen] = useState(false)
+  const [confirmRemoveConversationOpen, setConfirmRemoveConversationOpen] = useState(false)
+  const [renameConversationOpen, setRenameConversationOpen] = useState(false)
+  const [renameConversationDraft, setRenameConversationDraft] = useState('')
   const [conversationActionBusy, setConversationActionBusy] = useState<string | null>(null)
   const [conversationProviderDraft, setConversationProviderDraft] = useState<AgentType | ''>('')
   const [conversationModelDraft, setConversationModelDraft] = useState('')
   const shellRef = useRef<HTMLElement>(null)
   const composerRef = useRef<SessionComposerHandle>(null)
   const emptyStateActive = Boolean(emptyState) && !composerEnabled
+  const inlineApprovals = approvals ?? []
 
   useEffect(() => {
-    if (!onOpenWorkspace) {
+    const openWorkspace = onOpenWorkspace
+    if (!openWorkspace) {
       return
     }
 
     function handleWorkspaceShortcut(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        onOpenWorkspace()
+        openWorkspace?.()
       }
     }
 
@@ -242,9 +275,10 @@ export function MobileSessionShell({
     [conversation?.agentType, providers],
   )
   const conversationName = conversation?.name?.trim() || (conversation ? `chat ${conversation.id.slice(0, 8)}` : '')
-  const canResumeConversation = hasConversationAction(conversation, 'resume')
-  const canStartConversation = hasConversationAction(conversation, 'start') || canResumeConversation
-  const canStopConversation = hasConversationAction(conversation, 'pause')
+  const lifecycleAction = resolveConversationLifecycleAction(conversation)
+  const canResumeConversation = lifecycleAction === 'start' && hasConversationAction(conversation, 'resume')
+  const canStartConversation = lifecycleAction === 'start'
+  const canStopConversation = lifecycleAction === 'stop'
   const canEditConversationProviderModel =
     hasConversationAction(conversation, 'updateProvider') && Boolean(onSwapConversationProvider)
   const conversationStartState = conversation?.runtimeState ?? conversation?.displayState?.runtimeState ?? null
@@ -295,6 +329,10 @@ export function MobileSessionShell({
       || (hasConversationAction(conversation, 'delete') && onRemoveConversation)
     ),
   )
+
+  useEffect(() => {
+    setConfirmRemoveConversationOpen(false)
+  }, [conversation?.id])
 
   useEffect(() => {
     if (!conversation) {
@@ -428,15 +466,20 @@ export function MobileSessionShell({
     }
   }, [])
 
-  const handleRename = useCallback(async () => {
+  const handleRename = useCallback(() => {
     if (!conversation || !onRenameConversation) {
       return
     }
-    const nextName = window.prompt('Rename chat', conversationName)
-    if (nextName === null) {
+    setRenameConversationDraft(conversationName)
+    setRenameConversationOpen(true)
+  }, [conversation, conversationName, onRenameConversation])
+
+  const handleSubmitRename = useCallback(async () => {
+    if (!conversation || !onRenameConversation || conversationActionBusy !== null) {
       return
     }
-    const trimmed = nextName.trim()
+    const trimmed = renameConversationDraft.trim()
+    setRenameConversationOpen(false)
     if (!trimmed) {
       return
     }
@@ -447,9 +490,10 @@ export function MobileSessionShell({
     })
   }, [
     conversation,
-    conversationName,
+    conversationActionBusy,
     handleConversationAction,
     onRenameConversation,
+    renameConversationDraft,
   ])
 
   const handleConversationProviderDraftChange = useCallback((provider: AgentType) => {
@@ -500,17 +544,20 @@ export function MobileSessionShell({
     })
   }, [conversation, handleConversationAction, onArchiveConversation])
 
-  const handleRemove = useCallback(async () => {
+  const handleRequestRemove = useCallback(() => {
     if (!conversation || !onRemoveConversation) {
       return
     }
-    const confirmation = window.prompt(
-      `Type ${conversationName} to remove this chat and its transcript files.`,
-      '',
-    )
-    if (confirmation !== conversationName) {
+    setShowConversationProviderMenu(false)
+    setShowOverflowMenu(false)
+    setConfirmRemoveConversationOpen(true)
+  }, [conversation, onRemoveConversation])
+
+  const handleConfirmRemove = useCallback(async () => {
+    if (!conversation || !onRemoveConversation || conversationActionBusy !== null) {
       return
     }
+    setConfirmRemoveConversationOpen(false)
     await handleConversationAction('remove', async () => {
       await onRemoveConversation(conversation.id)
       setShowConversationProviderMenu(false)
@@ -518,7 +565,7 @@ export function MobileSessionShell({
     })
   }, [
     conversation,
-    conversationName,
+    conversationActionBusy,
     handleConversationAction,
     onRemoveConversation,
   ])
@@ -926,7 +973,7 @@ export function MobileSessionShell({
                         className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-xs text-accent-vermillion transition-colors hover:bg-accent-vermillion/5 disabled:cursor-not-allowed disabled:opacity-50"
                         data-testid="mobile-chat-remove-button"
                         onClick={() => {
-                          void handleRemove()
+                          handleRequestRemove()
                         }}
                         disabled={conversationActionBusy !== null}
                       >
@@ -1081,11 +1128,30 @@ export function MobileSessionShell({
               dark={theme === 'dark'}
               className={usesOverlayChrome
                 ? undefined
-                : 'h-full flex-1 px-4 py-4 herd-chat-pane'}
+                : 'h-full flex-1 px-4 py-4 hervald-chat-pane'}
               agentAvatarUrl={agentAvatarUrl}
               agentAccentColor={agentAccentColor}
               onOpenWorkspaceFile={onOpenWorkspaceFile}
             />
+            {inlineApprovals.length > 0 && onApprovalDecision && (
+              <div
+                className="space-y-3 px-4 pb-3"
+                data-testid="mobile-inline-approvals"
+                data-approval-count={inlineApprovals.length}
+              >
+                {inlineApprovals.map((approval) => (
+                  <ApprovalCard
+                    key={approval.id}
+                    approval={approval}
+                    onApprove={() => onApprovalDecision(approval, 'approve')}
+                    onDeny={() => onApprovalDecision(approval, 'reject')}
+                    compact
+                    variant="inline"
+                    hideInlineContext
+                  />
+                ))}
+              </div>
+            )}
             {isStreaming && (
               <div className="px-4 pb-2">
                 <StreamingDots />
@@ -1143,6 +1209,73 @@ export function MobileSessionShell({
         confirmTone="danger"
         onClose={() => setConfirmKillOpen(false)}
         onConfirm={() => void handleConfirmKill()}
+      />
+      <ModalFormContainer
+        open={renameConversationOpen}
+        title="Rename Chat"
+        onClose={() => {
+          if (conversationActionBusy === 'rename') {
+            return
+          }
+          setRenameConversationOpen(false)
+        }}
+        desktopClassName="max-w-md"
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handleSubmitRename()
+          }}
+        >
+          <label className="grid gap-1.5 text-sm text-[color:var(--hv-fg)]">
+            <span className="text-xs uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">
+              Name
+            </span>
+            <input
+              type="text"
+              autoFocus
+              value={renameConversationDraft}
+              onChange={(event) => setRenameConversationDraft(event.target.value)}
+              disabled={conversationActionBusy === 'rename'}
+              className="rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-3 py-2 text-sm text-[color:var(--hv-fg)] outline-none focus:border-[color:var(--hv-border-strong)] disabled:cursor-wait disabled:opacity-60"
+              data-testid="mobile-chat-rename-input"
+            />
+          </label>
+          <div className="flex items-center justify-end gap-3 border-t border-[color:var(--hv-border-hair)] pt-4">
+            <button
+              type="button"
+              onClick={() => setRenameConversationOpen(false)}
+              disabled={conversationActionBusy === 'rename'}
+              className="rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:cursor-wait disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={conversationActionBusy === 'rename'}
+              className="rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)] disabled:cursor-wait disabled:opacity-60"
+              data-testid="mobile-chat-rename-submit"
+            >
+              {conversationActionBusy === 'rename' ? 'Renaming...' : 'Rename'}
+            </button>
+          </div>
+        </form>
+      </ModalFormContainer>
+      <ConfirmModal
+        open={confirmRemoveConversationOpen}
+        title="Remove chat?"
+        message={`Remove ${conversationName} and its transcript files? This permanently deletes the chat and cannot be undone.`}
+        confirmLabel={conversationActionBusy === 'remove' ? 'Removing...' : 'Remove forever'}
+        confirmTone="danger"
+        bodyTestId="mobile-chat-remove-confirm"
+        onClose={() => {
+          if (conversationActionBusy === 'remove') {
+            return
+          }
+          setConfirmRemoveConversationOpen(false)
+        }}
+        onConfirm={() => void handleConfirmRemove()}
       />
     </section>
   )

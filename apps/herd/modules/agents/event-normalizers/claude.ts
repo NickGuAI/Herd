@@ -1,5 +1,5 @@
 import type { TranscriptEnvelope, TranscriptEnvelopeEvent } from '../../../src/types/transcript-envelope.js'
-import { classifyProviderError } from '../provider-errors.js'
+import { extractProviderLimitDetails } from '../provider-errors.js'
 import { createTranscriptId } from '../transcript-id.js'
 
 interface ClaudeStreamEvent {
@@ -52,6 +52,18 @@ function readCodeString(value: unknown): string | undefined {
     return String(value)
   }
   return readTrimmedString(value)
+}
+
+function readResetAtValue(value: unknown): string | number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  const text = readTrimmedString(value)
+  if (!text) {
+    return undefined
+  }
+  const numeric = Number(text)
+  return Number.isFinite(numeric) ? numeric : text
 }
 
 function readTimestamp(event: ClaudeStreamEvent): string {
@@ -193,15 +205,17 @@ export function createClaudeProviderErrorEnvelope(
   code?: string,
   hint?: string,
 ): TranscriptEnvelope {
+  const limitDetails = extractProviderLimitDetails(message, code)
   return createClaudeSyntheticEnvelope(
     'herd/provider-error',
     {
       type: 'provider.error',
       message,
-      classification: classifyProviderError(message, code),
+      classification: limitDetails.classification,
       ...(code ? { code } : {}),
       ...(hint ? { hint } : {}),
-      retryable: false,
+      ...(limitDetails.resetAt ? { resetAt: limitDetails.resetAt } : {}),
+      retryable: limitDetails.classification === 'usage_limit',
       data,
     },
     { sessionId },
@@ -361,6 +375,78 @@ function readClaudeResultErrorCode(event: ClaudeStreamEvent): string | undefined
     ?? readCodeString(event.error_code)
     ?? readCodeString(event.code)
     ?? readCodeString(event.subtype)
+}
+
+function readClaudeLimitSignalMessage(event: ClaudeStreamEvent): string | undefined {
+  return normalizeTextPayload(event.result)
+    ?? normalizeTextPayload(event.error)
+    ?? readTrimmedString(event.text)
+    ?? readTrimmedString(event.message)
+    ?? readTrimmedString(event.detail)
+    ?? readTrimmedString(event.reason)
+}
+
+function readClaudeAssistantLimitText(blocks: readonly unknown[]): string | undefined {
+  if (blocks.length !== 1) {
+    return undefined
+  }
+  const block = asObject(blocks[0])
+  const text = block?.type === 'text' ? readTrimmedString(block.text) : undefined
+  if (!text || text.length > 120 || !/^You(?:'|’)ve hit your .{0,40}\blimit\b/iu.test(text)) {
+    return undefined
+  }
+  const details = extractProviderLimitDetails(text)
+  return details.classification === 'usage_limit' ? text : undefined
+}
+
+function mapClaudeLimitSignalEvent(
+  event: ClaudeStreamEvent,
+  fallbackMessage: string,
+  code?: string,
+  options: { resetAt?: string | number } = {},
+): TranscriptEnvelope[] {
+  const message = readClaudeLimitSignalMessage(event) ?? fallbackMessage
+  const details = extractProviderLimitDetails(message, code, {
+    referenceTime: readTimestamp(event),
+    ...(options.resetAt !== undefined ? { resetAt: options.resetAt } : {}),
+  })
+  if (details.classification !== 'usage_limit') {
+    return []
+  }
+  return [envelope(event, {
+    type: 'provider.error',
+    message,
+    classification: 'usage_limit',
+    ...(code ? { code } : {}),
+    ...(details.resetAt ? { resetAt: details.resetAt } : {}),
+    retryable: true,
+    data: event,
+  })]
+}
+
+function isClaudeRateLimitHitStatus(status: string | undefined): boolean {
+  const normalized = status?.trim().toLowerCase()
+  if (!normalized || normalized === 'allowed') {
+    return false
+  }
+  return /(?:limited|limit[_\s-]?hit|limit[_\s-]?reached|rejected|blocked|denied|exceeded)/iu.test(normalized)
+}
+
+function mapClaudeRateLimitEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
+  const payload = asObject(event.payload)
+  const info = asObject(event.rate_limit_info)
+    ?? asObject(event.rateLimitInfo)
+    ?? asObject(payload?.rate_limit_info)
+    ?? asObject(payload?.rateLimitInfo)
+  const status = readTrimmedString(info?.status)
+  if (!isClaudeRateLimitHitStatus(status)) {
+    return []
+  }
+  const resetAt = readResetAtValue(info?.resetsAt) ?? readResetAtValue(info?.resetAt)
+  const code = readCodeString(info?.rateLimitType)
+    ?? readCodeString(info?.type)
+    ?? 'rate_limit_event'
+  return mapClaudeLimitSignalEvent(event, 'Claude usage limit reached', code, { resetAt })
 }
 
 function parseToolResultPayload(content: unknown): Record<string, unknown> | null {
@@ -622,6 +708,10 @@ function mapAssistantEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
       method: event.type,
       payload: event,
     })]
+  }
+  const limitText = readClaudeAssistantLimitText(content)
+  if (limitText) {
+    return mapClaudeLimitSignalEvent(event, limitText, 'session_limit')
   }
   const result: TranscriptEnvelope[] = []
   let passthroughBlocks: unknown[] = []
@@ -900,6 +990,9 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
           ? readClaudeResultErrorMessage(event)
           : undefined
         const errorCode = errorMessage ? readClaudeResultErrorCode(event) : undefined
+        const errorDetails = errorMessage
+          ? extractProviderLimitDetails(errorMessage, errorCode, { referenceTime: readTimestamp(event) })
+          : undefined
         return [
           ...(event.usage || typeof event.total_cost_usd === 'number' || typeof event.cost_usd === 'number'
           ? [envelope(event, {
@@ -917,9 +1010,10 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
             ? [envelope(event, {
                 type: 'provider.error',
                 message: errorMessage,
-                classification: classifyProviderError(errorMessage, errorCode),
+                classification: errorDetails?.classification ?? 'other',
                 ...(errorCode ? { code: errorCode } : {}),
-                retryable: false,
+                ...(errorDetails?.resetAt ? { resetAt: errorDetails.resetAt } : {}),
+                retryable: errorDetails?.classification === 'usage_limit',
                 data: event,
               })]
             : []),
@@ -932,6 +1026,8 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
           }),
         ]
       }
+    case 'rate_limit_event':
+      return mapClaudeRateLimitEvent(event)
     case 'system':
       return mapSystemEvent(event)
     case 'agent':

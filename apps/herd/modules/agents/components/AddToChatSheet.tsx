@@ -54,8 +54,8 @@ export function AddToChatSheet({
       onClose={onClose}
       title="Add to Chat"
       position="bottom-sheet"
-      backdropClassName="sheet-backdrop--herd add-to-chat-sheet-backdrop"
-      contentClassName="sheet visible sheet--herd add-to-chat-sheet"
+      backdropClassName="sheet-backdrop--hervald add-to-chat-sheet-backdrop"
+      contentClassName="sheet visible sheet--hervald add-to-chat-sheet"
       contentProps={{
         'aria-labelledby': 'add-to-chat-sheet-title',
         'data-testid': 'add-to-chat-sheet',

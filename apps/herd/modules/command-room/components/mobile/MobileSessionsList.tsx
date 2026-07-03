@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import { SessionRow, type Approval, type Commander, type Worker } from '@modules/command-room/components/desktop/SessionRow'
-import { StatusDot } from '@modules/components/herd'
+import { StatusDot } from '@modules/components/hervald'
 
 type SessionFilter = 'all' | 'active' | 'waiting'
 
@@ -72,7 +72,7 @@ export function MobileSessionsList({
       <div className="px-5 pb-3 pt-4">
         <div className="flex items-end justify-between gap-4">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">herd</p>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">hervald</p>
             <h1 className="mt-1 font-display text-4xl text-[color:var(--hv-fg)]">Sessions</h1>
           </div>
         </div>

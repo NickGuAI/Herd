@@ -130,6 +130,37 @@ function resolveConversationSessionName(
   return conversation.id
 }
 
+function approvalMatchesConversation(approval: PendingApproval, conversation: ConversationRecord): boolean {
+  if (approval.conversationId) {
+    return approval.conversationId === conversation.id
+  }
+
+  if (!approval.sessionName) {
+    return false
+  }
+
+  return approval.sessionName === conversation.sendTarget?.sessionName
+    || approval.sessionName === conversation.liveSession?.name
+}
+
+function conversationActionAllowed(
+  conversation: ConversationRecord,
+  action: keyof NonNullable<ConversationRecord['allowedActions']>,
+): boolean {
+  return conversation.allowedActions?.[action] === true
+}
+
+function resolveConversationComposerDisabledMessage(
+  conversation: ConversationRecord,
+  commanderName: string,
+): string | undefined {
+  if (conversationActionAllowed(conversation, 'send') || conversationActionAllowed(conversation, 'media')) {
+    return undefined
+  }
+  return conversation.displayState?.disabledReasons.send
+    ?? `Start ${commanderName} to begin chatting.`
+}
+
 interface PageDotsProps {
   conversations: readonly ConversationRecord[]
   activeConversationId: string | null
@@ -565,7 +596,7 @@ export function MobileChatView({
         durationSec={durationSec}
         messages={[]}
         onAnswer={onAnswer}
-        approvals={approvals}
+        approvals={[]}
         onApprovalDecision={(approval, decision) =>
           decision === 'approve'
             ? onApproveApproval(approval)
@@ -632,6 +663,8 @@ export function MobileChatView({
           const conversationMessages = isActive
             ? transcript
             : transcriptCacheRef.current.get(conversation.id) ?? []
+          const conversationApprovals = approvals.filter((approval) =>
+            approvalMatchesConversation(approval, conversation))
           const streamNotice = isActive && wsStatus && wsStatus !== 'connected'
             ? <MobileConversationStreamStatusNotice status={wsStatus} />
             : undefined
@@ -660,7 +693,7 @@ export function MobileChatView({
                 loadingOlderMessages={isActive && loadingOlderMessages}
                 onLoadOlderMessages={isActive ? onLoadOlderMessages : undefined}
                 onAnswer={onAnswer}
-                approvals={approvals}
+                approvals={conversationApprovals}
                 onApprovalDecision={(approval, decision) =>
                   decision === 'approve'
                     ? onApproveApproval(approval)
@@ -701,7 +734,9 @@ export function MobileChatView({
                 }))}
                 onOpenWorkers={onOpenTeam}
                 rootClassName={`mobile-session-shell session-view-overlay ${theme === 'dark' ? 'hv-dark' : 'hv-light'}`}
-                composerDisabledMessage={`Start ${commander.name} to begin chatting.`}
+                composerDisabledMessage={isActive
+                  ? resolveConversationComposerDisabledMessage(conversation, commander.name)
+                  : `Open ${conversation.name?.trim() || 'this chat'} to begin chatting.`}
                 dataTestId="mobile-chat-view"
                 conversation={conversation}
                 onStartConversation={onStartConversation}

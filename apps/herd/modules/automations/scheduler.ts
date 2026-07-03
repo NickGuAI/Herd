@@ -1,8 +1,8 @@
 import cron from 'node-cron'
 import { resolveCommanderPaths } from '../commanders/paths.js'
-import { resolveSkill } from '../sentinels/skills.js'
 import { AutomationQuestEventBus, type AutomationQuestCompletedEvent } from './quest-event-bus.js'
 import { AutomationExecutor, type AutomationExecutionResult } from './executor.js'
+import { resolveSkill } from './skills.js'
 import {
   AutomationStore,
   type CreateAutomationInput,

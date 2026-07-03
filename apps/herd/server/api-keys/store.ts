@@ -16,6 +16,7 @@ export const API_KEY_SCOPES = [
   'services:read',
   'services:write',
   'skills:read',
+  'skills:write',
 ] as const
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number]
@@ -146,12 +147,6 @@ function bootstrapMasterKeyExpiresAt(createdAt: string, now: Date): string {
 }
 
 function toPersistedCollection(value: unknown): PersistedApiKeyCollection {
-  if (Array.isArray(value)) {
-    return {
-      keys: value.filter((item): item is ApiKeyRecord => isApiKeyRecord(item)),
-    }
-  }
-
   if (
     isObject(value) &&
     Array.isArray(value.keys)

@@ -2,8 +2,6 @@ import type {
   ChannelDescriptorField,
   ChannelProviderDescriptor,
   ChannelProvider,
-  ChannelCommanderBindingState,
-  CommanderChannelBinding,
 } from './types.js'
 
 const PROVIDER_LABELS: Readonly<Record<string, string>> = {
@@ -12,6 +10,7 @@ const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   googlechat: 'Google Chat',
   telegram: 'Telegram',
   discord: 'Discord',
+  slack: 'Slack',
 }
 
 const POLICY_OPTIONS = [
@@ -20,18 +19,14 @@ const POLICY_OPTIONS = [
   { value: 'disabled', label: 'Disabled' },
 ]
 
-const COMMANDER_BINDING = {
-  mode: 'account-commander',
-  fieldKey: 'defaultCommanderId',
-  label: 'Default Commander',
-  source: 'bindingState.defaultCommanderId',
-  emptyLabel: 'None',
-} as const
+const DM_POLICY_HELPER = 'Who can message the agent directly. Allowlist means only listed people; Open means anyone; Disabled means no DMs.'
+const ROOM_POLICY_HELPER = 'Whether the agent responds in groups or channels. Disabled ignores them; Allowlist means only listed rooms; Open means every room where the bot is present.'
+const REQUIRE_MENTION_HELPER = 'When on, the agent only replies in a group or channel when someone mentions the bot.'
+const GLOBAL_ALLOWLIST_HELPER = 'Optional. Add user or room ids that should always be allowed, one per line.'
 
 const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   {
     key: 'accountId',
-    formKey: 'accountId',
     label: 'Mailbox',
     kind: 'text',
     required: true,
@@ -40,7 +35,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'displayName',
-    formKey: 'displayName',
     label: 'Display Name',
     kind: 'text',
     required: true,
@@ -49,7 +43,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'appPassword',
-    formKey: 'appPassword',
     label: 'App Password',
     kind: 'password',
     required: true,
@@ -59,7 +52,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'username',
-    formKey: 'username',
     configPath: 'username',
     label: 'Username',
     kind: 'text',
@@ -68,7 +60,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'fromAddress',
-    formKey: 'fromAddress',
     configPath: 'fromAddress',
     label: 'From',
     kind: 'text',
@@ -77,7 +68,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'replyFromAddress',
-    formKey: 'replyFromAddress',
     configPath: 'replyFromAddress',
     label: 'Reply From',
     kind: 'text',
@@ -86,7 +76,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'emailAlias',
-    formKey: 'emailAlias',
     configPath: 'emailAlias',
     label: 'Plus Alias',
     kind: 'text',
@@ -94,15 +83,7 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
     section: 'account',
   },
   {
-    key: 'defaultCommanderId',
-    formKey: 'defaultCommanderId',
-    label: 'Default Commander',
-    kind: 'select',
-    section: 'binding',
-  },
-  {
     key: 'imapHost',
-    formKey: 'imapHost',
     configPath: 'imapHost',
     label: 'IMAP Host',
     kind: 'text',
@@ -112,7 +93,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'imapPort',
-    formKey: 'imapPort',
     configPath: 'imapPort',
     label: 'IMAP Port',
     kind: 'number',
@@ -122,7 +102,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'imapMailbox',
-    formKey: 'imapMailbox',
     configPath: 'imapMailbox',
     label: 'IMAP Mailbox',
     kind: 'text',
@@ -132,7 +111,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'smtpHost',
-    formKey: 'smtpHost',
     configPath: 'smtpHost',
     label: 'SMTP Host',
     kind: 'text',
@@ -142,7 +120,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'smtpPort',
-    formKey: 'smtpPort',
     configPath: 'smtpPort',
     label: 'SMTP Port',
     kind: 'number',
@@ -152,18 +129,17 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'pollIntervalSeconds',
-    formKey: 'pollIntervalSeconds',
     configPath: 'pollIntervalMs',
     label: 'Poll Seconds',
     kind: 'number',
     required: true,
     min: 5,
     defaultValue: '15',
+    storageMultiplier: 1000,
     section: 'imap',
   },
   {
     key: 'imapSecure',
-    formKey: 'imapSecure',
     configPath: 'imapSecure',
     label: 'IMAP TLS',
     kind: 'checkbox',
@@ -172,7 +148,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'smtpSecure',
-    formKey: 'smtpSecure',
     configPath: 'smtpSecure',
     label: 'SMTP TLS',
     kind: 'checkbox',
@@ -181,7 +156,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'allowlist',
-    formKey: 'allowlist',
     configPath: 'allowlist',
     label: 'Allowed Senders',
     kind: 'textarea',
@@ -190,7 +164,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'globalAllowlist',
-    formKey: 'globalAllowlist',
     configPath: 'globalAllowlist',
     label: 'Global Allowlist',
     kind: 'textarea',
@@ -202,7 +175,6 @@ const EMAIL_FIELDS: readonly ChannelDescriptorField[] = [
 const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   {
     key: 'accountId',
-    formKey: 'accountId',
     label: 'Account ID',
     kind: 'text',
     placeholder: 'optional; generated if blank',
@@ -210,7 +182,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'displayName',
-    formKey: 'displayName',
     label: 'Display Name',
     kind: 'text',
     required: true,
@@ -219,7 +190,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'transport',
-    formKey: 'transport',
     configPath: 'transport',
     label: 'Transport',
     kind: 'static',
@@ -230,7 +200,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'browserName',
-    formKey: 'browserName',
     configPath: 'baileys.browserName',
     label: 'Baileys Browser',
     kind: 'text',
@@ -240,7 +209,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'authStateDir',
-    formKey: 'authStateDir',
     configPath: 'baileys.authStateDir',
     label: 'Auth State Dir',
     kind: 'text',
@@ -249,18 +217,17 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'connectTimeoutSeconds',
-    formKey: 'connectTimeoutSeconds',
     configPath: 'baileys.connectTimeoutMs',
     label: 'QR Timeout Seconds',
     kind: 'number',
     required: true,
     min: 1,
     defaultValue: '30',
+    storageMultiplier: 1000,
     section: 'transport',
   },
   {
     key: 'printQrInTerminal',
-    formKey: 'printQrInTerminal',
     configPath: 'baileys.printQrInTerminal',
     label: 'Terminal QR',
     kind: 'checkbox',
@@ -269,7 +236,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'reconnect',
-    formKey: 'reconnect',
     configPath: 'baileys.reconnect',
     label: 'Reconnect',
     kind: 'checkbox',
@@ -278,7 +244,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'markOnlineOnConnect',
-    formKey: 'markOnlineOnConnect',
     configPath: 'baileys.markOnlineOnConnect',
     label: 'Mark Online',
     kind: 'checkbox',
@@ -287,7 +252,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'syncFullHistory',
-    formKey: 'syncFullHistory',
     configPath: 'baileys.syncFullHistory',
     label: 'Sync Full History',
     kind: 'checkbox',
@@ -296,7 +260,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'sendTextWithVoiceNote',
-    formKey: 'sendTextWithVoiceNote',
     configPath: 'baileys.sendTextWithVoiceNote',
     label: 'Text With Voice',
     kind: 'checkbox',
@@ -305,7 +268,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'dmPolicy',
-    formKey: 'dmPolicy',
     configPath: 'dmPolicy',
     label: 'DM Policy',
     kind: 'select',
@@ -315,7 +277,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'groupPolicy',
-    formKey: 'groupPolicy',
     configPath: 'groupPolicy',
     label: 'Group Policy',
     kind: 'select',
@@ -325,7 +286,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'ttsVoice',
-    formKey: 'ttsVoice',
     configPath: 'tts.voice',
     label: 'TTS Voice',
     kind: 'text',
@@ -335,7 +295,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'ttsEnabled',
-    formKey: 'ttsEnabled',
     configPath: 'tts.enabled',
     label: 'TTS',
     kind: 'checkbox',
@@ -344,7 +303,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'sttEnabled',
-    formKey: 'sttEnabled',
     configPath: 'stt.enabled',
     label: 'STT',
     kind: 'checkbox',
@@ -353,7 +311,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'requireMention',
-    formKey: 'requireMention',
     configPath: 'requireMention',
     label: 'Require Mention',
     kind: 'checkbox',
@@ -362,7 +319,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'dmAllowlist',
-    formKey: 'dmAllowlist',
     configPath: 'dmAllowlist',
     label: 'DM Allowlist',
     kind: 'textarea',
@@ -372,7 +328,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'groupAllowlist',
-    formKey: 'groupAllowlist',
     configPath: 'groupAllowlist',
     label: 'Group Allowlist',
     kind: 'textarea',
@@ -382,7 +337,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'globalAllowlist',
-    formKey: 'globalAllowlist',
     configPath: 'globalAllowlist',
     label: 'Global Allowlist',
     kind: 'textarea',
@@ -395,7 +349,6 @@ const WHATSAPP_FIELDS: readonly ChannelDescriptorField[] = [
 const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   {
     key: 'accountId',
-    formKey: 'accountId',
     label: 'Account ID',
     kind: 'text',
     required: true,
@@ -404,7 +357,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'displayName',
-    formKey: 'displayName',
     label: 'Display Name',
     kind: 'text',
     required: true,
@@ -413,7 +365,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'serviceAccountJson',
-    formKey: 'serviceAccountJson',
     label: 'Service Account JSON',
     kind: 'textarea',
     required: true,
@@ -424,7 +375,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'webhookAudience',
-    formKey: 'webhookAudience',
     configPath: 'webhookAudience',
     label: 'Webhook Audience',
     kind: 'text',
@@ -434,7 +384,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'webhookAudienceType',
-    formKey: 'webhookAudienceType',
     configPath: 'webhookAudienceType',
     label: 'Audience Type',
     kind: 'select',
@@ -448,7 +397,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'projectId',
-    formKey: 'projectId',
     configPath: 'projectId',
     label: 'Project ID',
     kind: 'text',
@@ -457,7 +405,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'projectNumber',
-    formKey: 'projectNumber',
     configPath: 'projectNumber',
     label: 'Project Number',
     kind: 'text',
@@ -466,7 +413,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'botUserName',
-    formKey: 'botUserName',
     configPath: 'botUserName',
     label: 'Bot User',
     kind: 'text',
@@ -475,15 +421,7 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
     section: 'app',
   },
   {
-    key: 'defaultCommanderId',
-    formKey: 'defaultCommanderId',
-    label: 'Default Commander',
-    kind: 'select',
-    section: 'binding',
-  },
-  {
     key: 'dmPolicy',
-    formKey: 'dmPolicy',
     configPath: 'dmPolicy',
     label: 'DM Policy',
     kind: 'select',
@@ -493,7 +431,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'groupPolicy',
-    formKey: 'groupPolicy',
     configPath: 'groupPolicy',
     label: 'Space Policy',
     kind: 'select',
@@ -503,7 +440,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'requireMention',
-    formKey: 'requireMention',
     configPath: 'requireMention',
     label: 'Require Mention',
     kind: 'checkbox',
@@ -512,7 +448,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'dmAllowlist',
-    formKey: 'dmAllowlist',
     configPath: 'dmAllowlist',
     label: 'DM Allowlist',
     kind: 'textarea',
@@ -522,7 +457,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'groupAllowlist',
-    formKey: 'groupAllowlist',
     configPath: 'groupAllowlist',
     label: 'Space Allowlist',
     kind: 'textarea',
@@ -532,7 +466,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'globalAllowlist',
-    formKey: 'globalAllowlist',
     configPath: 'globalAllowlist',
     label: 'Global Allowlist',
     kind: 'textarea',
@@ -541,7 +474,6 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
   {
     key: 'maxMessageBytes',
-    formKey: 'maxMessageBytes',
     configPath: 'maxMessageBytes',
     label: 'Message Bytes',
     kind: 'number',
@@ -553,24 +485,390 @@ const GOOGLECHAT_FIELDS: readonly ChannelDescriptorField[] = [
   },
 ]
 
-const GENERIC_DESCRIPTOR_FIELDS: readonly ChannelDescriptorField[] = [
+const TELEGRAM_FIELDS: readonly ChannelDescriptorField[] = [
   {
     key: 'accountId',
-    formKey: 'accountId',
     label: 'Account ID',
     kind: 'text',
     required: true,
-    placeholder: 'account-main',
+    placeholder: 'telegram-main',
+    helperText: 'Use a short name you will recognize later, such as telegram-main.',
     section: 'identity',
   },
   {
     key: 'displayName',
-    formKey: 'displayName',
     label: 'Display Name',
     kind: 'text',
     required: true,
-    placeholder: 'Main Channel',
+    placeholder: 'Telegram',
     section: 'identity',
+  },
+  {
+    key: 'botToken',
+    label: 'Bot Token',
+    kind: 'password',
+    required: true,
+    secret: true,
+    placeholder: '123456789:AA...',
+    helperText: 'Copy this from the @BotFather chat in Telegram after you create or select your bot.',
+    section: 'credentials',
+  },
+  {
+    key: 'botUsername',
+    configPath: 'botUsername',
+    label: 'Bot Username',
+    kind: 'text',
+    placeholder: 'athena_bot',
+    helperText: 'This is the bot username from @BotFather, without the @ sign.',
+    section: 'credentials',
+  },
+  {
+    key: 'dmPolicy',
+    configPath: 'dmPolicy',
+    label: 'DM Policy',
+    kind: 'select',
+    defaultValue: 'allowlist',
+    helperText: DM_POLICY_HELPER,
+    section: 'policy',
+    options: POLICY_OPTIONS,
+  },
+  {
+    key: 'groupPolicy',
+    configPath: 'groupPolicy',
+    label: 'Group Policy',
+    kind: 'select',
+    defaultValue: 'disabled',
+    helperText: ROOM_POLICY_HELPER,
+    section: 'policy',
+    options: POLICY_OPTIONS,
+  },
+  {
+    key: 'requireMention',
+    configPath: 'requireMention',
+    label: 'Require Mention',
+    kind: 'checkbox',
+    defaultValue: true,
+    helperText: REQUIRE_MENTION_HELPER,
+    section: 'policy',
+  },
+  {
+    key: 'dmAllowlist',
+    configPath: 'dmAllowlist',
+    label: 'DM Allowlist',
+    kind: 'textarea',
+    placeholder: '123456789',
+    helperText: 'Use Telegram numeric user ids. Ask the person to message the bot once, then copy their id from the channel conversation metadata.',
+    section: 'policy',
+  },
+  {
+    key: 'groupAllowlist',
+    configPath: 'groupAllowlist',
+    label: 'Group Allowlist',
+    kind: 'textarea',
+    placeholder: '-1001234567890',
+    helperText: 'Use Telegram group or supergroup chat ids. They usually start with -100.',
+    section: 'policy',
+  },
+  {
+    key: 'globalAllowlist',
+    configPath: 'globalAllowlist',
+    label: 'Global Allowlist',
+    kind: 'textarea',
+    placeholder: '123456789\n-1001234567890',
+    helperText: GLOBAL_ALLOWLIST_HELPER,
+    section: 'policy',
+  },
+  {
+    key: 'longPollTimeoutSeconds',
+    configPath: 'longPollTimeoutSeconds',
+    label: 'Poll Timeout Seconds',
+    kind: 'number',
+    required: true,
+    min: 1,
+    defaultValue: '25',
+    section: 'advanced',
+  },
+  {
+    key: 'pollIntervalSeconds',
+    configPath: 'pollIntervalMs',
+    label: 'Retry Seconds',
+    kind: 'number',
+    required: true,
+    min: 1,
+    defaultValue: '5',
+    storageMultiplier: 1000,
+    section: 'advanced',
+  },
+  {
+    key: 'maxMessageLength',
+    configPath: 'maxMessageLength',
+    label: 'Message Length',
+    kind: 'number',
+    required: true,
+    min: 512,
+    defaultValue: '4096',
+    helperText: 'Telegram messages cannot exceed 4,096 characters; longer replies are split automatically.',
+    section: 'advanced',
+  },
+]
+
+const DISCORD_FIELDS: readonly ChannelDescriptorField[] = [
+  {
+    key: 'accountId',
+    label: 'Account ID',
+    kind: 'text',
+    required: true,
+    placeholder: 'discord-main',
+    helperText: 'Use a short name you will recognize later, such as discord-main.',
+    section: 'identity',
+  },
+  {
+    key: 'displayName',
+    label: 'Display Name',
+    kind: 'text',
+    required: true,
+    placeholder: 'Discord',
+    section: 'identity',
+  },
+  {
+    key: 'botToken',
+    label: 'Bot Token',
+    kind: 'password',
+    required: true,
+    secret: true,
+    placeholder: 'stored encrypted',
+    helperText: 'Copy this from Discord Developer Portal > your application > Bot > Reset Token.',
+    section: 'credentials',
+  },
+  {
+    key: 'applicationId',
+    configPath: 'applicationId',
+    label: 'Application ID',
+    kind: 'text',
+    placeholder: '123456789012345678',
+    helperText: 'Find this in Discord Developer Portal > your application > General Information.',
+    section: 'credentials',
+  },
+  {
+    key: 'botUserId',
+    configPath: 'botUserId',
+    label: 'Bot User ID',
+    kind: 'text',
+    placeholder: '123456789012345678',
+    helperText: 'Optional. The gateway fills this after connecting; paste it here if mention checks should work before the first connection.',
+    section: 'credentials',
+  },
+  {
+    key: 'dmPolicy',
+    configPath: 'dmPolicy',
+    label: 'DM Policy',
+    kind: 'select',
+    defaultValue: 'allowlist',
+    helperText: DM_POLICY_HELPER,
+    section: 'policy',
+    options: POLICY_OPTIONS,
+  },
+  {
+    key: 'groupPolicy',
+    configPath: 'groupPolicy',
+    label: 'Channel Policy',
+    kind: 'select',
+    defaultValue: 'disabled',
+    helperText: ROOM_POLICY_HELPER,
+    section: 'policy',
+    options: POLICY_OPTIONS,
+  },
+  {
+    key: 'requireMention',
+    configPath: 'requireMention',
+    label: 'Require Mention',
+    kind: 'checkbox',
+    defaultValue: true,
+    helperText: REQUIRE_MENTION_HELPER,
+    section: 'policy',
+  },
+  {
+    key: 'dmAllowlist',
+    configPath: 'dmAllowlist',
+    label: 'DM Allowlist',
+    kind: 'textarea',
+    placeholder: '123456789012345678',
+    helperText: 'Use Discord user ids. In Discord, enable Developer Mode, right-click the person, and choose Copy User ID.',
+    section: 'policy',
+  },
+  {
+    key: 'groupAllowlist',
+    configPath: 'groupAllowlist',
+    label: 'Channel Allowlist',
+    kind: 'textarea',
+    placeholder: '123456789012345678',
+    helperText: 'Use Discord channel ids. Enable Developer Mode, right-click the channel, and choose Copy Channel ID.',
+    section: 'policy',
+  },
+  {
+    key: 'globalAllowlist',
+    configPath: 'globalAllowlist',
+    label: 'Global Allowlist',
+    kind: 'textarea',
+    placeholder: '123456789012345678',
+    helperText: GLOBAL_ALLOWLIST_HELPER,
+    section: 'policy',
+  },
+  {
+    key: 'gatewayIntents',
+    configPath: 'gatewayIntents',
+    label: 'Gateway Intents',
+    kind: 'number',
+    required: true,
+    min: 1,
+    defaultValue: '37377',
+    helperText: 'Default covers servers, DMs, messages, and message content.',
+    section: 'advanced',
+  },
+  {
+    key: 'maxMessageLength',
+    configPath: 'maxMessageLength',
+    label: 'Message Length',
+    kind: 'number',
+    required: true,
+    min: 512,
+    defaultValue: '2000',
+    helperText: 'Discord messages cannot exceed 2,000 characters; longer replies are split automatically.',
+    section: 'advanced',
+  },
+]
+
+const SLACK_FIELDS: readonly ChannelDescriptorField[] = [
+  {
+    key: 'accountId',
+    label: 'Account ID',
+    kind: 'text',
+    required: true,
+    placeholder: 'slack-main',
+    helperText: 'Use a short name you will recognize later, such as slack-main.',
+    section: 'identity',
+  },
+  {
+    key: 'displayName',
+    label: 'Display Name',
+    kind: 'text',
+    required: true,
+    placeholder: 'Slack',
+    section: 'identity',
+  },
+  {
+    key: 'botToken',
+    label: 'Bot User OAuth Token',
+    kind: 'password',
+    required: true,
+    secret: true,
+    placeholder: 'xoxb-...',
+    helperText: 'Copy this from Slack API > your app > OAuth & Permissions after installing the app.',
+    section: 'credentials',
+  },
+  {
+    key: 'appToken',
+    label: 'App-Level Token',
+    kind: 'password',
+    required: true,
+    secret: true,
+    placeholder: 'xapp-...',
+    helperText: 'Copy this from Slack API > your app > Basic Information > App-Level Tokens. It needs connections:write.',
+    section: 'credentials',
+  },
+  {
+    key: 'teamId',
+    configPath: 'teamId',
+    label: 'Workspace ID',
+    kind: 'text',
+    placeholder: 'T0123456789',
+    helperText: 'Optional. Slack calls this the Team ID; it is shown in event payloads and app settings.',
+    section: 'credentials',
+  },
+  {
+    key: 'appId',
+    configPath: 'appId',
+    label: 'App ID',
+    kind: 'text',
+    placeholder: 'A0123456789',
+    helperText: 'Optional. Find this in Slack API > your app > Basic Information.',
+    section: 'credentials',
+  },
+  {
+    key: 'botUserId',
+    configPath: 'botUserId',
+    label: 'Bot User ID',
+    kind: 'text',
+    placeholder: 'U0123456789',
+    helperText: 'Optional. Slack includes this in Socket Mode authorizations; paste it if you want mention checks before the first event.',
+    section: 'credentials',
+  },
+  {
+    key: 'dmPolicy',
+    configPath: 'dmPolicy',
+    label: 'DM Policy',
+    kind: 'select',
+    defaultValue: 'allowlist',
+    helperText: DM_POLICY_HELPER,
+    section: 'policy',
+    options: POLICY_OPTIONS,
+  },
+  {
+    key: 'groupPolicy',
+    configPath: 'groupPolicy',
+    label: 'Channel Policy',
+    kind: 'select',
+    defaultValue: 'open',
+    helperText: 'Default is Open with Require Mention on: invited channels can start conversations only when the bot is mentioned. Use Allowlist to restrict channel ids.',
+    section: 'policy',
+    options: POLICY_OPTIONS,
+  },
+  {
+    key: 'requireMention',
+    configPath: 'requireMention',
+    label: 'Require Mention',
+    kind: 'checkbox',
+    defaultValue: true,
+    helperText: REQUIRE_MENTION_HELPER,
+    section: 'policy',
+  },
+  {
+    key: 'dmAllowlist',
+    configPath: 'dmAllowlist',
+    label: 'DM Allowlist',
+    kind: 'textarea',
+    placeholder: 'U0123456789',
+    helperText: 'Use Slack user ids. Open the member profile, choose More, then Copy member ID.',
+    section: 'policy',
+  },
+  {
+    key: 'groupAllowlist',
+    configPath: 'groupAllowlist',
+    label: 'Channel Allowlist',
+    kind: 'textarea',
+    placeholder: 'C0123456789',
+    helperText: 'Use Slack channel ids. Open the channel details and copy the Channel ID near the bottom.',
+    section: 'policy',
+  },
+  {
+    key: 'globalAllowlist',
+    configPath: 'globalAllowlist',
+    label: 'Global Allowlist',
+    kind: 'textarea',
+    placeholder: 'U0123456789\nC0123456789',
+    helperText: GLOBAL_ALLOWLIST_HELPER,
+    section: 'policy',
+  },
+  {
+    key: 'maxMessageLength',
+    configPath: 'maxMessageLength',
+    label: 'Message Length',
+    kind: 'number',
+    required: true,
+    min: 512,
+    defaultValue: '40000',
+    helperText: 'Slack messages can be long, but Herd will split replies that exceed this limit.',
+    section: 'advanced',
   },
 ]
 
@@ -581,7 +879,6 @@ export const EMAIL_CHANNEL_FORM_DEFAULTS = {
   fromAddress: '',
   replyFromAddress: '',
   emailAlias: '',
-  defaultCommanderId: '',
   appPassword: '',
   imapHost: 'imap.gmail.com',
   imapPort: '993',
@@ -671,7 +968,6 @@ export const GOOGLECHAT_CHANNEL_FORM_DEFAULTS = {
   projectId: '',
   projectNumber: '',
   botUserName: '',
-  defaultCommanderId: '',
   dmPolicy: 'allowlist',
   groupPolicy: 'disabled',
   dmAllowlist: '',
@@ -695,6 +991,94 @@ export const GOOGLECHAT_CHANNEL_CONFIG_DEFAULTS = {
   maxMessageBytes: 30_000,
 } as const
 
+export const TELEGRAM_CHANNEL_FORM_DEFAULTS = {
+  accountId: '',
+  displayName: '',
+  botToken: '',
+  botUsername: '',
+  dmPolicy: 'allowlist',
+  groupPolicy: 'disabled',
+  dmAllowlist: '',
+  groupAllowlist: '',
+  globalAllowlist: '',
+  requireMention: true,
+  pollIntervalSeconds: '5',
+  longPollTimeoutSeconds: '25',
+  maxMessageLength: '4096',
+} as const
+
+export const TELEGRAM_CHANNEL_CONFIG_DEFAULTS = {
+  provider: 'telegram',
+  dmPolicy: 'allowlist',
+  groupPolicy: 'disabled',
+  dmAllowlist: [],
+  groupAllowlist: [],
+  allowlist: [],
+  globalAllowlist: [],
+  requireMention: true,
+  pollIntervalMs: 5_000,
+  longPollTimeoutSeconds: 25,
+  maxMessageLength: 4_096,
+} as const
+
+export const DISCORD_CHANNEL_FORM_DEFAULTS = {
+  accountId: '',
+  displayName: '',
+  botToken: '',
+  applicationId: '',
+  botUserId: '',
+  dmPolicy: 'allowlist',
+  groupPolicy: 'disabled',
+  dmAllowlist: '',
+  groupAllowlist: '',
+  globalAllowlist: '',
+  requireMention: true,
+  gatewayIntents: '37377',
+  maxMessageLength: '2000',
+} as const
+
+export const DISCORD_CHANNEL_CONFIG_DEFAULTS = {
+  provider: 'discord',
+  dmPolicy: 'allowlist',
+  groupPolicy: 'disabled',
+  dmAllowlist: [],
+  groupAllowlist: [],
+  allowlist: [],
+  globalAllowlist: [],
+  requireMention: true,
+  gatewayIntents: 37_377,
+  maxMessageLength: 2_000,
+} as const
+
+export const SLACK_CHANNEL_FORM_DEFAULTS = {
+  accountId: '',
+  displayName: '',
+  botToken: '',
+  appToken: '',
+  teamId: '',
+  appId: '',
+  botUserId: '',
+  dmPolicy: 'allowlist',
+  groupPolicy: 'open',
+  dmAllowlist: '',
+  groupAllowlist: '',
+  globalAllowlist: '',
+  requireMention: true,
+  maxMessageLength: '40000',
+} as const
+
+export const SLACK_CHANNEL_CONFIG_DEFAULTS = {
+  provider: 'slack',
+  dmPolicy: 'allowlist',
+  groupPolicy: 'open',
+  dmAllowlist: [],
+  groupAllowlist: [],
+  allowlist: [],
+  globalAllowlist: [],
+  requireMention: true,
+  maxMessageLength: 40_000,
+} as const
+
 const CHANNEL_PROVIDER_DESCRIPTORS: readonly ChannelProviderDescriptor[] = [
   {
     provider: 'email',
@@ -705,7 +1089,31 @@ const CHANNEL_PROVIDER_DESCRIPTORS: readonly ChannelProviderDescriptor[] = [
     credentialFields: ['appPassword'],
     policyFields: ['allowlist', 'globalAllowlist'],
     pairing: { mode: 'none' },
-    commanderBinding: COMMANDER_BINDING,
+    setupGuide: {
+      summary: 'How to connect Email',
+      steps: [
+        {
+          title: 'Prepare the mailbox',
+          body: 'Use a dedicated mailbox when possible. Enable IMAP and SMTP with TLS in the mail provider, then create an app password or mailbox credential that can both read and send mail.',
+        },
+        {
+          title: 'Fill credentials and addresses',
+          body: 'Set Mailbox to the account address, paste the app password, and fill Username if it differs. Use From and Reply From when outbound replies should use a specific sender or alias.',
+        },
+        {
+          title: 'Confirm IMAP and SMTP settings',
+          body: 'Use the provider IMAP host, IMAP port, SMTP host, SMTP port, and TLS settings. Gmail defaults are prefilled; other providers must match their published mailbox settings.',
+        },
+        {
+          title: 'Set aliases and allowlists',
+          body: 'Use Plus Alias when the mailbox receives messages such as assistant+atlas@example.com. Add allowed sender addresses to Allowed Senders or Global Allowlist when policy is allowlist.',
+        },
+        {
+          title: 'Send the first inbound email',
+          body: 'After saving, send a real message from an allowed sender to the mailbox or plus alias. The first allowed inbound email creates or reuses the commander conversation and replies through SMTP.',
+        },
+      ],
+    },
   },
   {
     provider: 'whatsapp',
@@ -716,7 +1124,31 @@ const CHANNEL_PROVIDER_DESCRIPTORS: readonly ChannelProviderDescriptor[] = [
     credentialFields: [],
     policyFields: ['dmPolicy', 'groupPolicy', 'dmAllowlist', 'groupAllowlist', 'globalAllowlist', 'requireMention'],
     pairing: { mode: 'qr', transport: 'baileys', statusPollIntervalMs: 2_000 },
-    commanderBinding: COMMANDER_BINDING,
+    setupGuide: {
+      summary: 'How to pair WhatsApp',
+      steps: [
+        {
+          title: 'Use a stable WhatsApp account',
+          body: 'Pick the WhatsApp account that should own the channel. Keep the account active on a phone; Baileys connects as a Linked Device and depends on that account staying healthy.',
+        },
+        {
+          title: 'Start Baileys QR pairing',
+          body: 'Enter a display name and optional stable account id, then choose Start Pairing. Open WhatsApp on the phone, go to Linked Devices, and scan the QR code shown by Herd.',
+        },
+        {
+          title: 'Keep pairing open until connected',
+          body: 'Leave the phone and Herd page open while the QR status changes to connected. Herd stores Baileys auth state under the channel account so the runtime can reconnect after restart.',
+        },
+        {
+          title: 'Choose direct and group policy',
+          body: 'DM Policy controls one-on-one chats. Group Policy controls WhatsApp groups; Disabled ignores groups, Allowlist requires group ids ending in @g.us, and Open allows groups where the account participates.',
+        },
+        {
+          title: 'Fill allowlists before the first inbound',
+          body: 'Use phone numbers with country code, WhatsApp JIDs, or group ids in the allowlist fields. After saving, the first allowed inbound DM or group message creates or reuses the commander conversation.',
+        },
+      ],
+    },
   },
   {
     provider: 'googlechat',
@@ -727,29 +1159,140 @@ const CHANNEL_PROVIDER_DESCRIPTORS: readonly ChannelProviderDescriptor[] = [
     credentialFields: ['serviceAccountJson'],
     policyFields: ['dmPolicy', 'groupPolicy', 'dmAllowlist', 'groupAllowlist', 'globalAllowlist', 'requireMention'],
     pairing: { mode: 'none' },
-    commanderBinding: COMMANDER_BINDING,
+    setupGuide: {
+      summary: 'How to connect Google Chat',
+      steps: [
+        {
+          title: 'Create the Chat app and service account',
+          body: 'In Google Cloud, enable the Google Chat API, create or select a Chat app, create a service account, and download its JSON key. Paste that JSON into Service Account JSON.',
+        },
+        {
+          title: 'Point events at Herd',
+          body: 'Configure the Chat app interaction endpoint or webhook target to POST events to /api/commanders/channels/googlechat/events. Add accountId or commanderId query parameters only when multiple bindings share one app.',
+        },
+        {
+          title: 'Match the webhook audience',
+          body: 'Set Webhook Audience and Audience Type to the value Google uses in the event bearer token. Use Endpoint URL when the audience is the Herd events URL, or Project Number when Google sends the project number.',
+        },
+        {
+          title: 'Copy bot identity when mentions matter',
+          body: 'Paste the Chat bot user resource, such as users/123456789, into Bot User when spaces require mention checks before the first event proves the bot identity.',
+        },
+        {
+          title: 'Set space policy and send the first event',
+          body: 'Space Policy controls rooms and spaces; allowlist entries use space resource names such as spaces/AAAA. Add the app to a space or DM it, then send the first allowed message or @mention to create the conversation.',
+        },
+      ],
+    },
   },
   {
     provider: 'telegram',
     label: PROVIDER_LABELS.telegram,
-    fields: [...GENERIC_DESCRIPTOR_FIELDS],
-    configDefaults: {},
-    formDefaults: { accountId: '', displayName: '' },
-    credentialFields: [],
-    policyFields: [],
-    pairing: { mode: 'none' },
-    commanderBinding: COMMANDER_BINDING,
+    fields: [...TELEGRAM_FIELDS],
+    configDefaults: TELEGRAM_CHANNEL_CONFIG_DEFAULTS,
+    formDefaults: TELEGRAM_CHANNEL_FORM_DEFAULTS,
+    credentialFields: ['botToken'],
+    policyFields: ['dmPolicy', 'groupPolicy', 'dmAllowlist', 'groupAllowlist', 'globalAllowlist', 'requireMention'],
+    pairing: { mode: 'none', statusPollIntervalMs: 10_000 },
+    setupGuide: {
+      summary: 'How to get Telegram values',
+      steps: [
+        {
+          title: 'Create or open the bot',
+          body: 'Open https://t.me/BotFather in Telegram. Send /newbot to create a new bot, or /mybots to manage an existing one.',
+        },
+        {
+          title: 'Copy the bot token',
+          body: 'BotFather shows a long token after the bot is created. Paste that into Bot Token. If this is an existing bot, use /token in BotFather and choose the bot.',
+        },
+        {
+          title: 'Choose what the bot can read',
+          body: 'For private messages, ask people to send the bot a message first. For groups, add the bot to the group. If it should read ordinary group messages, use BotFather /setprivacy and disable privacy; otherwise leave Require Mention on.',
+        },
+        {
+          title: 'Fill allowlists only when you need them',
+          body: 'User ids and group ids appear in the created channel conversations after the first message. Copy those ids into the allowlist boxes if the policy is Allowlist.',
+        },
+      ],
+    },
   },
   {
     provider: 'discord',
     label: PROVIDER_LABELS.discord,
-    fields: [...GENERIC_DESCRIPTOR_FIELDS],
-    configDefaults: {},
-    formDefaults: { accountId: '', displayName: '' },
-    credentialFields: [],
-    policyFields: [],
-    pairing: { mode: 'none' },
-    commanderBinding: COMMANDER_BINDING,
+    fields: [...DISCORD_FIELDS],
+    configDefaults: DISCORD_CHANNEL_CONFIG_DEFAULTS,
+    formDefaults: DISCORD_CHANNEL_FORM_DEFAULTS,
+    credentialFields: ['botToken'],
+    policyFields: ['dmPolicy', 'groupPolicy', 'dmAllowlist', 'groupAllowlist', 'globalAllowlist', 'requireMention'],
+    pairing: { mode: 'none', statusPollIntervalMs: 10_000 },
+    setupGuide: {
+      summary: 'How to get Discord values',
+      steps: [
+        {
+          title: 'Create the Discord application',
+          body: 'Open https://discord.com/developers/applications, create an application, then open the Bot page for that application.',
+        },
+        {
+          title: 'Copy the bot token',
+          body: 'On the Bot page, choose Reset Token or View Token, then paste the token into Bot Token. Store it once; Discord will not keep showing it.',
+        },
+        {
+          title: 'Turn on message content',
+          body: 'On the Bot page, scroll to Privileged Gateway Intents and enable Message Content Intent. Without it, Discord sends messages with empty content.',
+        },
+        {
+          title: 'Invite the bot',
+          body: 'Open OAuth2 > URL Generator. Select bot, then allow Send Messages, Read Message History, View Channels, and Create Public Threads if you use threads. Open the generated URL and add the bot to your server.',
+        },
+        {
+          title: 'Copy ids only for allowlists',
+          body: 'In Discord User Settings > Advanced, enable Developer Mode. Then right-click a user or channel and choose Copy ID when a policy allowlist asks for one.',
+        },
+      ],
+    },
+  },
+  {
+    provider: 'slack',
+    label: PROVIDER_LABELS.slack,
+    fields: [...SLACK_FIELDS],
+    configDefaults: SLACK_CHANNEL_CONFIG_DEFAULTS,
+    formDefaults: SLACK_CHANNEL_FORM_DEFAULTS,
+    credentialFields: ['botToken', 'appToken'],
+    policyFields: ['dmPolicy', 'groupPolicy', 'dmAllowlist', 'groupAllowlist', 'globalAllowlist', 'requireMention'],
+    pairing: { mode: 'none', statusPollIntervalMs: 10_000 },
+    setupGuide: {
+      summary: 'How to get Slack values',
+      steps: [
+        {
+          title: 'Create the Slack app',
+          body: 'Open https://api.slack.com/apps, choose Create New App, and pick the workspace where the bot should live.',
+        },
+        {
+          title: 'Enable Socket Mode',
+          body: 'In the app settings, open Socket Mode and turn it on. Socket Mode lets Herd receive Slack messages without a public webhook URL.',
+        },
+        {
+          title: 'Create the app-level token',
+          body: 'Open Basic Information > App-Level Tokens. Generate a token with the connections:write scope, then paste the xapp token into App-Level Token.',
+        },
+        {
+          title: 'Install the bot token',
+          body: 'Open OAuth & Permissions. Add bot scopes app_mentions:read, channels:history, groups:history, im:history, mpim:history, and chat:write. Install the app, then paste the xoxb Bot User OAuth Token.',
+        },
+        {
+          title: 'Subscribe to Slack events',
+          body: 'Open Event Subscriptions, enable events, and subscribe the bot to app_mention, message.im, message.channels, message.groups, and message.mpim. Socket Mode still needs these bot events to receive messages.',
+        },
+        {
+          title: 'Add the app to channels',
+          body: 'In Slack, open each channel where the bot should work and run /invite @your-bot-name. New bindings default to Channel Policy Open with Require Mention on, so @mentions work after invite while unmentioned channel messages are ignored.',
+        },
+        {
+          title: 'Restrict channels when needed',
+          body: 'If the bot should answer in only specific channels, change Channel Policy to Allowlist and paste channel ids from channel details. User ids for DM allowlists come from member profiles.',
+        },
+      ],
+    },
   },
 ]
 
@@ -765,14 +1308,13 @@ function cloneDescriptor(descriptor: ChannelProviderDescriptor): ChannelProvider
     credentialFields: [...descriptor.credentialFields],
     policyFields: [...descriptor.policyFields],
     pairing: { ...descriptor.pairing },
-    commanderBinding: { ...descriptor.commanderBinding },
-    ...(descriptor.bindingState ? { bindingState: { ...descriptor.bindingState } } : {}),
+    ...(descriptor.setupGuide ? {
+      setupGuide: {
+        summary: descriptor.setupGuide.summary,
+        steps: descriptor.setupGuide.steps.map((step) => ({ ...step })),
+      },
+    } : {}),
   }
-}
-
-function trimString(value: unknown): string | undefined {
-  const normalized = typeof value === 'string' ? value.trim() : ''
-  return normalized.length > 0 ? normalized : undefined
 }
 
 export function getChannelProviderDescriptor(provider: ChannelProvider): ChannelProviderDescriptor | null {
@@ -780,36 +1322,6 @@ export function getChannelProviderDescriptor(provider: ChannelProvider): Channel
   return descriptor ? cloneDescriptor(descriptor) : null
 }
 
-export function listChannelProviderDescriptors(input: {
-  commanderId?: string
-  bindings?: readonly CommanderChannelBinding[]
-} = {}): ChannelProviderDescriptor[] {
-  return CHANNEL_PROVIDER_DESCRIPTORS.map((descriptor) => {
-    const projected = cloneDescriptor(descriptor)
-    if (input.commanderId) {
-      projected.bindingState = {
-        defaultCommanderId: input.commanderId,
-        effectiveCommanderId: input.commanderId,
-        source: 'binding-owner',
-      }
-    }
-    const binding = input.bindings?.find((candidate) => candidate.provider === descriptor.provider)
-    if (binding) {
-      projected.bindingState = projectChannelBindingState(binding)
-    }
-    return projected
-  })
-}
-
-export function projectChannelBindingState(binding: CommanderChannelBinding): ChannelCommanderBindingState {
-  const defaultCommanderId =
-    trimString(binding.config.defaultCommanderId)
-    ?? binding.commanderId
-  return {
-    defaultCommanderId,
-    effectiveCommanderId: defaultCommanderId,
-    source: trimString(binding.config.defaultCommanderId)
-        ? 'legacy-provider-config'
-        : 'binding-owner',
-  }
+export function listChannelProviderDescriptors(): ChannelProviderDescriptor[] {
+  return CHANNEL_PROVIDER_DESCRIPTORS.map((descriptor) => cloneDescriptor(descriptor))
 }

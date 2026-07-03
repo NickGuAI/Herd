@@ -229,6 +229,7 @@ interface ProviderErrorMessageInput {
   classification: ProviderErrorClassification
   code?: string
   hint?: string
+  resetAt?: string
   retryable?: boolean
   payload?: unknown
 }
@@ -684,6 +685,7 @@ function appendProviderError(
           classification: error.classification,
           ...(error.code ? { code: error.code } : {}),
           ...(error.hint ? { hint: error.hint } : {}),
+          ...(error.resetAt ? { resetAt: error.resetAt } : {}),
           ...(error.retryable !== undefined ? { retryable: error.retryable } : {}),
         },
         transcript: buildTranscriptMeta(envelope, {
@@ -895,6 +897,7 @@ function processTranscriptEnvelope(
         classification: ev.classification,
         ...(ev.code ? { code: ev.code } : {}),
         ...(ev.hint ? { hint: ev.hint } : {}),
+        ...(ev.resetAt ? { resetAt: ev.resetAt } : {}),
         ...(ev.retryable !== undefined ? { retryable: ev.retryable } : {}),
         payload: ev.data,
       })
@@ -2269,43 +2272,8 @@ export function processStreamEvent(
       break
     }
 
-    case 'message_start': {
-      context.setMessages((prev) =>
-        prev.map((message) =>
-          message.kind === 'tool' && message.toolStatus === 'running'
-            ? { ...message, toolStatus: 'success' }
-            : message,
-        ),
-      )
-      clearActiveAgentMessageIds(context.state)
-      context.state.activeEnvelopeMessages = {}
-      context.setIsStreaming(false)
-      break
-    }
-
     case 'message_stop': {
       context.setIsStreaming(false)
-      break
-    }
-
-    case 'result': {
-      const resultStatus = event.is_error ? ('error' as const) : ('success' as const)
-      const isSubagentResult = !event.duration_ms
-      context.setMessages((prev) =>
-        (context.capMessages ?? capMessages)([
-          ...prev.map((message) =>
-            message.kind === 'tool' && message.toolStatus === 'running'
-              ? { ...message, toolStatus: resultStatus }
-              : message,
-          ),
-          ...(isSubagentResult
-            ? []
-            : [{ id: context.nextId(), kind: 'system' as const, text: 'Awaiting input' }]),
-        ]),
-      )
-      clearActiveAgentMessageIds(context.state)
-      context.setIsStreaming(false)
-      context.onWorkspaceMutation?.()
       break
     }
 

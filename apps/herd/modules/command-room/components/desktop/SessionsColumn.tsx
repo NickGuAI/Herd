@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Play, Square } from 'lucide-react'
 import { useFontScale } from '@/hooks/use-font-scale'
 import { useProviderRegistry } from '@/hooks/use-providers'
-import { Icon, STATE_COLOR } from '@modules/components/herd'
+import { Icon, STATE_COLOR } from '@modules/components/hervald'
 import type { AgentSession, AgentType, ProviderModelOption, ProviderRegistryEntry } from '@/types'
 import { SessionCard } from '@modules/agents/page-shell/SessionCard'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
@@ -65,7 +65,6 @@ interface SessionsColumnProps {
   sentinelSessions?: ChatSession[]
   onKillSession?: (sessionId: string, agentType?: AgentType) => Promise<void>
   onResumeSession?: (sessionId: string) => Promise<void>
-  sessionActionError?: string | null
 }
 
 const tinyIconBtn: React.CSSProperties = {
@@ -179,8 +178,8 @@ const chatLifecycleButtonStyle: React.CSSProperties = {
   justifyContent: 'center',
   transition: 'background 160ms var(--hv-ease-gentle), box-shadow 160ms var(--hv-ease-gentle)',
 }
-const COLLAPSE_STORAGE_KEY = 'herd-sessions-collapsed'
-const SHOW_EXITED_STORAGE_KEY = 'herd-sessions-show-exited'
+const COLLAPSE_STORAGE_KEY = 'hervald-sessions-collapsed'
+const SHOW_EXITED_STORAGE_KEY = 'hervald-sessions-show-exited'
 const DEFAULT_COLLAPSED: Record<SectionKey, boolean> = {
   workers: false,
   automation: true,
@@ -190,6 +189,13 @@ const DEFAULT_SHOW_EXITED: Record<SectionKey, boolean> = {
   automation: false,
 }
 const EXITED_SESSION_STATUSES = new Set(['exited', 'completed'])
+
+function isVisibleChatSession(session: ChatSession): boolean {
+  if (session.state) {
+    return session.state !== 'archived'
+  }
+  return !EXITED_SESSION_STATUSES.has(session.status ?? '')
+}
 
 function readCollapsedState(): Record<SectionKey, boolean> {
   if (typeof window === 'undefined') return { ...DEFAULT_COLLAPSED }
@@ -269,7 +275,7 @@ function SessionListSection({
   if (sessions.length === 0 && !headerAction) return null
   const visibleSessions = showExited
     ? sessions
-    : sessions.filter((session) => !EXITED_SESSION_STATUSES.has(session.status ?? ''))
+    : sessions.filter(isVisibleChatSession)
 
   return (
     <>
@@ -453,9 +459,31 @@ function hasConversationAction(
   return conversation.allowedActions?.[action] === true
 }
 
+function conversationHasStoppableRuntime(conversation: ConversationRecord): boolean {
+  const runtimeState = conversation.displayState?.runtimeState ?? conversation.runtimeState
+  const hasLiveSession = conversation.displayState
+    ? conversation.displayState.hasLiveSession
+    : Boolean(conversation.liveSession) || conversation.status === 'active'
+  return runtimeState === 'starting' || (conversation.status === 'active' && hasLiveSession)
+}
+
+function resolveConversationLifecycleAction(conversation: ConversationRecord): 'start' | 'stop' | null {
+  const canStop = hasConversationAction(conversation, 'pause') && conversationHasStoppableRuntime(conversation)
+  if (canStop) {
+    return 'stop'
+  }
+
+  if (hasConversationAction(conversation, 'resume') || hasConversationAction(conversation, 'start')) {
+    return 'start'
+  }
+
+  return null
+}
+
 interface ConversationChatRowProps {
   conversation: ConversationRecord
   selected: boolean
+  approvalCount?: number
   onSelect?: (id: string) => void
   onStart?: (id: string) => void
   onStop?: (id: string) => void | Promise<void>
@@ -464,6 +492,21 @@ interface ConversationChatRowProps {
   onArchive?: (id: string) => void | Promise<void>
   onRemove?: (id: string) => void | Promise<void>
   providerOptions?: ReadonlyArray<ConversationProviderOption>
+}
+
+function approvalMatchesConversationRow(approval: Approval, conversation: ConversationRecord): boolean {
+  const approvalConversationId = approval.conversationId?.trim()
+  if (approvalConversationId) {
+    return approvalConversationId === conversation.id
+  }
+
+  const approvalSessionName = approval.sessionName?.trim()
+  if (!approvalSessionName) {
+    return false
+  }
+
+  return approvalSessionName === conversation.sendTarget?.sessionName
+    || approvalSessionName === conversation.liveSession?.name
 }
 
 function CommanderNewChatRow({
@@ -683,6 +726,7 @@ function CommanderTeamDropdown({
 function ConversationChatRow({
   conversation,
   selected,
+  approvalCount = 0,
   onSelect,
   onStart,
   onStop,
@@ -692,10 +736,10 @@ function ConversationChatRow({
   onRemove,
   providerOptions = [],
 }: ConversationChatRowProps) {
-  const canStart = hasConversationAction(conversation, 'start') || hasConversationAction(conversation, 'resume')
-  const canStop = hasConversationAction(conversation, 'pause')
+  const lifecycleAction = resolveConversationLifecycleAction(conversation)
+  const hasPendingApproval = approvalCount > 0
   const displayStatus = conversation.displayState?.status ?? conversation.status
-  const disabledLifecycleAction = !canStart && !canStop
+  const disabledLifecycleAction = lifecycleAction === null
     ? displayStatus === 'active'
       ? 'stop'
       : displayStatus === 'idle'
@@ -704,6 +748,7 @@ function ConversationChatRow({
     : null
   const canEditProviderModel = hasConversationAction(conversation, 'updateProvider') && Boolean(onSwapProvider)
   const conversationName = typeof conversation.name === 'string' ? conversation.name : ''
+  const conversationLabel = formatConversationLabel(conversation)
   const [menuOpen, setMenuOpen] = useState(false)
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
   const [providerDraft, setProviderDraft] = useState<AgentType | ''>('')
@@ -713,14 +758,12 @@ function ConversationChatRow({
   const [renameDraft, setRenameDraft] = useState(conversationName)
   const [renameBusy, setRenameBusy] = useState(false)
   const [removeOpen, setRemoveOpen] = useState(false)
-  const [removeDraft, setRemoveDraft] = useState('')
   const [removeBusy, setRemoveBusy] = useState(false)
 
   useEffect(() => {
     setRenameDraft(conversationName)
   }, [conversationName])
 
-  const canConfirmRemove = removeDraft === conversationName
   const activeProvider = providerOptions.find((provider) => provider.id === providerDraft) ?? null
   const availableModels: readonly ProviderModelOption[] = activeProvider?.availableModels ?? []
   const currentProvider = conversation.agentType ?? ''
@@ -787,7 +830,7 @@ function ConversationChatRow({
   }
 
   async function handleRemoveSubmit(): Promise<void> {
-    if (!onRemove || !canConfirmRemove) {
+    if (!onRemove) {
       return
     }
     setRemoveBusy(true)
@@ -795,7 +838,6 @@ function ConversationChatRow({
       await onRemove(conversation.id)
       setRemoveOpen(false)
       setMenuOpen(false)
-      setRemoveDraft('')
     } finally {
       setRemoveBusy(false)
     }
@@ -807,6 +849,8 @@ function ConversationChatRow({
         data-testid="commander-chat-row"
         data-conversation-id={conversation.id}
         data-conversation-status={conversation.status}
+        data-has-pending-approval={hasPendingApproval ? 'true' : 'false'}
+        data-approval-count={approvalCount}
         style={{
           position: 'relative',
           width: '100%',
@@ -814,10 +858,19 @@ function ConversationChatRow({
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          background: selected ? 'var(--hv-ink-wash-02)' : 'transparent',
-          borderLeft: selected
-            ? '2px solid var(--sumi-black)'
-            : '2px solid transparent',
+          background: hasPendingApproval
+            ? 'var(--hv-accent-danger-wash)'
+            : selected
+              ? 'var(--hv-ink-wash-02)'
+              : 'transparent',
+          borderLeft: hasPendingApproval
+            ? '2px solid var(--hv-accent-danger)'
+            : selected
+              ? '2px solid var(--sumi-black)'
+              : '2px solid transparent',
+          boxShadow: hasPendingApproval
+            ? 'inset 0 0 0 1px var(--hv-accent-danger)'
+            : 'none',
         }}
       >
         <button
@@ -860,7 +913,7 @@ function ConversationChatRow({
                 color: selected ? 'var(--hv-fg)' : 'var(--hv-fg-faint)',
               }}
             >
-              {formatConversationLabel(conversation)}
+              {conversationLabel}
             </span>
             <span
               className="font-body"
@@ -881,7 +934,28 @@ function ConversationChatRow({
           </span>
         </button>
 
-        {canStart && onStart && (
+        {hasPendingApproval && (
+          <span
+            className="font-body"
+            data-testid="commander-chat-approval-count"
+            style={{
+              flexShrink: 0,
+              borderRadius: '2px 6px 2px 6px',
+              background: 'var(--hv-bg)',
+              border: '1px solid var(--hv-accent-danger)',
+              color: 'var(--hv-accent-danger)',
+              fontSize: 'calc(9px * var(--hv-font-scale, 1))',
+              fontWeight: 600,
+              letterSpacing: '0.08em',
+              padding: '1px 5px',
+              textTransform: 'uppercase',
+            }}
+          >
+            {approvalCount}
+          </span>
+        )}
+
+        {lifecycleAction === 'start' && onStart && (
           <button
             className="font-mono"
             type="button"
@@ -899,7 +973,7 @@ function ConversationChatRow({
           </button>
         )}
 
-        {canStop && onStop && (
+        {lifecycleAction === 'stop' && onStop && (
           <button
             className="font-mono"
             type="button"
@@ -941,7 +1015,7 @@ function ConversationChatRow({
             <button
               type="button"
               data-testid="commander-chat-actions-button"
-              aria-label={`Actions for ${conversation.name}`}
+              aria-label={`Actions for ${conversationLabel}`}
               onClick={(event) => {
                 event.stopPropagation()
                 setMenuOpen((current) => !current)
@@ -970,7 +1044,7 @@ function ConversationChatRow({
               <>
                 <button
                   type="button"
-                  aria-label={`Close actions for ${conversation.name}`}
+                  aria-label={`Close actions for ${conversationLabel}`}
                   onClick={() => {
                     setMenuOpen(false)
                     setProviderMenuOpen(false)
@@ -1107,7 +1181,6 @@ function ConversationChatRow({
                       type="button"
                       data-testid="commander-chat-remove-button"
                       onClick={() => {
-                        setRemoveDraft('')
                         setRemoveOpen(true)
                         setProviderMenuOpen(false)
                       }}
@@ -1184,17 +1257,11 @@ function ConversationChatRow({
       >
         <div data-testid="commander-chat-remove-modal" style={{ display: 'grid', gap: 12 }}>
           <p style={{ margin: 0, color: 'var(--hv-fg-subtle)', lineHeight: 1.5 }}>
-            Type <strong>{conversationName}</strong> to remove this chat and its transcript files.
+            Remove <strong>{conversationLabel}</strong> and its transcript files?
           </p>
-          <label style={modalLabelStyle}>
-            <span>Confirmation</span>
-            <input
-              data-testid="commander-chat-remove-input"
-              value={removeDraft}
-              onChange={(event) => setRemoveDraft(event.target.value)}
-              style={modalInputStyle}
-            />
-          </label>
+          <p style={{ margin: 0, color: 'var(--hv-fg-subtle)', lineHeight: 1.5 }}>
+            This permanently deletes the chat and cannot be undone.
+          </p>
           <div style={modalActionsStyle}>
             <button
               type="button"
@@ -1210,13 +1277,13 @@ function ConversationChatRow({
               onClick={() => {
                 void handleRemoveSubmit()
               }}
-              disabled={removeBusy || !canConfirmRemove}
+              disabled={removeBusy}
               style={{
                 ...modalPrimaryButtonStyle,
                 background: 'var(--vermillion-seal)',
               }}
             >
-              Remove forever
+              {removeBusy ? 'Removing...' : 'Remove forever'}
             </button>
           </div>
         </div>
@@ -1251,7 +1318,6 @@ export function SessionsColumn({
   sentinelSessions = [],
   onKillSession,
   onResumeSession,
-  sessionActionError = null,
 }: SessionsColumnProps) {
   const { data: providers = [] } = useProviderRegistry()
   const providerOptions = useMemo(
@@ -1407,6 +1473,9 @@ export function SessionsColumn({
                         key={conversation.id}
                         conversation={conversation}
                         selected={selectedChatId === conversation.id}
+                        approvalCount={
+                          approvals.filter((approval) => approvalMatchesConversationRow(approval, conversation)).length
+                        }
                         onSelect={onSelectConversation}
                         onStart={onStartConversation}
                         onStop={onStopConversation}
@@ -1430,21 +1499,6 @@ export function SessionsColumn({
             )
           })}
         </div>
-
-        {sessionActionError && (
-          <div
-            data-testid="sessions-action-error"
-            data-test-id="sessions-action-error"
-            style={{
-              padding: '12px 20px 0',
-              color: 'var(--vermillion-seal)',
-              fontSize: 'calc(10.5px * var(--hv-font-scale, 1))',
-              lineHeight: 1.5,
-            }}
-          >
-            {sessionActionError}
-          </div>
-        )}
 
         <div data-testid="workers-section" data-test-id="workers-section">
           <SessionListSection

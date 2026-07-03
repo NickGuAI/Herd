@@ -102,6 +102,7 @@ export interface ProviderRegistryEntry {
 export interface ProviderRegistryResponse {
   providers: ProviderRegistryEntry[]
   defaultProviderId: AgentType
+  automationDefaultProviderId: AgentType
 }
 
 export type ProviderAdapterDeps =
@@ -138,7 +139,9 @@ export interface ProviderCreateOptions {
   currentSkillInvocation?: ActiveSkillInvocation
   daemonProcess?: PersistedDaemonProcess
   approvalBridgeNonce?: string
+  resumeProviderContext?: ProviderSessionContext
   providerAuth?: ProviderSpawnAuth
+  credentialPoolId?: string
 }
 
 export interface ProviderTeardownOptions {
@@ -167,17 +170,13 @@ export interface ProviderAdapter {
   runtimeWatchdog?(session: StreamSession): { teardown: () => void } | undefined
   /** Skill scan roots exposed by this provider, if any. */
   readonly skillScanPaths?: readonly string[]
-  /**
-   * Provider-owned migration for legacy persisted context shapes that predate
-   * the canonical `providerContext.providerId` discriminator.
-   */
-  migrateLegacyContext?(rawProviderContext: unknown): ProviderSessionContext | null
   buildStreamSessionAdapter(deps: ProviderAdapterDeps): StreamSessionAdapter
   create(options: ProviderCreateOptions, deps: ProviderAdapterDeps): Promise<StreamSession> | StreamSession
   restore(
     entry: PersistedStreamSession,
     machine: MachineConfig | undefined,
     deps: ProviderAdapterDeps,
+    providerAuth?: ProviderSpawnAuth,
   ): Promise<StreamSession> | StreamSession
   snapshotForPersist(session: StreamSession): PersistedStreamSession | null
   snapshotExited(session: StreamSession): ExitedStreamSessionState

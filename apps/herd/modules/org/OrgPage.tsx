@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ConfirmModal } from '@modules/components/ConfirmModal'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
 import { Toast } from '@modules/components/Toast'
+import { buildCommandRoomLaunchTarget } from '@modules/command-room/route-metadata'
 import { CreateCommanderWizard } from '@modules/commanders/components/CreateCommanderWizard'
 import { useCommander } from '@modules/commanders/hooks/useCommander'
 import { ORG_QUERY_KEY } from '@modules/org/hooks/useOrgTree'
@@ -232,7 +233,7 @@ export function OrgPage() {
   const expandedCommander = commanderCards.find((commander) => commander.id === expandedCommanderId) ?? null
 
   function openCommandRoom(commanderId: string) {
-    navigate(`/command-room?commander=${encodeURIComponent(commanderId)}`)
+    navigate(buildCommandRoomLaunchTarget({ commanderId }).path)
   }
 
   function highlightCommander(commanderId: string) {

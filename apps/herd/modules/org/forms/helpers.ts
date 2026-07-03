@@ -1,10 +1,8 @@
 import {
   CADENCE_PRESET_TO_CRON,
   CRON_SEGMENT_PATTERN,
-  DEFAULT_NEW_AUTOMATION_AGENT_TYPE,
   DEFAULT_NEW_AUTOMATION_CADENCE_PRESET,
   DEFAULT_NEW_AUTOMATION_TRIGGER,
-  HOST_PATTERN,
   listSupportedAutomationProviders,
   NEW_AUTOMATION_CADENCE_PRESET_OPTIONS,
   NEW_AUTOMATION_TRIGGER_OPTIONS,
@@ -53,7 +51,7 @@ export function createEmptyNewAutomationWizardErrors(): NewAutomationWizardFormE
 
 export function createDefaultNewAutomationWizardValues(
   defaultQuestCommanderId = '',
-  defaultAgentType: string = DEFAULT_NEW_AUTOMATION_AGENT_TYPE,
+  defaultAgentType = '',
 ): NewAutomationWizardFormValues {
   return {
     trigger: DEFAULT_NEW_AUTOMATION_TRIGGER,
@@ -186,14 +184,4 @@ export function buildNewAutomationCreateRequestBody(
   }
 
   return body
-}
-
-export function toRequestErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message
-  }
-  if (typeof error === 'string' && error.trim().length > 0) {
-    return error.trim()
-  }
-  return fallback
 }

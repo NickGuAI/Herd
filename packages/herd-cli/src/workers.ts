@@ -3,10 +3,19 @@ import { type HerdConfig, normalizeEndpoint, readHerdConfig } from './config.js'
 import { fetchJson as fetchJsonStrict } from './http-json.js'
 import { listWorkerDispatchProviderIds, loadProviderRegistry } from './providers.js'
 import {
+  formatRuntimeAllowedActions,
+  formatRuntimeDisabledReasons,
   isOwnedByCommander,
+  normalizeRuntimeSessionState,
   normalizeSessionCreator,
   normalizeSessionType,
+  parseRuntimeSessionAllowedActions,
+  parseRuntimeSessionDisabledReasons,
   workerLifecycle,
+  workerLifecycleWithRuntimeState,
+  type AgentRuntimeSessionState,
+  type RuntimeSessionAllowedActions,
+  type RuntimeSessionDisabledReasons,
   type SessionCreator,
 } from './session-contract.js'
 import {
@@ -56,6 +65,9 @@ interface AgentSessionSummary {
   transportType?: string
   creator?: SessionCreator
   status?: string
+  state?: AgentRuntimeSessionState
+  allowedActions?: RuntimeSessionAllowedActions
+  disabledReasons?: RuntimeSessionDisabledReasons
   cwd?: string
   host?: string
   created?: string
@@ -67,6 +79,9 @@ interface WorkerSessionStatus {
   name: string
   completed: boolean
   status?: string
+  state?: AgentRuntimeSessionState
+  allowedActions?: RuntimeSessionAllowedActions
+  disabledReasons?: RuntimeSessionDisabledReasons
   sessionType?: string
   transportType?: string
   host?: string
@@ -366,6 +381,7 @@ function parseSessions(payload: unknown): AgentSessionSummary[] {
     const transportType = typeof entry.transportType === 'string' ? entry.transportType.trim() : undefined
     const creator = normalizeSessionCreator(entry.creator) ?? undefined
     const status = typeof entry.status === 'string' ? entry.status.trim() : undefined
+    const state = normalizeRuntimeSessionState(entry.state) ?? undefined
     const cwd = typeof entry.cwd === 'string' ? entry.cwd.trim() : undefined
     const host = typeof entry.host === 'string' ? entry.host.trim() : undefined
     const created = typeof entry.created === 'string' ? entry.created.trim() : undefined
@@ -378,6 +394,9 @@ function parseSessions(payload: unknown): AgentSessionSummary[] {
       transportType: transportType && transportType.length > 0 ? transportType : undefined,
       creator,
       status: status && status.length > 0 ? status : undefined,
+      state,
+      allowedActions: parseRuntimeSessionAllowedActions(entry.allowedActions),
+      disabledReasons: parseRuntimeSessionDisabledReasons(entry.disabledReasons),
       cwd: cwd && cwd.length > 0 ? cwd : undefined,
       host: host && host.length > 0 ? host : undefined,
       created: created && created.length > 0 ? created : undefined,
@@ -402,6 +421,7 @@ function parseWorkerStatus(payload: unknown): WorkerSessionStatus | null {
   const transportType = typeof payload.transportType === 'string' ? payload.transportType.trim() : ''
   const host = typeof payload.host === 'string' ? payload.host.trim() : ''
   const processAlive = typeof payload.processAlive === 'boolean' ? payload.processAlive : undefined
+  const state = normalizeRuntimeSessionState(payload.state) ?? undefined
 
   if (!name) {
     return null
@@ -411,6 +431,9 @@ function parseWorkerStatus(payload: unknown): WorkerSessionStatus | null {
     name,
     completed,
     status: status.length > 0 ? status : undefined,
+    state,
+    allowedActions: parseRuntimeSessionAllowedActions(payload.allowedActions),
+    disabledReasons: parseRuntimeSessionDisabledReasons(payload.disabledReasons),
     sessionType: sessionType.length > 0 ? sessionType : undefined,
     transportType: transportType.length > 0 ? transportType : undefined,
     host: host.length > 0 ? host : undefined,
@@ -519,6 +542,13 @@ function isCommanderCreatedSession(session: AgentSessionSummary): boolean {
   return session.creator?.kind === 'commander'
 }
 
+function isVisibleWorkerSession(session: AgentSessionSummary): boolean {
+  if (session.state) {
+    return session.state !== 'archived'
+  }
+  return workerLifecycle(session) === 'stale'
+}
+
 async function runList(
   config: HerdConfig,
   fetchImpl: typeof fetch,
@@ -545,7 +575,7 @@ async function runList(
         ? true
         : (!commanderId || isOwnedByCommander(session, commanderId))
     ))
-    .filter((session) => (options.all ? true : workerLifecycle(session) === 'stale'))
+    .filter((session) => (options.all ? true : isVisibleWorkerSession(session)))
 
   if (sessions.length === 0) {
     stdout.write('No workers.\n')
@@ -554,11 +584,12 @@ async function runList(
 
   stdout.write('Workers:\n')
   for (const session of sessions) {
-    const lifecycle = workerLifecycle(session)
+    const lifecycle = workerLifecycleWithRuntimeState(session)
+    const runtimeState = session.state ? ` state=${session.state}` : ` lifecycle=${lifecycle}`
     const host = session.host ? ` host=${session.host}` : ''
     const cwd = session.cwd ? ` cwd=${session.cwd}` : ''
     stdout.write(
-      `- ${session.name} type=${session.sessionType ?? 'unknown'} creator=${formatCreatorLabel(session.creator)} lifecycle=${lifecycle} age=${formatAgeMs(resolveAgeMs(session))}${host}${cwd}\n`,
+      `- ${session.name} type=${session.sessionType ?? 'unknown'} creator=${formatCreatorLabel(session.creator)}${runtimeState} age=${formatAgeMs(resolveAgeMs(session))}${host}${cwd}\n`,
     )
   }
 
@@ -673,7 +704,8 @@ async function runStatus(
   }
 
   const normalizedStatus = (summary.status ?? '').trim().toLowerCase()
-  const lifecycleStatus = workerLifecycle({
+  const lifecycleStatus = workerLifecycleWithRuntimeState({
+    state: summary.state,
     status: summary.status,
     completed: summary.completed || normalizedStatus === 'completed',
     processAlive: summary.processAlive,
@@ -693,7 +725,11 @@ async function runStatus(
 
     stdout.write(`${JSON.stringify({
       session: summary.name,
-      status: lifecycleStatus,
+      state: summary.state ?? null,
+      status: summary.state ? (summary.status ?? null) : lifecycleStatus,
+      lifecycle: lifecycleStatus,
+      allowedActions: summary.allowedActions ?? null,
+      disabledReasons: summary.disabledReasons ?? null,
       transport: summary.transportType ?? null,
       sessionType: summary.sessionType ?? null,
       host: summary.host ?? null,
@@ -707,7 +743,22 @@ async function runStatus(
   }
 
   stdout.write(`session: ${summary.name}\n`)
-  stdout.write(`status: ${lifecycleStatus}\n`)
+  if (summary.state) {
+    stdout.write(`state: ${summary.state}\n`)
+    if (summary.status && summary.status !== summary.state) {
+      stdout.write(`status: ${summary.status}\n`)
+    }
+    const allowedActions = formatRuntimeAllowedActions(summary.allowedActions)
+    if (allowedActions) {
+      stdout.write(`allowed actions: ${allowedActions}\n`)
+    }
+    const disabledReasons = formatRuntimeDisabledReasons(summary.disabledReasons)
+    if (disabledReasons) {
+      stdout.write(`disabled actions: ${disabledReasons}\n`)
+    }
+  } else {
+    stdout.write(`status: ${lifecycleStatus}\n`)
+  }
 
   if (summary.completed && summary.status && summary.status !== lifecycleStatus) {
     stdout.write(`result: ${summary.status}\n`)

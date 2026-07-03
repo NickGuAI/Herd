@@ -11,6 +11,7 @@ import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
 import { DEFAULT_CLAUDE_MAX_THINKING_TOKENS } from '../../claude-max-thinking-tokens.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
 import { COMMANDER_STARTUP_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes.js'
+import { buildCommandRoomLaunchTarget } from '../../command-room/route-metadata.js'
 import {
   parseClaudeAdaptiveThinking,
   parseClaudeEffort,
@@ -97,7 +98,6 @@ import {
   resolveCommanderAgentType,
   resolveCommanderTerminalState,
   resolveEffectiveHeartbeat,
-  toCommanderSessionName,
   toCommanderSessionResponse,
 } from './context.js'
 import {
@@ -110,9 +110,11 @@ import { resolveCommanderWorkflow } from '../workflow-resolution.js'
 import { COMMANDER_WORKFLOW_FILE } from '../workflow.js'
 import { getLiveConversationSession, stopConversationSession } from './conversation-runtime.js'
 import type { AgentType } from '../../agents/types.js'
+import { resolveDefaultProviderId } from '../../agents/providers/registry.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
 import { listCommanderPackages, loadCommanderPackage } from '../packages/registry.js'
+import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import {
   getCommanderPackageInstallState,
   installCommanderPackage,
@@ -405,7 +407,7 @@ async function writeCommanderAvatarBytes(
 
   const existing = await readCommanderUiProfile(commanderId, basePath)
   await writeCommanderUiProfile(commanderId, basePath, {
-    ...ensureCommanderVisualProfile(commanderId, existing),
+    ...ensureCommanderVisualProfile(existing),
     ...profilePatch,
     avatar: avatarFileName,
   } satisfies CommanderUiProfile)
@@ -650,7 +652,7 @@ export function registerCoreRoutes(
       await writeCommanderUiProfile(
         created.id,
         context.commanderBasePath,
-        ensureCommanderVisualProfile(created.id, options.uiProfile),
+        ensureCommanderVisualProfile(options.uiProfile),
       )
     } catch (error) {
       await rollbackCreatedCommander()
@@ -976,7 +978,7 @@ export function registerCoreRoutes(
     }
 
     const existing = await readCommanderUiProfile(commanderId, context.commanderBasePath)
-    const merged: CommanderUiProfile = ensureCommanderVisualProfile(commanderId, {
+    const merged: CommanderUiProfile = ensureCommanderVisualProfile({
       ...(existing ?? {}),
       ...(req.body?.speakingTone !== undefined ? { speakingTone } : {}),
       ...(portraitStyleProvided && portraitStyleId ? { portraitStyleId } : {}),
@@ -1065,7 +1067,7 @@ export function registerCoreRoutes(
       return
     }
 
-    const selectedAgentType = parsedAgentType ?? 'claude'
+    const selectedAgentType = parsedAgentType ?? resolveDefaultProviderId()
     const selectedEffort = selectedAgentType === 'claude'
       ? (parsedEffort ?? 'low')
       : undefined
@@ -1204,18 +1206,16 @@ export function registerCoreRoutes(
       res.status(400).json({ error: 'replicatedFromCommanderId must be a valid commander id when provided' })
       return
     }
+    if (req.body?.persona !== undefined) {
+      res.status(400).json({ error: COMMANDER_MD_IDENTITY_MESSAGE })
+      return
+    }
     const parsedIdentityOperatingStyle = parseIdentityOperatingStyleInput(req.body?.identityOperatingStyle)
     if (!parsedIdentityOperatingStyle.valid) {
       res.status(400).json({ error: 'identityOperatingStyle must be a string when provided' })
       return
     }
-    const parsedLegacyIdentity = parseIdentityOperatingStyleInput(req.body?.persona)
-    if (!parsedLegacyIdentity.valid) {
-      res.status(400).json({ error: 'persona must be a string when provided' })
-      return
-    }
     const identityOperatingStyle = parsedIdentityOperatingStyle.value
-      ?? parsedLegacyIdentity.value
       ?? (isBenchmarkCreate
         ? (benchmarkArchetype?.defaultIdentityOperatingStyle ?? BENCHMARK_COMMANDER_PERSONA)
         : undefined)
@@ -1256,7 +1256,7 @@ export function registerCoreRoutes(
       res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
       return
     }
-    const selectedAgentType = parsedAgentTypeCreate ?? 'claude'
+    const selectedAgentType = parsedAgentTypeCreate ?? resolveDefaultProviderId()
     const modelValidation = validateModelForAgentType(selectedAgentType, parsedModelCreate.value ?? null)
     if (!modelValidation.ok) {
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
@@ -1381,12 +1381,7 @@ export function registerCoreRoutes(
       res.status(400).json({ error: 'commander.identityOperatingStyle must be a string when provided' })
       return
     }
-    const parsedLegacyIdentity = parseIdentityOperatingStyleInput(commander.persona)
-    if (!parsedLegacyIdentity.valid) {
-      res.status(400).json({ error: 'persona must be a string when provided' })
-      return
-    }
-    const identityOperatingStyle = parsedIdentityOperatingStyle.value ?? parsedLegacyIdentity.value
+    const identityOperatingStyle = parsedIdentityOperatingStyle.value
 
     const parsedAgentType = parseOptionalCommanderAgentType(commander.agentType)
     if (parsedAgentType === null) {
@@ -1467,7 +1462,7 @@ export function registerCoreRoutes(
     const memoryMd = memorySnapshot
       ? (memorySnapshot.memoryMd as string)
       : undefined
-    const importedAgentType = parsedAgentType ?? 'claude'
+    const importedAgentType = parsedAgentType ?? resolveDefaultProviderId()
     const importedProfile = sanitizeUiProfile(commander.profile)
     const importedModelValidation = validateModelForAgentType(importedAgentType, parsedModel.value ?? null)
     if (!importedModelValidation.ok) {
@@ -1530,7 +1525,7 @@ export function registerCoreRoutes(
       res.status(201).json({
         ...created,
         displayName,
-        url: `/command-room?commander=${encodeURIComponent(session.id)}`,
+        url: buildCommandRoomLaunchTarget({ commanderId: session.id }).path,
       })
     } catch (error) {
       await context.sessionStore.delete(session.id).catch(() => {})
@@ -1587,7 +1582,7 @@ export function registerCoreRoutes(
       avatarSeed: source.avatarSeed,
       state: 'idle',
       created: context.now().toISOString(),
-      agentType: source.agentType ?? 'claude',
+      agentType: source.agentType ?? resolveDefaultProviderId(),
       ...(source.model !== undefined ? { model: source.model } : {}),
       effort: source.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
       cwd: source.cwd,
@@ -1613,17 +1608,6 @@ export function registerCoreRoutes(
           path.join(commanderRoot, COMMANDER_WORKFLOW_FILE),
           `${sourceCommanderMd.trimEnd()}\n`,
           'utf8',
-        )
-      }
-      const sourceIdentityOperatingStyle = parseIdentityOperatingStyleInput(source.persona)
-      if (sourceIdentityOperatingStyle.valid && sourceIdentityOperatingStyle.value) {
-        await mergeIdentityOperatingStyleIntoCommanderWorkflow(
-          session.id,
-          sourceIdentityOperatingStyle.value,
-          {
-            cwd: session.cwd,
-            basePath: context.commanderBasePath,
-          },
         )
       }
       res.status(201).json(
@@ -1770,7 +1754,7 @@ export function registerCoreRoutes(
         throw error
       }
     }
-    const nextAgentType = parsedAgentType ?? session.agentType ?? 'claude'
+    const nextAgentType = parsedAgentType ?? session.agentType ?? resolveDefaultProviderId()
     const nextModel = modelProvided ? parsedModelValue : (session.model ?? null)
     const modelValidation = validateModelForAgentType(nextAgentType, nextModel ?? null)
     if (!modelValidation.ok) {
@@ -1821,23 +1805,23 @@ export function registerCoreRoutes(
       await writeCommanderUiProfile(
         commanderId,
         context.commanderBasePath,
-        ensureCommanderVisualProfile(commanderId, {
+        ensureCommanderVisualProfile({
           ...(existingProfile ?? {}),
           portraitStyleId,
         }),
       )
     }
 
-    const liveSessionName = context.activeCommanderSessions.get(commanderId)?.sessionName
-      ?? toCommanderSessionName(commanderId)
-    const liveSession = context.sessionsInterface?.getSession(liveSessionName)
-    if (liveSession) {
-      liveSession.maxTurns = updated.maxTurns
+    const activeSession = context.activeCommanderSessions.get(commanderId)
+    if (activeSession) {
+      const liveSession = context.sessionsInterface?.getSession(activeSession.sessionName)
+      if (liveSession) {
+        liveSession.maxTurns = updated.maxTurns
+      }
     }
 
-    const { persona: _legacyIdentity, ...publicUpdated } = updated
     res.json({
-      ...publicUpdated,
+      ...updated,
       displayName: nextDisplayName,
     })
   })
@@ -1851,8 +1835,6 @@ export function registerCoreRoutes(
       res.status(400).json({ error: 'Invalid commander id' })
       return
     }
-
-    await context.migrateCommanderConfigSource(commanderId)
 
     const session = await context.sessionStore.get(commanderId)
     if (!session) {
@@ -1887,7 +1869,6 @@ export function registerCoreRoutes(
     const previousState = session.state
     const defaultConversation = await context.ensureDefaultConversation(session, { surface: 'ui' })
     const sessionName = buildConversationSessionName(defaultConversation)
-    const legacySessionName = toCommanderSessionName(commanderId)
     let runtime: CommanderRuntime | null = null
     let startStateUpdated = false
 
@@ -1906,7 +1887,6 @@ export function registerCoreRoutes(
 
       context.activeCommanderSessions.delete(commanderId)
       context.sessionsInterface?.deleteSession(sessionName)
-      context.sessionsInterface?.deleteSession(legacySessionName)
 
       if (!startStateUpdated) {
         return
@@ -1982,7 +1962,6 @@ export function registerCoreRoutes(
       }
 
       context.sessionsInterface.deleteSession(sessionName)
-      context.sessionsInterface.deleteSession(legacySessionName)
       await context.sessionsInterface.createCommanderSession({
         name: sessionName,
         commanderId,
@@ -2023,8 +2002,8 @@ export function registerCoreRoutes(
 
       let contextPressureTriggeredForTurn = false
       const unsubscribeEvents = context.sessionsInterface.subscribeToEvents(sessionName, (event) => {
-        const eventType = typeof event.type === 'string' ? event.type : ''
-        if (eventType === 'message_start') {
+        const eventType = isTranscriptEnvelope(event) ? event.ev.type : ''
+        if (eventType === 'turn.start') {
           contextPressureTriggeredForTurn = false
           if (runtime) {
             runtime.terminalState = null
@@ -2060,7 +2039,7 @@ export function registerCoreRoutes(
           void contextPressureBridge.trigger()
         }
 
-        if (eventType === 'result' && runtime) {
+        if (eventType === 'turn.end' && runtime) {
           runtime.terminalState = resolveCommanderTerminalState(event)
           const observedPostCompactionBoundary = (
             runtime.lastKnownInputTokens > 0 &&
@@ -2146,7 +2125,6 @@ export function registerCoreRoutes(
 
     context.heartbeatManager.stopForCommander(commanderId)
     const activeSession = context.activeCommanderSessions.get(commanderId)
-    const commanderSessionName = activeSession?.sessionName ?? toCommanderSessionName(commanderId)
 
     // Sweep every conversation owned by this commander, not just the default
     // single-session path. Per #1216 phase 1 each conversation can have its
@@ -2184,10 +2162,9 @@ export function registerCoreRoutes(
     }
 
     context.activeCommanderSessions.delete(commanderId)
-    // Defensive cleanup of the commander session name in case nothing
-    // referenced the default conversation. The sweep above already covers all
-    // real per-conversation sessions through `stopConversationSession`.
-    context.sessionsInterface?.deleteSession(commanderSessionName)
+    if (activeSession) {
+      context.sessionsInterface?.deleteSession(activeSession.sessionName)
+    }
 
     const stopped = await context.sessionStore.update(commanderId, (current) => ({
       ...current,
@@ -2230,10 +2207,9 @@ export function registerCoreRoutes(
       return
     }
 
-    const liveWorkerSession = context.sessionsInterface?.getSession(toCommanderSessionName(commanderId))
-    if (session.state === 'running' || liveWorkerSession) {
+    if (session.state === 'running') {
       res.status(409).json({
-        error: `Commander "${commanderId}" has a live worker session. Stop it before archiving.`,
+        error: `Commander "${commanderId}" is running. Stop it before archiving.`,
       })
       return
     }
@@ -2307,10 +2283,9 @@ export function registerCoreRoutes(
       return
     }
 
-    const liveWorkerSession = context.sessionsInterface?.getSession(toCommanderSessionName(commanderId))
-    if (session.state === 'running' || liveWorkerSession) {
+    if (session.state === 'running') {
       res.status(409).json({
-        error: `Commander "${commanderId}" has a live worker session. Stop it before deleting.`,
+        error: `Commander "${commanderId}" is running. Stop it before deleting.`,
       })
       return
     }
@@ -2355,7 +2330,6 @@ export function registerCoreRoutes(
       context.runtimes.delete(commanderId)
     }
     context.activeCommanderSessions.delete(commanderId)
-    context.sessionsInterface?.deleteSession(toCommanderSessionName(commanderId))
 
     await context.sessionStore.delete(commanderId)
     try {
@@ -2521,11 +2495,12 @@ export function registerCoreRoutes(
       return
     }
 
-    const sessionName = context.activeCommanderSessions.get(commanderId)?.sessionName
-      ?? toCommanderSessionName(commanderId)
-    const liveSession = context.sessionsInterface?.getSession(sessionName)
-    if (liveSession) {
-      liveSession.maxTurns = updated.maxTurns
+    const activeSession = context.activeCommanderSessions.get(commanderId)
+    if (activeSession) {
+      const liveSession = context.sessionsInterface?.getSession(activeSession.sessionName)
+      if (liveSession) {
+        liveSession.maxTurns = updated.maxTurns
+      }
     }
 
     res.json({

@@ -9,7 +9,6 @@ import type {
   ApiKeyStoreLike,
 } from './api-keys/store.js'
 import type { ProviderSecretsStoreLike } from './api-keys/provider-secrets-store.js'
-import type { OpenAITranscriptionKeyStoreLike } from './api-keys/transcription-store.js'
 import {
   HerdModuleLoaderError,
   type HerdCapabilityContainer,
@@ -31,7 +30,6 @@ export interface HerdModule {
 export interface ModuleRegistryOptions {
   apiKeyStore?: ApiKeyStoreLike
   providerSecretsStore?: ProviderSecretsStoreLike
-  transcriptionKeyStore?: OpenAITranscriptionKeyStoreLike
   auth0Domain?: string
   auth0Audience?: string
   auth0ClientId?: string

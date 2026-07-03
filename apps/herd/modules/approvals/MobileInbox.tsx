@@ -33,7 +33,7 @@ export function MobileInbox({ onOpenApproval }: MobileInboxProps) {
     <section className="flex min-h-0 flex-1 flex-col" data-testid="mobile-inbox">
       <div className="flex items-end justify-between gap-4 px-5 pb-3 pt-4">
         <div>
-          <p className="text-[10px] uppercase tracking-[0.18em] text-sumi-diluted">herd</p>
+          <p className="text-[10px] uppercase tracking-[0.18em] text-sumi-diluted">hervald</p>
           <h1 className="mt-1 font-display text-4xl text-sumi-black">Inbox</h1>
         </div>
         <span className="text-[10.5px] font-medium uppercase tracking-[0.12em] text-accent-vermillion">

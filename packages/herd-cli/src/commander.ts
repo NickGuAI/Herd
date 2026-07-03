@@ -97,10 +97,10 @@ Commander memory search/recollection is not a Herd runtime feature.
 cat .memory/MEMORY.md
 cat .memory/LONG_TERM_MEM.md
 cat .memory/working-memory.md
-herd memory save --commander [COMMANDER_ID] "<fact>"
-herd memory --type=working_memory append --commander [COMMANDER_ID] "<scratch note>"
-herd memory --type=working_memory read --commander [COMMANDER_ID]
-herd commander transcripts search --commander [COMMANDER_ID] "<query>"
+ herd memory save --commander [COMMANDER_ID] "<fact>"
+ herd memory --type=working_memory append --commander [COMMANDER_ID] "<scratch note>"
+ herd memory --type=working_memory read --commander [COMMANDER_ID]
+ herd commander transcripts search --commander [COMMANDER_ID] "<query>"
 \`\`\`
 
 ### When to read
@@ -129,7 +129,7 @@ Use it when you need prior execution context from earlier commander sessions wit
 ### Command
 
 \`\`\`
-herd commander transcripts search --commander [COMMANDER_ID] "<query>"
+ herd commander transcripts search --commander [COMMANDER_ID] "<query>"
 \`\`\`
 
 ### Rules

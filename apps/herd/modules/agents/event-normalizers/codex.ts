@@ -1,5 +1,5 @@
 import type { TranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
-import { classifyProviderError } from '../provider-errors.js'
+import { extractProviderLimitDetails } from '../provider-errors.js'
 import { createTranscriptId } from '../transcript-id.js'
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -399,14 +399,37 @@ function createCodexProviderErrorEnvelope(
     ?? readCodeString(params.code)
   const hint = readTrimmedString(error?.additionalDetails)
     ?? readTrimmedString(params.additionalDetails)
+  const details = extractProviderLimitDetails(message, code)
   return createCodexEnvelope(method, params, {
     type: 'provider.error',
     message,
-    classification: classifyProviderError(message, code),
+    classification: details.classification,
     ...(code ? { code } : {}),
     ...(hint ? { hint } : {}),
-    retryable: params.willRetry === true,
+    ...(details.resetAt ? { resetAt: details.resetAt } : {}),
+    retryable: details.classification === 'usage_limit' || params.willRetry === true,
     data: params,
+  })
+}
+
+function createCodexRateLimitErrorEnvelope(
+  method: string,
+  params: Record<string, unknown>,
+  rateLimit: CodexRateLimitStatus,
+): TranscriptEnvelope {
+  const message = 'Codex quota limit reached'
+  const code = rateLimit.rateLimitReachedType ?? 'rate_limit'
+  const details = extractProviderLimitDetails(message, code, {
+    resetAt: rateLimit.primaryResetAtIso,
+  })
+  return createCodexEnvelope(method, params, {
+    type: 'provider.error',
+    message,
+    classification: 'usage_limit',
+    code,
+    ...(details.resetAt ? { resetAt: details.resetAt } : {}),
+    retryable: true,
+    data: { rateLimit },
   })
 }
 
@@ -524,13 +547,16 @@ export function mapCodexToTranscriptEnvelopes(
       if (!rateLimit || !shouldSurfaceCodexRateLimitStatus(rateLimit)) {
         return []
       }
-      return [createCodexActivityEnvelope(
+      const activity = createCodexActivityEnvelope(
         method,
         p,
         rateLimit.rateLimitReachedType ? 'Codex quota limit reached' : 'Codex quota nearly exhausted',
         formatCodexRateLimitDetail(rateLimit),
         { rateLimit, rateLimits: asObject(p.rateLimits) ?? p },
-      )]
+      )
+      return rateLimit.rateLimitReachedType
+        ? [activity, createCodexRateLimitErrorEnvelope(method, p, rateLimit)]
+        : [activity]
     }
     case 'thread/started':
       return [createCodexActivityEnvelope(method, p, 'Thread started', undefined, p)]

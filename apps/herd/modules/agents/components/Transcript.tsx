@@ -203,6 +203,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
       <SessionMessageList
         messages={renderedMessages}
         onAnswer={onAnswer ?? (() => {})}
+        sessionName={sessionId}
         emptyLabel="Session started"
         agentAvatarUrl={agentAvatarUrl}
         agentAccentColor={agentAccentColor}

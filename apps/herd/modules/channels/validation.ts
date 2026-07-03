@@ -76,8 +76,8 @@ function validateEmailConfig(input: {
 
 function validateWhatsAppConfig(config: Record<string, unknown>): void {
   const descriptor = getChannelProviderDescriptor('whatsapp')
-  if (config.transport !== undefined && config.transport !== 'baileys' && config.transport !== 'cloud') {
-    throw new CommanderChannelValidationError('Transport must be one of baileys, cloud')
+  if (config.transport !== undefined && config.transport !== 'baileys') {
+    throw new CommanderChannelValidationError('WhatsApp transport must be baileys')
   }
   validateSelectField(descriptor, config, 'dmPolicy')
   validateSelectField(descriptor, config, 'groupPolicy')
@@ -99,6 +99,45 @@ function hasGoogleChatCredential(config: Record<string, unknown> | undefined): b
   )
 }
 
+function hasBotCredential(config: Record<string, unknown> | undefined): boolean {
+  if (!config) {
+    return false
+  }
+  return Boolean(
+    trimString(config.botToken)
+    ?? trimString(config.token)
+    ?? trimString(config.credential)
+    ?? trimString(config.credentialRef)
+    ?? (config.credentialConfigured === true ? 'configured' : undefined),
+  )
+}
+
+function hasSlackBotCredential(config: Record<string, unknown> | undefined): boolean {
+  if (!config) {
+    return false
+  }
+  return Boolean(
+    trimString(config.botToken)
+    ?? trimString(config.token)
+    ?? trimString(config.credential)
+    ?? trimString(config.botTokenRef)
+    ?? trimString(config.credentialRef)
+    ?? (config.botTokenConfigured === true ? 'configured' : undefined),
+  )
+}
+
+function hasSlackAppCredential(config: Record<string, unknown> | undefined): boolean {
+  if (!config) {
+    return false
+  }
+  return Boolean(
+    trimString(config.appToken)
+    ?? trimString(config.socketModeToken)
+    ?? trimString(config.appTokenRef)
+    ?? (config.appTokenConfigured === true ? 'configured' : undefined),
+  )
+}
+
 function validateGoogleChatConfig(input: {
   incomingConfig: Record<string, unknown>
   existingConfig?: CommanderChannelBindingConfig
@@ -116,6 +155,51 @@ function validateGoogleChatConfig(input: {
     throw new CommanderChannelValidationError('Webhook Audience is required for an enabled Google Chat channel.')
   }
   validateSelectField(descriptor, mergedConfig, 'webhookAudienceType')
+  validateSelectField(descriptor, mergedConfig, 'dmPolicy')
+  validateSelectField(descriptor, mergedConfig, 'groupPolicy')
+  parseStringList(mergedConfig.dmAllowlist, fieldByKey(descriptor, 'dmAllowlist').label)
+  parseStringList(mergedConfig.groupAllowlist, fieldByKey(descriptor, 'groupAllowlist').label)
+  parseStringList(mergedConfig.globalAllowlist, fieldByKey(descriptor, 'globalAllowlist').label)
+  parseStringList(mergedConfig.allowlist, 'Allowlist')
+}
+
+function validateBotTokenConfig(input: {
+  provider: 'telegram' | 'discord'
+  incomingConfig: Record<string, unknown>
+  existingConfig?: CommanderChannelBindingConfig
+}): void {
+  const descriptor = getChannelProviderDescriptor(input.provider)
+  const mergedConfig = {
+    ...(isObject(input.existingConfig) ? input.existingConfig : {}),
+    ...input.incomingConfig,
+  }
+  const tokenField = fieldByKey(descriptor, 'botToken')
+  if (!hasBotCredential(input.incomingConfig) && !hasBotCredential(input.existingConfig)) {
+    throw new CommanderChannelValidationError(`${tokenField.label} is required for an enabled ${descriptor?.label ?? input.provider} channel.`)
+  }
+  validateSelectField(descriptor, mergedConfig, 'dmPolicy')
+  validateSelectField(descriptor, mergedConfig, 'groupPolicy')
+  parseStringList(mergedConfig.dmAllowlist, fieldByKey(descriptor, 'dmAllowlist').label)
+  parseStringList(mergedConfig.groupAllowlist, fieldByKey(descriptor, 'groupAllowlist').label)
+  parseStringList(mergedConfig.globalAllowlist, fieldByKey(descriptor, 'globalAllowlist').label)
+  parseStringList(mergedConfig.allowlist, 'Allowlist')
+}
+
+function validateSlackConfig(input: {
+  incomingConfig: Record<string, unknown>
+  existingConfig?: CommanderChannelBindingConfig
+}): void {
+  const descriptor = getChannelProviderDescriptor('slack')
+  const mergedConfig = {
+    ...(isObject(input.existingConfig) ? input.existingConfig : {}),
+    ...input.incomingConfig,
+  }
+  if (!hasSlackBotCredential(input.incomingConfig) && !hasSlackBotCredential(input.existingConfig)) {
+    throw new CommanderChannelValidationError(`${fieldByKey(descriptor, 'botToken').label} is required for an enabled Slack channel.`)
+  }
+  if (!hasSlackAppCredential(input.incomingConfig) && !hasSlackAppCredential(input.existingConfig)) {
+    throw new CommanderChannelValidationError(`${fieldByKey(descriptor, 'appToken').label} is required for an enabled Slack channel.`)
+  }
   validateSelectField(descriptor, mergedConfig, 'dmPolicy')
   validateSelectField(descriptor, mergedConfig, 'groupPolicy')
   parseStringList(mergedConfig.dmAllowlist, fieldByKey(descriptor, 'dmAllowlist').label)
@@ -149,6 +233,29 @@ export function validateChannelConfigForDescriptor(input: {
   }
   if (input.provider === 'googlechat') {
     validateGoogleChatConfig({
+      incomingConfig: input.incomingConfig,
+      existingConfig: input.existingConfig,
+    })
+    return
+  }
+  if (input.provider === 'telegram') {
+    validateBotTokenConfig({
+      provider: 'telegram',
+      incomingConfig: input.incomingConfig,
+      existingConfig: input.existingConfig,
+    })
+    return
+  }
+  if (input.provider === 'discord') {
+    validateBotTokenConfig({
+      provider: 'discord',
+      incomingConfig: input.incomingConfig,
+      existingConfig: input.existingConfig,
+    })
+    return
+  }
+  if (input.provider === 'slack') {
+    validateSlackConfig({
       incomingConfig: input.incomingConfig,
       existingConfig: input.existingConfig,
     })

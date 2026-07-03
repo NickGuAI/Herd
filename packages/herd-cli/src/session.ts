@@ -9,8 +9,16 @@ import {
   type SessionMessagePeekResponse,
 } from './session-peek.js'
 import {
+  formatRuntimeAllowedActions,
+  formatRuntimeDisabledReasons,
+  normalizeRuntimeSessionState,
   normalizeSessionCreator,
   normalizeSessionType,
+  parseRuntimeSessionAllowedActions,
+  parseRuntimeSessionDisabledReasons,
+  type AgentRuntimeSessionState,
+  type RuntimeSessionAllowedActions,
+  type RuntimeSessionDisabledReasons,
   type SessionCreator,
   type SessionType,
 } from './session-contract.js'
@@ -27,6 +35,9 @@ interface AgentSessionSummary {
   transportType?: string
   creator?: SessionCreator
   status?: string
+  state?: AgentRuntimeSessionState
+  allowedActions?: RuntimeSessionAllowedActions
+  disabledReasons?: RuntimeSessionDisabledReasons
   cwd?: string
   host?: string
 }
@@ -191,6 +202,9 @@ function parseSessionDetail(payload: unknown): AgentSessionDetail | null {
     transportType: parseOptionalString(payload.transportType),
     creator: normalizeSessionCreator(payload.creator) ?? undefined,
     status: parseOptionalString(payload.status),
+    state: normalizeRuntimeSessionState(payload.state) ?? undefined,
+    allowedActions: parseRuntimeSessionAllowedActions(payload.allowedActions),
+    disabledReasons: parseRuntimeSessionDisabledReasons(payload.disabledReasons),
     cwd: parseOptionalString(payload.cwd),
     host: parseOptionalString(payload.host),
     created: parseOptionalString(payload.created) ?? parseOptionalString(payload.createdAt),
@@ -202,6 +216,13 @@ function parseSessionDetail(payload: unknown): AgentSessionDetail | null {
 
 function isExitedStatus(status: string | undefined): boolean {
   return (status ?? '').trim().toLowerCase() === 'exited'
+}
+
+function isHiddenSession(session: AgentSessionSummary): boolean {
+  if (session.state) {
+    return session.state === 'archived'
+  }
+  return isExitedStatus(session.status)
 }
 
 function parseSessions(payload: unknown): AgentSessionSummary[] {
@@ -221,6 +242,7 @@ function parseSessions(payload: unknown): AgentSessionSummary[] {
     const sessionType = normalizeSessionType(entry.sessionType) ?? undefined
     const transportType = typeof entry.transportType === 'string' ? entry.transportType.trim() : undefined
     const status = typeof entry.status === 'string' ? entry.status.trim() : undefined
+    const state = normalizeRuntimeSessionState(entry.state) ?? undefined
     const cwd = typeof entry.cwd === 'string' ? entry.cwd.trim() : undefined
     const host = typeof entry.host === 'string' ? entry.host.trim() : undefined
     sessions.push({
@@ -229,6 +251,9 @@ function parseSessions(payload: unknown): AgentSessionSummary[] {
       transportType: transportType && transportType.length > 0 ? transportType : undefined,
       creator: normalizeSessionCreator(entry.creator) ?? undefined,
       status: status && status.length > 0 ? status : undefined,
+      state,
+      allowedActions: parseRuntimeSessionAllowedActions(entry.allowedActions),
+      disabledReasons: parseRuntimeSessionDisabledReasons(entry.disabledReasons),
       cwd: cwd && cwd.length > 0 ? cwd : undefined,
       host: host && host.length > 0 ? host : undefined,
     })
@@ -303,7 +328,7 @@ async function runList(
   }
 
   const sessions = parseSessions(result.data)
-    .filter((session) => !isExitedStatus(session.status))
+    .filter((session) => !isHiddenSession(session))
     .filter((session) => {
       if (filter === 'all') {
         return true
@@ -316,17 +341,21 @@ async function runList(
     return 0
   }
 
-  stdout.write('Active sessions:\n')
+  stdout.write('Sessions:\n')
   for (const session of sessions) {
     const sessionType = session.sessionType ?? 'worker'
     const transport = session.transportType ? ` transport=${session.transportType}` : ''
-    const status = session.status ? ` status=${session.status}` : ''
+    const status = session.state ? ` state=${session.state}` : (session.status ? ` status=${session.status}` : '')
+    const allowedActions = formatRuntimeAllowedActions(session.allowedActions)
+    const disabledReasons = formatRuntimeDisabledReasons(session.disabledReasons)
+    const actions = allowedActions ? ` allowedActions=${allowedActions}` : ''
+    const disabled = disabledReasons ? ` disabledActions=${disabledReasons}` : ''
     const host = session.host ? ` host=${session.host}` : ''
     const cwd = session.cwd ? ` cwd=${session.cwd}` : ''
     const creatorLabel = session.creator
       ? ` creator=${session.creator.kind}${session.creator.id ? `/${session.creator.id}` : ''}`
       : ''
-    stdout.write(`- ${session.name} type=${sessionType}${creatorLabel}${transport}${status}${host}${cwd}\n`)
+    stdout.write(`- ${session.name} type=${sessionType}${creatorLabel}${transport}${status}${actions}${disabled}${host}${cwd}\n`)
   }
   return 0
 }
@@ -389,6 +418,9 @@ async function runInfo(
       lastActivityAt: session.lastActivityAt ?? null,
       transport: session.transportType ?? null,
       status: session.status ?? null,
+      state: session.state ?? null,
+      allowedActions: session.allowedActions ?? null,
+      disabledReasons: session.disabledReasons ?? null,
       spawnedBy: session.spawnedBy ?? null,
       spawnedWorkers: session.spawnedWorkers ?? [],
       host: session.host ?? null,
@@ -411,6 +443,17 @@ async function runInfo(
   stdout.write(`Last activity: ${session.lastActivityAt ?? 'unknown'}\n`)
   if (session.transportType) {
     stdout.write(`Transport: ${session.transportType}\n`)
+  }
+  if (session.state) {
+    stdout.write(`State: ${session.state}\n`)
+    const allowedActions = formatRuntimeAllowedActions(session.allowedActions)
+    if (allowedActions) {
+      stdout.write(`Allowed actions: ${allowedActions}\n`)
+    }
+    const disabledReasons = formatRuntimeDisabledReasons(session.disabledReasons)
+    if (disabledReasons) {
+      stdout.write(`Disabled actions: ${disabledReasons}\n`)
+    }
   }
   if (session.status) {
     stdout.write(`Status: ${session.status}\n`)

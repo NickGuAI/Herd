@@ -12,13 +12,12 @@ import type {
   MachineAuthStatusReport,
   Machine,
   ProviderAuthSnapshotsResponse,
-  ProviderReauthStartResponse,
   SessionTransportType,
   SessionType,
-  WorldAgent,
 } from '@/types'
 
 const AGENT_SESSIONS_REFETCH_INTERVAL_MS = 5000
+const AGENT_SESSIONS_STALE_MS = 30_000
 const PROVIDER_AUTH_SNAPSHOTS_REFETCH_INTERVAL_MS = 5000
 
 export interface DirectoryListing {
@@ -40,11 +39,6 @@ async function fetchSessions(): Promise<AgentSession[]> {
 
 async function fetchMachines(): Promise<Machine[]> {
   return fetchJson<Machine[]>('/api/agents/machines')
-}
-
-export interface VerifyTailscaleHostnameResponse {
-  tailscaleHostname: string
-  resolvedHost: string
 }
 
 export async function createMachine(input: CreateMachineInput): Promise<Machine> {
@@ -134,40 +128,12 @@ export async function probeProviderAuthSnapshots(): Promise<ProviderAuthSnapshot
   })
 }
 
-export async function startProviderReauth(input: {
-  provider: string
-  scopeId?: string
-  host?: string
-}): Promise<ProviderReauthStartResponse> {
-  const body: Record<string, string> = {}
-  if (input.scopeId?.trim()) {
-    body.scopeId = input.scopeId.trim()
-  }
-  if (input.host?.trim()) {
-    body.host = input.host.trim()
-  }
-
-  return fetchJson<ProviderReauthStartResponse>(
-    `/api/agents/provider-auth/${encodeURIComponent(input.provider)}/reauth/start`,
-    {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    },
-  )
-}
-
-export async function fetchWorldAgents(): Promise<WorldAgent[]> {
-  return fetchJson<WorldAgent[]>('/api/agents/world')
-}
-
 export function useAgentSessions() {
   return useQuery({
     queryKey: ['agents', 'sessions'],
     queryFn: fetchSessions,
-    refetchInterval: AGENT_SESSIONS_REFETCH_INTERVAL_MS,
+    staleTime: AGENT_SESSIONS_STALE_MS,
+    refetchInterval: (query) => query.state.error ? AGENT_SESSIONS_REFETCH_INTERVAL_MS : false,
   })
 }
 
@@ -175,18 +141,6 @@ export function useMachines() {
   return useQuery({
     queryKey: ['agents', 'machines'],
     queryFn: fetchMachines,
-  })
-}
-
-export async function verifyTailscaleHostname(
-  hostname: string,
-): Promise<VerifyTailscaleHostnameResponse> {
-  return fetchJson<VerifyTailscaleHostnameResponse>('/api/agents/machines/verify-tailscale', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ hostname }),
   })
 }
 
@@ -245,14 +199,6 @@ export function useProviderAuthSnapshots() {
   })
 }
 
-export function useWorldAgents() {
-  return useQuery({
-    queryKey: ['agents', 'world'],
-    queryFn: fetchWorldAgents,
-    refetchInterval: 5000,
-  })
-}
-
 export async function createSession(
   input: CreateSessionInput,
 ): Promise<{
@@ -277,41 +223,12 @@ export async function killSession(sessionName: string): Promise<{ killed: boolea
   })
 }
 
-export async function pauseSession(sessionName: string): Promise<{ paused: boolean }> {
-  return fetchJson(`/api/agents/sessions/${encodeURIComponent(sessionName)}/pause`, {
-    method: 'POST',
-  })
-}
-
 export async function resumeSession(
   sessionName: string,
 ): Promise<{ name: string; resumedFrom: string }> {
   return fetchJson(`/api/agents/sessions/${encodeURIComponent(sessionName)}/resume`, {
     method: 'POST',
   })
-}
-
-export interface SendSessionMessageResponse {
-  sent: boolean
-  queued: boolean
-  id?: string
-  position?: number
-}
-
-export async function sendSessionMessage(
-  sessionName: string,
-  text: string,
-): Promise<SendSessionMessageResponse> {
-  return fetchJson<SendSessionMessageResponse>(
-    `/api/agents/sessions/${encodeURIComponent(sessionName)}/message`,
-    {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ text }),
-    },
-  )
 }
 
 export interface PreKillDebriefResponse {

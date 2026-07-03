@@ -37,12 +37,11 @@ import { resolveFounderAvatarSrc } from '../operators/founder-avatar.js'
 import {
   DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
   FOUNDER_SETUP_COMPLETED_PATH,
-  FOUNDER_SETUP_EMAIL_PATTERN,
   FOUNDER_SETUP_PATH,
   validateFounderOrgSetupFormValues,
   type FounderOrgSetupRequest,
+  type FounderOrgSetupValidationErrors,
   type FounderOrgSetupResponse,
-  type FounderSetupStatus,
 } from '../onboarding/contracts.js'
 import { buildCommandRoomLaunchTarget } from '../command-room/route-metadata.js'
 import { createOrgIdentityRouter } from '../org-identity/route.js'
@@ -109,9 +108,12 @@ type FounderWriteStore = BuildOrgTreeDependencies['operatorStore'] & {
 }
 
 class OrgSetupValidationError extends Error {
-  constructor(message: string) {
+  readonly fieldErrors: FounderOrgSetupValidationErrors
+
+  constructor(message: string, fieldErrors: FounderOrgSetupValidationErrors = {}) {
     super(message)
     this.name = 'OrgSetupValidationError'
+    this.fieldErrors = fieldErrors
   }
 }
 
@@ -196,51 +198,39 @@ function createAutomationStoreFallback(): BuildOrgTreeDependencies['automationSt
   }
 }
 
-function parseFounderDisplayName(raw: unknown): string {
-  if (typeof raw !== 'string') {
-    throw new OrgSetupValidationError('founder.displayName must be a non-empty string up to 120 characters')
-  }
-
-  const normalized = raw.trim()
-  if (normalized.length === 0 || normalized.length > 120) {
-    throw new OrgSetupValidationError('founder.displayName must be a non-empty string up to 120 characters')
-  }
-
-  return normalized
-}
-
-function parseFounderEmail(raw: unknown): string {
-  if (typeof raw !== 'string') {
-    throw new OrgSetupValidationError('founder.email must be a valid email address')
-  }
-
-  const normalized = raw.trim()
-  if (!FOUNDER_SETUP_EMAIL_PATTERN.test(normalized)) {
-    throw new OrgSetupValidationError('founder.email must be a valid email address')
-  }
-
-  return normalized
-}
-
 function parseFounderOrgSetupRequest(raw: unknown): FounderOrgSetupRequest {
   const body = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : null
   const founder = typeof body?.founder === 'object' && body.founder !== null
     ? body.founder as Record<string, unknown>
     : null
 
+  const formValues = {
+    orgDisplayName: typeof body?.displayName === 'string' ? body.displayName : '',
+    founderDisplayName: typeof founder?.displayName === 'string' ? founder.displayName : '',
+    founderEmail: typeof founder?.email === 'string' ? founder.email : '',
+  }
+  const fieldErrors = validateFounderOrgSetupFormValues(formValues)
+  let displayName: string | null = null
   try {
-    return {
-      displayName: normalizeOrgName(body?.displayName),
-      founder: {
-        displayName: parseFounderDisplayName(founder?.displayName),
-        email: parseFounderEmail(founder?.email),
-      },
-    }
+    displayName = normalizeOrgName(body?.displayName)
   } catch (error) {
     if (error instanceof OrgIdentityValidationError) {
-      throw new OrgSetupValidationError(error.message)
+      fieldErrors.orgDisplayName = error.message
+    } else {
+      throw error
     }
-    throw error
+  }
+
+  if (Object.values(fieldErrors).some(Boolean)) {
+    throw new OrgSetupValidationError('Founder organization setup is invalid.', fieldErrors)
+  }
+
+  return {
+    displayName: displayName ?? formValues.orgDisplayName.trim(),
+    founder: {
+      displayName: formValues.founderDisplayName.trim(),
+      email: formValues.founderEmail.trim(),
+    },
   }
 }
 
@@ -393,7 +383,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
           : Promise.resolve(),
         mergeIdentityOperatingStyleIntoCommanderWorkflow(created.id, GAIA_IDENTITY, { basePath: commanderDataDir }),
         setCommanderDisplayName(commanderDataDir, created.id, GAIA_DISPLAY_NAME),
-        writeCommanderUiProfile(created.id, commanderDataDir, ensureCommanderVisualProfile(created.id, {
+        writeCommanderUiProfile(created.id, commanderDataDir, ensureCommanderVisualProfile({
           avatar: GAIA_COMMANDER_AVATAR_URL,
           speakingTone: GAIA_SPEAKING_TONE,
         })),
@@ -441,30 +431,6 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
     internalToken: options.internalToken,
   }))
 
-  async function buildFounderSetupStatus(user: AuthUser | undefined): Promise<FounderSetupStatus> {
-    const founder = await operatorStore.getFounder()
-    const orgIdentity = founder ? await orgIdentityStore.get() : null
-    const bootstrapCandidate = founder ? null : createFounderBootstrapCandidate(user)
-    const defaultValues = founder
-      ? {
-          orgDisplayName: orgIdentity?.name ?? '',
-          founderDisplayName: founder.displayName,
-          founderEmail: founder.email ?? '',
-        }
-      : {
-          ...DEFAULT_FOUNDER_ORG_SETUP_FORM_VALUES,
-          founderDisplayName: bootstrapCandidate?.displayName ?? '',
-          founderEmail: bootstrapCandidate?.email ?? '',
-        }
-
-    return {
-      setupComplete: Boolean(founder),
-      defaultValues,
-      validationErrors: validateFounderOrgSetupFormValues(defaultValues),
-      nextRoute: founder ? FOUNDER_SETUP_COMPLETED_PATH : FOUNDER_SETUP_PATH,
-    }
-  }
-
   async function getActiveConversationId(commanderId: string): Promise<string | null> {
     try {
       if (typeof conversationStore.getActiveChatForCommander === 'function') {
@@ -493,10 +459,6 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
       return null
     }
   }
-
-  router.get('/setup-status', requireReadAccess, async (req, res) => {
-    res.json(await buildFounderSetupStatus(req.user))
-  })
 
   router.get('/commanders/:id/check-on-target', requireReadAccess, async (req, res) => {
     const commanderId = parseCommanderId(req.params.id)
@@ -531,7 +493,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
       payload = parseFounderOrgSetupRequest(req.body)
     } catch (error) {
       if (error instanceof OrgSetupValidationError) {
-        res.status(400).json({ error: error.message })
+        res.status(400).json({ error: error.message, fieldErrors: error.fieldErrors })
         return
       }
       throw error

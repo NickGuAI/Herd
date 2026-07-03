@@ -4,10 +4,6 @@ import path from 'node:path'
 const repoRoot = process.cwd()
 const agentsRoot = path.join(repoRoot, 'modules', 'agents')
 
-const allowedFiles = new Set([
-  path.join(agentsRoot, 'legacy-session-source-migration.ts'),
-])
-
 const bannedPrefixAlternation = String.raw`(?:command-room-|commander-|worker-|automation-|sentinel-)`
 const bannedPatterns = [
   {
@@ -35,7 +31,7 @@ function shouldScan(filePath: string): boolean {
   if (filePath.includes(`${path.sep}__tests__${path.sep}`) || filePath.endsWith('.test.ts')) {
     return false
   }
-  return !allowedFiles.has(filePath)
+  return true
 }
 
 async function walk(dir: string): Promise<string[]> {
@@ -73,7 +69,7 @@ if (failures.length > 0) {
   console.error(
     [
       'Agent runtime must not classify sessions by name prefix.',
-      'Use persisted creator/sessionType/source fields instead. Only legacy-session-source-migration.ts may backfill old records from prefixes.',
+      'Use persisted creator/sessionType/source fields instead. One-off legacy backfills belong under tools only.',
       '',
       ...failures,
     ].join('\n'),

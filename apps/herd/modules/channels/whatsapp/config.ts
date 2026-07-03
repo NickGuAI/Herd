@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import type { CommanderSecretsStore } from '../../commanders/secrets-store.js'
 import { WHATSAPP_CHANNEL_CONFIG_DEFAULTS } from '../descriptors.js'
 import { CommanderChannelValidationError } from '../store.js'
 import type {
@@ -8,7 +7,7 @@ import type {
   ChannelPolicyMode,
 } from '../types.js'
 
-export type WhatsAppTransportKind = 'baileys' | 'cloud'
+export type WhatsAppTransportKind = 'baileys'
 
 export interface WhatsAppBaileysConfig {
   authStateDir?: string
@@ -21,19 +20,11 @@ export interface WhatsAppBaileysConfig {
   sendTextWithVoiceNote: boolean
 }
 
-export interface WhatsAppCloudConfig {
-  phoneNumberId?: string
-  verifyToken?: string
-  accessTokenRef?: string
-  accessTokenConfigured: boolean
-}
-
 export interface WhatsAppChannelConfig extends CommanderChannelBindingConfig {
   provider: 'whatsapp'
   transport: WhatsAppTransportKind
   displayLabel?: string
   baileys: WhatsAppBaileysConfig
-  cloud: WhatsAppCloudConfig
   dmPolicy: ChannelPolicyMode
   groupPolicy: ChannelPolicyMode
   dmAllowlist: string[]
@@ -57,7 +48,6 @@ export interface PreparedWhatsAppChannelConfig {
 }
 
 const POLICY_VALUES = new Set<ChannelPolicyMode>(['open', 'allowlist', 'disabled'])
-const TRANSPORT_VALUES = new Set<WhatsAppTransportKind>(['baileys', 'cloud'])
 const DEFAULT_BAILEYS = WHATSAPP_CHANNEL_CONFIG_DEFAULTS.baileys
 const DEFAULT_BAILEYS_CONNECT_TIMEOUT_MS = WHATSAPP_CHANNEL_CONFIG_DEFAULTS.baileys.connectTimeoutMs
 const DEFAULT_BAILEYS_BROWSER_NAME = WHATSAPP_CHANNEL_CONFIG_DEFAULTS.baileys.browserName
@@ -107,9 +97,13 @@ function parsePolicy(value: unknown, fallback: ChannelPolicyMode): ChannelPolicy
 }
 
 function parseTransport(value: unknown): WhatsAppTransportKind {
-  return typeof value === 'string' && TRANSPORT_VALUES.has(value as WhatsAppTransportKind)
-    ? value as WhatsAppTransportKind
-    : 'baileys'
+  if (value === undefined || value === null || value === '') {
+    return 'baileys'
+  }
+  if (value === 'baileys') {
+    return 'baileys'
+  }
+  throw new CommanderChannelValidationError('WhatsApp transport must be baileys')
 }
 
 function hashPathToken(value: string): string {
@@ -142,10 +136,6 @@ function normalizeAuthStateDir(value: unknown, accountRoot: string | undefined):
   return resolved
 }
 
-export function whatsappAccessTokenRef(accountId: string): string {
-  return `whatsapp:${accountId.trim().toLowerCase()}:cloud-access-token`
-}
-
 export function parseWhatsAppChannelConfig(
   raw: unknown,
   accountId: string,
@@ -153,7 +143,6 @@ export function parseWhatsAppChannelConfig(
 ): WhatsAppChannelConfig {
   const source = isObject(raw) ? raw : {}
   const baileysSource = isObject(source.baileys) ? source.baileys : {}
-  const cloudSource = isObject(source.cloud) ? source.cloud : {}
   const accountRoot = whatsappAccountDataRoot(accountId, dataDir)
   const defaultAuthStateDir = accountRoot ? path.join(accountRoot, 'auth') : undefined
   const authStateDir = normalizeAuthStateDir(baileysSource.authStateDir ?? source.authStateDir, accountRoot)
@@ -188,18 +177,6 @@ export function parseWhatsAppChannelConfig(
         DEFAULT_BAILEYS.sendTextWithVoiceNote,
       ),
     },
-    cloud: {
-      ...(trimString(cloudSource.phoneNumberId ?? source.phoneNumberId)
-        ? { phoneNumberId: trimString(cloudSource.phoneNumberId ?? source.phoneNumberId) }
-        : {}),
-      ...(trimString(cloudSource.verifyToken ?? source.verifyToken)
-        ? { verifyToken: trimString(cloudSource.verifyToken ?? source.verifyToken) }
-        : {}),
-      ...(trimString(cloudSource.accessTokenRef ?? source.accessTokenRef)
-        ? { accessTokenRef: trimString(cloudSource.accessTokenRef ?? source.accessTokenRef) }
-        : {}),
-      accessTokenConfigured: source.accessTokenConfigured === true || cloudSource.accessTokenConfigured === true,
-    },
     dmPolicy: parsePolicy(source.dmPolicy, WHATSAPP_CHANNEL_CONFIG_DEFAULTS.dmPolicy),
     groupPolicy: parsePolicy(source.groupPolicy, WHATSAPP_CHANNEL_CONFIG_DEFAULTS.groupPolicy),
     dmAllowlist: parseStringList(source.dmAllowlist),
@@ -222,42 +199,20 @@ export async function prepareWhatsAppChannelConfigForStorage(input: {
   accountId: string
   incomingConfig: unknown
   existingConfig?: CommanderChannelBindingConfig
-  secretsStore: CommanderSecretsStore
   dataDir?: string
   deferCredentialWrite?: boolean
 }): Promise<PreparedWhatsAppChannelConfig> {
   const incoming = isObject(input.incomingConfig) ? input.incomingConfig : {}
-  const existing = parseWhatsAppChannelConfig(input.existingConfig, input.accountId, input.dataDir)
-  const incomingCloud = isObject(incoming.cloud) ? incoming.cloud : {}
-  const incomingAccessToken = trimString(incomingCloud.accessToken ?? incoming.accessToken)
-  const accessTokenRef = incomingAccessToken
-    ? whatsappAccessTokenRef(input.accountId)
-    : existing.cloud.accessTokenRef
-  const commitCredential = incomingAccessToken && accessTokenRef
-    ? () => input.secretsStore.setSecret(input.commanderId, accessTokenRef, incomingAccessToken)
-    : undefined
-  if (commitCredential && !input.deferCredentialWrite) {
-    await commitCredential()
-  }
 
-  const merged: Record<string, unknown> & { cloud?: Record<string, unknown> } = {
+  const merged: Record<string, unknown> = {
     ...input.existingConfig,
     ...incoming,
-    cloud: {
-      ...(isObject(input.existingConfig?.cloud) ? input.existingConfig.cloud : {}),
-      ...(isObject(incoming.cloud) ? incoming.cloud : {}),
-      ...(accessTokenRef ? { accessTokenRef, accessTokenConfigured: true } : {}),
-    },
   }
   delete merged.accessToken
-  if (isObject(merged.cloud)) {
-    delete merged.cloud.accessToken
-  }
 
   const parsed = parseWhatsAppChannelConfig(merged, input.accountId, input.dataDir)
   return {
-    credentialUpdated: Boolean(incomingAccessToken),
-    ...(commitCredential ? { commitCredential } : {}),
+    credentialUpdated: false,
     config: {
       provider: 'whatsapp',
       transport: parsed.transport,
@@ -271,12 +226,6 @@ export async function prepareWhatsAppChannelConfigForStorage(input: {
         syncFullHistory: parsed.baileys.syncFullHistory,
         reconnect: parsed.baileys.reconnect,
         sendTextWithVoiceNote: parsed.baileys.sendTextWithVoiceNote,
-      },
-      cloud: {
-        ...(parsed.cloud.phoneNumberId ? { phoneNumberId: parsed.cloud.phoneNumberId } : {}),
-        ...(parsed.cloud.verifyToken ? { verifyToken: parsed.cloud.verifyToken } : {}),
-        ...(parsed.cloud.accessTokenRef ? { accessTokenRef: parsed.cloud.accessTokenRef } : {}),
-        accessTokenConfigured: parsed.cloud.accessTokenConfigured || Boolean(parsed.cloud.accessTokenRef),
       },
       dmPolicy: parsed.dmPolicy,
       groupPolicy: parsed.groupPolicy,

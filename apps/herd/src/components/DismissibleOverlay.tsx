@@ -7,7 +7,7 @@ import {
   useRef,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { getHerdThemeClassName, useTheme } from '@/lib/theme-context'
+import { getHervaldThemeClassName, useTheme } from '@/lib/theme-context'
 import { cn } from '@/lib/utils'
 
 type OverlayPosition = 'modal' | 'bottom-sheet' | 'top-sheet'
@@ -81,7 +81,7 @@ export function DismissibleOverlay({
   const contentRef = useRef<HTMLDivElement | null>(null)
   const onCloseRef = useRef(onClose)
   const { theme } = useTheme()
-  const themeClassName = portalThemeClassName ?? getHerdThemeClassName(theme)
+  const themeClassName = portalThemeClassName ?? getHervaldThemeClassName(theme)
 
   onCloseRef.current = onClose
 

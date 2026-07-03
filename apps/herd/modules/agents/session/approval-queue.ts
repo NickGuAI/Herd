@@ -64,6 +64,7 @@ export function createCodexApprovalQueueRuntime(
       id: serializeCodexApprovalId(session.name, pendingRequest.requestId),
       sessionName: session.name,
       commanderScopeId: getApprovalCommanderScopeId(session),
+      conversationId: session.conversationId,
       requestId: pendingRequest.requestId,
       actionId: getCodexApprovalActionId(pendingRequest.method),
       actionLabel: getCodexApprovalActionLabel(pendingRequest.method),

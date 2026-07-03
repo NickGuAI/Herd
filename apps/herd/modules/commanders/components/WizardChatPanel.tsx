@@ -234,11 +234,6 @@ function wizardWsUrl(sessionName: string, ticket: string | null): string {
 async function startWizardSession(): Promise<WizardStartResponse> {
   return fetchJson<WizardStartResponse>('/api/commanders/wizard/start', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      agentType: 'claude',
-      effort: 'low',
-    }),
   })
 }
 
@@ -674,11 +669,11 @@ export function WizardChatPanel({
                 <p className="text-sm text-sumi-diluted">Waiting for the wizard to respond...</p>
               )}
               {wizardMessages.length > 0 && (
-                <div className="herd-chat-pane p-0">
+                <div className="hervald-chat-pane p-0">
                   <Transcript
                     messages={wizardMessages}
                     sessionId={sessionName ?? 'commander-wizard'}
-                    className="herd-chat-transcript"
+                    className="hervald-chat-transcript"
                   />
                 </div>
               )}

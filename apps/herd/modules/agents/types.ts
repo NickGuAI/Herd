@@ -24,7 +24,12 @@ import type { GeminiTurnState } from './event-normalizers/gemini.js'
 import type { OpenCodeTurnState } from './event-normalizers/opencode.js'
 import type { ProviderId } from './adapters/provider-registry-types.js'
 import type { ProviderSessionContext } from './providers/provider-session-context.js'
-import type { ProviderAuthSnapshot, ProviderAuthStore, ProviderSpawnAuth } from './provider-auth.js'
+import type {
+  CredentialPoolProvider,
+  ProviderAuthSnapshot,
+  ProviderAuthStore,
+  ProviderSpawnAuth,
+} from './provider-auth.js'
 
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions'
 
@@ -37,6 +42,20 @@ export type SessionCreatorKind = 'human' | 'commander' | 'cron' | 'sentinel' | '
 export interface SessionCreator {
   kind: SessionCreatorKind
   id?: string
+}
+
+export interface CredentialPoolRecoveryRequest {
+  provider: CredentialPoolProvider
+  credentialPoolId?: string
+  previousCredentialPoolId?: string
+  clearResumeProviderContext: boolean
+  reason: 'manual_switch' | 'usage_limit'
+  requestedAt: string
+  resetAt?: string
+  blockedUntil?: string
+  interruptedMessage?: QueuedMessage
+  interruptedTurnHadSideEffects?: boolean
+  interruptedTurnId?: string
 }
 
 export type AgentSessionProcessState = 'running' | 'exited' | 'none'
@@ -322,6 +341,8 @@ export interface StreamSession {
   completedTurnAt?: string
   providerContext: ProviderSessionContext
   providerAuthSnapshot?: ProviderAuthSnapshot
+  credentialPoolId?: string
+  credentialPoolRecovery?: CredentialPoolRecoveryRequest
   approvalBridgeNonce?: string
   activeTurnId?: string
   resumedFrom?: string
@@ -426,6 +447,8 @@ export interface ExitedStreamSessionState {
   spawnedWorkers: string[]
   createdAt: string
   providerContext: ProviderSessionContext
+  credentialPoolId?: string
+  credentialPoolRecovery?: CredentialPoolRecoveryRequest
   activeTurnId?: string
   resumedFrom?: string
   conversationEntryCount: number
@@ -454,6 +477,7 @@ export interface StreamSessionCreateOptions {
   approvalBridgeNonce?: string
   daemonProcess?: PersistedDaemonProcess
   providerAuth?: ProviderSpawnAuth
+  credentialPoolId?: string
 }
 
 export interface CodexSessionCreateOptions {
@@ -581,6 +605,7 @@ export interface ApprovalSessionContext {
   cwd: string
   host?: string
   commanderScopeId?: string
+  conversationId?: string
   currentSkillInvocation?: ActiveSkillInvocation
 }
 
@@ -588,6 +613,7 @@ export interface PendingCodexApprovalView {
   id: string
   sessionName: string
   commanderScopeId?: string
+  conversationId?: string
   requestId: number
   actionId: string
   actionLabel: string
@@ -650,6 +676,7 @@ export interface CommanderSessionsInterface {
     maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
     resumeProviderContext?: ProviderSessionContext
+    credentialPoolId?: string
     maxTurns?: number
   }): Promise<StreamSession>
   replaceCommanderSession(params: {
@@ -664,8 +691,12 @@ export interface CommanderSessionsInterface {
     maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
     resumeProviderContext?: ProviderSessionContext
+    credentialPoolId?: string
     maxTurns?: number
   }): Promise<StreamSession>
+  getCredentialRecoveryRequest?(sessionName: string): CredentialPoolRecoveryRequest | undefined
+  clearCredentialRecoveryRequest?(sessionName: string): void
+  getActiveCredentialPoolId?(provider: AgentType): Promise<string | undefined>
   /**
    * Dispatch a worker session attributed to a commander whose identity has
    * already been verified by the caller (typically the URL-baked
@@ -826,6 +857,8 @@ export interface PersistedStreamSession {
   currentSkillInvocation?: ActiveSkillInvocation
   createdAt: string
   providerContext: ProviderSessionContext
+  credentialPoolId?: string
+  credentialPoolRecovery?: CredentialPoolRecoveryRequest
   approvalBridgeNonce?: string
   activeTurnId?: string
   conversationEntryCount?: number

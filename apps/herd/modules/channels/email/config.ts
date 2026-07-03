@@ -15,7 +15,6 @@ export interface EmailChannelConfig {
   fromAddress: string
   replyFromAddress?: string
   emailAlias?: string
-  defaultCommanderId?: string
   imapHost: string
   imapPort: number
   imapSecure: boolean
@@ -106,7 +105,6 @@ export function parseEmailChannelConfig(
   const fromAddress = trimString(source.fromAddress) ?? trimString(source.replyAccount) ?? username
   const replyFromAddress = trimString(source.replyFromAddress)
   const emailAlias = trimString(source.emailAlias)
-  const defaultCommanderId = trimString(source.defaultCommanderId)
   const credentialRef = trimString(source.credentialRef)
   const allowlist = parseStringList(source.allowlist)
   const globalAllowlist = parseStringList(source.globalAllowlist)
@@ -117,7 +115,6 @@ export function parseEmailChannelConfig(
     fromAddress,
     ...(replyFromAddress ? { replyFromAddress } : {}),
     ...(emailAlias ? { emailAlias } : {}),
-    ...(defaultCommanderId ? { defaultCommanderId } : {}),
     imapHost: trimString(source.imapHost) ?? DEFAULT_IMAP_HOST,
     imapPort: parsePort(source.imapPort, DEFAULT_IMAP_PORT),
     imapSecure: parseBoolean(source.imapSecure, EMAIL_CHANNEL_CONFIG_DEFAULTS.imapSecure),
@@ -184,7 +181,6 @@ export async function prepareEmailChannelConfigForStorage(input: {
       fromAddress: next.fromAddress,
       ...(next.replyFromAddress ? { replyFromAddress: next.replyFromAddress } : {}),
       ...(next.emailAlias ? { emailAlias: next.emailAlias } : {}),
-      ...(next.defaultCommanderId ? { defaultCommanderId: next.defaultCommanderId } : {}),
       imapHost: next.imapHost,
       imapPort: next.imapPort,
       imapSecure: next.imapSecure,

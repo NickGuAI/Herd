@@ -1,4 +1,3 @@
-import { access } from 'node:fs/promises'
 import path from 'node:path'
 import multer from 'multer'
 import { type Request, type RequestHandler } from 'express'
@@ -7,6 +6,7 @@ import { generateGeminiImage } from '../../../server/image-generation/gemini-cli
 import { combinedAuth } from '../../../server/middleware/combined-auth.js'
 import { authUserHasRequiredPermissions } from '../../../server/middleware/auth0.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
+import { resolveDefaultProviderId } from '../../agents/providers/registry.js'
 import { HEARTBEAT_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes.js'
 import {
   findExpiredPendingPlanApproval,
@@ -20,7 +20,6 @@ import {
   channelSurfaceBindingStorePathForDataRoot,
 } from '../../channels/surface-binding-store.js'
 import { CommanderChannelBindingStore } from '../../channels/store.js'
-import { resolveModuleDataDir } from '../../data-dir.js'
 import {
   buildFatHeartbeatMessage as appendHeartbeatChecklist,
   chooseHeartbeatMode,
@@ -34,9 +33,6 @@ import {
   resolveCommanderAvatarUrl,
 } from '../commander-profile.js'
 import { computeCommanderMonthlySpendUsd } from '../cost-control.js'
-import {
-  migrateLegacyCommanderConfig,
-} from '../config-migration.js'
 import { dispatchChannelReply } from '../channel-dispatchers.js'
 import {
   CommanderHeartbeatManager,
@@ -44,7 +40,7 @@ import {
   type CommanderHeartbeatConfig,
 } from '../heartbeat.js'
 import { HeartbeatLog, type HeartbeatLogAppendInput } from '../heartbeat-log.js'
-import { CommanderManager, type CommanderSubagentLifecycleEvent } from '../manager.js'
+import type { CommanderSubagentLifecycleEvent } from '../manager.js'
 import { ConversationStore, type Conversation } from '../conversation-store.js'
 import {
   resolveCommanderDataDir,
@@ -55,7 +51,6 @@ import {
   parseBearerToken,
   parseContextPressureInputTokenThreshold,
   parseMessage,
-  parseSessionId,
 } from '../route-parsers.js'
 import {
   buildDefaultCommanderConversationId,
@@ -64,7 +59,6 @@ import {
   type CommanderCurrentTask,
   type CommanderLastRoute,
   type CommanderSession,
-  type CommanderTaskSource,
 } from '../store.js'
 import { GhTasks } from '../tools/gh-tasks.js'
 import {
@@ -89,6 +83,7 @@ import type {
   CommanderSubAgentEntry,
   CommandersRouterOptions,
   ContextPressureBridge,
+  ChannelReplyForwarder,
   StreamEvent,
 } from './types.js'
 import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
@@ -248,13 +243,7 @@ function hasTranscriptUsageBearingContextPressureData(event: StreamEvent): boole
 }
 
 function isUsageBearingContextPressureEvent(event: StreamEvent): boolean {
-  if (hasTranscriptUsageBearingContextPressureData(event)) {
-    return true
-  }
-
-  const record = event as Record<string, unknown>
-  const type = typeof record.type === 'string' ? record.type : ''
-  return type === 'message_delta' || type === 'result'
+  return hasTranscriptUsageBearingContextPressureData(event)
 }
 
 export function isInputTokenContextPressureEvent(
@@ -267,14 +256,6 @@ export function isInputTokenContextPressureEvent(
   }
 
   return Number.isFinite(sessionInputTokens) && sessionInputTokens >= threshold
-}
-
-export function toSessionRepo(session: CommanderSession | null | undefined): string | null {
-  if (!session?.taskSource) return null
-  const owner = session.taskSource.owner?.trim()
-  const repo = session.taskSource.repo?.trim()
-  if (!owner || !repo) return null
-  return `${owner}/${repo}`
 }
 
 export function listSubAgentEntries(runtime: CommanderRuntime | undefined): CommanderSubAgentEntry[] {
@@ -545,7 +526,7 @@ async function buildHeartbeatLogTaskSnapshot(
 export function resolveCommanderAgentType(
   session: Pick<CommanderSession, 'agentType'>,
 ): NonNullable<CommanderSession['agentType']> {
-  return session.agentType ?? 'claude'
+  return session.agentType ?? resolveDefaultProviderId()
 }
 
 export async function toCommanderSessionResponse(
@@ -577,10 +558,9 @@ export async function toCommanderSessionResponse(
         }
       : undefined,
   )
-  const { persona: _legacyPersona, ...publicSession } = session
   const base = session.remoteOrigin
     ? {
-        ...publicSession,
+        ...session,
         ...runtimeView,
         heartbeat: { ...session.heartbeat },
         name: session.host,
@@ -591,7 +571,7 @@ export async function toCommanderSessionResponse(
         },
       }
     : {
-        ...publicSession,
+        ...session,
         ...runtimeView,
         heartbeat: { ...session.heartbeat },
         name: session.host,
@@ -726,34 +706,7 @@ export function resolveCommanderTerminalState(
     }
   }
 
-  const record = event as Record<string, unknown>
-  if (record.type !== 'result') {
-    return null
-  }
-
-  const subtype = parseMessage(record.subtype) ?? undefined
-  const terminalReason = parseMessage(record.terminal_reason ?? record.terminalReason) ?? undefined
-  const message = parseMessage(record.result ?? record.text)
-    ?? 'Commander session ended.'
-  const errors = normalizeEventErrors(record.errors)
-  const reachedMaxTurns = (
-    subtype === 'error_max_turns'
-    || terminalReason === 'max_turns'
-    || /maximum number of turns/i.test(message)
-    || errors.some((entry) => /maximum number of turns/i.test(entry))
-  )
-
-  if (!reachedMaxTurns) {
-    return null
-  }
-
-  return {
-    kind: 'max_turns',
-    subtype,
-    terminalReason,
-    message,
-    errors,
-  }
+  return null
 }
 
 export function buildCommandersContext(
@@ -799,9 +752,7 @@ export function buildCommandersContext(
         ? new QuestStore(path.dirname(path.resolve(options.sessionStorePath)))
         : new QuestStore()
   )
-  const automationStore = options.automationStore ?? new AutomationStore({
-    commanderDataDir,
-  })
+  const automationStore = options.automationStore ?? new AutomationStore()
   const ghTasksFactory = options.ghTasksFactory ?? ((repo: string) => new GhTasks({ repo }))
   const automationScheduler = options.automationScheduler
   const automationSchedulerInitialized = automationScheduler
@@ -833,7 +784,7 @@ export function buildCommandersContext(
   const sessionsInterface = options.sessionsInterface
   const runtimes = new Map<string, CommanderRuntime>()
   const activeCommanderSessions = new Map<string, { sessionName: string; startedAt: string }>()
-  const channelReplyForwarders = new Map<string, () => void>()
+  const channelReplyForwarders = new Map<string, ChannelReplyForwarder>()
   const heartbeatFiredAtByConversation = new Map<string, string>()
   const requireReadAccess = combinedAuth({
     apiKeyStore: options.apiKeyStore,
@@ -902,20 +853,6 @@ export function buildCommandersContext(
 
   }
 
-  let commanderConfigMigrationPromise: Promise<void> | null = null
-
-  const migrateCommanderConfigSource = async (_commanderId: string): Promise<void> => {
-    await migrateAllCommanderConfigSources()
-  }
-
-  const migrateAllCommanderConfigSources = async (): Promise<void> => {
-    commanderConfigMigrationPromise ??= migrateLegacyCommanderConfig(sessionStore, {
-      commanderBasePath,
-    }).then(() => undefined)
-
-    await commanderConfigMigrationPromise
-  }
-
   const scheduleCollectSend = (commanderId: string, runtime: CommanderRuntime): void => {
     if (runtime.collectTimer) {
       clearTimeout(runtime.collectTimer)
@@ -933,8 +870,13 @@ export function buildCommandersContext(
           return
         }
 
-        const sessionName = activeCommanderSessions.get(commanderId)?.sessionName
-          ?? toCommanderSessionName(commanderId)
+        const activeSession = activeCommanderSessions.get(commanderId)
+        if (!activeSession) {
+          runtime.pendingCollect.unshift(merged)
+          console.warn(`[commanders] Collect mode send failed for "${commanderId}" (active conversation session unavailable).`)
+          return
+        }
+        const sessionName = activeSession.sessionName
         const sent = await sessionsInterface.sendToSession(sessionName, merged, {
           queue: true,
           priority: 'normal',
@@ -1396,8 +1338,15 @@ export function buildCommandersContext(
       return { ok: false, status: 500, error: 'sessionsInterface not configured' }
     }
 
-    const sessionName = activeCommanderSessions.get(input.commanderId)?.sessionName
-      ?? toCommanderSessionName(input.commanderId)
+    const activeSession = activeCommanderSessions.get(input.commanderId)
+    if (!activeSession) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Commander "${input.commanderId}" stream session unavailable`,
+      }
+    }
+    const sessionName = activeSession.sessionName
     if (input.mode === 'followup') {
       const sent = await sessionsInterface.sendToSession(sessionName, input.message)
       if (!sent) {
@@ -1574,8 +1523,6 @@ export function buildCommandersContext(
       session: CommanderSession,
       options,
     ) => ensureDefaultConversationForCommander(session, conversationStore, options),
-    migrateCommanderConfigSource,
-    migrateLegacyCommanderConfig: migrateAllCommanderConfigSources,
     reconcileCommanderSessions,
   }
 }

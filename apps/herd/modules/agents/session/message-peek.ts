@@ -9,7 +9,7 @@ export type SessionMessagePeekRoleFilter = 'assistant' | 'user' | 'all'
 
 export interface SessionMessagePeekEntry {
   ts: string
-  type: 'assistant' | 'user' | 'system' | 'message_start' | 'content_block_start' | string
+  type: 'assistant' | 'user' | 'system' | 'content_block_start' | string
   kind?: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'image' | 'warning'
   tool?: string
   preview: string
@@ -606,12 +606,6 @@ export function extractSessionMessagePeek(
         ? 'warning'
         : 'text'
       pushEntry(entries, { ts, type: 'system', kind, preview }, options.role, options.includeToolUse)
-      continue
-    }
-
-    if (event.type === 'message_start') {
-      const preview = truncatePreview(event.message.role)
-      pushEntry(entries, { ts, type: 'message_start', preview }, options.role, options.includeToolUse)
       continue
     }
 

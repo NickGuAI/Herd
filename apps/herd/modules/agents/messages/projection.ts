@@ -16,7 +16,7 @@ export interface SessionProjectionReplayCursorDTO {
 }
 
 export interface SessionProjectionDTO {
-  schemaVersion: 1 | 2
+  schemaVersion: 2
   messages: MsgItem[]
   replayCursor: SessionProjectionReplayCursorDTO
   envelopes?: TranscriptEnvelope[]
@@ -33,7 +33,7 @@ export function projectSessionReplay(input: {
 }): SessionProjectionDTO {
   const envelopes = input.events.filter(isTranscriptEnvelope)
   return {
-    schemaVersion: envelopes.length > 0 ? 2 : 1,
+    schemaVersion: 2,
     messages: mapStreamEventsToMessages(input.events),
     ...(envelopes.length > 0 ? { envelopes } : {}),
     replayCursor: {

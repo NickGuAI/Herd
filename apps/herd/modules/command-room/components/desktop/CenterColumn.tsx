@@ -11,7 +11,7 @@
  */
 import type { ReactNode } from 'react'
 import { useProviderRegistry } from '@/hooks/use-providers'
-import { usePendingApprovals, useApprovalDecision, type PendingApproval } from '@/hooks/use-approvals'
+import { useApprovalDecision, type PendingApproval } from '@/hooks/use-approvals'
 import type { AgentType, ProviderRegistryEntry, SessionQueueSnapshot } from '@/types'
 import {
   SessionComposer,
@@ -33,13 +33,13 @@ import { ChatPane } from './ChatPane'
 import type { ChatSession } from './SessionsColumn'
 import { SubAgentChip, type Worker } from './SubAgentChip'
 import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
-import { STATE_COLOR } from '@modules/components/herd'
+import { STATE_COLOR } from '@modules/components/hervald'
 
 /* ---- local types ---- */
 
 type CommandRoomStreamStatus = 'connecting' | 'connected' | 'disconnected' | 'closed' | null
 
-export interface HerdCommander extends Partial<CommanderSession> {
+export interface HervaldCommander extends Partial<CommanderSession> {
   id: string
   name: string
   status: string
@@ -55,13 +55,15 @@ export interface HerdCommander extends Partial<CommanderSession> {
 }
 
 export interface CenterColumnProps {
-  commander: HerdCommander
+  commander: HervaldCommander
   isGlobalScope?: boolean
   hasSelectedConversation?: boolean
   streamStatus?: CommandRoomStreamStatus
   conversationLoadError?: string | null
   onRetryConversations?: () => void
   activeChatSession?: ChatSession | null
+  activeConversationId?: string | null
+  pendingApprovals?: PendingApproval[]
   transcript?: MsgItem[]
   hasOlderMessages?: boolean
   loadingOlderMessages?: boolean
@@ -131,6 +133,7 @@ export interface CenterColumnProps {
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   composerSessionName: string
   composerEnabled: boolean
+  composerDisabledMessage?: string
   composerSendReady: boolean
   canQueueDraft: boolean
   queueSnapshot: SessionQueueSnapshot
@@ -220,6 +223,8 @@ export function CenterColumn({
   conversationLoadError = null,
   onRetryConversations,
   activeChatSession = null,
+  activeConversationId = null,
+  pendingApprovals = [],
   transcript = [],
   hasOlderMessages = false,
   loadingOlderMessages = false,
@@ -266,6 +271,7 @@ export function CenterColumn({
   activeTab,
   composerSessionName,
   composerEnabled,
+  composerDisabledMessage,
   composerSendReady,
   queueSnapshot,
   queueError = null,
@@ -280,14 +286,20 @@ export function CenterColumn({
     ? providers.filter((provider) => availableAgentTypes.includes(provider.id))
     : providers
 
-  const pendingQuery = usePendingApprovals()
   const decisionMutation = useApprovalDecision()
 
-  // Filter approvals to this commander only
-  const allApprovals: PendingApproval[] = pendingQuery.data ?? []
-  const commanderApprovals = allApprovals.filter(
-    (a) => !commander.id || a.commanderId === commander.id || a.commanderName === commander.name,
-  )
+  const activeApprovals = pendingApprovals.filter((approval) => {
+    if (activeConversationId && approval.conversationId) {
+      return approval.conversationId === activeConversationId
+    }
+    if (approval.conversationId) {
+      return false
+    }
+    if (activeChatSession?.id && approval.sessionName) {
+      return approval.sessionName === activeChatSession.id
+    }
+    return false
+  })
 
   const subAgents = workers.filter((w) => w.kind === 'worker' || w.kind === 'tool')
   const automationChips = automationSessions.map((session) => ({
@@ -388,7 +400,7 @@ export function CenterColumn({
     return (
       <ChatPane
         messages={transcript}
-        approvals={commanderApprovals}
+        approvals={activeApprovals}
         onApprove={(approval) => { void handleApprove(approval) }}
         onDeny={(approval) => { void handleDeny(approval) }}
         onAnswer={onAnswer}
@@ -512,13 +524,14 @@ export function CenterColumn({
               agentType={commander.agentType}
               theme={theme}
               disabled={!composerEnabled}
-              disabledMessage={isGlobalScope
-                ? 'Chat is not available for Global scope.'
-                : needsConversation
-                  ? `Create a chat to message ${commander.name}.`
-                  : !hasConversation
-                    ? 'Select a commander or worker to start chatting.'
-                    : undefined}
+              disabledMessage={composerDisabledMessage
+                ?? (isGlobalScope
+                  ? 'Chat is not available for Global scope.'
+                  : needsConversation
+                    ? `Create a chat to message ${commander.name}.`
+                    : !hasConversation
+                      ? 'Select a commander or worker to start chatting.'
+                      : undefined)}
               sendReady={composerSendReady}
               contextFilePaths={contextFilePaths}
               contextDirectoryPaths={contextDirectoryPaths}

@@ -9,7 +9,7 @@ import {
   parseClaudeMaxThinkingTokens,
 } from '../../agents/session/input.js'
 import { deleteSessionTranscript } from '../../agents/transcript-store.js'
-import { getProvider, parseProviderId } from '../../agents/providers/registry.js'
+import { getProvider, parseProviderId, resolveDefaultProviderId } from '../../agents/providers/registry.js'
 import { createProviderContextForAgentType } from '../../agents/providers/provider-session-context.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
 import {
@@ -45,7 +45,10 @@ import {
   updateCommanderDerivedState,
   buildConversationSessionName,
 } from './conversation-runtime.js'
-import { buildConversationSummaryDTO } from './conversation-read-model.js'
+import {
+  buildConversationSummaryDTO,
+  type ConversationSummaryDTO,
+} from './conversation-read-model.js'
 import {
   beginConversationBootstrap,
   completeConversationBootstrap,
@@ -226,8 +229,21 @@ function withLiveSession(
   context: CommanderRoutesContext,
   conversation: Conversation,
   canonicalOrder = 0,
-) {
+): ConversationSummaryDTO {
   return buildConversationSummaryDTO(context, conversation, canonicalOrder)
+}
+
+async function withInitialMessagePage(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  canonicalOrder = 0,
+): Promise<ConversationSummaryDTO> {
+  return {
+    ...withLiveSession(context, conversation, canonicalOrder),
+    initialMessagePage: await getConversationMessagesPage(context, conversation, {
+      limit: DEFAULT_CONVERSATION_MESSAGES_LIMIT,
+    }),
+  }
 }
 
 type ConversationBootstrapResult =
@@ -505,7 +521,7 @@ export function registerConversationRoutes(
 
     const activeChat = await context.conversationStore.getActiveChatForCommander(commanderId)
     try {
-      res.json(activeChat ? withLiveSession(context, activeChat) : null)
+      res.json(activeChat ? await withInitialMessagePage(context, activeChat) : null)
     } catch (error) {
       sendConversationListSerializationFailure(res, error)
     }
@@ -524,11 +540,20 @@ export function registerConversationRoutes(
     }
 
     const conversations = await context.conversationStore.listByCommander(commanderId)
+    const initialMessagesFor = req.query.initialMessagesFor === undefined
+      ? null
+      : parseConversationId(req.query.initialMessagesFor)
+    if (req.query.initialMessagesFor !== undefined && !initialMessagesFor) {
+      res.status(400).json({ error: 'initialMessagesFor must be a conversation id' })
+      return
+    }
     try {
       const canonicalOrder = buildConversationCanonicalOrder(conversations)
-      res.json(conversations.map((conversation) => (
-        withLiveSession(context, conversation, canonicalOrder.get(conversation.id) ?? 0)
-      )))
+      res.json(await Promise.all(conversations.map((conversation) => (
+        conversation.id === initialMessagesFor
+          ? withInitialMessagePage(context, conversation, canonicalOrder.get(conversation.id) ?? 0)
+          : Promise.resolve(withLiveSession(context, conversation, canonicalOrder.get(conversation.id) ?? 0))
+      ))))
     } catch (error) {
       sendConversationListSerializationFailure(res, error)
     }
@@ -594,7 +619,7 @@ export function registerConversationRoutes(
       res.status(400).json({ error: 'model must be a string or null when provided' })
       return
     }
-    const selectedAgentType = requestedAgentType ?? commander.agentType ?? 'claude'
+    const selectedAgentType = requestedAgentType ?? commander.agentType ?? resolveDefaultProviderId()
     const modelValidation = validateModelForAgentType(selectedAgentType, requestedModel.value ?? null)
     if (!modelValidation.ok) {
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
@@ -743,7 +768,7 @@ export function registerConversationRoutes(
     }
 
     const commander = await context.sessionStore.get(conversation.commanderId)
-    const nextAgentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? 'claude'
+    const nextAgentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? resolveDefaultProviderId()
     const providerChanged = Boolean(requestedAgentType && requestedAgentType !== conversation.agentType)
     const nextModel = requestedModel.value !== undefined
       ? requestedModel.value
@@ -927,8 +952,41 @@ export function registerConversationRoutes(
         })
         return
       }
-      if (conversation.status !== 'idle') {
+      const liveSession = getLiveConversationSession(context, conversation)
+      const canRecoverActiveNoLiveSession = conversation.status === 'active' && !liveSession
+      if (conversation.status !== 'idle' && !canRecoverActiveNoLiveSession) {
         res.status(409).json({ error: `Conversation "${conversationId}" is not idle` })
+        return
+      }
+      if (
+        canRecoverActiveNoLiveSession
+        && !conversation.agentType
+      ) {
+        res.status(409).json({
+          error: `Conversation "${conversationId}" is active but missing agentType. Run the one-off Herd migration before resuming it.`,
+        })
+        return
+      }
+      if (
+        canRecoverActiveNoLiveSession
+        && requestedAgentType
+        && conversation.agentType
+        && requestedAgentType !== conversation.agentType
+      ) {
+        res.status(409).json({
+          error: `Conversation "${conversationId}" is active; stop it before changing provider`,
+        })
+        return
+      }
+      if (
+        canRecoverActiveNoLiveSession
+        && requestedModel.value !== undefined
+        && conversation.model !== undefined
+        && requestedModel.value !== conversation.model
+      ) {
+        res.status(409).json({
+          error: `Conversation "${conversationId}" is active; stop it before changing model`,
+        })
         return
       }
 
@@ -939,7 +997,7 @@ export function registerConversationRoutes(
       }
 
       const commander = await context.sessionStore.get(conversation.commanderId)
-      const agentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? 'claude'
+      const agentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? resolveDefaultProviderId()
       const provider = getProvider(agentType)
       if (effort !== undefined && !provider?.uiCapabilities.supportsEffort) {
         res.status(400).json({ error: `Provider "${agentType}" does not support effort` })
@@ -969,7 +1027,12 @@ export function registerConversationRoutes(
         ...(maxThinkingTokens !== undefined ? { maxThinkingTokens } : {}),
       }
 
-      const launch = launchConversationBootstrap(context, conversation, 'start', spawnOptions)
+      const launch = launchConversationBootstrap(
+        context,
+        conversation,
+        canRecoverActiveNoLiveSession ? 'resume' : 'start',
+        spawnOptions,
+      )
       const fastResult = await awaitBootstrapFastPath(launch.completion)
       if (!fastResult) {
         const latest = await context.conversationStore.get(conversation.id)
@@ -1025,8 +1088,22 @@ export function registerConversationRoutes(
       res.status(409).json({ error: `Conversation "${conversationId}" is archived` })
       return
     }
-    if (getConversationRuntimeOverlay(conversation.id)?.state === 'starting') {
+    const runtimeOverlay = getConversationRuntimeOverlay(conversation.id)
+    if (runtimeOverlay?.state === 'starting') {
       res.status(409).json({ error: `Conversation "${conversationId}" is starting` })
+      return
+    }
+    if (runtimeOverlay?.state === 'failed') {
+      res.status(409).json({ error: 'Conversation start failed' })
+      return
+    }
+    const shouldAutoStartIdleTextSend = conversation.status === 'idle' && !queue && images.length === 0
+    if (conversation.status === 'idle' && queue) {
+      res.status(409).json({ error: 'Conversation queue requires an active stream session' })
+      return
+    }
+    if (conversation.status === 'idle' && images.length > 0) {
+      res.status(409).json({ error: 'Conversation image transport requires an active stream session' })
       return
     }
 
@@ -1047,12 +1124,15 @@ export function registerConversationRoutes(
       return
     }
 
+    const dispatchChannelReplies = Boolean(conversation.channelMeta && conversation.lastRoute)
     const delivered = await deliverConversationMessage(
       context,
       conversation,
       { message: messageWithContext, displayMessage: message, images, clientSendId },
       {
         ...(queue ? { queue: true, priority: 'normal' as const } : {}),
+        ...(dispatchChannelReplies ? { dispatchChannelReplies: true } : {}),
+        ...(shouldAutoStartIdleTextSend ? { autoStartIdle: true, autoStartSeedPrompt: false } : {}),
         abortSignal: requestAbortSignal(req, res),
       },
     )

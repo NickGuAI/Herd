@@ -117,6 +117,7 @@ export interface ProviderRegistryEntry {
 export interface ProviderRegistryResponse {
   providers: ProviderRegistryEntry[]
   defaultProviderId: ProviderId
+  automationDefaultProviderId: ProviderId
 }
 
 export interface SessionCreator {
@@ -125,6 +126,10 @@ export interface SessionCreator {
 }
 
 export type AgentSessionStatus = 'active' | 'idle' | 'stale' | 'completed' | 'exited'
+export type AgentRuntimeSessionState = 'active' | 'paused' | 'archived'
+export type AgentRuntimeSessionAction = 'send' | 'pause' | 'resume' | 'archive' | 'start'
+export type AgentRuntimeSessionAllowedActions = Record<AgentRuntimeSessionAction, boolean>
+export type AgentRuntimeSessionDisabledReasons = Record<AgentRuntimeSessionAction, string | null>
 
 export interface AgentWorkerSummary {
   total: number
@@ -178,6 +183,9 @@ export interface AgentSession {
   processAlive?: boolean
   hadResult?: boolean
   resumedFrom?: string
+  state?: AgentRuntimeSessionState
+  allowedActions?: AgentRuntimeSessionAllowedActions
+  disabledReasons?: AgentRuntimeSessionDisabledReasons
   status?: AgentSessionStatus
   resumeAvailable?: boolean
   queuedMessageCount?: number
@@ -201,16 +209,6 @@ export interface ProviderAuthSnapshot {
 
 export interface ProviderAuthSnapshotsResponse {
   snapshots: ProviderAuthSnapshot[]
-}
-
-export interface ProviderReauthStartResponse {
-  provider: AgentType
-  scopeId: string
-  host: string
-  state: string
-  authorizationUrl: string
-  callbackUrl: string
-  expiresAt: string
 }
 
 // hamRPG world types

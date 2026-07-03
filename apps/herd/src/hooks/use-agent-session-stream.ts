@@ -260,8 +260,6 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
         try {
           const raw = JSON.parse(rawText) as {
             type?: string
-            events?: StreamEvent[]
-            messages?: unknown
             projection?: { messages?: unknown }
             queue?: SessionQueueSnapshot
             toolId?: string
@@ -272,22 +270,11 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
             }
             const projectedMessages = isProjectedMessages(raw.projection?.messages)
               ? raw.projection.messages
-              : (isProjectedMessages(raw.messages) ? raw.messages : null)
+              : null
             if (projectedMessages) {
-              hydrateReplayMessages(projectedMessages, Array.isArray(raw.events) ? raw.events : [])
+              hydrateReplayMessages(projectedMessages, [])
             } else {
-              if (!Array.isArray(raw.events)) {
-                resetMessages()
-                return
-              }
               resetMessages()
-              for (const replayEvent of raw.events) {
-                if (replayEvent.type === 'queue_update') {
-                  onQueueUpdate?.(normalizeQueueSnapshot(replayEvent.queue))
-                  continue
-                }
-                processEvent(replayEvent, true)
-              }
             }
             return
           }

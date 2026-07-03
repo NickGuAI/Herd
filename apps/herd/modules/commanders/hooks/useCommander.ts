@@ -331,7 +331,7 @@ async function createCommanderCron(input: CommanderCronCreateInput): Promise<Com
       status: input.enabled === false ? 'paused' : 'active',
       machine: input.machine?.trim() ?? '',
       workDir: input.workDir?.trim() ?? '',
-      agentType: input.agentType ?? 'claude',
+      ...(input.agentType ? { agentType: input.agentType } : {}),
       sessionType: input.sessionType,
       permissionMode: input.permissionMode,
       model: undefined,

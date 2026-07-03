@@ -1,6 +1,6 @@
 import {
   sanitizeProviderContextForPersistence,
-} from '../providers/provider-context-migration.js'
+} from '../providers/provider-context-normalization.js'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
 } from '../../claude-adaptive-thinking.js'
@@ -43,11 +43,16 @@ import {
 import {
   extractTranscriptUsageUpdate,
   isTranscriptTurnEndRecord,
+  isTranscriptTurnStartRecord,
 } from '../transcript-records.js'
 import {
+  asClaudeProviderContext,
+  createClaudeProviderContext,
+  createCodexProviderContext,
   ensureCodexProviderContext,
 } from '../providers/provider-session-context.js'
 import { getProvider } from '../providers/registry.js'
+import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 
 export interface PersistedSessionsWriteDeps {
   sessions: Map<string, AnySession>
@@ -66,6 +71,7 @@ export interface PersistedRestoreDeps {
     entry: PersistedStreamSession,
     machine?: MachineConfig,
   ) => StreamSession | Promise<StreamSession>
+  restoreCredentialPoolRecovery?(session: StreamSession): void
 }
 
 export function sanitizeTranscriptFileKey(raw: string): string {
@@ -120,6 +126,9 @@ export function writeTranscriptMetaForSession(session: StreamSession): void {
 }
 
 export function appendGenericTranscriptEvent(session: StreamSession, event: StreamJsonEvent): void {
+  if (!isTranscriptEnvelope(event)) {
+    return
+  }
   void appendTranscriptEvent(session.name, event).catch((error) => {
     warnTranscriptStoreFailure('append transcript event', session.name, error)
   })
@@ -132,6 +141,9 @@ export function appendCommanderTranscriptEvent(
   transcriptAppender: CommanderTranscriptAppender | undefined,
   extractClaudeSessionId: (event: StreamJsonEvent) => string | undefined,
 ): void {
+  if (!isTranscriptEnvelope(event)) {
+    return
+  }
   if (!transcriptAppender || session.sessionType !== 'commander' || session.creator.kind !== 'commander') {
     return
   }
@@ -171,7 +183,7 @@ export async function resolveRestoredReplaySource(
     if (transcriptEvents.length > 0) {
       return {
         entry: resolvedEntry,
-        events: transcriptEvents.filter((event): event is StreamJsonEvent => !!asObject(event)),
+        events: transcriptEvents,
       }
     }
   } catch (error) {
@@ -214,7 +226,7 @@ export function serializePersistedSessionsState(
       session.lastTurnCompleted &&
       session.finalResultEvent
     ) continue
-    if (!getProvider(session.agentType)?.snapshotForPersist(session)) continue
+    if (!session.credentialPoolRecovery && !getProvider(session.agentType)?.snapshotForPersist(session)) continue
     sessionsByName.set(session.name, buildPersistedEntryFromLiveStreamSession(session.name, session))
   }
 
@@ -230,6 +242,105 @@ export function serializePersistedSessionsState(
   const restoredSessions = [...sessionsByName.values()]
   restoredSessions.sort((left, right) => left.name.localeCompare(right.name))
   return { sessions: restoredSessions }
+}
+
+function buildRecoveryProviderContext(entry: PersistedStreamSession): StreamSession['providerContext'] {
+  if (!entry.credentialPoolRecovery?.clearResumeProviderContext) {
+    return entry.providerContext
+  }
+
+  if (entry.agentType === 'codex') {
+    return createCodexProviderContext()
+  }
+
+  if (entry.agentType === 'claude') {
+    const context = asClaudeProviderContext(entry.providerContext)
+    return createClaudeProviderContext({
+      effort: context?.effort ?? entry.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      adaptiveThinking: context?.adaptiveThinking ?? entry.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+      maxThinkingTokens: context?.maxThinkingTokens ?? entry.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+    })
+  }
+
+  return entry.providerContext
+}
+
+function readRestoredTurnState(events: readonly StreamJsonEvent[]): {
+  lastTurnCompleted: boolean
+  completedTurnAt?: string
+  finalResultEvent?: StreamJsonEvent
+} {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!
+    if (isTranscriptTurnEndRecord(event)) {
+      return {
+        lastTurnCompleted: true,
+        ...(isTranscriptEnvelope(event) ? { completedTurnAt: event.time } : {}),
+        finalResultEvent: event,
+      }
+    }
+    if (isTranscriptTurnStartRecord(event)) {
+      return { lastTurnCompleted: false }
+    }
+  }
+  return { lastTurnCompleted: true }
+}
+
+function buildPendingCredentialRecoverySession(
+  entry: PersistedStreamSession,
+  events: readonly StreamJsonEvent[],
+): StreamSession | null {
+  if (!entry.sessionType || !entry.creator || !entry.credentialPoolRecovery) {
+    return null
+  }
+
+  const turnState = readRestoredTurnState(events)
+  const lastEvent = events.at(-1)
+  return {
+    kind: 'stream',
+    name: entry.name,
+    sessionType: entry.sessionType,
+    creator: entry.creator,
+    ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
+    agentType: entry.agentType,
+    effort: entry.effort,
+    adaptiveThinking: entry.adaptiveThinking,
+    maxThinkingTokens: entry.maxThinkingTokens,
+    mode: entry.mode,
+    cwd: entry.cwd,
+    ...(entry.host ? { host: entry.host } : {}),
+    ...(entry.currentSkillInvocation ? { currentSkillInvocation: entry.currentSkillInvocation } : {}),
+    ...(entry.spawnedBy ? { spawnedBy: entry.spawnedBy } : {}),
+    spawnedWorkers: entry.spawnedWorkers ? [...entry.spawnedWorkers] : [],
+    process: { kill: () => true } as unknown as StreamSession['process'],
+    events: [],
+    clients: new Set(),
+    createdAt: entry.createdAt,
+    lastEventAt: isTranscriptEnvelope(lastEvent) ? lastEvent.time : entry.createdAt,
+    usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+    stdoutBuffer: '',
+    stdinDraining: false,
+    lastTurnCompleted: turnState.lastTurnCompleted,
+    ...(turnState.completedTurnAt ? { completedTurnAt: turnState.completedTurnAt } : {}),
+    providerContext: buildRecoveryProviderContext(entry),
+    ...(entry.credentialPoolId ? { credentialPoolId: entry.credentialPoolId } : {}),
+    credentialPoolRecovery: entry.credentialPoolRecovery,
+    ...(entry.approvalBridgeNonce ? { approvalBridgeNonce: entry.approvalBridgeNonce } : {}),
+    ...(turnState.lastTurnCompleted ? {} : { activeTurnId: entry.activeTurnId }),
+    ...(entry.resumedFrom ? { resumedFrom: entry.resumedFrom } : {}),
+    ...(turnState.finalResultEvent ? { finalResultEvent: turnState.finalResultEvent } : {}),
+    conversationEntryCount: entry.conversationEntryCount ?? countCompletedTurnEntries([...events]),
+    autoRotatePending: false,
+    codexUnclassifiedIncomingCount: 0,
+    codexPendingApprovals: new Map(),
+    messageQueue: new SessionMessageQueue(DEFAULT_SESSION_MESSAGE_QUEUE_LIMIT),
+    pendingDirectSendMessages: [],
+    queuedMessageRetryDelayMs: 0,
+    queuedMessageDrainScheduled: false,
+    queuedMessageDrainPending: false,
+    queuedMessageDrainPendingForce: false,
+    restoredIdle: true,
+  } as StreamSession
 }
 
 export async function restorePersistedSessions(
@@ -279,6 +390,7 @@ export async function restorePersistedSessions(
           spawnedWorkers: entry.spawnedWorkers ? [...entry.spawnedWorkers] : [],
           createdAt: entry.createdAt,
           providerContext: entry.providerContext,
+          credentialPoolRecovery: entry.credentialPoolRecovery,
           activeTurnId: entry.activeTurnId,
           effort: supportsEffort
             ? entry.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
@@ -351,7 +463,8 @@ export async function restorePersistedSessions(
       remainingLiveSlots -= 1
 
       try {
-        const session = await deps.restoreProviderSession(entry, machine)
+        const session = buildPendingCredentialRecoverySession(entry, events)
+          ?? await deps.restoreProviderSession(entry, machine)
 
         applyRestoredReplayState(session, events, deps.applyUsageEvent, entry.conversationEntryCount)
         session.messageQueue = new SessionMessageQueue(
@@ -362,13 +475,19 @@ export async function restorePersistedSessions(
         session.pendingDirectSendMessages = entry.pendingDirectSendMessages
           ? [...entry.pendingDirectSendMessages]
           : []
-        session.activeTurnId = entry.activeTurnId
-        if (entry.agentType === 'codex' && entry.activeTurnId) {
+        session.credentialPoolRecovery = entry.credentialPoolRecovery
+        session.activeTurnId = entry.credentialPoolRecovery?.clearResumeProviderContext
+          ? undefined
+          : entry.activeTurnId
+        if (entry.agentType === 'codex' && session.activeTurnId) {
           session.lastTurnCompleted = false
           session.completedTurnAt = undefined
           session.finalResultEvent = undefined
         }
         deps.sessions.set(entry.name, session)
+        if (session.credentialPoolRecovery) {
+          deps.restoreCredentialPoolRecovery?.(session)
+        }
       } catch (error) {
         remainingLiveSlots += 1
         throw error

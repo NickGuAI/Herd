@@ -12,7 +12,6 @@ type LegacyCommanderColorFields = {
 type CommanderVisualProfileWithoutColors<T> = Omit<T, keyof LegacyCommanderColorFields>
 
 export function ensureCommanderVisualProfile<T extends CommanderVisualProfileFields & LegacyCommanderColorFields>(
-  _commanderId: string | null | undefined,
   profile: T | null | undefined,
 ): CommanderVisualProfileWithoutColors<T> {
   const current = (profile ?? {}) as T

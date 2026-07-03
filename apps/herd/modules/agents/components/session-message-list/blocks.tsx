@@ -12,6 +12,7 @@ import {
   FileText,
   Loader2,
 } from 'lucide-react'
+import { fetchJson } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import {
   SUBAGENT_WORKING_LABEL,
@@ -24,6 +25,136 @@ const ALLOWED_INLINE_IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'im
 const INLINE_IMAGE_REFERRER_POLICY = 'no-referrer'
 const INLINE_IMAGE_CLASS = 'msg-inline-image max-h-80 max-w-full rounded border border-[color:var(--hv-border-soft)] object-contain'
 const COPY_FEEDBACK_MS = 1400
+const FENCE_MARKER_PATTERN = /^(\s{0,3})(`{3,}|~{3,})/u
+const STANDALONE_ORDERED_LIST_MARKER_PATTERN = /^(\s{0,3}\d+)([.)])(\s*)$/u
+const STANDALONE_UNORDERED_LIST_MARKER_PATTERN = /^(\s{0,3})([-+*])(\s*)$/u
+const STANDALONE_HEADING_MARKER_PATTERN = /^(\s{0,3})(#{1,6})(\s*)$/u
+
+interface MarkdownFenceState {
+  marker: '`' | '~'
+  length: number
+}
+
+function openingFenceFromLine(line: string): MarkdownFenceState | null {
+  const match = FENCE_MARKER_PATTERN.exec(line)
+  const markerRun = match?.[2]
+  if (!markerRun) {
+    return null
+  }
+  return {
+    marker: markerRun[0] as '`' | '~',
+    length: markerRun.length,
+  }
+}
+
+function closesFence(line: string, fence: MarkdownFenceState): boolean {
+  const match = FENCE_MARKER_PATTERN.exec(line)
+  const markerRun = match?.[2]
+  const trailing = match ? line.slice(match[0].length) : ''
+  return Boolean(
+    markerRun &&
+    markerRun[0] === fence.marker &&
+    markerRun.length >= fence.length &&
+    /^\s*$/u.test(trailing),
+  )
+}
+
+type CredentialPoolProvider = 'claude' | 'codex'
+
+interface CredentialPoolCredentialDto {
+  id: string
+  label: string
+  active: boolean
+  exhausted: boolean
+  exhaustedUntil?: string
+  status?: 'active' | 'available' | 'exhausted' | 'auth_required'
+}
+
+interface CredentialPoolDto {
+  provider: CredentialPoolProvider
+  active?: string
+  credentials: CredentialPoolCredentialDto[]
+  nextCredential?: CredentialPoolCredentialDto
+  readyCount?: number
+  earliestExhaustedUntil?: string
+}
+
+function escapeStandaloneMarkdownMarkers(text: string): string {
+  let fence: MarkdownFenceState | null = null
+
+  return text.split('\n').map((rawLine) => {
+    const hasCarriageReturn = rawLine.endsWith('\r')
+    const line = hasCarriageReturn ? rawLine.slice(0, -1) : rawLine
+    const suffix = hasCarriageReturn ? '\r' : ''
+
+    if (fence) {
+      if (closesFence(line, fence)) {
+        fence = null
+      }
+      return rawLine
+    }
+
+    const openingFence = openingFenceFromLine(line)
+    if (openingFence) {
+      fence = openingFence
+      return rawLine
+    }
+
+    const escapedOrdered = line.replace(
+      STANDALONE_ORDERED_LIST_MARKER_PATTERN,
+      '$1\\$2$3',
+    )
+    if (escapedOrdered !== line) {
+      return `${escapedOrdered}${suffix}`
+    }
+
+    const escapedUnordered = line.replace(
+      STANDALONE_UNORDERED_LIST_MARKER_PATTERN,
+      '$1\\$2$3',
+    )
+    if (escapedUnordered !== line) {
+      return `${escapedUnordered}${suffix}`
+    }
+
+    const escapedHeading = line.replace(
+      STANDALONE_HEADING_MARKER_PATTERN,
+      '$1\\$2$3',
+    )
+    if (escapedHeading !== line) {
+      return `${escapedHeading}${suffix}`
+    }
+
+    return rawLine
+  }).join('\n')
+}
+
+interface CredentialPoolRegisterResponse {
+  pool: CredentialPoolDto
+  instructions: {
+    commands: string[]
+  }
+}
+
+interface CredentialPoolSwitchResponse {
+  switched: boolean
+  activeCredential?: CredentialPoolCredentialDto
+  pool: CredentialPoolDto
+  recovery?: {
+    status: 'recovered_in_place' | 'queued' | 'blocked'
+    sessionName?: string
+    credentialPoolId?: string
+    clearResumeProviderContext?: boolean
+    blockedUntil?: string
+  }
+}
+
+function isCredentialPoolProvider(value: string): value is CredentialPoolProvider {
+  return value === 'claude' || value === 'codex'
+}
+
+function fetchCredentialPool(provider: CredentialPoolProvider): Promise<CredentialPoolDto> {
+  return fetchJson<CredentialPoolDto>(`/api/agents/provider-auth/pool/${provider}`)
+}
 
 function textFromReactNode(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') {
@@ -338,6 +469,8 @@ function MarkdownContent({
   onOpenWorkspaceFile?: (path: string) => void
   imageReferrerPolicy?: typeof INLINE_IMAGE_REFERRER_POLICY
 }) {
+  const renderText = escapeStandaloneMarkdownMarkers(text)
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -426,7 +559,7 @@ function MarkdownContent({
         },
       }}
     >
-      {text}
+      {renderText}
     </ReactMarkdown>
   )
 }
@@ -517,13 +650,114 @@ function formatProviderErrorClassification(
   }
 }
 
-export function ProviderErrorBlock({ msg }: { msg: MsgItem }) {
+export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; sessionName?: string }) {
   const provider = msg.transcript?.source?.provider ?? 'provider'
   const backend = msg.transcript?.source?.backend ?? 'unknown'
   const classification = msg.providerError?.classification ?? 'other'
   const classificationLabel = formatProviderErrorClassification(classification)
   const code = msg.providerError?.code
   const hint = msg.providerError?.hint
+  const poolProvider = isCredentialPoolProvider(provider) ? provider : null
+  const shouldLoadPool = classification === 'usage_limit' && poolProvider !== null
+  const [pool, setPool] = useState<CredentialPoolDto | null>(null)
+  const [poolError, setPoolError] = useState<string | null>(null)
+  const [poolActionMessage, setPoolActionMessage] = useState<string | null>(null)
+  const [poolInstructions, setPoolInstructions] = useState<string[] | null>(null)
+  const [poolAction, setPoolAction] = useState<'switch' | 'add' | null>(null)
+
+  useEffect(() => {
+    if (!shouldLoadPool || !poolProvider) {
+      setPool(null)
+      setPoolError(null)
+      return undefined
+    }
+    let cancelled = false
+    fetchCredentialPool(poolProvider)
+      .then((nextPool) => {
+        if (!cancelled) {
+          setPool(nextPool)
+          setPoolError(null)
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPoolError(error instanceof Error ? error.message : 'Credential pool is unavailable.')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [poolProvider, shouldLoadPool])
+
+  async function handleSwitchCredential() {
+    if (!poolProvider) {
+      return
+    }
+    setPoolAction('switch')
+    setPoolActionMessage(null)
+    setPoolInstructions(null)
+    try {
+      const response = await fetchJson<CredentialPoolSwitchResponse>('/api/agents/provider-auth/pool/switch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: poolProvider,
+          ...(pool?.active ? { exhaustedId: pool.active } : {}),
+          ...(sessionName ? { sessionName } : {}),
+        }),
+      })
+      setPool(response.pool)
+      if (response.switched && response.activeCredential) {
+        if (response.recovery?.status === 'recovered_in_place') {
+          setPoolActionMessage(`Switched to ${response.activeCredential.label}. This conversation recovered in place.`)
+        } else if (response.recovery?.status === 'queued') {
+          setPoolActionMessage(`Switched to ${response.activeCredential.label}. This conversation will recover on next start.`)
+        } else {
+          setPoolActionMessage(`Switched to ${response.activeCredential.label}.`)
+        }
+      } else if (response.recovery?.status === 'blocked') {
+        setPoolActionMessage(response.recovery.blockedUntil
+          ? `No ready credential is available. Earliest reset: ${response.recovery.blockedUntil}.`
+          : 'No ready credential is available.')
+      } else {
+        setPoolActionMessage('No available credential to switch to.')
+      }
+    } catch (error) {
+      setPoolActionMessage(error instanceof Error ? error.message : 'Credential switch failed.')
+    } finally {
+      setPoolAction(null)
+    }
+  }
+
+  async function handleAddCredential() {
+    if (!poolProvider) {
+      return
+    }
+    setPoolAction('add')
+    setPoolActionMessage(null)
+    setPoolInstructions(null)
+    try {
+      const response = await fetchJson<CredentialPoolRegisterResponse>('/api/agents/provider-auth/pool/credentials', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: poolProvider,
+          label: `${poolProvider} credential ${(pool?.credentials.length ?? 0) + 1}`,
+        }),
+      })
+      setPool(response.pool)
+      setPoolInstructions(response.instructions.commands)
+      setPoolActionMessage('Credential directory created.')
+    } catch (error) {
+      setPoolActionMessage(error instanceof Error ? error.message : 'Credential registration failed.')
+    } finally {
+      setPoolAction(null)
+    }
+  }
+
+  const nextCredential = pool?.nextCredential
+  const showPoolAction = shouldLoadPool && !poolError && pool !== null
+  const actionDisabled = poolAction !== null
 
   return (
     <div className="message msg-provider-error rounded border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-[color:var(--hv-fg)]">
@@ -554,6 +788,42 @@ export function ProviderErrorBlock({ msg }: { msg: MsgItem }) {
               {hint}
             </p>
           )}
+          {showPoolAction ? (
+            <div className="pt-1">
+              {nextCredential ? (
+                <button
+                  type="button"
+                  disabled={actionDisabled}
+                  onClick={handleSwitchCredential}
+                  className="inline-flex items-center rounded-[2px_8px] border border-[color:var(--hv-accent-danger)] px-3 py-1.5 text-xs text-[color:var(--hv-accent-danger)] shadow-[2px_2px_0_var(--hv-accent-danger)] transition hover:bg-[var(--hv-accent-danger-wash)] disabled:opacity-50"
+                >
+                  {poolAction === 'switch' ? 'Switching' : `Switch to ${nextCredential.label}`}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={actionDisabled}
+                  onClick={handleAddCredential}
+                  className="inline-flex items-center rounded-[2px_8px] border border-[color:var(--hv-accent-danger)] px-3 py-1.5 text-xs text-[color:var(--hv-accent-danger)] shadow-[2px_2px_0_var(--hv-accent-danger)] transition hover:bg-[var(--hv-accent-danger-wash)] disabled:opacity-50"
+                >
+                  {poolAction === 'add' ? 'Creating' : 'Add credential'}
+                </button>
+              )}
+              {poolActionMessage ? (
+                <p className="mt-2 text-xs text-[color:var(--hv-fg-muted)]">{poolActionMessage}</p>
+              ) : null}
+              {poolInstructions ? (
+                <code className="mt-2 block whitespace-pre-wrap break-words rounded border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-raised)] p-2 font-mono text-[10px] text-[color:var(--hv-fg-muted)]">
+                  {poolInstructions.join('\n')}
+                </code>
+              ) : null}
+            </div>
+          ) : null}
+          {poolError ? (
+            <p className="pt-1 text-xs text-[color:var(--hv-fg-muted)]">
+              Credential pool is unavailable.
+            </p>
+          ) : null}
         </div>
       </div>
     </div>
@@ -923,12 +1193,13 @@ function pluralize(count: number, singular: string): string {
 function renderActivityMessage(
   message: MsgItem,
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void,
+  sessionName?: string,
 ) {
   switch (message.kind) {
     case 'system':
       return <SystemDivider key={message.id} text={message.text} />
     case 'tool':
-      return <ToolBlock key={message.id} msg={message} nested onAnswer={onAnswer} />
+      return <ToolBlock key={message.id} msg={message} nested onAnswer={onAnswer} sessionName={sessionName} />
     case 'agent':
       return <AgentMessage key={message.id} text={message.text} images={message.images} />
     case 'thinking':
@@ -948,7 +1219,7 @@ function renderActivityMessage(
     case 'provider':
       return <ProviderActivityBlock key={message.id} msg={message} />
     case 'error':
-      return <ProviderErrorBlock key={message.id} msg={message} />
+      return <ProviderErrorBlock key={message.id} msg={message} sessionName={sessionName} />
     default:
       return null
   }
@@ -957,9 +1228,11 @@ function renderActivityMessage(
 export function AgentActivityGroup({
   messages,
   onAnswer,
+  sessionName,
 }: {
   messages: MsgItem[]
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
+  sessionName?: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const tools = messages.filter((message) => message.kind === 'tool')
@@ -1033,7 +1306,7 @@ export function AgentActivityGroup({
       </button>
       {expanded && (
         <div className="msg-agent-activity-body space-y-1 border-t border-[color:var(--hv-border-soft)] p-1.5">
-          {messages.map((message) => renderActivityMessage(message, onAnswer))}
+          {messages.map((message) => renderActivityMessage(message, onAnswer, sessionName))}
         </div>
       )}
     </div>
@@ -1043,13 +1316,15 @@ export function AgentActivityGroup({
 function NestedActivity({
   children,
   onAnswer,
+  sessionName,
 }: {
   children: MsgItem[]
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
+  sessionName?: string
 }) {
   return (
     <div className="msg-tool-activity space-y-1 rounded border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-sunken)] p-1.5">
-      {children.map((child) => renderActivityMessage(child, onAnswer))}
+      {children.map((child) => renderActivityMessage(child, onAnswer, sessionName))}
     </div>
   )
 }
@@ -1058,10 +1333,12 @@ export function SubagentBlock({
   msg,
   onAnswer,
   nested = false,
+  sessionName,
 }: {
   msg: MsgItem
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   nested?: boolean
+  sessionName?: string
 }) {
   const children = msg.children ?? []
   const hasChildren = children.length > 0
@@ -1119,7 +1396,7 @@ export function SubagentBlock({
               <div className="msg-subagent-section-label mb-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--hv-fg-subtle)]">
                 activity
               </div>
-              <NestedActivity children={children} onAnswer={onAnswer} />
+              <NestedActivity children={children} onAnswer={onAnswer} sessionName={sessionName} />
             </div>
           )}
           {hasOutput && (
@@ -1151,14 +1428,16 @@ export function ToolBlock({
   msg,
   onAnswer,
   nested = false,
+  sessionName,
 }: {
   msg: MsgItem
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   nested?: boolean
+  sessionName?: string
 }) {
   const isAgentTool = msg.toolName === 'Agent'
   if (isAgentTool) {
-    return <SubagentBlock msg={msg} onAnswer={onAnswer} nested={nested} />
+    return <SubagentBlock msg={msg} onAnswer={onAnswer} nested={nested} sessionName={sessionName} />
   }
 
   const children = msg.children ?? []
@@ -1257,7 +1536,7 @@ export function ToolBlock({
               <div className="msg-tool-section-label mb-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--hv-fg)]">
                 activity
               </div>
-              <NestedActivity children={children} onAnswer={onAnswer} />
+              <NestedActivity children={children} onAnswer={onAnswer} sessionName={sessionName} />
             </div>
           )}
         </div>
@@ -1269,9 +1548,11 @@ export function ToolBlock({
 export function ToolCallGroup({
   tools,
   onAnswer,
+  sessionName,
 }: {
   tools: MsgItem[]
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
+  sessionName?: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const running = tools.filter((tool) => tool.toolStatus === 'running').length
@@ -1329,7 +1610,7 @@ export function ToolCallGroup({
       {expanded && (
         <div className="msg-tool-group-body border-t border-[color:var(--hv-border-soft)] space-y-1 p-1.5">
           {tools.map((tool) => (
-            <ToolBlock key={tool.id} msg={tool} onAnswer={onAnswer} />
+            <ToolBlock key={tool.id} msg={tool} onAnswer={onAnswer} sessionName={sessionName} />
           ))}
         </div>
       )}

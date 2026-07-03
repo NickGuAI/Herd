@@ -1,5 +1,4 @@
 import type {
-  HerdEvent,
   HerdUsage,
 } from '../../src/types/herd-events.js'
 import {
@@ -15,22 +14,18 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>
 }
 
-export function isLegacyStreamEvent(value: StreamJsonEvent): value is HerdEvent {
-  return !isTranscriptEnvelope(value)
-}
-
 export function isTranscriptTurnStartRecord(record: StreamJsonEvent): boolean {
   if (isTranscriptEnvelope(record)) {
     return record.ev.type === 'turn.start'
   }
-  return record.type === 'message_start'
+  return false
 }
 
 export function isTranscriptTurnEndRecord(record: StreamJsonEvent): boolean {
   if (isTranscriptEnvelope(record)) {
     return record.ev.type === 'turn.end'
   }
-  return record.type === 'result'
+  return false
 }
 
 export function isTranscriptExitRecord(record: StreamJsonEvent): boolean {
@@ -147,24 +142,7 @@ export function extractTranscriptUsageUpdate(record: StreamJsonEvent): Transcrip
     return null
   }
 
-  if (record.type !== 'message_delta' && record.type !== 'result') {
-    return null
-  }
-
-  return {
-    ...(record.usage ? { usage: record.usage } : {}),
-    ...(
-      record.type === 'result' || ('usage_is_total' in record && record.usage_is_total === true)
-        ? { usageIsTotal: true }
-        : {}
-    ),
-    ...('total_cost_usd' in record && typeof record.total_cost_usd === 'number'
-      ? { totalCostUsd: record.total_cost_usd }
-      : {}),
-    ...('cost_usd' in record && typeof record.cost_usd === 'number'
-      ? { costUsd: record.cost_usd }
-      : {}),
-  }
+  return null
 }
 
 export function getTranscriptEnvelopeSource(

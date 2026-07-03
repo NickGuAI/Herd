@@ -6,7 +6,7 @@ import type { AgentType } from '@/types'
 import type {
   CreateSentinelInput,
   UpdateSentinelInput,
-} from '../../sentinels/types'
+} from '../sentinel-types'
 import type {
   Automation,
   AutomationHistoryEntry,

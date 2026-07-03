@@ -45,8 +45,7 @@ export function createCommandersRouter(
     if (disposed) {
       return
     }
-    void context.migrateLegacyCommanderConfig()
-      .then(() => context.reconcileCommanderSessions())
+    void context.reconcileCommanderSessions()
       .catch((error) => {
       console.error('[commanders] Startup reconciliation failed:', error)
       })
@@ -64,8 +63,8 @@ export function createCommandersRouter(
       }
       runtime.unsubscribeEvents?.()
     }
-    for (const unsubscribe of context.channelReplyForwarders.values()) {
-      unsubscribe()
+    for (const forwarder of context.channelReplyForwarders.values()) {
+      forwarder.unsubscribe()
     }
 
     context.runtimes.clear()

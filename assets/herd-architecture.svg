@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
   <title id="title">Herd meta-harness architecture</title>
   <desc id="desc">Herd is a meta-harness above Codex, Claude Code, Gemini CLI, OpenCode, and other agent harnesses. It owns Command Room, mission graph, approvals, worker scheduling, memory, and machine routing.</desc>
-  <!-- Exported from apps/herd-site/diagrams/herd-architecture.html. -->
+  <!-- Exported from apps/hervald-site/diagrams/herd-architecture.html. -->
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
       <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.7"/>

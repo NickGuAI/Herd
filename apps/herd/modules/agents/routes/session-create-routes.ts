@@ -20,7 +20,7 @@ import {
   resolveProviderDefaults,
   unsupportedProviderPermissionModeError,
 } from '../providers/provider-adapter.js'
-import { getProvider, parseProviderId } from '../providers/registry.js'
+import { getProvider, resolveProviderIdForRequest } from '../providers/registry.js'
 import { validateModelForAgentType } from '../providers/validate-model.js'
 import {
   codexRolloutUnavailableMessage,
@@ -154,6 +154,91 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
     daemonRegistry,
   } = deps
 
+  router.post('/sessions/:name/workers', requireWriteAccess, async (req, res) => {
+    const sourceSessionName = parseSessionName(req.params.name)
+    if (!sourceSessionName) {
+      res.status(400).json({ error: 'Invalid source session name' })
+      return
+    }
+
+    const sourceSession = sessions.get(sourceSessionName)
+    if (!sourceSession || sourceSession.kind !== 'stream') {
+      res.status(404).json({ error: `Stream session "${sourceSessionName}" not found` })
+      return
+    }
+
+    const parsedHost = parseOptionalHost(req.body?.host)
+    if (parsedHost === null) {
+      res.status(400).json({ error: 'Invalid host: expected machine ID string' })
+      return
+    }
+
+    const generatedName = `${sourceSessionName}-worker-${Date.now()}`
+    const parsed = parseWorkerLaunchRequest({
+      allowedBodyKeys: COMMANDER_WORKER_LAUNCH_BODY_KEYS,
+      creator: sourceSession.creator,
+      currentSkillInvocationNull: 'clear',
+      fallbackCwd: sourceSession.cwd ?? process.env.HOME ?? '/tmp',
+      generatedName,
+      preferMachineCwd: parsedHost !== undefined,
+      rawBody: req.body,
+      requireName: false,
+      routeLabel: '/api/agents/sessions/:name/workers',
+      sourceDefaults: {
+        agentType: sourceSession.agentType,
+        adaptiveThinking: sourceSession.adaptiveThinking,
+        currentSkillInvocation: sourceSession.currentSkillInvocation,
+        cwd: sourceSession.cwd,
+        effort: sourceSession.effort,
+        host: sourceSession.host,
+        maxThinkingTokens: sourceSession.maxThinkingTokens,
+        mode: sourceSession.mode,
+        model: sourceSession.model,
+      },
+      spawnedBy: sourceSessionName,
+    })
+    if (!parsed.ok) {
+      res.status(parsed.status).json(parsed.body)
+      return
+    }
+
+    const launched = await launchProviderWorkerSession(
+      {
+        createProviderStreamSession: deps.createProviderStreamSession,
+        maxSessions,
+        resolveDaemonLaunchReadiness: deps.resolveDaemonLaunchReadiness,
+        resolveMachine: deps.resolveLaunchMachine,
+        schedulePersistedSessionsWrite: deps.schedulePersistedSessionsWrite,
+        sessions,
+      },
+      parsed.request,
+      {
+        missingCwdError: `Source session "${sourceSessionName}" has no cwd; provide cwd or host when dispatching a worker`,
+      },
+    )
+    if (!launched.ok) {
+      res.status(launched.status).json(launched.body)
+      return
+    }
+
+    if (!sourceSession.spawnedWorkers.includes(launched.session.name)) {
+      sourceSession.spawnedWorkers = [...sourceSession.spawnedWorkers, launched.session.name]
+      deps.schedulePersistedSessionsWrite()
+    }
+
+    res.status(201).json({
+      sessionName: launched.session.name,
+      mode: parsed.request.mode,
+      sessionType: launched.session.sessionType,
+      creator: launched.session.creator,
+      spawnedBy: launched.session.spawnedBy,
+      transportType: 'stream',
+      agentType: parsed.request.agentType,
+      host: launched.session.host,
+      created: true,
+    })
+  })
+
   router.post('/sessions', requireWriteAccess, async (req, res) => {
     const sessionName = parseSessionName(req.body?.name)
     if (!sessionName) {
@@ -285,7 +370,18 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
       return
     }
 
-    const agentType = resumeSource?.source.agentType ?? parseProviderId(req.body?.agentType) ?? 'claude'
+    let agentType = resumeSource?.source.agentType
+    if (!agentType) {
+      const providerResolution = resolveProviderIdForRequest(req.body?.agentType)
+      if (providerResolution.error || !providerResolution.providerId) {
+        res.status(400).json({
+          error: providerResolution.error ?? 'agentType must be a registered provider id',
+          validIds: providerResolution.validIds,
+        })
+        return
+      }
+      agentType = providerResolution.providerId
+    }
     const provider = getProvider(agentType)
     if (!provider) {
       res.status(400).json({ error: `Unknown provider: ${agentType}` })
@@ -378,7 +474,6 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
         rawBody: buildSessionCreateWorkerLaunchBody(req.body),
         requireName: true,
         routeLabel: '/api/agents/sessions',
-        unknownKeyStyle: 'quoted',
       })
       if (!parsed.ok) {
         res.status(parsed.status).json(parsed.body)

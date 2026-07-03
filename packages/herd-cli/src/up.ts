@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { syncManagedAgentTelemetryFromSavedConfig } from './agent-telemetry.js'
-import { formatStatusLine, printHerdBrand } from './terminal-style.js'
+import { formatStatusLine, printHervaldBrand } from './terminal-style.js'
 
 export interface UpOptions {
   appDir: string
@@ -17,19 +17,45 @@ export const BOOTSTRAP_KEY_FILE = path.join(homedir(), '.herd', 'bootstrap-key.t
 export const TMUX_SESSION = 'herd-dev'
 export const DEFAULT_PORT = 20001
 
+function expandHome(value: string): string {
+  return value.replace(/^~(?=$|\/)/u, homedir())
+}
+
+export function resolveAppPathFileCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
+  const candidates: string[] = []
+  const dataDir = env.HERD_DATA_DIR?.trim()
+  if (dataDir) {
+    candidates.push(path.join(path.resolve(expandHome(dataDir)), 'app-path'))
+  }
+  if (!candidates.includes(APP_PATH_FILE)) {
+    candidates.push(APP_PATH_FILE)
+  }
+  return candidates
+}
+
+export function readAppPathFileValue(filePath: string): string | null {
+  try {
+    if (existsSync(filePath)) {
+      const raw = readFileSync(filePath, 'utf8').trim()
+      if (raw) return raw
+    }
+  } catch {
+    // fall through
+  }
+  return null
+}
+
 export function resolveAppDir(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.HERD_APP_DIR?.trim()
   if (override) {
     return override
   }
 
-  try {
-    if (existsSync(APP_PATH_FILE)) {
-      const raw = readFileSync(APP_PATH_FILE, 'utf8').trim()
-      if (raw) return raw
+  for (const candidate of resolveAppPathFileCandidates(env)) {
+    const value = readAppPathFileValue(candidate)
+    if (value) {
+      return value
     }
-  } catch {
-    // fall through
   }
 
   return null
@@ -127,7 +153,8 @@ function printUpUsage(write: (chunk: string) => void): void {
   write('\n')
   write('The app directory is resolved in this order:\n')
   write('  1. $HERD_APP_DIR\n')
-  write(`  2. ${APP_PATH_FILE}\n`)
+  write('  2. $HERD_DATA_DIR/app-path\n')
+  write(`  3. ${APP_PATH_FILE}\n`)
   write('\n')
   write('Run apps/herd/install.sh once to initialize both.\n')
 }
@@ -191,6 +218,105 @@ export function buildManagedLaunchInvocation(plan: LaunchPlan): ManagedLaunchInv
       HERD_APP_DIR: plan.appDir,
     } as Record<string, string>,
   }
+}
+
+export interface DbReadyInvocation {
+  command: string
+  args: string[]
+  cwd: string
+  env: Record<string, string>
+}
+
+interface DbReadyCommandResult {
+  status?: number | null
+  stdout?: string | Buffer | null
+  stderr?: string | Buffer | null
+  error?: Error
+}
+
+type DbReadyCommandRunner = (
+  command: string,
+  args: string[],
+  options: {
+    cwd: string
+    env: Record<string, string>
+    encoding: 'utf8'
+  },
+) => DbReadyCommandResult
+
+interface TextWriter {
+  write(chunk: string): boolean
+}
+
+function commandOutputToString(output: string | Buffer | null | undefined): string {
+  if (!output) {
+    return ''
+  }
+  return typeof output === 'string' ? output : output.toString('utf8')
+}
+
+export function buildDbReadyInvocation(plan: LaunchPlan): DbReadyInvocation {
+  return {
+    command: 'pnpm',
+    args: ['run', 'db:ready'],
+    cwd: plan.appDir,
+    env: {
+      ...process.env,
+      ...plan.env,
+      HERD_APP_DIR: plan.appDir,
+    } as Record<string, string>,
+  }
+}
+
+export function runDbReadyPreflight(
+  plan: LaunchPlan,
+  deps: {
+    runCommand?: DbReadyCommandRunner
+    stdout?: TextWriter
+    stderr?: TextWriter
+  } = {},
+): number {
+  const invocation = buildDbReadyInvocation(plan)
+  const runCommand = deps.runCommand ?? ((command, args, options) => spawnSync(command, args, options))
+  const stdout = deps.stdout ?? process.stdout
+  const stderr = deps.stderr ?? process.stderr
+  const result = runCommand(invocation.command, invocation.args, {
+    cwd: invocation.cwd,
+    env: invocation.env,
+    encoding: 'utf8',
+  })
+
+  if (result.error) {
+    stderr.write(`${formatStatusLine(
+      'fail',
+      'SQLite runtime sessions',
+      'db:ready could not start',
+      result.error.message,
+    )}\n`)
+    return 1
+  }
+
+  if (result.status === 0) {
+    return 0
+  }
+
+  stderr.write(`${formatStatusLine(
+    'fail',
+    'SQLite runtime sessions',
+    'db:ready failed',
+    'Resolve the db:ready error before starting Herd.',
+  )}\n`)
+
+  const out = commandOutputToString(result.stdout)
+  const err = commandOutputToString(result.stderr)
+  if (out.trim().length > 0) {
+    stdout.write(out.endsWith('\n') ? out : `${out}\n`)
+  }
+  if (err.trim().length > 0) {
+    stderr.write(err.endsWith('\n') ? err : `${err}\n`)
+  }
+
+  return typeof result.status === 'number' && result.status > 0 ? result.status : 1
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +397,7 @@ function runManagedLaunch(plan: LaunchPlan): number {
 }
 
 function runForegroundLaunch(plan: LaunchPlan): Promise<number> {
-  printHerdBrand('Herd up')
+  printHervaldBrand('Herd up')
   process.stdout.write(`Starting Herd (${plan.script}) on port ${plan.port}\n`)
   process.stdout.write(`  app: ${plan.appDir}\n`)
   process.stdout.write('  press Ctrl+C to stop\n\n')
@@ -351,6 +477,13 @@ export async function runUpCli(args: readonly string[]): Promise<number> {
 
   const dotenv = loadDotenv(appDir)
   const plan = planLaunch(parsed, appDir, dotenv)
+  if (plan.mode === 'foreground') {
+    const dbReadyExitCode = runDbReadyPreflight(plan)
+    if (dbReadyExitCode !== 0) {
+      return dbReadyExitCode
+    }
+  }
+
   const telemetrySync = await syncManagedAgentTelemetryFromSavedConfig()
 
   if (telemetrySync.config && telemetrySync.configured.length > 0) {

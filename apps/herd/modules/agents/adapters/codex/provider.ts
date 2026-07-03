@@ -26,39 +26,6 @@ import {
   teardownCodexSessionRuntime,
 } from './session.js'
 
-function asObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0
-    ? value.trim()
-    : undefined
-}
-
-function migrateLegacyCodexProviderContext(rawProviderContext: unknown) {
-  const raw = asObject(rawProviderContext)
-  if (!raw) {
-    return null
-  }
-
-  const nested = asObject(raw.providerContext)
-  const agentType = readOptionalString(raw.agentType)
-  const threadId = readOptionalString(raw.codexThreadId)
-    ?? readOptionalString(nested?.threadId)
-
-  if (agentType && agentType !== 'codex') {
-    return null
-  }
-  if (!threadId) {
-    return null
-  }
-
-  return createCodexProviderContext({ threadId })
-}
-
 function snapshotCodexSession(
   session: StreamSession,
 ): PersistedStreamSession | null {
@@ -83,7 +50,10 @@ function snapshotCodexSession(
     createdAt: session.createdAt,
     providerContext: createCodexProviderContext({
       threadId: context.threadId,
+      codexHome: context.codexHome,
     }),
+    credentialPoolId: session.credentialPoolId,
+    credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     spawnedBy: session.spawnedBy,
     spawnedWorkers: [...session.spawnedWorkers],
@@ -119,7 +89,10 @@ function snapshotExitedCodexSession(session: StreamSession): ExitedStreamSession
     createdAt: session.createdAt,
     providerContext: createCodexProviderContext({
       threadId: context.threadId,
+      codexHome: context.codexHome,
     }),
+    credentialPoolId: session.credentialPoolId,
+    credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     resumedFrom: session.resumedFrom,
     conversationEntryCount: session.conversationEntryCount,
@@ -206,7 +179,7 @@ export const codexProvider: ProviderAdapter = registerProvider({
       deps,
     )
   },
-  restore(entry, machine, deps) {
+  restore(entry, machine, deps, providerAuth) {
     const context = asCodexProviderContext(entry.providerContext)
     return this.create({
       sessionName: entry.name,
@@ -225,6 +198,7 @@ export const codexProvider: ProviderAdapter = registerProvider({
       creator: entry.creator,
       conversationId: entry.conversationId,
       currentSkillInvocation: entry.currentSkillInvocation,
+      providerAuth,
     }, deps)
   },
   snapshotForPersist(session) {
@@ -255,8 +229,5 @@ export const codexProvider: ProviderAdapter = registerProvider({
         .filter((session) => session.agentType === 'codex')
         .map(async (session) => teardownCodexSessionRuntime(session, reason ?? 'Herd shutdown')),
     )
-  },
-  migrateLegacyContext(rawProviderContext) {
-    return migrateLegacyCodexProviderContext(rawProviderContext)
   },
 })

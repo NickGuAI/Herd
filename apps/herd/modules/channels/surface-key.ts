@@ -5,13 +5,6 @@ function clean(value: string | undefined): string | undefined {
   return normalized.length > 0 ? normalized : undefined
 }
 
-export function computeChannelSurfaceKey(event: Pick<
-  ChannelInboundEvent,
-  'provider' | 'accountId' | 'peerId' | 'threadId'
->): string {
-  return getSurfaceKey(event)
-}
-
 export function getSurfaceKey(event: Pick<
   ChannelInboundEvent,
   'provider' | 'accountId' | 'peerId' | 'threadId'

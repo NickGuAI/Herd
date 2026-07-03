@@ -11,10 +11,8 @@ import type {
   OrgFormOption,
 } from './types.js'
 
-export const DEFAULT_NEW_AUTOMATION_AGENT_TYPE: OrgAgentType = 'claude'
 export const DEFAULT_NEW_AUTOMATION_TRIGGER: NewAutomationTrigger = 'schedule'
 export const DEFAULT_NEW_AUTOMATION_CADENCE_PRESET: NewAutomationCadencePreset = 'every-5-minutes'
-export const HOST_PATTERN = /^[a-zA-Z0-9_-]+$/
 export const CRON_SEGMENT_PATTERN = /^\s*\S+(?:\s+\S+){4}\s*$/
 
 function toAgentOption(provider: Pick<ProviderRegistryEntry, 'id' | 'label'>): OrgFormOption<OrgAgentType> {

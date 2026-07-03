@@ -144,7 +144,6 @@ export function createAgentsWebSocket(ctx: AgentsWebSocketContext): {
             ws.send(JSON.stringify({
               type: 'replay',
               projection,
-              events: replayEvents,
               more: replayMore,
               ...(session.kind === 'stream'
                 ? { usage: session.usage, queue }

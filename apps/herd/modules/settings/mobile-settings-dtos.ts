@@ -9,6 +9,7 @@ export type MobileSettingsSectionId =
   | 'telemetry'
   | 'notifications'
   | 'machines'
+  | 'credential-pools'
   | 'appearance'
   | 'about'
 
@@ -17,6 +18,7 @@ export type MobileSettingsSectionIcon =
   | 'radio-tower'
   | 'bell'
   | 'monitor'
+  | 'key-round'
   | 'eye'
   | 'info'
 
@@ -53,6 +55,11 @@ const MOBILE_SETTINGS_SECTION_DEFINITIONS: readonly Omit<MobileSettingsSectionDt
     id: 'machines',
     label: 'Machines',
     icon: 'monitor',
+  },
+  {
+    id: 'credential-pools',
+    label: 'Credential pools',
+    icon: 'key-round',
   },
   {
     id: 'appearance',

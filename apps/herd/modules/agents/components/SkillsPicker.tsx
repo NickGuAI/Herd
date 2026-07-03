@@ -14,7 +14,7 @@ export function SkillsPicker({
   visible: boolean
   onSelectSkill: (command: string) => boolean | void | Promise<boolean | void>
   onClose: () => void
-  variant?: 'default' | 'herd'
+  variant?: 'default' | 'hervald'
   theme?: 'light' | 'dark'
 }) {
   const { data: skills, isError, isLoading } = useSkills()
@@ -35,13 +35,13 @@ export function SkillsPicker({
       position="bottom-sheet"
       portalThemeClassName={theme === 'dark' ? 'hv-dark' : 'hv-light'}
       backdropClassName={cn(
-        variant === 'herd' && 'sheet-backdrop--herd',
-        variant === 'herd' && theme === 'dark' && 'sheet-backdrop--herd-dark',
+        variant === 'hervald' && 'sheet-backdrop--hervald',
+        variant === 'hervald' && theme === 'dark' && 'sheet-backdrop--hervald-dark',
       )}
       contentClassName={cn(
         'sheet visible',
-        variant === 'herd' && 'sheet--herd',
-        variant === 'herd' && theme === 'dark' && 'sheet--herd-dark',
+        variant === 'hervald' && 'sheet--hervald',
+        variant === 'hervald' && theme === 'dark' && 'sheet--hervald-dark',
       )}
     >
         <div className="sheet-handle">
@@ -52,7 +52,7 @@ export function SkillsPicker({
             <h3
               className={cn(
                 'font-display text-heading text-[color:var(--hv-fg)]',
-                variant === 'herd' && 'sheet-title--herd',
+                variant === 'hervald' && 'sheet-title--hervald',
               )}
             >
               Skills
@@ -61,7 +61,7 @@ export function SkillsPicker({
               onClick={onClose}
               className={cn(
                 'p-1.5 rounded-lg hover:bg-[var(--hv-surface-hover)] transition-colors',
-                variant === 'herd' && 'sheet-close--herd',
+                variant === 'hervald' && 'sheet-close--hervald',
               )}
               aria-label="Close"
             >
@@ -69,7 +69,7 @@ export function SkillsPicker({
                 size={16}
                 className={cn(
                   'text-[color:var(--hv-fg-subtle)]',
-                  variant === 'herd' && 'sheet-close-icon--herd',
+                  variant === 'hervald' && 'sheet-close-icon--hervald',
                 )}
               />
             </button>
@@ -79,7 +79,7 @@ export function SkillsPicker({
             onChange={(event) => setQuery(event.target.value)}
             className={cn(
               'w-full px-3 py-2 mb-3 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
-              variant === 'herd' && 'sheet-search--herd',
+              variant === 'hervald' && 'sheet-search--hervald',
             )}
             placeholder="Search skills..."
             aria-label="Search skills"
@@ -120,7 +120,7 @@ export function SkillsPicker({
                   className={cn(
                     'w-full text-left p-3 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] transition-colors',
                     '[-webkit-tap-highlight-color:transparent] [@media(hover:hover)]:hover:bg-[var(--hv-surface-hover)]',
-                    variant === 'herd' && 'sheet-skill--herd',
+                    variant === 'hervald' && 'sheet-skill--hervald',
                   )}
                   disabled={selectingSkillName !== null}
                 >
@@ -129,13 +129,13 @@ export function SkillsPicker({
                       size={14}
                       className={cn(
                         'text-[color:var(--hv-accent-danger)] shrink-0',
-                        variant === 'herd' && 'sheet-skill-icon--herd',
+                        variant === 'hervald' && 'sheet-skill-icon--hervald',
                       )}
                     />
                     <span
                       className={cn(
                         'font-mono text-sm text-[color:var(--hv-fg)]',
-                        variant === 'herd' && 'sheet-skill-name--herd',
+                        variant === 'hervald' && 'sheet-skill-name--hervald',
                       )}
                     >
                       /{skill.name}
@@ -148,7 +148,7 @@ export function SkillsPicker({
                     <p
                       className={cn(
                         'text-xs text-[color:var(--hv-fg-subtle)] mt-1.5 line-clamp-2',
-                        variant === 'herd' && 'sheet-skill-description--herd',
+                        variant === 'hervald' && 'sheet-skill-description--hervald',
                       )}
                     >
                       {skill.description}
@@ -158,7 +158,7 @@ export function SkillsPicker({
                     <p
                       className={cn(
                         'text-xs text-[color:var(--hv-fg-faint)] mt-1 font-mono',
-                        variant === 'herd' && 'sheet-skill-args--herd',
+                        variant === 'hervald' && 'sheet-skill-args--hervald',
                       )}
                     >
                       args: {skill.argumentHint}

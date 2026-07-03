@@ -5,6 +5,7 @@ import { isClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type {
   AgentType,
   ClaudePermissionMode,
+  CredentialPoolRecoveryRequest,
   PersistedDaemonProcess,
   PersistedSessionsState,
   PersistedStreamSession,
@@ -48,6 +49,8 @@ type RuntimeStatePayload = Partial<Pick<
   | 'resumedFrom'
   | 'spawnedWorkers'
   | 'hadResult'
+  | 'credentialPoolId'
+  | 'credentialPoolRecovery'
   | 'activeTurnId'
   | 'conversationEntryCount'
   | 'approvalBridgeNonce'
@@ -169,6 +172,46 @@ function parseCurrentQueuedMessage(value: unknown): PersistedStreamSession['curr
   return parsed?.[0]
 }
 
+function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecoveryRequest | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined
+  }
+  const record = value as Record<string, unknown>
+  const parsedProvider = parseProviderId(record.provider)
+  const provider = parsedProvider === 'claude' || parsedProvider === 'codex'
+    ? parsedProvider
+    : undefined
+  const reason = record.reason === 'manual_switch' || record.reason === 'usage_limit'
+    ? record.reason
+    : undefined
+  const requestedAt = parseOptionalNonEmptyString(record.requestedAt)
+  if (!provider || !reason || !requestedAt) {
+    return undefined
+  }
+
+  const interruptedMessage = parseCurrentQueuedMessage(record.interruptedMessage)
+  const credentialPoolId = parseOptionalNonEmptyString(record.credentialPoolId)
+  const previousCredentialPoolId = parseOptionalNonEmptyString(record.previousCredentialPoolId)
+  const resetAt = parseOptionalNonEmptyString(record.resetAt)
+  const blockedUntil = parseOptionalNonEmptyString(record.blockedUntil)
+  const interruptedTurnId = parseOptionalNonEmptyString(record.interruptedTurnId)
+  return {
+    provider,
+    ...(credentialPoolId ? { credentialPoolId } : {}),
+    ...(previousCredentialPoolId ? { previousCredentialPoolId } : {}),
+    clearResumeProviderContext: record.clearResumeProviderContext !== false,
+    reason,
+    requestedAt,
+    ...(resetAt ? { resetAt } : {}),
+    ...(blockedUntil ? { blockedUntil } : {}),
+    ...(interruptedMessage ? { interruptedMessage } : {}),
+    ...(typeof record.interruptedTurnHadSideEffects === 'boolean'
+      ? { interruptedTurnHadSideEffects: record.interruptedTurnHadSideEffects }
+      : {}),
+    ...(interruptedTurnId ? { interruptedTurnId } : {}),
+  }
+}
+
 function parseReplayEvents(value: unknown): StreamJsonEvent[] | undefined {
   if (!Array.isArray(value)) {
     return undefined
@@ -217,6 +260,8 @@ function buildRuntimeStatePayload(entry: PersistedStreamSession): RuntimeStatePa
     ...(entry.resumedFrom ? { resumedFrom: entry.resumedFrom } : {}),
     ...(entry.spawnedWorkers && entry.spawnedWorkers.length > 0 ? { spawnedWorkers: entry.spawnedWorkers } : {}),
     ...(entry.hadResult !== undefined ? { hadResult: entry.hadResult } : {}),
+    ...(entry.credentialPoolId ? { credentialPoolId: entry.credentialPoolId } : {}),
+    ...(entry.credentialPoolRecovery ? { credentialPoolRecovery: entry.credentialPoolRecovery } : {}),
     ...(entry.activeTurnId ? { activeTurnId: entry.activeTurnId } : {}),
     ...(entry.conversationEntryCount !== undefined ? { conversationEntryCount: entry.conversationEntryCount } : {}),
     ...(entry.approvalBridgeNonce ? { approvalBridgeNonce: entry.approvalBridgeNonce } : {}),
@@ -249,6 +294,8 @@ function rowToPersistedStreamSession(row: RuntimeRow): PersistedStreamSession | 
   const pendingDirectSendMessages = parseQueuedMessages(runtimeState.pendingDirectSendMessages)
   const resumedFrom = parseOptionalNonEmptyString(runtimeState.resumedFrom)
   const activeTurnId = parseOptionalNonEmptyString(runtimeState.activeTurnId)
+  const credentialPoolId = parseOptionalNonEmptyString(runtimeState.credentialPoolId)
+  const credentialPoolRecovery = parseCredentialPoolRecoveryRequest(runtimeState.credentialPoolRecovery)
   const approvalBridgeNonce = parseOptionalNonEmptyString(runtimeState.approvalBridgeNonce)
   const conversationEntryCount = parseOptionalFiniteNumber(runtimeState.conversationEntryCount)
   const currentSkillInvocation = parseActiveSkillInvocation(runtimeState.currentSkillInvocation)
@@ -274,6 +321,8 @@ function rowToPersistedStreamSession(row: RuntimeRow): PersistedStreamSession | 
     ...(row.machine_id && row.machine_id !== 'local' ? { host: row.machine_id } : {}),
     createdAt: row.created_at,
     providerContext: providerContext.providerContext,
+    ...(credentialPoolId ? { credentialPoolId } : {}),
+    ...(credentialPoolRecovery ? { credentialPoolRecovery } : {}),
     ...(providerContext.daemonProcess ? { daemonProcess: providerContext.daemonProcess } : {}),
     ...(row.spawned_by ? { spawnedBy: row.spawned_by } : {}),
     ...(resumedFrom ? { resumedFrom } : {}),

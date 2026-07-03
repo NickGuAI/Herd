@@ -67,7 +67,6 @@ try {
     console.error(`status: ${readiness.migrationStatus}`)
     console.error(`db: ${readiness.dbPath}`)
     console.error(`required schema: ${readiness.requiredSchemaVersion}`)
-    console.error(`remediation: ${readiness.remediationCommand}`)
     if (readiness.error) {
       console.error(readiness.error)
     }

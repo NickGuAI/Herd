@@ -1,22 +1,14 @@
 import { mkdir, open, readFile, rm } from 'node:fs/promises'
 import * as path from 'node:path'
-import {
-  migrateProviderContext,
-  migratedProviderContextChanged,
-} from './providers/provider-context-migration.js'
-import { writeJsonFileAtomically } from '../json-file.js'
 import { appendFileDurably, writeFileAtomically } from '../durable-file.js'
+import { writeJsonFileAtomically } from '../json-file.js'
 import {
   isTranscriptEnvelope,
   type TranscriptEnvelope,
 } from '../../src/types/transcript-envelope.js'
-import type { StreamJsonEvent } from './types.js'
 import { isTranscriptTurnEndRecord } from './transcript-records.js'
 
-export type TranscriptEvent = {
-  type?: string
-  [key: string]: unknown
-} | TranscriptEnvelope
+export type TranscriptEvent = TranscriptEnvelope
 
 export type TranscriptMeta = Record<string, unknown>
 
@@ -59,7 +51,7 @@ function resolveSessionDir(sessionName: string): string {
 }
 
 function resolveTranscriptPath(sessionName: string): string {
-  return path.join(resolveSessionDir(sessionName), 'transcript.v1.jsonl')
+  return path.join(resolveSessionDir(sessionName), 'transcript.jsonl')
 }
 
 function resolveMetaPath(sessionName: string): string {
@@ -109,9 +101,6 @@ function parseTranscriptEvent(raw: Buffer): TranscriptEvent | null {
     if (!parsed || typeof parsed !== 'object') {
       return null
     }
-    if (typeof (parsed as { type?: unknown }).type === 'string') {
-      return parsed as TranscriptEvent
-    }
     return isTranscriptEnvelope(parsed) ? parsed : null
   } catch {
     return null
@@ -132,6 +121,15 @@ export function resetTranscriptStoreRoot(): void {
 
 export function getTranscriptStoreRoot(): string {
   return transcriptRoot ?? defaultTranscriptRoot()
+}
+
+export async function flushTranscriptWrites(): Promise<void> {
+  const pendingWrites = Array.from(writeQueues.values())
+  if (pendingWrites.length === 0) {
+    return
+  }
+  await Promise.all(pendingWrites)
+  await flushTranscriptWrites()
 }
 
 export async function deleteSessionTranscript(sessionName: string): Promise<void> {
@@ -199,7 +197,7 @@ async function readTranscriptTailPageInternal(
           if (!parsed) {
             continue
           }
-          if (isTranscriptTurnEndRecord(parsed as StreamJsonEvent)) {
+          if (isTranscriptTurnEndRecord(parsed)) {
             if (completedTurnsKept >= turnsToKeep) {
               reachedBoundary = true
               break
@@ -219,8 +217,8 @@ async function readTranscriptTailPageInternal(
       if (!reachedBoundary && remainder.length > 0) {
         const parsed = parseTranscriptEvent(remainder)
         if (parsed) {
-          if (!isTranscriptTurnEndRecord(parsed as StreamJsonEvent) || completedTurnsKept < turnsToKeep) {
-            if (isTranscriptTurnEndRecord(parsed as StreamJsonEvent)) {
+          if (!isTranscriptTurnEndRecord(parsed) || completedTurnsKept < turnsToKeep) {
+            if (isTranscriptTurnEndRecord(parsed)) {
               completedTurnsKept += 1
             }
             eventsInReverse.push(parsed)
@@ -336,17 +334,7 @@ export async function readSessionMeta(sessionName: string): Promise<TranscriptMe
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return null
     }
-    const { cleaned } = migrateProviderContext(parsed as Record<string, unknown>)
-    if (migratedProviderContextChanged(parsed as Record<string, unknown>, cleaned)) {
-      await queueWrite(metaPath, async () => {
-        await writeJsonFileAtomically(metaPath, cleaned, {
-          backup: true,
-          trailingNewline: true,
-        })
-      })
-      console.warn(`[agents][migration] Migrated providerContext in "${metaPath}" (records=1)`)
-    }
-    return cleaned as TranscriptMeta
+    return parsed as TranscriptMeta
   } catch {
     return null
   }

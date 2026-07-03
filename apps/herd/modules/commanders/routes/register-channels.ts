@@ -14,6 +14,7 @@ import {
   recordChannelReplyDeliveryDelivered,
   stopConversationSession,
 } from './conversation-runtime.js'
+import { createTranscriptId } from '../../agents/transcript-id.js'
 import { resolveConversationVoiceConfig } from '../voice-config.js'
 import type { ParsedChannelMessageInput } from '../route-parsers.js'
 import type { ChannelAdapter, ChannelInboundEvent } from '../../channels/types.js'
@@ -36,6 +37,7 @@ interface ChannelMessageDuplicateResponseInput {
 }
 
 const inFlightChannelMessageDeliveries = new Map<string, Promise<boolean>>()
+let generatedChannelClientSendSequence = 0
 
 function requestAbortSignal(
   req: import('express').Request,
@@ -105,6 +107,23 @@ function channelMessageIdempotencyKey(input: ChannelMessageIdempotencyInput): st
     input.accountId.trim(),
     input.rawSourceId.trim(),
   ])
+}
+
+function channelClientSendId(input: ChannelMessageIdempotencyInput, explicitRawSourceId: boolean, now: Date): string {
+  generatedChannelClientSendSequence = (generatedChannelClientSendSequence + 1) % Number.MAX_SAFE_INTEGER
+  const sourceId = explicitRawSourceId
+    ? input.rawSourceId.trim()
+    : [
+        'generated',
+        now.getTime().toString(36),
+        String(generatedChannelClientSendSequence),
+      ].join('-')
+  return [
+    'channel',
+    input.provider.trim().toLowerCase(),
+    input.accountId.trim(),
+    sourceId,
+  ].join(':')
 }
 
 async function waitForInFlightChannelMessageDelivery(
@@ -186,23 +205,37 @@ async function appendVoiceTranscriptLedgerEntry(input: {
   if (!audio) {
     return
   }
+  const now = new Date().toISOString()
   await appendTranscriptEvent(buildConversationSessionName(input.conversation), {
-    type: 'channel_voice_transcript',
-    timestamp: new Date().toISOString(),
-    status: input.status,
-    provider: input.event.provider,
-    accountId: input.event.accountId,
-    peerId: input.event.peerId,
-    threadId: input.event.threadId,
-    rawSourceId: input.event.rawSourceId,
-    ...(input.transcript ? { transcript: input.transcript } : {}),
-    ...(input.error ? { error: input.error instanceof Error ? input.error.message : String(input.error) } : {}),
-    audioRef: {
-      mimeType: audio.mimeType,
-      durationMs: audio.durationMs,
-      byteLength: audio.buffer.length,
-      encoding: 'base64',
-      data: audio.buffer.toString('base64'),
+    schemaVersion: 2,
+    id: createTranscriptId(),
+    time: now,
+    source: {
+      provider: input.event.provider,
+      backend: 'channel',
+      rawEventId: input.event.rawSourceId,
+      rawEventType: 'channel_voice_transcript',
+    },
+    ev: {
+      type: 'provider.activity',
+      title: 'Channel voice transcript',
+      data: {
+        status: input.status,
+        provider: input.event.provider,
+        accountId: input.event.accountId,
+        peerId: input.event.peerId,
+        threadId: input.event.threadId,
+        rawSourceId: input.event.rawSourceId,
+        ...(input.transcript ? { transcript: input.transcript } : {}),
+        ...(input.error ? { error: input.error instanceof Error ? input.error.message : String(input.error) } : {}),
+        audioRef: {
+          mimeType: audio.mimeType,
+          durationMs: audio.durationMs,
+          byteLength: audio.buffer.length,
+          encoding: 'base64',
+          data: audio.buffer.toString('base64'),
+        },
+      },
     },
   })
 }
@@ -360,13 +393,12 @@ export function registerChannelRoutes(
         return
       }
 
-      const idempotencyInput = explicitRawSourceId
-        ? {
-          provider: event.provider,
-          accountId: event.accountId,
-          rawSourceId: explicitRawSourceId,
-        }
-        : null
+      const deliveryIdentity = {
+        provider: event.provider,
+        accountId: event.accountId,
+        rawSourceId: event.rawSourceId,
+      }
+      const idempotencyInput = explicitRawSourceId ? deliveryIdentity : null
       if (idempotencyInput) {
         if (
           await waitForInFlightChannelMessageDelivery(idempotencyInput)
@@ -428,7 +460,7 @@ export function registerChannelRoutes(
         delivered = await deliverConversationMessage(
           context,
           resolved.conversation,
-          { message },
+          { message, clientSendId: channelClientSendId(deliveryIdentity, Boolean(explicitRawSourceId), context.now()) },
           {
             ...sendOptions,
             autoStartIdle: true,
@@ -439,6 +471,10 @@ export function registerChannelRoutes(
         if (delivered.ok && idempotencyInput) {
           await context.channelMessageIdempotencyLedger.claim({
             ...idempotencyInput,
+            commanderId: commander.id,
+            conversationId: delivered.conversation.id,
+            sessionKey: channelMeta.sessionKey,
+            surfaceKey: resolved.binding.surfaceKey,
             now: context.now(),
           })
           deliverySucceeded = true

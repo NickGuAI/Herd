@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import {
   buildCommanderSessionSeedFromResolvedWorkflow,
@@ -12,14 +13,15 @@ import { COMMANDER_STARTUP_USER_EVENT_SUBTYPE } from '../../agents/user-event-su
 import type { MsgItem } from '../../agents/messages/model.js'
 import { mergeCanonicalStreamEvents } from '../../agents/messages/canonical-timeline.js'
 import { readTranscriptTailPage } from '../../agents/transcript-store.js'
+import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import { STARTUP_PROMPT } from './context.js'
 import type { CommanderSession } from '../store.js'
 import { resolveCommanderWorkflow } from '../workflow-resolution.js'
-import type { ChannelReplyDelivery, Conversation } from '../conversation-store.js'
-import type { CommanderRoutesContext } from './types.js'
-import { sanitizeProviderContextForPersistence } from '../../agents/providers/provider-context-migration.js'
+import type { ChannelReplyDelivery, ChannelReplyIntent, Conversation } from '../conversation-store.js'
+import type { ChannelReplyForwarder, CommanderRoutesContext } from './types.js'
+import { sanitizeProviderContextForPersistence } from '../../agents/providers/provider-context-normalization.js'
 import { asClaudeProviderContext } from '../../agents/providers/provider-session-context.js'
-import { getProvider } from '../../agents/providers/registry.js'
+import { getProvider, resolveDefaultProviderId } from '../../agents/providers/registry.js'
 import { resolveProviderDefaults } from '../../agents/providers/provider-adapter.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
 import { hasNativeProviderResumeIdentifier } from '../../agents/providers/native-resume.js'
@@ -46,6 +48,10 @@ const DEFAULT_TRANSCRIPT_TAIL_EVENT_LIMIT = 500
 const MAX_TRANSCRIPT_TAIL_EVENT_LIMIT = 5_000
 const MAX_TRANSCRIPT_TAIL_READ_ATTEMPTS = 5
 const CLIENT_SEND_ID_DEDUPE_TAIL_TURNS = 200
+const CHANNEL_REPLY_INTENT_HISTORY_LIMIT = 100
+const CHANNEL_REPLY_RECONCILIATION_DELAYS_MS = [0, 1000, 5000] as const
+const DEFAULT_CHANNEL_REPLY_RECONCILIATION_RETRY_MS = 5000
+const CHANNEL_REPLY_UNDELIVERABLE_MESSAGE = 'No automatic channel reply was available to send.'
 const DEEP_THINKING_RESEARCH_ROLES = ['context-research', 'risk-research'] as const
 const DEEP_THINKING_THINKING_ROLES = ['inversion-thinking', 'synthesis-thinking', 'operational-thinking'] as const
 const DEFAULT_DEEP_THINKING_WORKER_WAIT_TIMEOUT_MS = 10 * 60 * 1000
@@ -62,6 +68,7 @@ let deepThinkingDispatchSequence = 0
 let deepThinkingWorkerWaitTimeoutMs = DEFAULT_DEEP_THINKING_WORKER_WAIT_TIMEOUT_MS
 let deepThinkingWorkerPollMs = DEFAULT_DEEP_THINKING_WORKER_POLL_MS
 let deepThinkingOperationScheduleDelayMs = DEFAULT_DEEP_THINKING_OPERATION_SCHEDULE_DELAY_MS
+let channelReplyReconciliationRetryMs = DEFAULT_CHANNEL_REPLY_RECONCILIATION_RETRY_MS
 
 interface DeepThinkingOperationRegistration {
   controller: AbortController
@@ -74,6 +81,9 @@ interface DeepThinkingOperationRegistration {
 
 const deepThinkingOperations = new Map<string, DeepThinkingOperationRegistration>()
 const inFlightConversationDeliveries = new Map<string, Promise<DeliverConversationMessageResult>>()
+const inFlightChannelReplyDeliveryIds = new Set<string>()
+const channelReplyReconciliationRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+let channelReplyClientSendSequence = 0
 
 export function configureDeepThinkingRoutingForTest(options: {
   workerWaitTimeoutMs?: number
@@ -92,6 +102,20 @@ export function resetDeepThinkingRoutingStateForTest(): void {
   deepThinkingOperations.clear()
   deepThinkingDispatchSequence = 0
   configureDeepThinkingRoutingForTest({})
+}
+
+export function configureChannelReplyReconciliationForTest(options: {
+  retryMs?: number
+}): void {
+  channelReplyReconciliationRetryMs = options.retryMs ?? DEFAULT_CHANNEL_REPLY_RECONCILIATION_RETRY_MS
+}
+
+export function resetChannelReplyReconciliationStateForTest(): void {
+  for (const timer of channelReplyReconciliationRetryTimers.values()) {
+    clearTimeout(timer)
+  }
+  channelReplyReconciliationRetryTimers.clear()
+  configureChannelReplyReconciliationForTest({})
 }
 
 function stripDeepThinkingTriggers(message: string): string {
@@ -131,10 +155,6 @@ function hasExplicitDeepThinkingTrigger(message: string): boolean {
     /\btake\s+(?:a\s+)?(?:deep|harder|more\s+careful)\s+(?:think|look)\b/,
     /深入思考|深度思考|多轮思考|认真思考|仔细思考/,
   ].some((pattern) => pattern.test(normalized))
-}
-
-export function isSubstantiveDeepThinkingRequest(message: string): boolean {
-  return hasExplicitDeepThinkingTrigger(message) && hasSubstantiveDeepThinkingSubject(message)
 }
 
 export interface ConversationMessagesPageOptions {
@@ -294,6 +314,8 @@ export interface ConversationSpawnOptions {
   effort?: ClaudeEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
+  credentialPoolId?: string
+  clearResumeProviderContext?: boolean
 }
 
 interface ConversationStartLifecycleCallbacks {
@@ -316,8 +338,10 @@ interface PreparedConversationSession {
     cwd?: string
     host?: string
     resumeProviderContext?: Conversation['providerContext']
+    credentialPoolId?: string
     maxTurns?: number
   }
+  credentialRecoveryApplied?: boolean
 }
 
 async function hasConversationTranscriptMessages(
@@ -365,12 +389,49 @@ async function prepareConversationSession(
     throw new Error('sessionsInterface not configured')
   }
 
-  const commanderAgentType = commander.agentType ?? 'claude'
+  const commanderAgentType = commander.agentType ?? resolveDefaultProviderId()
   const agentType = spawnOptions?.agentType ?? conversation.agentType ?? commanderAgentType
   const provider = getProvider(agentType)
   const providerDefaults = provider ? resolveProviderDefaults(provider) : undefined
+  const cwd = commander.cwd ?? undefined
+  const host = commander.host ?? undefined
+  const sessionName = buildConversationSessionName(conversation)
+  const liveSession = context.sessionsInterface.getSession(sessionName)
+  const queuedCredentialRecovery = context.sessionsInterface.getCredentialRecoveryRequest?.(sessionName)
+  const liveCredentialRecovery = liveSession?.credentialPoolRecovery
+  const credentialRecovery = queuedCredentialRecovery?.provider === agentType
+    ? queuedCredentialRecovery
+    : liveCredentialRecovery?.provider === agentType
+      ? liveCredentialRecovery
+      : undefined
+  const activeCredentialPoolId = await context.sessionsInterface.getActiveCredentialPoolId?.(agentType)
+  const activeCredentialStale = Boolean(
+    activeCredentialPoolId
+      && conversation.credentialPoolId
+      && conversation.credentialPoolId !== activeCredentialPoolId,
+  )
+  const credentialPoolId = spawnOptions?.credentialPoolId
+    ?? credentialRecovery?.credentialPoolId
+    ?? (activeCredentialStale ? activeCredentialPoolId : undefined)
+  const clearResumeProviderContext = Boolean(
+    spawnOptions?.clearResumeProviderContext
+      || credentialRecovery?.clearResumeProviderContext
+      || activeCredentialStale,
+  )
+  const resumeProviderContext = clearResumeProviderContext
+    ? undefined
+    : conversation.providerContext
+  const hasNativeResumeIdentifier = provider
+    ? hasNativeProviderResumeIdentifier({
+      provider,
+      agentType,
+      providerContext: resumeProviderContext,
+      sessionName,
+      cwd: cwd ?? process.env.HOME ?? '/tmp',
+    })
+    : false
   const conversationClaudeContext = conversation.agentType === agentType
-    ? asClaudeProviderContext(conversation.providerContext)
+    ? asClaudeProviderContext(resumeProviderContext)
     : null
   const commanderClaudeContext = commander.agentType === agentType
     ? asClaudeProviderContext(commander.providerContext)
@@ -381,11 +442,12 @@ async function prepareConversationSession(
   const conversationModel = conversation.agentType === agentType
     ? (conversation.model ?? undefined)
     : undefined
+  const inheritedModel = conversationModel ?? (agentType === commanderAgentType
+    ? (commander.model ?? undefined)
+    : undefined)
   const model = hasSpawnModel
     ? (spawnOptions?.model ?? undefined)
-    : conversationModel ?? (agentType === commanderAgentType
-      ? (commander.model ?? undefined)
-      : undefined)
+    : inheritedModel ?? (hasNativeResumeIdentifier ? undefined : providerDefaults?.model) ?? undefined
   const effort = provider?.uiCapabilities.supportsEffort
     ? spawnOptions?.effort
       ?? conversationClaudeContext?.effort
@@ -407,18 +469,6 @@ async function prepareConversationSession(
       ?? commanderClaudeContext?.maxThinkingTokens
       ?? providerDefaults?.maxThinkingTokens
     : undefined
-  const cwd = commander.cwd ?? undefined
-  const host = commander.host ?? undefined
-  const sessionName = buildConversationSessionName(conversation)
-  const hasNativeResumeIdentifier = provider
-    ? hasNativeProviderResumeIdentifier({
-      provider,
-      agentType,
-      providerContext: conversation.providerContext,
-      sessionName,
-      cwd: cwd ?? process.env.HOME ?? '/tmp',
-    })
-    : false
   const hasPriorTranscriptMessages = hasNativeResumeIdentifier || !mayHavePriorConversationHistory(conversation)
     ? false
     : await hasConversationTranscriptMessages(context, conversation)
@@ -460,9 +510,11 @@ async function prepareConversationSession(
       maxThinkingTokens,
       cwd,
       host,
-      resumeProviderContext: conversation.providerContext,
+      resumeProviderContext,
+      credentialPoolId,
       maxTurns: built.maxTurns,
     },
+    credentialRecoveryApplied: Boolean(credentialRecovery || activeCredentialStale),
   }
 }
 
@@ -477,6 +529,7 @@ function applyLiveSessionState(
     agentType: nextAgentType,
     model: liveSession?.model,
     providerContext: sanitizeConversationProviderContext(liveSession) ?? current.providerContext,
+    ...(liveSession?.credentialPoolId ? { credentialPoolId: liveSession.credentialPoolId } : {}),
     status: nextStatus,
     lastHeartbeat: nextStatus === 'active' ? null : current.lastHeartbeat,
     heartbeatTickCount: nextStatus === 'active' ? 0 : current.heartbeatTickCount,
@@ -503,6 +556,15 @@ function isCompatibleLiveConversationSession(
   createSessionInput: PreparedConversationSession['createSessionInput'],
 ): liveSession is StreamSession {
   if (!liveSession) {
+    return false
+  }
+  if (liveSession.credentialPoolRecovery) {
+    return false
+  }
+  if (
+    createSessionInput.credentialPoolId
+    && liveSession.credentialPoolId !== createSessionInput.credentialPoolId
+  ) {
     return false
   }
 
@@ -581,9 +643,12 @@ export async function startConversationSession(
   const { sessionName, createSessionInput } = prepared
   const existingSession = sessionsInterface.getSession(sessionName)
   const reusingLiveSession = isCompatibleLiveConversationSession(existingSession, createSessionInput)
+  const replacingForCredentialRecovery = Boolean(
+    existingSession && !reusingLiveSession && prepared.credentialRecoveryApplied,
+  )
   if (reusingLiveSession) {
     refreshLiveConversationSessionPrompt(existingSession, createSessionInput)
-  } else {
+  } else if (!replacingForCredentialRecovery) {
     removeChannelReplyForwarder(context, sessionName)
     sessionsInterface.deleteSession(sessionName)
   }
@@ -591,8 +656,14 @@ export async function startConversationSession(
   let liveSession: StreamSession
   if (reusingLiveSession) {
     liveSession = existingSession
+  } else if (replacingForCredentialRecovery && sessionsInterface.replaceCommanderSession) {
+    liveSession = await sessionsInterface.replaceCommanderSession(createSessionInput)
+    sessionsInterface.clearCredentialRecoveryRequest?.(sessionName)
   } else {
     liveSession = await sessionsInterface.createCommanderSession(createSessionInput)
+    if (prepared.credentialRecoveryApplied) {
+      sessionsInterface.clearCredentialRecoveryRequest?.(sessionName)
+    }
   }
 
   const updated = await context.conversationStore.update(conversation.id, (current) => ({
@@ -606,15 +677,17 @@ export async function startConversationSession(
     commanderId,
     prepared.commander.heartbeat,
   )
-  if (dispatchChannelReplies) {
-    ensureChannelReplyForwarder(context, heartbeatConversation, {
-      skipCompletedTurns: channelReplySkipCompletedTurns,
-    })
-  }
-
   const isBackendStartupPrompt = initialMessage == null
     && !reusingLiveSession
     && !conversation.providerContext
+  if (dispatchChannelReplies) {
+    ensureChannelReplyForwarder(context, heartbeatConversation, {
+      skipCompletedTurns: isBackendStartupPrompt
+        ? channelReplySkipCompletedTurns
+        : 0,
+    })
+  }
+
   const messageToSend = initialMessage ?? (isBackendStartupPrompt ? STARTUP_PROMPT : null)
   const sent = messageToSend
     ? await sessionsInterface.sendToSession(
@@ -718,13 +791,12 @@ export interface DeliverConversationMessageOptions {
   dispatchChannelReplies?: boolean
   /**
    * When `true`, an `idle` conversation is auto-started before delivering the
-   * message instead of returning 409. This is the explicit opt-in for channel
-   * webhook surfaces (whatsapp/telegram/discord) where the inbound message
-   * itself is the implicit start signal — UI surfaces must keep the default
-   * `false` so explicit Start clicks remain the only resume path.
-   * See codex-review P1 on PR #1279 (comment 3174904129).
+   * message instead of returning 409. Channel webhook surfaces keep the
+   * commander startup seed before queueing inbound text; UI text sends opt out
+   * of that seed so the user's submitted message is dispatched once.
    */
   autoStartIdle?: boolean
+  autoStartSeedPrompt?: boolean
   /**
    * Spawn options applied when `autoStartIdle` triggers `startConversationSession`.
    * Ignored when the conversation is already active.
@@ -1465,10 +1537,6 @@ async function sendConversationPayloadWithDeepThinkingGuard(input: {
   return { ok: true }
 }
 
-function eventType(event: StreamJsonEvent): string {
-  return typeof event.type === 'string' ? event.type : ''
-}
-
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -1534,35 +1602,126 @@ function conversationDeliveryDedupeKey(conversation: Conversation, clientSendId:
   return normalizedClientSendId ? `${conversation.id}:${normalizedClientSendId}` : null
 }
 
-function extractAssistantReplyText(events: readonly StreamJsonEvent[]): string | null {
-  const messages = mapStreamEventsToMessages(events)
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message.kind !== 'agent') {
-      continue
-    }
-    const text = message.text.trim()
-    if (text) {
-      return text
-    }
-  }
-  return null
-}
-
 function removeChannelReplyForwarder(
   context: CommanderRoutesContext,
   sessionName: string,
 ): void {
-  const unsubscribe = context.channelReplyForwarders.get(sessionName)
-  if (!unsubscribe) {
+  const forwarder = context.channelReplyForwarders.get(sessionName)
+  if (!forwarder) {
     return
   }
-  unsubscribe()
+  forwarder.unsubscribe()
   context.channelReplyForwarders.delete(sessionName)
 }
 
 interface ChannelReplyForwarderOptions {
   skipCompletedTurns?: number
+}
+
+function isSuccessfulTurnEndStatus(status: unknown): boolean {
+  if (typeof status !== 'string' || !status.trim()) {
+    return true
+  }
+  const normalized = status.trim().toLowerCase()
+  return normalized === 'ok' || normalized === 'completed' || normalized === 'success'
+}
+
+function isTopLevelSuccessfulTurnEnd(event: StreamJsonEvent): boolean {
+  return isTranscriptEnvelope(event)
+    && event.ev.type === 'turn.end'
+    && !event.subagentId
+    && isSuccessfulTurnEndStatus(event.ev.status)
+}
+
+function isTopLevelTurnEnd(event: StreamJsonEvent): boolean {
+  return isTranscriptEnvelope(event)
+    && event.ev.type === 'turn.end'
+    && !event.subagentId
+}
+
+function isTopLevelTurnStart(event: StreamJsonEvent): boolean {
+  return isTranscriptEnvelope(event)
+    && event.ev.type === 'turn.start'
+    && !event.subagentId
+}
+
+function transcriptTurnId(event: StreamJsonEvent): string | null {
+  if (!isTranscriptEnvelope(event) || event.subagentId) {
+    return null
+  }
+  const turnId = typeof event.turnId === 'string' ? event.turnId.trim() : ''
+  return turnId || null
+}
+
+function matchingUserClientSend(
+  event: StreamJsonEvent,
+  pendingClientSendIds: ReadonlySet<string>,
+): { clientSendId: string; turnId: string | null } | null {
+  if (
+    !isTranscriptEnvelope(event) ||
+    event.ev.type !== 'message.start' ||
+    event.ev.role !== 'user' ||
+    event.subagentId
+  ) {
+    return null
+  }
+  const clientSendId = normalizeClientSendId(event.clientSendId)
+  const turnId = transcriptTurnId(event)
+  return clientSendId && pendingClientSendIds.has(clientSendId)
+    ? { clientSendId, turnId }
+    : null
+}
+
+function isTopLevelAssistantMessageStart(event: StreamJsonEvent): boolean {
+  return isTranscriptEnvelope(event)
+    && event.ev.type === 'message.start'
+    && event.ev.role === 'assistant'
+    && !event.subagentId
+}
+
+function isSameTranscriptTurn(event: StreamJsonEvent, turnId: string | null): boolean {
+  return isTranscriptEnvelope(event)
+    && (!turnId || event.turnId === turnId)
+    && !event.subagentId
+}
+
+function shouldBindActiveTurn(event: StreamJsonEvent): boolean {
+  return isTopLevelTurnStart(event) || isTopLevelAssistantMessageStart(event)
+}
+
+function extractTopLevelAssistantReplyText(events: readonly StreamJsonEvent[]): string | null {
+  let currentParts: string[] = []
+  let currentIsAssistant = false
+  let lastAssistantText: string | null = null
+
+  for (const event of events) {
+    if (!isTranscriptEnvelope(event) || event.subagentId) {
+      continue
+    }
+    if (event.ev.type === 'message.start') {
+      currentIsAssistant = event.ev.role === 'assistant'
+      currentParts = []
+      continue
+    }
+    if (!currentIsAssistant) {
+      continue
+    }
+    if (event.ev.type === 'message.delta' && (!event.ev.channel || event.ev.channel === 'final')) {
+      currentParts.push(event.ev.text)
+      continue
+    }
+    if (event.ev.type === 'message.end') {
+      const text = currentParts.join('').trim()
+      if (text) {
+        lastAssistantText = text
+      }
+      currentParts = []
+      currentIsAssistant = false
+    }
+  }
+
+  const trailingText = currentIsAssistant ? currentParts.join('').trim() : ''
+  return trailingText || lastAssistantText
 }
 
 function channelReplyDeliveryId(conversationId: string, now: Date, attemptCount: number): string {
@@ -1574,10 +1733,120 @@ function channelReplyDeliveryId(conversationId: string, now: Date, attemptCount:
   ].join('-')
 }
 
+function channelReplyIntentId(conversationId: string, clientSendId: string): string {
+  const digest = createHash('sha256').update(clientSendId).digest('hex').slice(0, 16)
+  return [
+    'channel-reply-intent',
+    conversationId.slice(0, 8),
+    digest,
+  ].join('-')
+}
+
+function pruneChannelReplyIntents(intents: ChannelReplyIntent[]): ChannelReplyIntent[] {
+  if (intents.length <= CHANNEL_REPLY_INTENT_HISTORY_LIMIT) {
+    return intents
+  }
+
+  const pending = intents.filter((intent) => intent.status === 'pending')
+  const settled = intents.filter((intent) => intent.status !== 'pending')
+  const settledLimit = Math.max(0, CHANNEL_REPLY_INTENT_HISTORY_LIMIT - pending.length)
+  return [
+    ...(settledLimit > 0 ? settled.slice(-settledLimit) : []),
+    ...pending,
+  ]
+}
+
+function isActivePendingChannelReplyDelivery(
+  delivery: ChannelReplyDelivery | undefined,
+  intents: ChannelReplyIntent[],
+): boolean {
+  if (delivery?.status !== 'pending') {
+    return false
+  }
+  if (inFlightChannelReplyDeliveryIds.has(delivery.id)) {
+    return true
+  }
+  return intents.some((intent) => intent.status === 'pending' && intent.deliveryId === delivery.id)
+}
+
+async function recordChannelReplyIntentPending(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string | undefined,
+): Promise<void> {
+  const normalizedClientSendId = normalizeClientSendId(clientSendId)
+  if (!normalizedClientSendId) {
+    return
+  }
+
+  const timestamp = context.now().toISOString()
+  await context.conversationStore.update(conversation.id, (current) => {
+    if (!current.channelMeta || !current.lastRoute) {
+      return current
+    }
+
+    const intents = current.channelReplyIntents ?? []
+    if (intents.some((intent) => intent.clientSendId === normalizedClientSendId)) {
+      return current
+    }
+
+    const provider = current.channelMeta.provider
+    const lastRoute = {
+      ...current.lastRoute,
+      channel: provider,
+    }
+    const nextIntent: ChannelReplyIntent = {
+      id: channelReplyIntentId(current.id, normalizedClientSendId),
+      clientSendId: normalizedClientSendId,
+      status: 'pending',
+      provider,
+      sessionKey: current.channelMeta.sessionKey,
+      lastRoute,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+
+    return {
+      ...current,
+      channelReplyIntents: pruneChannelReplyIntents([
+        ...intents,
+        nextIntent,
+      ]),
+    }
+  })
+}
+
+async function removePendingChannelReplyIntent(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string | undefined,
+): Promise<void> {
+  const normalizedClientSendId = normalizeClientSendId(clientSendId)
+  if (!normalizedClientSendId) {
+    return
+  }
+
+  await context.conversationStore.update(conversation.id, (current) => {
+    const intents = current.channelReplyIntents ?? []
+    const nextIntents = intents.filter((intent) =>
+      intent.clientSendId !== normalizedClientSendId ||
+      intent.status !== 'pending' ||
+      Boolean(intent.deliveryId))
+    if (nextIntents.length === intents.length) {
+      return current
+    }
+    return {
+      ...current,
+      channelReplyIntents: nextIntents.length > 0 ? nextIntents : undefined,
+    }
+  })
+}
+
 async function recordChannelReplyDeliveryPending(
   context: CommanderRoutesContext,
   conversation: Conversation,
   message: string,
+  clientSendId?: string,
 ): Promise<ChannelReplyDelivery | null> {
   const now = context.now()
   const timestamp = now.toISOString()
@@ -1602,6 +1871,7 @@ async function recordChannelReplyDeliveryPending(
         id: channelReplyDeliveryId(current.id, now, attemptCount),
         status: 'pending',
         message,
+        ...(clientSendId ? { clientSendId } : {}),
         provider,
         sessionKey: current.channelMeta.sessionKey,
         lastRoute,
@@ -1613,6 +1883,73 @@ async function recordChannelReplyDeliveryPending(
   })
 
   return updated?.channelReplyDelivery ?? null
+}
+
+async function claimChannelReplyIntentForDelivery(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string,
+  message: string,
+): Promise<ChannelReplyDelivery | null> {
+  const now = context.now()
+  const timestamp = now.toISOString()
+  let claimedDelivery: ChannelReplyDelivery | null = null
+
+  await context.conversationStore.update(conversation.id, (current) => {
+    if (!current.channelMeta || !current.lastRoute) {
+      return current
+    }
+
+    const intents = current.channelReplyIntents ?? []
+    const intent = intents.find((candidate) => candidate.clientSendId === clientSendId)
+    if (!intent || intent.status !== 'pending' || intent.deliveryId) {
+      return current
+    }
+
+    const previous = current.channelReplyDelivery
+    if (isActivePendingChannelReplyDelivery(previous, intents)) {
+      return current
+    }
+
+    const attemptCount = previous?.message === message
+      ? previous.attemptCount + 1
+      : 1
+    const provider = current.channelMeta.provider
+    const lastRoute = {
+      ...current.lastRoute,
+      channel: provider,
+    }
+    const delivery: ChannelReplyDelivery = {
+      id: channelReplyDeliveryId(current.id, now, attemptCount),
+      status: 'pending',
+      message,
+      clientSendId,
+      provider,
+      sessionKey: current.channelMeta.sessionKey,
+      lastRoute,
+      attemptCount,
+      attemptedAt: timestamp,
+      updatedAt: timestamp,
+    }
+    claimedDelivery = delivery
+
+    return {
+      ...current,
+      channelReplyDelivery: delivery,
+      channelReplyIntents: pruneChannelReplyIntents(intents.map((candidate) =>
+        candidate.clientSendId === clientSendId
+          ? {
+              ...candidate,
+              deliveryId: delivery.id,
+              message,
+              updatedAt: timestamp,
+            }
+          : candidate,
+      )),
+    }
+  })
+
+  return claimedDelivery
 }
 
 async function recordChannelReplyDeliveryFailed(
@@ -1638,6 +1975,17 @@ async function recordChannelReplyDeliveryFailed(
         failedAt: timestamp,
         updatedAt: timestamp,
       },
+      channelReplyIntents: current.channelReplyIntents?.map((intent) =>
+        intent.deliveryId === input.deliveryId
+          ? {
+              ...intent,
+              status: 'failed',
+              error: input.error,
+              settledAt: timestamp,
+              updatedAt: timestamp,
+            }
+          : intent,
+      ),
       lastMessageAt: timestamp,
     }
   })
@@ -1677,6 +2025,91 @@ export async function recordChannelReplyDeliveryDelivered(
         deliveredAt: timestamp,
         updatedAt: timestamp,
       },
+      channelReplyIntents: current.channelReplyIntents?.map((intent) =>
+        intent.deliveryId === delivery.id
+          ? {
+              ...intent,
+              status: 'delivered',
+              settledAt: timestamp,
+              updatedAt: timestamp,
+            }
+          : intent,
+      ),
+      lastMessageAt: timestamp,
+    }
+  })
+}
+
+async function recordChannelReplyIntentFailed(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string,
+  error: string,
+): Promise<void> {
+  const normalizedClientSendId = normalizeClientSendId(clientSendId)
+  if (!normalizedClientSendId) {
+    return
+  }
+
+  const now = context.now()
+  const timestamp = now.toISOString()
+  await context.conversationStore.update(conversation.id, (current) => {
+    if (!current.channelMeta || !current.lastRoute) {
+      return current
+    }
+
+    const intents = current.channelReplyIntents ?? []
+    const intent = intents.find((candidate) =>
+      candidate.clientSendId === normalizedClientSendId && candidate.status === 'pending')
+    if (!intent) {
+      return current
+    }
+
+    const existingDelivery = intent.deliveryId && current.channelReplyDelivery?.id === intent.deliveryId
+      ? current.channelReplyDelivery
+      : null
+    const provider = current.channelMeta.provider
+    const lastRoute = {
+      ...current.lastRoute,
+      channel: provider,
+    }
+    const message = existingDelivery?.message
+      ?? intent.message
+      ?? CHANNEL_REPLY_UNDELIVERABLE_MESSAGE
+    const previous = current.channelReplyDelivery
+    const attemptCount = existingDelivery?.attemptCount
+      ?? (previous?.message === message ? previous.attemptCount + 1 : 1)
+    const delivery: ChannelReplyDelivery = {
+      id: existingDelivery?.id ?? channelReplyDeliveryId(current.id, now, attemptCount),
+      status: 'failed',
+      message,
+      clientSendId: normalizedClientSendId,
+      provider,
+      sessionKey: current.channelMeta.sessionKey,
+      lastRoute,
+      attemptCount,
+      attemptedAt: existingDelivery?.attemptedAt ?? timestamp,
+      failedAt: timestamp,
+      updatedAt: timestamp,
+      error,
+    }
+
+    return {
+      ...current,
+      channelReplyDelivery: delivery,
+      channelReplyIntents: pruneChannelReplyIntents(intents.map((candidate) =>
+        candidate.clientSendId === normalizedClientSendId
+          ? {
+              ...candidate,
+              status: 'failed',
+              deliveryId: delivery.id,
+              message,
+              error,
+              settledAt: timestamp,
+              updatedAt: timestamp,
+            }
+          : candidate,
+      )),
       lastMessageAt: timestamp,
     }
   })
@@ -1686,6 +2119,7 @@ async function dispatchAutomaticChannelReply(
   context: CommanderRoutesContext,
   conversation: Conversation,
   message: string,
+  clientSendId?: string,
 ): Promise<void> {
   let delivery: ChannelReplyDelivery | null = null
   const recordFailure = async (error: string): Promise<void> => {
@@ -1706,7 +2140,17 @@ async function dispatchAutomaticChannelReply(
     }
   }
   try {
-    delivery = await recordChannelReplyDeliveryPending(context, conversation, message)
+    const normalizedClientSendId = normalizeClientSendId(clientSendId)
+    delivery = normalizedClientSendId
+      ? await claimChannelReplyIntentForDelivery(context, conversation, normalizedClientSendId, message)
+      : await recordChannelReplyDeliveryPending(context, conversation, message)
+    if (!delivery) {
+      if (normalizedClientSendId) {
+        scheduleAutomaticChannelReplyReconciliationRetry(context, conversation)
+      }
+      return
+    }
+    inFlightChannelReplyDeliveryIds.add(delivery.id)
     const result = await context.dispatchCommanderChannelReply({
       commanderId: conversation.commanderId,
       conversationId: conversation.id,
@@ -1734,6 +2178,211 @@ async function dispatchAutomaticChannelReply(
       `[channels] Failed to dispatch assistant reply for conversation "${conversation.id}":`,
       error,
     )
+  } finally {
+    if (delivery) {
+      inFlightChannelReplyDeliveryIds.delete(delivery.id)
+    }
+  }
+}
+
+type ReconciledChannelReplyTurn =
+  | { status: 'completed'; message: string }
+  | { status: 'failed'; error: string }
+
+function findChannelReplyTurnForClientSendId(
+  events: readonly StreamJsonEvent[],
+  clientSendId: string,
+): ReconciledChannelReplyTurn | null {
+  const pendingClientSendIds = new Set([clientSendId])
+  let activeTurnId: string | null = null
+  let turnEvents: StreamJsonEvent[] = []
+  let armed = false
+
+  for (const event of events) {
+    const eventTurnId = transcriptTurnId(event)
+    const matchedClientSend = matchingUserClientSend(event, pendingClientSendIds)
+    if (matchedClientSend) {
+      armed = true
+      activeTurnId = matchedClientSend.turnId
+      turnEvents = [event]
+      continue
+    }
+
+    if (!armed) {
+      continue
+    }
+
+    if (!activeTurnId && eventTurnId && shouldBindActiveTurn(event)) {
+      activeTurnId = eventTurnId
+    }
+
+    if (!isSameTranscriptTurn(event, activeTurnId)) {
+      continue
+    }
+
+    if (isTopLevelAssistantMessageStart(event)) {
+      turnEvents = [event]
+    } else {
+      turnEvents.push(event)
+    }
+
+    if (!isTopLevelTurnEnd(event)) {
+      continue
+    }
+
+    if (!isTopLevelSuccessfulTurnEnd(event)) {
+      return { status: 'failed', error: 'Assistant turn did not complete successfully' }
+    }
+
+    const replyText = extractTopLevelAssistantReplyText(turnEvents)
+    if (!replyText) {
+      return { status: 'failed', error: 'Assistant turn completed without final assistant text' }
+    }
+
+    return { status: 'completed', message: replyText }
+  }
+
+  return null
+}
+
+async function readChannelReplyReconciliationEvents(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): Promise<StreamJsonEvent[]> {
+  const sessionName = buildConversationSessionName(conversation)
+  const liveEvents = getLiveConversationSession(context, conversation)?.events ?? []
+  const page = await readTranscriptTailPage(sessionName, {
+    maxTurns: CLIENT_SEND_ID_DEDUPE_TAIL_TURNS,
+    maxEvents: MAX_TRANSCRIPT_TAIL_EVENT_LIMIT,
+  })
+  return mergeCanonicalStreamEvents({
+    persistedEvents: page.events as readonly StreamJsonEvent[],
+    liveEvents,
+  })
+}
+
+function conversationStoreHasGet(
+  store: CommanderRoutesContext['conversationStore'],
+): store is CommanderRoutesContext['conversationStore'] & { get: CommanderRoutesContext['conversationStore']['get'] } {
+  return typeof (store as { get?: unknown }).get === 'function'
+}
+
+async function refreshConversationForReconciliation(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): Promise<Conversation> {
+  if (!conversationStoreHasGet(context.conversationStore)) {
+    return conversation
+  }
+  return await context.conversationStore.get(conversation.id) ?? conversation
+}
+
+async function hasPendingChannelReplyIntents(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): Promise<boolean> {
+  const current = await refreshConversationForReconciliation(context, conversation)
+  return Boolean(current.channelReplyIntents?.some((intent) => intent.status === 'pending'))
+}
+
+export async function reconcileAutomaticChannelReplies(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): Promise<void> {
+  const current = await refreshConversationForReconciliation(context, conversation)
+  const pendingIntents = (current.channelReplyIntents ?? [])
+    .filter((intent) => intent.status === 'pending')
+  if (pendingIntents.length === 0) {
+    return
+  }
+
+  for (const intent of pendingIntents.filter((candidate) => Boolean(candidate.deliveryId))) {
+    const delivery = current.channelReplyDelivery?.id === intent.deliveryId
+      ? current.channelReplyDelivery
+      : null
+    if (delivery?.status === 'pending' && inFlightChannelReplyDeliveryIds.has(delivery.id)) {
+      continue
+    }
+    if (!delivery || delivery.status === 'pending') {
+      await recordChannelReplyIntentFailed(
+        context,
+        current,
+        intent.clientSendId,
+        delivery
+          ? 'Channel reply delivery was interrupted before terminal settlement; operator retry required.'
+          : 'Channel reply delivery record is missing; operator retry required.',
+      )
+    }
+  }
+
+  const unclaimedIntents = pendingIntents.filter((intent) => !intent.deliveryId)
+  if (unclaimedIntents.length === 0) {
+    return
+  }
+
+  const events = await readChannelReplyReconciliationEvents(context, current)
+  for (const intent of unclaimedIntents) {
+    const turn = findChannelReplyTurnForClientSendId(events, intent.clientSendId)
+    if (!turn) {
+      continue
+    }
+    if (turn.status === 'failed') {
+      console.error(
+        `[channels] Completed channel assistant turn for conversation "${current.id}" had no deliverable reply for clientSendId "${intent.clientSendId}": ${turn.error}`,
+      )
+      await recordChannelReplyIntentFailed(context, current, intent.clientSendId, turn.error)
+      continue
+    }
+    await dispatchAutomaticChannelReply(context, current, turn.message, intent.clientSendId)
+  }
+}
+
+async function runAutomaticChannelReplyReconciliation(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): Promise<void> {
+  await reconcileAutomaticChannelReplies(context, conversation)
+  if (await hasPendingChannelReplyIntents(context, conversation)) {
+    scheduleAutomaticChannelReplyReconciliationRetry(context, conversation)
+  }
+}
+
+function scheduleAutomaticChannelReplyReconciliationRetry(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): void {
+  if (channelReplyReconciliationRetryTimers.has(conversation.id)) {
+    return
+  }
+  const timer = setTimeout(() => {
+    channelReplyReconciliationRetryTimers.delete(conversation.id)
+    void runAutomaticChannelReplyReconciliation(context, conversation)
+      .catch((error) => {
+        console.warn(
+          `[channels] Failed to reconcile assistant replies for conversation "${conversation.id}":`,
+          error,
+        )
+      })
+  }, channelReplyReconciliationRetryMs)
+  channelReplyReconciliationRetryTimers.set(conversation.id, timer)
+  timer.unref?.()
+}
+
+function scheduleAutomaticChannelReplyReconciliation(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): void {
+  for (const delayMs of CHANNEL_REPLY_RECONCILIATION_DELAYS_MS) {
+    const timer = setTimeout(() => {
+      void runAutomaticChannelReplyReconciliation(context, conversation)
+        .catch((error) => {
+          console.warn(
+            `[channels] Failed to reconcile assistant replies for conversation "${conversation.id}":`,
+            error,
+          )
+        })
+    }, delayMs)
+    timer.unref?.()
   }
 }
 
@@ -1741,46 +2390,184 @@ function ensureChannelReplyForwarder(
   context: CommanderRoutesContext,
   conversation: Conversation,
   options: ChannelReplyForwarderOptions = {},
-): void {
+): ChannelReplyForwarder | null {
   if (!conversation.channelMeta || !conversation.lastRoute || !context.sessionsInterface) {
-    return
+    return null
   }
 
   const sessionName = buildConversationSessionName(conversation)
-  if (context.channelReplyForwarders.has(sessionName)) {
-    return
+  const existing = context.channelReplyForwarders.get(sessionName)
+  if (existing) {
+    existing.skippedCompletedTurns += Math.max(0, Math.floor(options.skipCompletedTurns ?? 0))
+    void runAutomaticChannelReplyReconciliation(context, conversation)
+      .catch((error) => {
+        console.warn(
+          `[channels] Failed to reconcile assistant replies for conversation "${conversation.id}":`,
+          error,
+        )
+      })
+    return existing
   }
 
-  let turnEvents: StreamJsonEvent[] = []
-  let skippedCompletedTurns = Math.max(0, Math.floor(options.skipCompletedTurns ?? 0))
-  const unsubscribe = context.sessionsInterface.subscribeToEvents(sessionName, (event) => {
-    const type = eventType(event)
-    if (type === 'message_start') {
-      turnEvents = [event]
+  const forwarder: ChannelReplyForwarder = {
+    unsubscribe: () => {},
+    pendingClientSendIds: new Set<string>(),
+    activeClientSendId: null,
+    activeTurnId: null,
+    turnEvents: [],
+    skippedTurnIds: new Set<string>(),
+    skippedCompletedTurns: Math.max(0, Math.floor(options.skipCompletedTurns ?? 0)),
+  }
+
+  forwarder.unsubscribe = context.sessionsInterface.subscribeToEvents(sessionName, (event) => {
+    const eventTurnId = transcriptTurnId(event)
+    const matchedClientSend = matchingUserClientSend(event, forwarder.pendingClientSendIds)
+    if (matchedClientSend) {
+      forwarder.activeClientSendId = matchedClientSend.clientSendId
+      forwarder.activeTurnId = matchedClientSend.turnId
+      if (matchedClientSend.turnId) {
+        forwarder.skippedTurnIds.delete(matchedClientSend.turnId)
+      }
+      forwarder.turnEvents = [event]
+      return
+    }
+
+    if (!forwarder.activeClientSendId) {
+      if (
+        forwarder.skippedCompletedTurns > 0 &&
+        eventTurnId &&
+        (isTopLevelTurnStart(event) || isTopLevelAssistantMessageStart(event))
+      ) {
+        forwarder.skippedTurnIds.add(eventTurnId)
+      }
+      if (isTopLevelTurnEnd(event) && forwarder.skippedCompletedTurns > 0) {
+        if (eventTurnId) {
+          forwarder.skippedTurnIds.delete(eventTurnId)
+        }
+        forwarder.skippedCompletedTurns -= 1
+      }
+      return
+    }
+
+    if (eventTurnId && forwarder.skippedTurnIds.has(eventTurnId)) {
+      if (isTopLevelTurnEnd(event) && forwarder.skippedCompletedTurns > 0) {
+        forwarder.skippedTurnIds.delete(eventTurnId)
+        forwarder.skippedCompletedTurns -= 1
+      }
+      return
+    }
+
+    if (!forwarder.activeTurnId && eventTurnId && shouldBindActiveTurn(event)) {
+      forwarder.activeTurnId = eventTurnId
+    }
+
+    if (!isSameTranscriptTurn(event, forwarder.activeTurnId)) {
+      return
+    }
+
+    if (isTopLevelAssistantMessageStart(event)) {
+      forwarder.turnEvents = [event]
     } else {
-      turnEvents.push(event)
+      forwarder.turnEvents.push(event)
     }
 
-    if (type !== 'result') {
+    if (!isTopLevelTurnEnd(event)) {
       return
     }
 
-    if (skippedCompletedTurns > 0) {
-      skippedCompletedTurns -= 1
-      turnEvents = []
+    const completedClientSendId = forwarder.activeClientSendId
+    forwarder.activeClientSendId = null
+    forwarder.activeTurnId = null
+    forwarder.pendingClientSendIds.delete(completedClientSendId)
+
+    if (!isTopLevelSuccessfulTurnEnd(event)) {
+      forwarder.turnEvents = []
+      void recordChannelReplyIntentFailed(
+        context,
+        conversation,
+        completedClientSendId,
+        'Assistant turn did not complete successfully',
+      )
       return
     }
 
-    const replyText = extractAssistantReplyText(turnEvents)
-    turnEvents = []
+    const replyText = extractTopLevelAssistantReplyText(forwarder.turnEvents)
+    forwarder.turnEvents = []
     if (!replyText) {
+      void recordChannelReplyIntentFailed(
+        context,
+        conversation,
+        completedClientSendId,
+        'Assistant turn completed without final assistant text',
+      )
       return
     }
 
-    void dispatchAutomaticChannelReply(context, conversation, replyText)
+    void dispatchAutomaticChannelReply(context, conversation, replyText, completedClientSendId)
   })
 
-  context.channelReplyForwarders.set(sessionName, unsubscribe)
+  context.channelReplyForwarders.set(sessionName, forwarder)
+  void runAutomaticChannelReplyReconciliation(context, conversation)
+    .catch((error) => {
+      console.warn(
+        `[channels] Failed to reconcile assistant replies for conversation "${conversation.id}":`,
+        error,
+      )
+    })
+  return forwarder
+}
+
+function armChannelReplyForwarder(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string | undefined,
+): void {
+  const normalizedClientSendId = normalizeClientSendId(clientSendId)
+  if (!normalizedClientSendId) {
+    return
+  }
+  const forwarder = ensureChannelReplyForwarder(context, conversation)
+  forwarder?.pendingClientSendIds.add(normalizedClientSendId)
+}
+
+function disarmChannelReplyForwarder(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string | undefined,
+): void {
+  const normalizedClientSendId = normalizeClientSendId(clientSendId)
+  if (!normalizedClientSendId) {
+    return
+  }
+  const forwarder = context.channelReplyForwarders.get(buildConversationSessionName(conversation))
+  if (!forwarder) {
+    return
+  }
+  forwarder.pendingClientSendIds.delete(normalizedClientSendId)
+  if (forwarder.activeClientSendId === normalizedClientSendId) {
+    forwarder.activeClientSendId = null
+    forwarder.activeTurnId = null
+    forwarder.turnEvents = []
+  }
+}
+
+function ensureChannelReplyPayloadClientSendId(
+  conversation: Conversation,
+  payload: ConversationMessagePayload,
+): ConversationMessagePayload {
+  if (normalizeClientSendId(payload.clientSendId)) {
+    return payload
+  }
+  channelReplyClientSendSequence += 1
+  return {
+    ...payload,
+    clientSendId: [
+      'channel-reply-trigger',
+      conversation.id,
+      Date.now().toString(36),
+      String(channelReplyClientSendSequence),
+    ].join(':'),
+  }
 }
 
 export async function persistConversationRuntimeSnapshot(
@@ -1862,9 +2649,12 @@ export async function deliverConversationMessage(
   payload: ConversationMessagePayload,
   options?: DeliverConversationMessageOptions,
 ): Promise<DeliverConversationMessageResult> {
-  const dedupeKey = conversationDeliveryDedupeKey(conversation, payload.clientSendId)
+  const deliveryPayload = options?.dispatchChannelReplies
+    ? ensureChannelReplyPayloadClientSendId(conversation, payload)
+    : payload
+  const dedupeKey = conversationDeliveryDedupeKey(conversation, deliveryPayload.clientSendId)
   if (!dedupeKey) {
-    return deliverConversationMessageUnchecked(context, conversation, payload, options)
+    return deliverConversationMessageUnchecked(context, conversation, deliveryPayload, options)
   }
 
   const inFlightDelivery = inFlightConversationDeliveries.get(dedupeKey)
@@ -1872,7 +2662,7 @@ export async function deliverConversationMessage(
     return inFlightDelivery
   }
 
-  const delivery = deliverConversationMessageUnchecked(context, conversation, payload, options)
+  const delivery = deliverConversationMessageUnchecked(context, conversation, deliveryPayload, options)
   inFlightConversationDeliveries.set(dedupeKey, delivery)
   try {
     return await delivery
@@ -1897,6 +2687,13 @@ async function deliverConversationMessageUnchecked(
   if (!commander) {
     return { ok: false, status: 404, error: `Commander "${conversation.commanderId}" not found` }
   }
+  if (conversation.status === 'idle' && options?.autoStartIdle && commander.state === 'stopped') {
+    return {
+      ok: false,
+      status: 409,
+      error: `Commander "${conversation.commanderId}" is stopped. Start the commander before sending to idle conversations.`,
+    }
+  }
 
   const sendOptions = options?.queue === undefined && options?.priority === undefined
     ? undefined
@@ -1904,6 +2701,10 @@ async function deliverConversationMessageUnchecked(
 
   const liveSession = getLiveConversationSession(context, conversation)
   if (await conversationAlreadyHasClientSendId(context, conversation, liveSession, payload.clientSendId)) {
+    if (options?.dispatchChannelReplies === true) {
+      await recordChannelReplyIntentPending(context, conversation, payload.clientSendId)
+      scheduleAutomaticChannelReplyReconciliation(context, conversation)
+    }
     return {
       ok: true,
       createdSession: false,
@@ -1913,6 +2714,8 @@ async function deliverConversationMessageUnchecked(
 
   if (!liveSession) {
     if (conversation.status === 'idle' && options?.autoStartIdle) {
+      const shouldSendAutoStartSeed = options.autoStartSeedPrompt !== false
+        && options.dispatchChannelReplies === true
       const costCap = await enforceCommanderCostCap(context, conversation.commanderId)
       if (!costCap.ok) {
         return {
@@ -1925,11 +2728,11 @@ async function deliverConversationMessageUnchecked(
         context,
         conversation.commanderId,
         conversation,
-        null,
+        shouldSendAutoStartSeed ? null : '',
         options.startSpawnOptions,
         undefined,
         options.dispatchChannelReplies === true,
-        options.dispatchChannelReplies === true ? 1 : 0,
+        shouldSendAutoStartSeed ? 1 : 0,
       )
       if (!started.sent) {
         return {
@@ -1939,7 +2742,9 @@ async function deliverConversationMessageUnchecked(
         }
       }
       const sessionName = buildConversationSessionName(started.conversation)
-      const autoStartedSendOptions = sendOptions ?? { queue: true, priority: 'normal' as const }
+      const autoStartedSendOptions = sendOptions ?? (shouldSendAutoStartSeed
+        ? { queue: true, priority: 'normal' as const }
+        : undefined)
       const startedLiveSession = getLiveConversationSession(context, started.conversation)
       if (!startedLiveSession) {
         await stopConversationSession(context, started.conversation, 'idle')
@@ -1948,6 +2753,10 @@ async function deliverConversationMessageUnchecked(
           status: 503,
           error: `Conversation "${conversation.id}" could not receive its auto-start message`,
         }
+      }
+      if (options.dispatchChannelReplies === true) {
+        await recordChannelReplyIntentPending(context, started.conversation, payload.clientSendId)
+        armChannelReplyForwarder(context, started.conversation, payload.clientSendId)
       }
       const sent = await sendConversationPayloadWithDeepThinkingGuard({
         context,
@@ -1960,12 +2769,19 @@ async function deliverConversationMessageUnchecked(
         abortSignal: options?.abortSignal,
       })
       if (!sent.ok) {
+        disarmChannelReplyForwarder(context, started.conversation, payload.clientSendId)
+        if (options.dispatchChannelReplies === true) {
+          await removePendingChannelReplyIntent(context, started.conversation, payload.clientSendId)
+        }
         await stopConversationSession(context, started.conversation, 'idle')
         return {
           ok: false,
           status: sent.status,
           error: sent.error,
         }
+      }
+      if (options.dispatchChannelReplies === true) {
+        scheduleAutomaticChannelReplyReconciliation(context, started.conversation)
       }
       const updated = await context.conversationStore.update(started.conversation.id, (current) => ({
         ...current,
@@ -2023,6 +2839,12 @@ async function deliverConversationMessageUnchecked(
           error: `Conversation "${conversation.id}" recovered without a live session`,
         }
       }
+      if (options?.dispatchChannelReplies === true) {
+        await recordChannelReplyIntentPending(context, restarted.conversation, payload.clientSendId)
+        armChannelReplyForwarder(context, restarted.conversation, payload.clientSendId)
+      }
+      const recoveredSendOptions = sendOptions
+        ?? (options?.dispatchChannelReplies === true ? { queue: true, priority: 'normal' as const } : undefined)
       const sent = await sendConversationPayloadWithDeepThinkingGuard({
         context,
         conversation: restarted.conversation,
@@ -2030,16 +2852,23 @@ async function deliverConversationMessageUnchecked(
         liveSession: restartedLiveSession,
         sessionName,
         payload,
-        sendOptions,
+        sendOptions: recoveredSendOptions,
         abortSignal: options?.abortSignal,
       })
       if (!sent.ok) {
+        disarmChannelReplyForwarder(context, restarted.conversation, payload.clientSendId)
+        if (options?.dispatchChannelReplies === true) {
+          await removePendingChannelReplyIntent(context, restarted.conversation, payload.clientSendId)
+        }
         await stopConversationSession(context, restarted.conversation, 'idle')
         return {
           ok: false,
           status: sent.status,
           error: sent.error,
         }
+      }
+      if (options?.dispatchChannelReplies === true) {
+        scheduleAutomaticChannelReplyReconciliation(context, restarted.conversation)
       }
       const updated = await context.conversationStore.update(restarted.conversation.id, (current) => ({
         ...current,
@@ -2070,8 +2899,14 @@ async function deliverConversationMessageUnchecked(
       error: costCap.body.error,
     }
   }
-  if (options?.dispatchChannelReplies) {
-    ensureChannelReplyForwarder(context, conversation)
+  const pendingCredentialRecovery = context.sessionsInterface?.getCredentialRecoveryRequest?.(sessionName)
+    ?? liveSession.credentialPoolRecovery
+  const guardedSendOptions = pendingCredentialRecovery
+    ? { queue: true, priority: 'high' as const }
+    : sendOptions
+  if (options?.dispatchChannelReplies === true) {
+    await recordChannelReplyIntentPending(context, conversation, payload.clientSendId)
+    armChannelReplyForwarder(context, conversation, payload.clientSendId)
   }
   const sent = await sendConversationPayloadWithDeepThinkingGuard({
     context,
@@ -2080,15 +2915,22 @@ async function deliverConversationMessageUnchecked(
     liveSession,
     sessionName,
     payload,
-    sendOptions,
+    sendOptions: guardedSendOptions,
     abortSignal: options?.abortSignal,
   })
   if (!sent.ok) {
+    disarmChannelReplyForwarder(context, conversation, payload.clientSendId)
+    if (options?.dispatchChannelReplies === true) {
+      await removePendingChannelReplyIntent(context, conversation, payload.clientSendId)
+    }
     return {
       ok: false,
       status: sent.status,
       error: sent.error,
     }
+  }
+  if (options?.dispatchChannelReplies === true) {
+    scheduleAutomaticChannelReplyReconciliation(context, conversation)
   }
 
   const updated = await context.conversationStore.update(conversation.id, (current) => ({

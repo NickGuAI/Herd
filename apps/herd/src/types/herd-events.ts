@@ -133,10 +133,6 @@ export type HerdEvent =
       }
     } & HerdEventBase)
   | ({
-      type: 'message_start'
-      message: { id: string; role: string }
-    } & HerdEventBase)
-  | ({
       type: 'content_block_start'
       index?: number
       content_block: HerdTextBlock | HerdThinkingBlock | HerdToolUseBlock | HerdImageBlock
@@ -186,18 +182,6 @@ export type HerdEvent =
         isImage?: boolean
         noOutputExpected?: boolean
       }
-    } & HerdEventBase)
-  | ({
-      type: 'result'
-      result: string
-      subtype?: string
-      is_error?: boolean
-      duration_ms?: number
-      duration_api_ms?: number
-      num_turns?: number
-      usage?: HerdUsage
-      cost_usd?: number
-      total_cost_usd?: number
     } & HerdEventBase)
   | ({
       type: 'exit'

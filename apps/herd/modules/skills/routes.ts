@@ -1,26 +1,21 @@
 import { Router } from 'express'
-import { readdir, readFile } from 'node:fs/promises'
-import path from 'node:path'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
-import { discoverSkillDirectorySources } from './skill-roots.js'
+import {
+  deleteSkillPackage,
+  discoverSkills,
+  createManualSkillPackage,
+  getSkillArchive,
+  getSkillExportPreview,
+  getSkillPackageDetail,
+  SkillPackageConflictError,
+  type SkillInfo,
+} from './package-discovery.js'
+import { SKILL_CREATION_MODE_PROMPT } from './skill-creation-prompt.js'
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface SkillInfo {
-  name: string
-  dirName: string
-  description: string
-  userInvocable: boolean
-  argumentHint?: string
-  allowedTools?: string
-  supportedProviders?: string[]
-  /** Source package (e.g. "pkos", "general-skills") */
-  source: string
-}
+export type { SkillInfo } from './package-discovery.js'
+export { discoverSkills } from './package-discovery.js'
 
 export interface SkillsRouterOptions {
   apiKeyStore?: ApiKeyStoreLike
@@ -30,103 +25,8 @@ export interface SkillsRouterOptions {
   verifyAuth0Token?: (token: string) => Promise<AuthUser>
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function parseFrontmatter(content: string): Record<string, string | boolean> {
-  const match = content.match(/^---\n([\s\S]*?)\n---/)
-  if (!match) return {}
-  const result: Record<string, string | boolean> = {}
-  for (const line of match[1].split('\n')) {
-    const colonIdx = line.indexOf(':')
-    if (colonIdx === -1) continue
-    const key = line.slice(0, colonIdx).trim()
-    let val = line.slice(colonIdx + 1).trim()
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1)
-    }
-    if (val === 'true') {
-      result[key] = true
-    } else if (val === 'false') {
-      result[key] = false
-    } else {
-      result[key] = val
-    }
-  }
-  return result
-}
-
-function parseStringListField(value: string | boolean | undefined): string[] | undefined {
-  if (typeof value !== 'string') {
-    return undefined
-  }
-
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return undefined
-  }
-
-  const listSource = trimmed.startsWith('[') && trimmed.endsWith(']')
-    ? trimmed.slice(1, -1)
-    : trimmed
-  const providers = listSource
-    .split(',')
-    .map((item) => item.trim().replace(/^['"]|['"]$/g, ''))
-    .filter(Boolean)
-
-  return providers.length > 0 ? Array.from(new Set(providers)) : undefined
-}
-
-// ---------------------------------------------------------------------------
-// Skill discovery — scans installed skill roots and bundled agent-skills packages.
-// ---------------------------------------------------------------------------
-
-export async function discoverSkills(): Promise<SkillInfo[]> {
-  const skills: SkillInfo[] = []
-  const seen = new Set<string>()
-
-  const skillSources = await discoverSkillDirectorySources()
-
-  for (const skillSource of skillSources) {
-    let skillDirs: string[]
-    try {
-      const entries = await readdir(skillSource.dir, { withFileTypes: true })
-      skillDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name)
-    } catch {
-      continue
-    }
-
-    for (const dirName of skillDirs) {
-      if (seen.has(dirName)) continue
-      const skillMd = path.join(skillSource.dir, dirName, 'SKILL.md')
-      try {
-        const content = await readFile(skillMd, 'utf-8')
-        const fm = parseFrontmatter(content)
-        const name = typeof fm.name === 'string' ? fm.name : dirName
-
-        seen.add(dirName)
-        skills.push({
-          name,
-          dirName,
-          description: typeof fm.description === 'string' ? fm.description : '',
-          userInvocable: fm['user-invocable'] === true || fm['user-invocable'] === 'true',
-          argumentHint: typeof fm['argument-hint'] === 'string' ? fm['argument-hint'] : undefined,
-          allowedTools: typeof fm['allowed-tools'] === 'string' ? fm['allowed-tools'] : undefined,
-          supportedProviders: parseStringListField(fm['supported-providers']),
-          source: skillSource.source,
-        })
-      } catch {
-        // No valid SKILL.md — skip
-      }
-    }
-  }
-
-  skills.sort((a, b) => a.name.localeCompare(b.name))
-  return skills
+function readRouteParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? '' : value ?? ''
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +47,17 @@ export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
     verifyToken: options.verifyAuth0Token,
   })
 
+  const requireWriteAccess = combinedAuth({
+    apiKeyStore: options.apiKeyStore,
+    requiredApiKeyScopes: ['skills:write'],
+    requiredAuth0Permissions: ['skills:write', 'commanders:write'],
+    auth0PermissionMode: 'any',
+    domain: options.auth0Domain,
+    audience: options.auth0Audience,
+    clientId: options.auth0ClientId,
+    verifyToken: options.verifyAuth0Token,
+  })
+
   // GET /api/skills — list all installed skills
   router.get('/', requireReadAccess, async (_req, res) => {
     try {
@@ -154,6 +65,97 @@ export function createSkillsRouter(options: SkillsRouterOptions = {}): Router {
       res.json(skills)
     } catch (err) {
       res.status(500).json({ error: 'Failed to discover skills', detail: String(err) })
+    }
+  })
+
+  router.get('/creation-prompt', requireReadAccess, (_req, res) => {
+    res.json({ prompt: SKILL_CREATION_MODE_PROMPT })
+  })
+
+  router.post('/export', requireReadAccess, async (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
+    if (!name) {
+      res.status(400).json({ error: 'name is required' })
+      return
+    }
+
+    try {
+      const preview = await getSkillExportPreview(name)
+      if (!preview) {
+        res.status(404).json({ error: `Skill "${name}" not found` })
+        return
+      }
+      res.json(preview)
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to build skill export preview', detail: String(err) })
+    }
+  })
+
+  router.post('/manual', requireWriteAccess, async (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
+    const description = typeof req.body?.description === 'string' ? req.body.description.trim() : ''
+    const provider = typeof req.body?.provider === 'string' ? req.body.provider.trim() : 'codex'
+    if (!name) {
+      res.status(400).json({ error: 'name is required' })
+      return
+    }
+
+    try {
+      const created = await createManualSkillPackage({ name, description, provider })
+      res.status(201).json(created)
+    } catch (err) {
+      if (err instanceof SkillPackageConflictError) {
+        res.status(409).json({ error: err.message })
+        return
+      }
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to create skill package' })
+    }
+  })
+
+  router.get('/:name/archive', requireReadAccess, async (req, res) => {
+    const name = readRouteParam(req.params.name)
+    try {
+      const archive = await getSkillArchive(name)
+      if (!archive) {
+        res.status(404).json({ error: `Skill "${name}" not found` })
+        return
+      }
+
+      const safeArchiveName = archive.archiveName.replace(/["\r\n]/g, '_')
+      res.setHeader('content-type', 'application/zip')
+      res.setHeader('content-disposition', `attachment; filename="${safeArchiveName}"`)
+      res.setHeader('content-length', String(archive.buffer.length))
+      res.send(archive.buffer)
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to build skill archive', detail: String(err) })
+    }
+  })
+
+  router.get('/:name', requireReadAccess, async (req, res) => {
+    const name = readRouteParam(req.params.name)
+    try {
+      const skill = await getSkillPackageDetail(name)
+      if (!skill) {
+        res.status(404).json({ error: `Skill "${name}" not found` })
+        return
+      }
+      res.json(skill)
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to load skill package', detail: String(err) })
+    }
+  })
+
+  router.delete('/:name', requireWriteAccess, async (req, res) => {
+    const name = readRouteParam(req.params.name)
+    try {
+      const deleted = await deleteSkillPackage(name)
+      if (!deleted) {
+        res.status(404).json({ error: `Skill "${name}" not found` })
+        return
+      }
+      res.json({ deleted: true, skill: deleted })
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to delete skill package', detail: String(err) })
     }
   })
 

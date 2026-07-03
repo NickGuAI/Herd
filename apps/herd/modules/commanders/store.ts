@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readdir, readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -16,11 +16,10 @@ import {
   normalizeClaudeMaxThinkingTokens,
   type ClaudeMaxThinkingTokens,
 } from '../claude-max-thinking-tokens.js'
-import { parseProviderId } from '../agents/providers/registry.js'
+import { parseProviderId, resolveDefaultProviderId } from '../agents/providers/registry.js'
 import type { ProviderSessionContext } from '../agents/providers/provider-session-context.js'
 import type { AgentType } from '../agents/types.js'
 import {
-  createDefaultHeartbeatConfig,
   normalizeHeartbeatConfig,
   type CommanderHeartbeatConfig,
 } from './heartbeat.js'
@@ -28,15 +27,12 @@ import { resolveCommanderSessionStorePath } from './paths.js'
 import {
   createDefaultCommanderRuntimeConfig,
   DEFAULT_COMMANDER_RUNTIME_DEFAULT_MAX_TURNS,
-  DEFAULT_COMMANDER_RUNTIME_LIMIT_MAX_TURNS,
   type CommanderRuntimeConfig,
 } from './runtime-config.shared.js'
 import { writeJsonFileAtomically } from '../json-file.js'
 import {
-  migrateProviderContext,
-  migratedProviderContextChanged,
   parseCanonicalProviderContext,
-} from '../agents/providers/provider-context-migration.js'
+} from '../agents/providers/provider-context-normalization.js'
 import type { ChannelChatType, ChannelProvider } from '../channels/types.js'
 
 const COMMANDER_STATES = new Set<CommanderSession['state']>([
@@ -47,7 +43,6 @@ const COMMANDER_STATES = new Set<CommanderSession['state']>([
 ])
 
 export const DEFAULT_COMMANDER_MAX_TURNS = DEFAULT_COMMANDER_RUNTIME_DEFAULT_MAX_TURNS
-export const MAX_COMMANDER_MAX_TURNS = DEFAULT_COMMANDER_RUNTIME_LIMIT_MAX_TURNS
 export type CommanderContextMode = 'thin' | 'fat'
 export const DEFAULT_COMMANDER_CONTEXT_MODE: CommanderContextMode = 'fat'
 
@@ -100,8 +95,6 @@ export interface CommanderSession {
   id: string
   host: string
   avatarSeed?: string
-  /** @deprecated Legacy field migrated into COMMANDER.md; do not read for runtime or UI behavior. */
-  persona?: string
   state: 'idle' | 'running' | 'paused' | 'stopped'
   created: string
   agentType?: AgentType
@@ -141,36 +134,10 @@ export type CommanderConversationSurface =
 
 interface ParsedCommanderSessions {
   sessions: CommanderSession[]
-  commanderHeartbeatMissingIds: Set<string>
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
-}
-
-function hasOwnProperty(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key)
-}
-
-function latestIsoTimestamp(values: Array<string | null | undefined>): string | null {
-  let latest: string | null = null
-  for (const value of values) {
-    const trimmed = typeof value === 'string' ? value.trim() : ''
-    if (!trimmed) {
-      continue
-    }
-    if (!latest || trimmed > latest) {
-      latest = trimmed
-    }
-  }
-  return latest
-}
-
-function isNonDefaultHeartbeat(heartbeat: CommanderHeartbeatConfig): boolean {
-  const defaults = createDefaultHeartbeatConfig()
-  return heartbeat.intervalMs !== defaults.intervalMs ||
-    heartbeat.messageTemplate.trim() !== defaults.messageTemplate.trim() ||
-    heartbeat.intervalOverridden === true
 }
 
 function parseTaskSource(raw: unknown): CommanderTaskSource | null {
@@ -372,12 +339,9 @@ export function buildDefaultCommanderConversationId(commanderId: string): string
 function parseCommanderSession(
   raw: unknown,
   runtimeConfig: CommanderRuntimeConfig,
-): {
-  session: CommanderSession | null
-  heartbeatMissing?: boolean
-} {
+): CommanderSession | null {
   if (!isObject(raw)) {
-    return { session: null }
+    return null
   }
 
   const id = typeof raw.id === 'string' ? raw.id.trim() : ''
@@ -385,11 +349,8 @@ function parseCommanderSession(
   const avatarSeed = typeof raw.avatarSeed === 'string' && raw.avatarSeed.trim().length > 0
     ? raw.avatarSeed.trim()
     : undefined
-  const persona = typeof raw.persona === 'string' && raw.persona.trim().length > 0
-    ? raw.persona.trim()
-    : undefined
   const created = typeof raw.created === 'string' ? raw.created.trim() : ''
-  const agentType = parseProviderId(raw.agentType) ?? 'claude'
+  const agentType = parseProviderId(raw.agentType) ?? resolveDefaultProviderId()
   const model = raw.model === null
     ? null
     : (typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model.trim() : undefined)
@@ -415,8 +376,16 @@ function parseCommanderSession(
   const maxTurns = parseCommanderMaxTurns(raw.maxTurns, runtimeConfig)
   const costCapUsd = parseCommanderCostCapUsd(raw.costCapUsd)
   const contextMode = parseCommanderContextMode(raw.contextMode)
+  if (!Object.prototype.hasOwnProperty.call(raw, 'heartbeat')) {
+    return null
+  }
+  if (
+    !isObject(raw.heartbeat) ||
+    Object.prototype.hasOwnProperty.call(raw.heartbeat, 'lastSentAt')
+  ) {
+    return null
+  }
   const heartbeat = normalizeHeartbeatConfig(raw.heartbeat)
-  const heartbeatMissing = !hasOwnProperty(raw, 'heartbeat')
   const operatorId = parseOptionalNonEmptyString(raw.operatorId)
   const templateId = raw.templateId === null ? null : parseOptionalNonEmptyString(raw.templateId)
   const replicatedFromCommanderId = raw.replicatedFromCommanderId === null
@@ -433,14 +402,13 @@ function parseCommanderSession(
     !created ||
     !COMMANDER_STATES.has(state as CommanderSession['state'])
   ) {
-    return { session: null }
+    return null
   }
 
   const session: CommanderSession = {
     id,
     host,
     avatarSeed,
-    persona,
     state: state as CommanderSession['state'],
     created,
     agentType,
@@ -464,35 +432,28 @@ function parseCommanderSession(
     ...(remoteOrigin ? { remoteOrigin } : {}),
   }
 
-  return {
-    session,
-    heartbeatMissing,
-  }
+  return session
 }
 
 function parsePersistedCommanderSessions(
   raw: unknown,
   runtimeConfig: CommanderRuntimeConfig,
 ): ParsedCommanderSessions {
-  const candidates: unknown[] = Array.isArray(raw)
-    ? raw
-    : (isObject(raw) && Array.isArray(raw.sessions) ? raw.sessions : [])
+  const candidates: unknown[] = isObject(raw) && Array.isArray(raw.sessions)
+    ? raw.sessions
+    : []
 
   const sessions: CommanderSession[] = []
-  const commanderHeartbeatMissingIds = new Set<string>()
 
   for (const entry of candidates) {
-    const parsed = parseCommanderSession(entry, runtimeConfig)
-    if (!parsed.session) {
+    const session = parseCommanderSession(entry, runtimeConfig)
+    if (!session) {
       continue
     }
-    sessions.push(parsed.session)
-    if (parsed.heartbeatMissing) {
-      commanderHeartbeatMissingIds.add(parsed.session.id)
-    }
+    sessions.push(session)
   }
 
-  return { sessions, commanderHeartbeatMissingIds }
+  return { sessions }
 }
 
 function cloneSession(session: CommanderSession): CommanderSession {
@@ -509,8 +470,7 @@ function cloneSession(session: CommanderSession): CommanderSession {
 type SerializedCommanderSession = Record<string, unknown> & { created: string }
 
 function serializeSession(session: CommanderSession): SerializedCommanderSession {
-  const raw = cloneSession(session) as unknown as Record<string, unknown>
-  const cleaned = migrateProviderContext(raw).cleaned
+  const cleaned = cloneSession(session) as unknown as Record<string, unknown>
   return {
     ...cleaned,
     created: typeof cleaned.created === 'string' ? cleaned.created : session.created,
@@ -523,13 +483,11 @@ export function defaultCommanderSessionStorePath(): string {
 
 export interface CommanderSessionStoreOptions {
   runtimeConfig?: CommanderRuntimeConfig
-  logger?: Pick<Console, 'info' | 'warn'>
 }
 
 export class CommanderSessionStore {
   private readonly filePath: string
   private readonly runtimeConfig: CommanderRuntimeConfig
-  private readonly logger: Pick<Console, 'info' | 'warn'>
   private sessionsById: Map<string, CommanderSession> | null = null
   private loadPromise: Promise<void> | null = null
   private mutationQueue: Promise<void> = Promise.resolve()
@@ -540,7 +498,6 @@ export class CommanderSessionStore {
   ) {
     this.filePath = path.resolve(filePath)
     this.runtimeConfig = options.runtimeConfig ?? createDefaultCommanderRuntimeConfig()
-    this.logger = options.logger ?? console
   }
 
   async list(): Promise<CommanderSession[]> {
@@ -625,22 +582,6 @@ export class CommanderSessionStore {
           persisted.sessions.map((session) => [session.id, cloneSession(session)]),
         )
       }
-
-      let heartbeatMigrationPersisted = false
-      if (persisted.commanderHeartbeatMissingIds.size > 0) {
-        for (const commanderId of persisted.commanderHeartbeatMissingIds) {
-          const session = this.sessions().get(commanderId)
-          if (!session) {
-            continue
-          }
-          session.heartbeat = await this.resolveMigratedCommanderHeartbeat(commanderId)
-        }
-        heartbeatMigrationPersisted = true
-      }
-
-      if (heartbeatMigrationPersisted) {
-        await this.writeToDisk({ backup: true })
-      }
     })()
 
     try {
@@ -658,7 +599,6 @@ export class CommanderSessionStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return {
           sessions: [],
-          commanderHeartbeatMissingIds: new Set<string>(),
         }
       }
       throw error
@@ -670,95 +610,10 @@ export class CommanderSessionStore {
     } catch {
       return {
         sessions: [],
-        commanderHeartbeatMissingIds: new Set<string>(),
       }
     }
 
-    const parsedPayload = isObject(parsed) ? parsed : null
-    const sessions = Array.isArray(parsed)
-      ? parsed
-      : (parsedPayload && Array.isArray(parsedPayload.sessions) ? parsedPayload.sessions : null)
-    if (!sessions) {
-      return parsePersistedCommanderSessions(parsed, this.runtimeConfig)
-    }
-
-    let migratedCount = 0
-    const migratedSessions = sessions.map((entry) => {
-      if (!isObject(entry)) {
-        return entry
-      }
-      const { cleaned } = migrateProviderContext(entry)
-      if (migratedProviderContextChanged(entry, cleaned)) {
-        migratedCount += 1
-      }
-      return cleaned
-    })
-
-    const migratedPayload = Array.isArray(parsed)
-      ? migratedSessions
-      : { ...parsedPayload, sessions: migratedSessions }
-    if (migratedCount > 0) {
-      await writeJsonFileAtomically(this.filePath, migratedPayload, { backup: true })
-      this.logger.warn(
-        `[commanders][migration] Migrated providerContext in ${migratedCount} commander session record(s)`,
-      )
-    }
-
-    return parsePersistedCommanderSessions(migratedPayload, this.runtimeConfig)
-  }
-
-  private async resolveMigratedCommanderHeartbeat(commanderId: string): Promise<CommanderHeartbeatConfig> {
-    const candidates = await this.readHistoricalConversationHeartbeatCandidates(commanderId)
-    const selected = candidates
-      .filter((candidate) => isNonDefaultHeartbeat(candidate.heartbeat))
-      .sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0]
-    return selected ? { ...selected.heartbeat } : createDefaultHeartbeatConfig()
-  }
-
-  private async readHistoricalConversationHeartbeatCandidates(
-    commanderId: string,
-  ): Promise<Array<{ heartbeat: CommanderHeartbeatConfig; timestamp: string }>> {
-    const conversationsDir = path.join(path.dirname(this.filePath), commanderId, 'conversations')
-    let files: import('node:fs').Dirent[]
-    try {
-      files = await readdir(conversationsDir, { withFileTypes: true })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return []
-      }
-      throw error
-    }
-
-    const candidates: Array<{ heartbeat: CommanderHeartbeatConfig; timestamp: string }> = []
-    for (const file of files) {
-      if (!file.isFile() || !file.name.endsWith('.json')) {
-        continue
-      }
-
-      try {
-        const raw = JSON.parse(await readFile(path.join(conversationsDir, file.name), 'utf8')) as unknown
-        if (!isObject(raw) || raw.commanderId !== commanderId || !hasOwnProperty(raw, 'heartbeat')) {
-          continue
-        }
-        const lastHeartbeat = typeof raw.lastHeartbeat === 'string' && raw.lastHeartbeat.trim().length > 0
-          ? raw.lastHeartbeat.trim()
-          : null
-        const heartbeat = normalizeHeartbeatConfig(raw.heartbeat)
-        const historicalHeartbeatLastSentAt = isObject(raw.heartbeat) && typeof raw.heartbeat.lastSentAt === 'string'
-          ? raw.heartbeat.lastSentAt.trim() || null
-          : null
-        const timestamp = latestIsoTimestamp([
-          typeof raw.lastMessageAt === 'string' ? raw.lastMessageAt : null,
-          historicalHeartbeatLastSentAt,
-          lastHeartbeat,
-          typeof raw.createdAt === 'string' ? raw.createdAt : null,
-        ]) ?? ''
-        candidates.push({ heartbeat, timestamp })
-      } catch {
-        // Ignore malformed historical conversation files; session loading must remain tolerant.
-      }
-    }
-    return candidates
+    return parsePersistedCommanderSessions(parsed, this.runtimeConfig)
   }
 
   private async writeToDisk(options: { backup?: boolean } = {}): Promise<void> {
@@ -782,10 +637,4 @@ export class CommanderSessionStore {
     )
     return run
   }
-}
-
-export function isCommanderSessionRunning(
-  session: Pick<CommanderSession, 'state'> | null | undefined,
-): boolean {
-  return session?.state === 'running'
 }

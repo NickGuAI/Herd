@@ -3,10 +3,14 @@ import type { Conversation, ConversationStore } from '../commanders/conversation
 import type { CommanderChannelMeta, CommanderLastRoute } from '../commanders/store.js'
 import { CommanderChannelBindingStore } from './store.js'
 import { checkAccountInboundPolicy } from './policy.js'
-import { computeChannelSurfaceKey } from './surface-key.js'
+import { getSurfaceKey } from './surface-key.js'
 import {
   ChannelSurfaceBindingStore,
 } from './surface-binding-store.js'
+import {
+  bindingRoutesToCommander,
+  effectiveBindingCommanderId,
+} from './binding-routing.js'
 import type {
   ChannelInboundEvent,
   ChannelSurfaceBinding,
@@ -72,7 +76,7 @@ export async function resolveInboundChannelMessage(
 ): Promise<ResolveInboundChannelMessageResult> {
   const surfaceBindingStore = options.surfaceBindingStore ?? new ChannelSurfaceBindingStore()
   const accountBindingStore = options.accountBindingStore ?? new CommanderChannelBindingStore()
-  const surfaceKey = computeChannelSurfaceKey(input.event)
+  const surfaceKey = getSurfaceKey(input.event)
 
   const existingBinding = await surfaceBindingStore.getBySurfaceKey(surfaceKey)
   if (existingBinding) {
@@ -136,7 +140,7 @@ export async function resolveInboundChannelMessage(
     const conversationId = randomUUID()
     const conversation = await options.conversationStore.create({
       id: conversationId,
-      commanderId: accountBinding.binding.commanderId,
+      commanderId: accountBinding.commanderId,
       surface: input.event.provider,
       channelMeta: input.channelMeta,
       lastRoute: input.lastRoute,
@@ -160,7 +164,7 @@ export async function resolveInboundChannelMessage(
       peerId: input.event.peerId,
       threadId: input.event.threadId,
       surfaceKey,
-      commanderId: accountBinding.binding.commanderId,
+      commanderId: accountBinding.commanderId,
       conversationId: conversation.id,
       enabled: true,
       config: {
@@ -294,9 +298,9 @@ async function resolveAccountBindingForSurface(
 > {
   const bindings = (await store.list()).filter((accountBinding) => (
     accountBinding.enabled
-    && accountBinding.commanderId === binding.commanderId
     && accountBinding.provider === binding.provider
     && accountBinding.accountId === binding.accountId
+    && bindingRoutesToCommander(accountBinding, binding.commanderId)
   ))
 
   if (bindings.length === 0) {
@@ -312,7 +316,7 @@ async function resolveAccountBinding(
   store: CommanderChannelBindingStore,
   input: ResolveInboundChannelMessageInput,
 ): Promise<
-  | { kind: 'found'; binding: CommanderChannelBinding }
+  | { kind: 'found'; binding: CommanderChannelBinding; commanderId: string }
   | { kind: 'missing' }
   | { kind: 'ambiguous' }
 > {
@@ -320,7 +324,7 @@ async function resolveAccountBinding(
     binding.enabled
     && binding.provider === input.event.provider
     && binding.accountId === input.event.accountId
-    && (!input.commanderId || binding.commanderId === input.commanderId)
+    && (!input.commanderId || bindingRoutesToCommander(binding, input.commanderId))
   ))
 
   if (bindings.length === 0) {
@@ -329,5 +333,10 @@ async function resolveAccountBinding(
   if (bindings.length > 1) {
     return { kind: 'ambiguous' }
   }
-  return { kind: 'found', binding: bindings[0]! }
+  const binding = bindings[0]!
+  return {
+    kind: 'found',
+    binding,
+    commanderId: effectiveBindingCommanderId(binding, input.commanderId),
+  }
 }

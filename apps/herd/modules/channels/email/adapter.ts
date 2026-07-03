@@ -5,6 +5,7 @@ import { ImapFlow } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import nodemailer from 'nodemailer'
 import { checkAccountInboundPolicy } from '../policy.js'
+import { effectiveBindingCommanderId } from '../binding-routing.js'
 import type { CommanderChannelBindingStore } from '../store.js'
 import type {
   ChannelAdapter,
@@ -606,19 +607,14 @@ export class EmailChannelAdapter implements ChannelAdapter<EmailChannelConfig> {
       }
     }
 
-    const configuredDefaultBinding = bindings
-      .map((binding) => ({
-        binding,
-        commanderId: parseEmailChannelConfig(binding.config, binding.accountId).defaultCommanderId,
-      }))
-      .find((entry): entry is { binding: CommanderChannelBinding; commanderId: string } => Boolean(entry.commanderId))
     const envDefault = this.env.COMMANDER_EMAIL_DEFAULT_COMMANDER?.trim()
-    const preferredCommanderId = configuredDefaultBinding?.commanderId || envDefault || runtime.commanderId
+    const preferredCommanderId = envDefault || runtime.commanderId
     const binding = bindings.find((candidate) => candidate.commanderId === preferredCommanderId)
-      ?? configuredDefaultBinding?.binding
       ?? bindings.find((candidate) => candidate.commanderId === runtime.commanderId)
       ?? bindings[0]
-    return binding ? { commanderId: binding.commanderId, binding } : null
+    return binding
+      ? { commanderId: effectiveBindingCommanderId(binding, preferredCommanderId), binding }
+      : null
   }
 
   private async cacheAttachments(

@@ -87,6 +87,7 @@ export function createApprovalSessionsInterface(
       cwd: session.cwd,
       host: session.host,
       commanderScopeId: getApprovalCommanderScopeId(session),
+      conversationId: session.conversationId,
       currentSkillInvocation: session.currentSkillInvocation
         ? { ...session.currentSkillInvocation }
         : undefined,

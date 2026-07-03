@@ -1,6 +1,6 @@
 {
   "name": "herd",
-  "version": "0.0.3-beta",
+  "version": "0.0.4-beta",
   "private": true,
   "type": "module",
   "bin": {
@@ -11,6 +11,9 @@
     "docs:check": "tsx tools/check-docs.ts",
     "db:ready": "tsx tools/db-ready.ts",
     "migrate:sqlite": "tsx tools/migrate-sqlite.ts",
+    "migrate:provider-secrets": "tsx tools/migrate-provider-secrets.ts",
+    "migrate:machine-env-files": "tsx tools/migrate-machine-env-files.ts",
+    "migrate:legacy-automations": "tsx tools/migrate-legacy-automations.ts",
     "build:deps": "pnpm run generate:provider-registry && pnpm --filter @gehirn/ai-services build && pnpm --filter @gehirn/herd-cli build && pnpm --filter @gehirn/auth-providers build && pnpm --filter @gehirn/telemetry build && pnpm --filter @gehirn/sse-streaming build && pnpm --filter @gehirn/transcription build",
     "dev": "pnpm run build:deps && concurrently \"vite\" \"tsx watch server/index.ts\"",
     "dev:client": "vite",
@@ -19,7 +22,7 @@
     "start:src": "tsx server/index.ts",
     "build": "pnpm run build:deps && vite build && tsc -p tsconfig.node.json",
     "preview": "vite preview",
-    "test": "echo \"Release source does not include tests\"",
+    "test": "NODE_ENV=development pnpm run build:deps && NODE_ENV=development vitest run",
     "lint": "tsx tools/check-agent-session-name-prefixes.ts && eslint src server modules --ext .ts,.tsx",
     "onboard": "herd onboard",
     "cap:sync": "cap sync ios",
@@ -93,6 +96,7 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.55.0",
-    "vite": "^6.0.6"
+    "vite": "^6.0.6",
+    "vitest": "^2.1.0"
   }
 }

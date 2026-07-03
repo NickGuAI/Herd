@@ -5,19 +5,13 @@ import { FOUNDER_PROFILE_QUERY_KEY } from '@modules/operators/hooks/useFounderPr
 import type {
   FounderOrgSetupRequest,
   FounderOrgSetupResponse,
-  FounderSetupStatus,
   OnboardingStatus,
   SeedGaiaOnboardingResponse,
   SeedStarterWorkforceOnboardingResponse,
   SkipStarterWorkforceOnboardingResponse,
 } from '../contracts'
 
-export const FOUNDER_SETUP_STATUS_QUERY_KEY = ['onboarding', 'founder-setup-status'] as const
 export const ONBOARDING_STATUS_QUERY_KEY = ['onboarding', 'status'] as const
-
-async function fetchFounderSetupStatus(): Promise<FounderSetupStatus> {
-  return fetchJson<FounderSetupStatus>('/api/org/setup-status')
-}
 
 async function fetchOnboardingStatus(): Promise<OnboardingStatus> {
   return fetchJson<OnboardingStatus>('/api/onboarding/status')
@@ -57,13 +51,6 @@ async function skipStarterWorkforce(): Promise<SkipStarterWorkforceOnboardingRes
   })
 }
 
-export function useFounderSetupStatus() {
-  return useQuery({
-    queryKey: FOUNDER_SETUP_STATUS_QUERY_KEY,
-    queryFn: fetchFounderSetupStatus,
-  })
-}
-
 export function useOnboardingStatus() {
   return useQuery({
     queryKey: ONBOARDING_STATUS_QUERY_KEY,
@@ -77,16 +64,6 @@ export function useCreateFounderOrgSetup() {
   return useMutation({
     mutationFn: createFounderOrgSetup,
     onSuccess: async (result) => {
-      queryClient.setQueryData(FOUNDER_SETUP_STATUS_QUERY_KEY, {
-        setupComplete: true,
-        defaultValues: {
-          orgDisplayName: result.orgIdentity.name,
-          founderDisplayName: result.operator.displayName,
-          founderEmail: result.operator.email ?? '',
-        },
-        validationErrors: {},
-        nextRoute: result.nextRoute,
-      } satisfies FounderSetupStatus)
       queryClient.setQueryData(FOUNDER_PROFILE_QUERY_KEY, result.operator)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: FOUNDER_PROFILE_QUERY_KEY }),
@@ -104,10 +81,7 @@ export function useSeedGaiaCommander() {
     mutationFn: seedGaiaCommander,
     onSuccess: async (result) => {
       queryClient.setQueryData(ONBOARDING_STATUS_QUERY_KEY, result.status)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ONBOARDING_STATUS_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY }),
-      ])
+      await queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY })
     },
   })
 }
@@ -119,10 +93,7 @@ export function useSeedStarterWorkforce() {
     mutationFn: seedStarterWorkforce,
     onSuccess: async (result) => {
       queryClient.setQueryData(ONBOARDING_STATUS_QUERY_KEY, result.status)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ONBOARDING_STATUS_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY }),
-      ])
+      await queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY })
     },
   })
 }
@@ -134,10 +105,7 @@ export function useSkipStarterWorkforce() {
     mutationFn: skipStarterWorkforce,
     onSuccess: async (result) => {
       queryClient.setQueryData(ONBOARDING_STATUS_QUERY_KEY, result.status)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ONBOARDING_STATUS_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY }),
-      ])
+      await queryClient.invalidateQueries({ queryKey: ORG_QUERY_KEY })
     },
   })
 }

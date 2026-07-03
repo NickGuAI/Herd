@@ -1,6 +1,6 @@
 import { ProfileCard } from '@/components/ProfileCard'
 import { cn } from '@/lib/utils'
-import { StatusDot } from '@modules/components/herd'
+import { StatusDot } from '@modules/components/hervald'
 import type { OrgNode } from '../types'
 
 export interface CommanderProfileCardItem {

@@ -1,19 +1,15 @@
 import { type FormEvent, useEffect, useState } from 'react'
-import { useProviderRegistry } from '@/hooks/use-providers'
+import {
+  findProviderEntry,
+  getProviderControlDefaults,
+  resolveDefaultProviderId,
+  useProviderRegistry,
+} from '@/hooks/use-providers'
 import { useSkills } from '@/hooks/use-skills'
 import type { AgentType, Machine, SessionTransportType } from '@/types'
-import {
-  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
-  type ClaudeAdaptiveThinkingMode,
-} from '../../claude-adaptive-thinking.js'
-import {
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
-  type ClaudeEffortLevel,
-} from '../../claude-effort.js'
-import {
-  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
-  type ClaudeMaxThinkingTokens,
-} from '../../claude-max-thinking-tokens.js'
+import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
+import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type { CreateAutomationTaskInput } from '../../automations/hooks/useAutomations'
 import { NewSessionForm } from '../../agents/components/NewSessionForm'
 import { ProviderModelSelect, resolveProviderModelOptions } from './ProviderModelSelect'
@@ -71,8 +67,9 @@ export function CreateAutomationTaskForm({
     isLoading: skillsLoading,
     refetch: refetchSkills,
   } = useSkills()
-  const { data: providers = [] } = useProviderRegistry()
+  const { data: providers = [], automationDefaultProviderId } = useProviderRegistry()
   const skillList = skills ?? []
+  const initialProviderControls = getProviderControlDefaults(null)
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -80,15 +77,15 @@ export function CreateAutomationTaskForm({
   const [cwd, setCwd] = useState('')
   const [task, setTask] = useState('')
   const [timezone, setTimezone] = useState(() => detectBrowserTimezone())
-  const [agentType, setAgentType] = useState<AgentType>('codex')
+  const [agentType, setAgentType] = useState<AgentType>('')
   const [transportType, setTransportType] =
-    useState<Exclude<SessionTransportType, 'external'>>('stream')
-  const [effort, setEffort] = useState<ClaudeEffortLevel>(DEFAULT_CLAUDE_EFFORT_LEVEL)
+    useState<Exclude<SessionTransportType, 'external'>>(initialProviderControls.transportType)
+  const [effort, setEffort] = useState<ClaudeEffortLevel>(initialProviderControls.effort)
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
-    DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+    initialProviderControls.adaptiveThinking,
   )
   const [maxThinkingTokens, setMaxThinkingTokens] = useState<ClaudeMaxThinkingTokens>(
-    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+    initialProviderControls.maxThinkingTokens,
   )
   const [model, setModel] = useState<string | null>(null)
   const [selectedHost, setSelectedHost] = useState('')
@@ -96,8 +93,26 @@ export function CreateAutomationTaskForm({
   const [createError, setCreateError] = useState<string | null>(null)
 
   const activeSkill = skillList.find((s) => s.name === selectedSkill) ?? null
-  const currentProvider = providers.find((provider) => provider.id === agentType) ?? null
+  const defaultAgentType = resolveDefaultProviderId(providers, automationDefaultProviderId)
+  const currentProvider = findProviderEntry(providers, agentType)
   const availableModels = resolveProviderModelOptions(providers, agentType)
+
+  useEffect(() => {
+    if (defaultAgentType && !currentProvider) {
+      setAgentType(defaultAgentType)
+    }
+  }, [currentProvider, defaultAgentType])
+
+  useEffect(() => {
+    if (!currentProvider) {
+      return
+    }
+    const defaults = getProviderControlDefaults(currentProvider)
+    setTransportType(defaults.transportType)
+    setEffort(defaults.effort)
+    setAdaptiveThinking(defaults.adaptiveThinking)
+    setMaxThinkingTokens(defaults.maxThinkingTokens)
+  }, [currentProvider])
 
   useEffect(() => {
     if (model && !availableModels.some((option) => option.id === model)) {
@@ -109,6 +124,9 @@ export function CreateAutomationTaskForm({
     event.preventDefault()
     setCreateError(null)
     try {
+      if (!currentProvider) {
+        throw new Error('Select an available provider before creating an automation.')
+      }
       const createInput: CreateAutomationTaskInput = {
         name: name.trim(),
         ...(description.trim() ? { description: description.trim() } : {}),
@@ -130,11 +148,14 @@ export function CreateAutomationTaskForm({
       setTimezone(detectBrowserTimezone())
       setCwd('')
       setTask('')
-      setAgentType('codex')
-      setTransportType('stream')
-      setEffort(DEFAULT_CLAUDE_EFFORT_LEVEL)
-      setAdaptiveThinking(DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
-      setMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
+      if (defaultAgentType) {
+        setAgentType(defaultAgentType)
+      }
+      const defaults = getProviderControlDefaults(currentProvider)
+      setTransportType(defaults.transportType)
+      setEffort(defaults.effort)
+      setAdaptiveThinking(defaults.adaptiveThinking)
+      setMaxThinkingTokens(defaults.maxThinkingTokens)
       setModel(null)
       setSelectedHost('')
       setSelectedSkill('')
@@ -164,8 +185,8 @@ export function CreateAutomationTaskForm({
         transportType={transportType}
         setTransportType={setTransportType}
         machines={machines}
-        selectedHost={selectedHost}
-        setSelectedHost={setSelectedHost}
+        selectedMachineId={selectedHost}
+        setSelectedMachineId={setSelectedHost}
         isCreating={createPending}
         createError={createError}
         onSubmit={(e) => void handleSubmit(e)}

@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { DismissibleOverlay } from '@/components/DismissibleOverlay'
-import { getHerdThemeClassName, useTheme } from '@/lib/theme-context'
+import { getHervaldThemeClassName, useTheme } from '@/lib/theme-context'
 import { cn } from '@/lib/utils'
 
 interface ModalFormContainerProps {
@@ -24,7 +24,7 @@ export function ModalFormContainer({
   desktopClassName,
 }: ModalFormContainerProps) {
   const { theme } = useTheme()
-  const themeClassName = getHerdThemeClassName(theme)
+  const themeClassName = getHervaldThemeClassName(theme)
 
   return (
     <DismissibleOverlay

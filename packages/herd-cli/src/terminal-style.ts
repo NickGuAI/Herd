@@ -27,7 +27,7 @@ function icon(status: TerminalStatus): string {
   return color('>', CYAN)
 }
 
-export function printHerdBrand(
+export function printHervaldBrand(
   label: string,
   write: (chunk: string) => void = (chunk) => process.stdout.write(chunk),
 ): void {

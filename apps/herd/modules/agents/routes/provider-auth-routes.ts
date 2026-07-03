@@ -10,17 +10,21 @@ import {
   resolveProviderAuthScopeId,
   startProviderOAuthFlow,
   type ProviderAuthSnapshot,
+  type CredentialPoolProvider,
   type ProviderOAuthCompleteResult,
 } from '../provider-auth.js'
 import type {
   AgentType,
   AgentsRouterOptions,
   AnySession,
+  CredentialPoolRecoveryRequest,
   MachineConfig,
   SessionCreator,
+  StreamJsonEvent,
   StreamSession,
 } from '../types.js'
 import { parseProviderId } from '../providers/registry.js'
+import { installBlockedCredentialPoolRecovery } from '../session/provider-runtime.js'
 
 export const DEFAULT_PROVIDER_AUTH_PROBE_INTERVAL_MS = 60_000
 
@@ -33,6 +37,15 @@ interface ProviderAuthRouteDeps {
   questStore?: AgentsRouterOptions['questStore']
   readMachineRegistry(): Promise<MachineConfig[]>
   sessionCreatorIdFromUser(req: Request): string | undefined
+  appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void
+  broadcastStreamEvent(session: StreamSession, event: StreamJsonEvent): void
+  schedulePersistedSessionsWrite(): void
+  markCredentialRecoveryRequest(sessionName: string, request: CredentialPoolRecoveryRequest): void
+  scheduleCredentialRecoveryReplacement?(sessionName: string): void
+  recoverCredentialPoolSession?(
+    sessionName: string,
+    request: CredentialPoolRecoveryRequest,
+  ): Promise<Record<string, unknown>>
 }
 
 interface RegisteredProviderAuthRoutes {
@@ -125,6 +138,15 @@ function humanCreatorId(
   return { kind: 'human', id: sessionCreatorIdFromUser(req) }
 }
 
+function parsePoolProvider(value: unknown): CredentialPoolProvider | null {
+  const provider = typeof value === 'string' ? parseProviderId(value) : null
+  return provider === 'claude' || provider === 'codex' ? provider : null
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
 export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): RegisteredProviderAuthRoutes {
   const {
     router,
@@ -135,7 +157,71 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     requireWriteAccess,
     sessionCreatorIdFromUser,
     sessions,
+    appendStreamEvent,
+    broadcastStreamEvent,
+    schedulePersistedSessionsWrite,
+    markCredentialRecoveryRequest,
   } = deps
+
+  async function queueCredentialRecovery(
+    sessionName: string | undefined,
+    provider: CredentialPoolProvider,
+    exhaustedId: string | undefined,
+    result: Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>,
+  ): Promise<Record<string, unknown> | undefined> {
+    const activeCredentialId = result.activeCredential?.id
+    if (sessionName && result.blocked) {
+      const session = sessions.get(sessionName)
+      if (session?.kind === 'stream' && session.agentType === provider) {
+        installBlockedCredentialPoolRecovery({
+          providerAuthStore,
+          appendStreamEvent,
+          broadcastStreamEvent,
+          markCredentialRecoveryRequest,
+          schedulePersistedSessionsWrite,
+          ...(deps.scheduleCredentialRecoveryReplacement
+            ? { scheduleCredentialRecoveryReplacement: deps.scheduleCredentialRecoveryReplacement }
+            : {}),
+        }, session, {
+          reason: exhaustedId ? 'usage_limit' : 'manual_switch',
+          ...(result.blocked.earliestExhaustedUntil ? { blockedUntil: result.blocked.earliestExhaustedUntil } : {}),
+        })
+      }
+      return {
+        status: 'blocked',
+        sessionName,
+        ...(result.blocked.earliestExhaustedUntil ? { blockedUntil: result.blocked.earliestExhaustedUntil } : {}),
+      }
+    }
+    if (!sessionName || !activeCredentialId || !result.switched) {
+      return undefined
+    }
+
+    const request: CredentialPoolRecoveryRequest = {
+      provider,
+      credentialPoolId: activeCredentialId,
+      ...(result.previousCredential?.id
+        ? { previousCredentialPoolId: result.previousCredential.id }
+          : {}),
+      clearResumeProviderContext: true,
+      reason: exhaustedId ? 'usage_limit' : 'manual_switch',
+      requestedAt: new Date().toISOString(),
+    }
+    markCredentialRecoveryRequest(sessionName, request)
+
+    const session = sessions.get(sessionName)
+    if (session?.kind === 'stream' && session.agentType === provider) {
+      session.credentialPoolRecovery = request
+    }
+
+    const recovered = await deps.recoverCredentialPoolSession?.(sessionName, request)
+    return recovered ?? {
+      status: 'recovered_in_place',
+      sessionName,
+      credentialPoolId: request.credentialPoolId,
+      clearResumeProviderContext: request.clearResumeProviderContext,
+    }
+  }
 
   async function markProviderAuthRequired(
     session: StreamSession,
@@ -269,6 +355,81 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to refresh provider auth snapshots'
       res.status(500).json({ error: message })
+    }
+  })
+
+  router.get('/provider-auth/pool/:provider', requireReadAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.params.provider)
+    if (!provider) {
+      res.status(400).json({ error: 'Invalid credential pool provider' })
+      return
+    }
+    try {
+      res.json(await providerAuthStore.listPoolCredentials(provider))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to read credential pool'
+      res.status(500).json({ error: message })
+    }
+  })
+
+  router.post('/provider-auth/pool/credentials', requireWriteAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.body?.provider)
+    if (!provider) {
+      res.status(400).json({ error: 'Invalid credential pool provider' })
+      return
+    }
+    try {
+      res.status(201).json(await providerAuthStore.registerPoolCredential(
+        provider,
+        parseOptionalString(req.body?.label) ?? 'Credential',
+        parseOptionalString(req.body?.email),
+      ))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to register credential'
+      res.status(400).json({ error: message })
+    }
+  })
+
+  router.post('/provider-auth/pool/switch', requireWriteAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.body?.provider)
+    if (!provider) {
+      res.status(400).json({ error: 'Invalid credential pool provider' })
+      return
+    }
+    try {
+      const exhaustedId = parseOptionalString(req.body?.exhaustedId)
+      const result = await providerAuthStore.switchToNextPoolCredential(
+        provider,
+        exhaustedId,
+      )
+      const recovery = await queueCredentialRecovery(
+        parseOptionalString(req.body?.sessionName),
+        provider,
+        exhaustedId,
+        result,
+      )
+      res.json({
+        ...result,
+        ...(recovery ? { recovery } : {}),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to switch credential'
+      res.status(400).json({ error: message })
+    }
+  })
+
+  router.delete('/provider-auth/pool/credentials/:provider/:credentialId', requireWriteAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.params.provider)
+    const credentialId = parseOptionalString(req.params.credentialId)
+    if (!provider || !credentialId) {
+      res.status(400).json({ error: 'Invalid credential pool credential' })
+      return
+    }
+    try {
+      res.json(await providerAuthStore.removePoolCredential(provider, credentialId))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to remove credential'
+      res.status(400).json({ error: message })
     }
   })
 

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { FolderOpen, GitBranch, Loader2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ConfirmModal } from '@modules/components/ConfirmModal'
+import { ModalFormContainer } from '@modules/components/ModalFormContainer'
 import { Toast } from '@modules/components/Toast'
 import type { WorkspaceTreeNode } from '../types'
 import {
@@ -51,6 +52,8 @@ function isHiddenWorkspaceNode(node: WorkspaceTreeNode): boolean {
   return node.name.startsWith('.')
 }
 
+type WorkspaceNameDialogKind = 'file' | 'folder' | 'rename'
+
 export function WorkspacePanel({
   source,
   position = 'embedded',
@@ -95,6 +98,10 @@ export function WorkspacePanel({
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null)
   const [draftContent, setDraftContent] = useState('')
   const [isInitializingGit, setIsInitializingGit] = useState(false)
+  const [nameDialog, setNameDialog] = useState<{
+    kind: WorkspaceNameDialogKind
+    value: string
+  } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const addFeedbackTimersRef = useRef<number[]>([])
   const requestedSelectionRef = useRef<{ path: string } | null>(null)
@@ -434,16 +441,7 @@ export function WorkspacePanel({
     }
   }, [nodesByParent, onRecoverStaleTarget, source])
 
-  function promptForName(label: string): string | null {
-    if (typeof window === 'undefined') {
-      return null
-    }
-    const value = window.prompt(label)
-    return value?.trim() || null
-  }
-
-  async function handleCreateFile(): Promise<void> {
-    const name = promptForName('New file name')
+  async function createFileNamed(name: string): Promise<void> {
     if (!name) {
       return
     }
@@ -455,8 +453,7 @@ export function WorkspacePanel({
     })
   }
 
-  async function handleCreateFolder(): Promise<void> {
-    const name = promptForName('New folder name')
+  async function createFolderNamed(name: string): Promise<void> {
     if (!name) {
       return
     }
@@ -466,6 +463,32 @@ export function WorkspacePanel({
       setExpandedPaths((prev) => new Set(prev).add(nextPath))
       await refreshWorkspace()
     })
+  }
+
+  function handleRequestName(kind: WorkspaceNameDialogKind, value = ''): void {
+    setNameDialog({ kind, value })
+  }
+
+  async function handleSubmitNameDialog(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    const request = nameDialog
+    if (!request) {
+      return
+    }
+    const name = request.value.trim()
+    setNameDialog(null)
+    if (!name) {
+      return
+    }
+    if (request.kind === 'file') {
+      await createFileNamed(name)
+      return
+    }
+    if (request.kind === 'rename') {
+      await renameSelectedNodeTo(name)
+      return
+    }
+    await createFolderNamed(name)
   }
 
   async function handleSave(): Promise<void> {
@@ -484,12 +507,15 @@ export function WorkspacePanel({
     }
   }
 
-  async function handleRename(): Promise<void> {
+  function handleRename(): void {
     if (!selectedNode) {
       return
     }
-    const nextName = promptForName(`Rename ${selectedNode.name} to`)
-    if (!nextName || nextName === selectedNode.name) {
+    handleRequestName('rename', selectedNode.name)
+  }
+
+  async function renameSelectedNodeTo(nextName: string): Promise<void> {
+    if (!selectedNode || !nextName || nextName === selectedNode.name) {
       return
     }
     await runBusyTask('Renaming…', async () => {
@@ -622,6 +648,50 @@ export function WorkspacePanel({
   const feedbackOverlays = (
     <>
       <Toast open={Boolean(toastMessage)} message={toastMessage ?? ''} />
+      <ModalFormContainer
+        open={Boolean(nameDialog)}
+        title={nameDialog?.kind === 'rename'
+          ? 'Rename Path'
+          : nameDialog?.kind === 'folder'
+            ? 'New Folder'
+            : 'New File'}
+        onClose={() => setNameDialog(null)}
+        desktopClassName="max-w-md"
+      >
+        <form className="space-y-4" onSubmit={(event) => { void handleSubmitNameDialog(event) }}>
+          <label className="grid gap-1.5 text-sm text-[color:var(--hv-fg)]">
+            <span className="text-xs uppercase tracking-wide text-[color:var(--hv-fg-subtle)]">
+              Name
+            </span>
+            <input
+              type="text"
+              autoFocus
+              value={nameDialog?.value ?? ''}
+              onChange={(event) => setNameDialog((current) => (
+                current ? { ...current, value: event.target.value } : current
+              ))}
+              className="rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-3 py-2 text-sm text-[color:var(--hv-fg)] outline-none focus:border-[color:var(--hv-border-strong)]"
+              data-testid="workspace-name-dialog-input"
+            />
+          </label>
+          <div className="flex items-center justify-end gap-3 border-t border-[color:var(--hv-border-hair)] pt-4">
+            <button
+              type="button"
+              onClick={() => setNameDialog(null)}
+              className="rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)]"
+              data-testid="workspace-name-dialog-submit"
+            >
+              {nameDialog?.kind === 'rename' ? 'Rename' : 'Create'}
+            </button>
+          </div>
+        </form>
+      </ModalFormContainer>
       <ConfirmModal
         open={Boolean(pendingDeletePath)}
         title="Delete workspace path?"
@@ -720,8 +790,8 @@ export function WorkspacePanel({
             variant={variant}
             onRefresh={() => void refreshWorkspace()}
             onUpload={() => fileInputRef.current?.click()}
-            onNewFile={() => void handleCreateFile()}
-            onNewFolder={() => void handleCreateFolder()}
+            onNewFile={() => handleRequestName('file')}
+            onNewFolder={() => handleRequestName('folder')}
             onDownloadSelected={selectedPath ? () => void handleDownloadPath(selectedPath, selectedNode?.type) : undefined}
           />
           <input

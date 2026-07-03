@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { fetchJson } from '@/lib/api'
+import { buildCommandRoomLaunchTarget } from '@modules/command-room/route-metadata'
 
 interface CommanderPackageSkill {
   id: string
@@ -164,7 +165,7 @@ function PackageCard({
         {pkg.installState.installed && pkg.installState.commanderId ? (
           <Link
             className="hv-marketplace-button hv-marketplace-button-ghost"
-            to={`/command-room?commander=${encodeURIComponent(pkg.installState.commanderId)}`}
+            to={buildCommandRoomLaunchTarget({ commanderId: pkg.installState.commanderId }).path}
           >
             Open Commander
           </Link>

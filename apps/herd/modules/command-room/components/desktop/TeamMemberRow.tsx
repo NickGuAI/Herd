@@ -4,7 +4,7 @@
  * A single row in the Team column worker list.
  * Selected state gets a carved-radius border + whisper shadow.
  */
-import { Chip, StatusDot } from '@modules/components/herd'
+import { Chip, StatusDot } from '@modules/components/hervald'
 
 export interface Worker {
   id: string

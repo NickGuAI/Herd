@@ -135,11 +135,11 @@ function compareConversationTranscriptRecords(
   if (leftPendingWithoutSeq !== rightPendingWithoutSeq) {
     return leftPendingWithoutSeq ? 1 : -1
   }
-  if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
-    return left.seq - right.seq
-  }
   if (left.timeMs !== null && right.timeMs !== null && left.timeMs !== right.timeMs) {
     return left.timeMs - right.timeMs
+  }
+  if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
+    return left.seq - right.seq
   }
   if (left.seq !== null && right.seq === null) {
     return -1
@@ -298,27 +298,6 @@ export function hasPendingConversationMessages(
     pendingMessages,
     conversationId,
   ).length > 0
-}
-
-export function appendPendingConversationMessagesToTranscript(
-  canonicalMessages: MsgItem[],
-  pendingMessages: PendingConversationMessage[],
-  conversationId?: string | null,
-): MsgItem[] {
-  const visiblePendingMessages = getUnconfirmedPendingConversationMessages(
-    canonicalMessages,
-    pendingMessages,
-    conversationId,
-  )
-  if (visiblePendingMessages.length === 0) {
-    return canonicalMessages
-  }
-
-  return mergeConversationTranscriptSources({
-    canonicalMessages,
-    pendingMessages,
-    conversationId,
-  })
 }
 
 export function pruneConfirmedPendingConversationMessages(

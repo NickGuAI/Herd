@@ -1,10 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { ChevronRight, Cpu, Monitor } from 'lucide-react'
-import { findProviderEntry, getProviderLabel, useProviderRegistry } from '@/hooks/use-providers'
+import {
+  findProviderEntry,
+  getProviderControlDefaults,
+  getProviderLabel,
+  useProviderRegistry,
+} from '@/hooks/use-providers'
 import { timeAgo, cn } from '@/lib/utils'
 import { ConfirmModal } from '@modules/components/ConfirmModal'
 import type { AgentType, Machine } from '@/types'
-import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
 import {
   fallbackWorkerSummary,
   getKillConfirmationMessage,
@@ -47,8 +51,9 @@ export function SessionCard({
   const isCommander = session.sessionType === 'commander'
   const Icon = Monitor
   const isRemote = Boolean(session.host)
+  const legacyTransportType = (session as { sessionType?: string }).sessionType
   const transportType = session.transportType
-    ?? (session.sessionType === 'pty' || session.sessionType === 'stream' ? session.sessionType : undefined)
+    ?? (legacyTransportType === 'pty' || legacyTransportType === 'stream' ? legacyTransportType : undefined)
   const isStream = transportType === 'stream'
   const rawAgentType = typeof session.agentType === 'string' ? session.agentType : null
   const currentProvider = findProviderEntry(providers, rawAgentType)
@@ -82,6 +87,7 @@ export function SessionCard({
     sessionStatus,
   ].filter((value): value is string => Boolean(value))
   const supportsEffort = currentProvider?.uiCapabilities.supportsEffort ?? (rawAgentType === 'claude')
+  const providerDefaults = getProviderControlDefaults(currentProvider)
   const [isExpanded, setIsExpanded] = useState(variant === 'row' && selected)
   const [confirmKillOpen, setConfirmKillOpen] = useState(false)
   const previousSelectedRef = useRef(selected)
@@ -121,7 +127,9 @@ export function SessionCard({
   }
 
   const handleDismiss = () => {
-    void Promise.resolve(onKill()).catch(() => {})
+    void Promise.resolve(onKill()).catch((error) => {
+      void error
+    })
   }
 
   const sessionActions = (
@@ -196,7 +204,7 @@ export function SessionCard({
         </span>
         <span>{variant === 'row' ? `Started ${timeAgo(session.created)}` : timeAgo(session.created)}</span>
         {supportsEffort && (
-          <span>effort {session.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL}</span>
+          <span>effort {session.effort ?? providerDefaults.effort}</span>
         )}
       </div>
 

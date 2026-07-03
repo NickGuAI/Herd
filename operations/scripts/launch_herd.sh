@@ -199,7 +199,7 @@ init_launch_log "herd" "$APP_DIR"
 
 clear
 echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║       ⚖️  Herd Launcher ⚖️           ║${NC}"
+echo -e "${CYAN}║       ⚖️  Herd Launcher ⚖️              ║${NC}"
 echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
 echo
 

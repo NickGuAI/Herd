@@ -17,10 +17,7 @@ import {
 import type { WorkspaceCommandRunner } from '../workspace/index.js'
 import { APPROVAL_BRIDGE_TOKEN_ENV } from '../policies/approval-bridge-token.js'
 import { WORKSPACE_EXEC_MAX_BUFFER_BYTES } from './constants.js'
-import {
-  migrateMachineEnvFiles,
-  prepareMachineLaunchEnvironment,
-} from './machine-credentials.js'
+import { prepareMachineLaunchEnvironment } from './machine-credentials.js'
 import { listMachineProviders } from './providers/machine-provider-adapter.js'
 import type {
   CapturedCommandResult,
@@ -340,13 +337,7 @@ export function createMachineRegistryStore(machinesFilePath: string): MachineReg
 
     const contents = await readFile(machinesFilePath, 'utf8')
     const parsed = JSON.parse(contents) as unknown
-    let machines = ensureDefaultLocalMachine(parseMachineRegistry(parsed))
-    const migrated = await migrateMachineEnvFiles(machines)
-    if (migrated.changed) {
-      await writeMachineRegistry(migrated.machines)
-      machines = ensureDefaultLocalMachine(migrated.machines)
-      machinesStats = await stat(machinesFilePath)
-    }
+    const machines = ensureDefaultLocalMachine(parseMachineRegistry(parsed))
     cachedMachines = machines
     cachedMachinesMtimeMs = machinesStats.mtimeMs
     return machines
@@ -358,9 +349,7 @@ export function createMachineRegistryStore(machinesFilePath: string): MachineReg
   }
 
   async function writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]> {
-    let validated = ensureDefaultLocalMachine(parseMachineRegistry({ machines }))
-    const migrated = await migrateMachineEnvFiles(validated)
-    validated = ensureDefaultLocalMachine(migrated.machines)
+    const validated = ensureDefaultLocalMachine(parseMachineRegistry({ machines }))
     await writeJsonFileAtomically(
       machinesFilePath,
       { machines: validated },

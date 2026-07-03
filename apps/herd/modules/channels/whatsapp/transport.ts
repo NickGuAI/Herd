@@ -1,5 +1,6 @@
 import type {
   ChannelInboundEvent,
+  ChannelLastDrop,
   ChannelOutboundPayload,
 } from '../types.js'
 import type { WhatsAppChannelConfig } from './config.js'
@@ -22,6 +23,7 @@ export interface WhatsAppRuntimeStatus {
   lastQrAt?: string
   lastError?: string
   lastEventAt?: string
+  lastDrop?: ChannelLastDrop
   qrCode?: string
   qrDataUrl?: string
 }

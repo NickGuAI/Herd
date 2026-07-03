@@ -28,7 +28,6 @@ export function createApiKeysRuntime(context: ModuleRuntimeContext): ModuleRoute
   capabilities.provide('api-key-store', 'api-keys', options.apiKeyStore)
   capabilities.provide('settings.provider-secrets', 'api-keys', providerSecretsStore)
   capabilities.provide('provider-secrets-store', 'api-keys', providerSecretsStore)
-  capabilities.provide('realtime.transcription-key-store', 'api-keys', options.transcriptionKeyStore)
 
   initializeInboundTranscriptionProvider({ providerSecretsStore })
   initializeOutboundSpeechSynthesizer({ providerSecretsStore })

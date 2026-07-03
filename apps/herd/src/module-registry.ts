@@ -26,6 +26,12 @@ export const moduleComponentBindings: FrontendModuleBinding[] = [
     component: () => import('@modules/commanders/packages/page'),
   },
   {
+    name: 'skills',
+    routeId: 'skills.ui',
+    componentKey: 'modules/skills/page',
+    component: () => import('@modules/skills/page'),
+  },
+  {
     name: 'automations',
     routeId: 'automations.ui',
     componentKey: 'modules/automations/page',

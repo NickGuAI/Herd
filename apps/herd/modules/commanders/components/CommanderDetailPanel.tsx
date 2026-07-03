@@ -1,8 +1,13 @@
 import { ArrowLeft, MessageSquare, Pencil, Square, Triangle, Zap } from 'lucide-react'
 import type { AgentType } from '@/types'
+import {
+  findProviderEntry,
+  getProviderControlDefaults,
+  getProviderLabel,
+  useProviderRegistry,
+} from '@/hooks/use-providers'
 import { cn } from '@/lib/utils'
 import { fetchVoid } from '@/lib/api'
-import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
 import type {
   CommanderCronCreateInput,
   CommanderSession,
@@ -28,7 +33,7 @@ const STATE_BADGE_CLASSES: Record<CommanderSession['state'], string> = {
 }
 
 function normalizeTab(tab: string): TabId {
-  if (tab === 'sentinels' || tab === 'cron' || tab === 'automation') {
+  if (tab === 'cron' || tab === 'automation') {
     return 'automation'
   }
   if (tab === 'identity') {
@@ -119,8 +124,15 @@ export function CommanderDetailPanel({
   deleteCronPending: boolean
   deleteCronId?: string | null
 }) {
+  const { data: providers = [] } = useProviderRegistry()
   const tab = normalizeTab(activeTab)
   const isRunning = commander.state === 'running'
+  const commanderAgentType = commander.agentType ?? null
+  const currentProvider = findProviderEntry(providers, commanderAgentType)
+  const agentLabel = commanderAgentType
+    ? getProviderLabel(providers, commanderAgentType)
+    : 'Unavailable'
+  const effortLabel = commander.effort ?? getProviderControlDefaults(currentProvider).effort
 
   return (
     <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
@@ -171,9 +183,9 @@ export function CommanderDetailPanel({
             </div>
             <p className="text-whisper text-sumi-mist mt-1 font-mono truncate pl-4">{commander.id}</p>
             <p className="text-whisper text-sumi-diluted mt-1 pl-4">
-              agent: {commander.agentType ?? 'claude'}
+              agent: {agentLabel}
               {commander.model ? ` · model: ${commander.model}` : ''}
-              · effort: {commander.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL}
+              · effort: {effortLabel}
             </p>
           </div>
 

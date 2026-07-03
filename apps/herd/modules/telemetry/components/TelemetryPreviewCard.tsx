@@ -18,7 +18,7 @@ export default function TelemetryPreviewCard({
     { label: 'tool calls', value: null },
     { label: 'avg latency', value: null },
     { label: 'approvals shown', value: null },
-    { label: 'sentinels fired', value: null },
+    { label: 'automations fired', value: null },
     { label: 'cron runs', value: null },
     { label: 'errors', value: null },
   ]

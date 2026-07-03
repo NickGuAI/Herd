@@ -13,6 +13,12 @@ export interface ApiKeyView {
   scopes: string[]
 }
 
+export interface ApiKeyScopeCatalog {
+  scopes: string[]
+  defaultBootstrapScopes: string[]
+  mobilePairingScopes: string[]
+}
+
 export interface CreateApiKeyInput {
   name: string
   scopes: string[]
@@ -61,6 +67,10 @@ export interface GeminiImageGenerationSettings {
 
 async function fetchApiKeys(): Promise<ApiKeyView[]> {
   return fetchJson<ApiKeyView[]>('/api/auth/keys')
+}
+
+async function fetchApiKeyScopeCatalog(): Promise<ApiKeyScopeCatalog> {
+  return fetchJson<ApiKeyScopeCatalog>('/api/auth/scopes')
 }
 
 async function createApiKey(input: CreateApiKeyInput): Promise<CreatedApiKey> {
@@ -236,6 +246,14 @@ export function useApiKeys() {
     queryKey: ['auth', 'api-keys'],
     queryFn: fetchApiKeys,
     refetchInterval: 15_000,
+  })
+}
+
+export function useApiKeyScopeCatalog() {
+  return useQuery({
+    queryKey: ['auth', 'api-key-scopes'],
+    queryFn: fetchApiKeyScopeCatalog,
+    staleTime: 5 * 60_000,
   })
 }
 

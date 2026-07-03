@@ -8,7 +8,7 @@ import type {
   StreamJsonEvent,
   StreamSession,
 } from '../types.js'
-import { extractTranscriptUsageUpdate, isLegacyStreamEvent } from '../transcript-records.js'
+import { extractTranscriptUsageUpdate } from '../transcript-records.js'
 
 export function truncateLogText(value: string, maxChars = CODEX_SIDECAR_LOG_TEXT_LIMIT): string {
   const normalized = value.replace(/\s+/g, ' ').trim()
@@ -137,16 +137,6 @@ export function applyStreamUsageEvent(session: StreamSession, event: StreamJsonE
   if (usageUpdate.costUsd !== undefined) {
     session.usage.costUsd = usageUpdate.costUsd
     return
-  }
-
-  if (isLegacyStreamEvent(event) && event.type === 'result') {
-    const totalCost = readFiniteNumber(event.total_cost_usd)
-    const cost = readFiniteNumber(event.cost_usd)
-    if (totalCost !== undefined) {
-      session.usage.costUsd = totalCost
-    } else if (cost !== undefined) {
-      session.usage.costUsd = cost
-    }
   }
 }
 

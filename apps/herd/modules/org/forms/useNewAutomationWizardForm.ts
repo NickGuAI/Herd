@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useProviderRegistry } from '@/hooks/use-providers'
+import { resolveDefaultProviderId, useProviderRegistry } from '@/hooks/use-providers'
 import {
   buildNewAutomationCreateRequestBody,
   createDefaultNewAutomationWizardValues,
@@ -22,12 +22,16 @@ export function useNewAutomationWizardForm(options: {
   commanders: ReadonlyArray<NewAutomationCommander>
   defaultQuestCommanderId?: string
 }) {
-  const { data: providers = [] } = useProviderRegistry()
+  const { data: providers = [], automationDefaultProviderId } = useProviderRegistry()
   const agentTypeOptions = useMemo(
     () => listSupportedAutomationProviders(providers),
     [providers],
   )
-  const defaultAgentType = agentTypeOptions[0]?.value
+  const defaultAgentType = resolveDefaultProviderId(
+    providers,
+    automationDefaultProviderId,
+    { predicate: (provider) => provider.capabilities.supportsAutomation },
+  ) ?? agentTypeOptions[0]?.value ?? ''
   const defaultValues = useMemo(
     () => createDefaultNewAutomationWizardValues(
       options.defaultQuestCommanderId ?? '',

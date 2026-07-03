@@ -12,6 +12,14 @@ const DRAFT_IMAGES_MAX_BYTES = 12 * 1024 * 1024
 const DRAFT_SAVE_DEBOUNCE_MS = 500
 const DRAFT_SAVED_LABEL_MS = 2000
 
+export function buildSessionDraftStorageKey(sessionName: string): string {
+  return `${DRAFT_STORAGE_PREFIX}${sessionName}`
+}
+
+export function buildSessionDraftImagesStorageKey(sessionName: string): string {
+  return `${DRAFT_IMAGES_STORAGE_PREFIX}${sessionName}`
+}
+
 export interface SessionDraftImage {
   mediaType: string
   data: string
@@ -62,8 +70,8 @@ export function useSessionDraft(sessionName: string) {
   const draftSavedIndicatorTimerRef = useRef<number | null>(null)
   const skipDraftSaveCountRef = useRef(1)
 
-  const draftStorageKey = useMemo(() => `${DRAFT_STORAGE_PREFIX}${sessionName}`, [sessionName])
-  const draftImagesStorageKey = useMemo(() => `${DRAFT_IMAGES_STORAGE_PREFIX}${sessionName}`, [sessionName])
+  const draftStorageKey = useMemo(() => buildSessionDraftStorageKey(sessionName), [sessionName])
+  const draftImagesStorageKey = useMemo(() => buildSessionDraftImagesStorageKey(sessionName), [sessionName])
 
   const setInputText = useCallback((nextInputText: SetStateAction<string>) => {
     const resolvedInputText = typeof nextInputText === 'function'

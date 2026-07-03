@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Clock3, ExternalLink, MessageSquare, Plus, Square, Trash2, Triangle } from 'lucide-react'
-import { useProviderRegistry } from '@/hooks/use-providers'
+import { resolveDefaultProviderId, useProviderRegistry } from '@/hooks/use-providers'
 import { cn, formatCost, timeAgo } from '@/lib/utils'
 import { fetchJson } from '../../../src/lib/api'
 import type {
@@ -97,8 +97,11 @@ function removeKey(record: Record<string, string>, key: string): Record<string, 
   return next
 }
 
-function resolveAgentType(agentType: CommanderSession['agentType']): CommanderAgentType {
-  return agentType ?? 'claude'
+function resolveAgentType(
+  agentType: CommanderSession['agentType'],
+  defaultAgentType: CommanderAgentType | null,
+): CommanderAgentType {
+  return agentType ?? defaultAgentType ?? ''
 }
 
 export function CommanderList({
@@ -130,7 +133,8 @@ export function CommanderList({
   isStartPending?: boolean
   isStopPending?: boolean
 }) {
-  const { data: providers = [] } = useProviderRegistry()
+  const { data: providers = [], defaultProviderId } = useProviderRegistry()
+  const defaultAgentType = resolveDefaultProviderId(providers, defaultProviderId)
   const queryClient = useQueryClient()
   const [agentTypeByCommander, setAgentTypeByCommander] = useState<Record<string, CommanderAgentType>>({})
   const [manualHeartbeatRunIdByCommander, setManualHeartbeatRunIdByCommander] = useState<Record<string, string>>({})
@@ -217,7 +221,7 @@ export function CommanderList({
           const taskLabel = currentTaskLabel(session)
           const isRunning = session.state === 'running'
           const commanderDisplayName = resolveCommanderDisplayName(session)
-          const selectedAgentType = agentTypeByCommander[session.id] ?? resolveAgentType(session.agentType)
+          const selectedAgentType = agentTypeByCommander[session.id] ?? resolveAgentType(session.agentType, defaultAgentType)
           const isManualHeartbeatPending = manualHeartbeatMutation.isPending &&
             manualHeartbeatMutation.variables === session.id
           const manualHeartbeatRunId = manualHeartbeatRunIdByCommander[session.id]

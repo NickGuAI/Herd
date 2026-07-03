@@ -3,6 +3,7 @@ import QRCode from 'qrcode'
 import { AlertTriangle, Copy, KeyRound, LogOut, QrCode, Smartphone, Trash2 } from 'lucide-react'
 import {
   useApiKeys,
+  useApiKeyScopeCatalog,
   useClearGeminiImageGenerationKey,
   useClearOpenAITranscriptionKey,
   useCreateApiKey,
@@ -15,6 +16,7 @@ import {
   type CreatedApiKey,
   type MobileAccessInvite,
 } from '@/hooks/use-api-keys'
+import { getBootstrapKeyRotationState } from '@/app/bootstrap-key-rotation'
 import { useAuth } from '@/contexts/AuthContext'
 import { timeAgo } from '@/lib/utils'
 import { MagicBento, MagicBentoCard } from '@/components/MagicBento'
@@ -24,37 +26,36 @@ import { AccountProfileCard } from './components/AccountProfileCard'
 import { OrgIdentityCard } from '@modules/org-identity/components/OrgIdentityCard'
 import { ProviderAuthPanel } from '@modules/agents/components/ProviderAuthPanel'
 
-const AVAILABLE_SCOPES = [
-  { value: 'telemetry:read', label: 'Telemetry read' },
-  { value: 'telemetry:write', label: 'Telemetry write' },
-  { value: 'agents:read', label: 'Agents read' },
-  { value: 'agents:write', label: 'Agents write' },
-  {
-    value: 'agents:admin',
+interface ScopeOption {
+  value: string
+  label: string
+  description?: string
+}
+
+type ScopePreset = 'operational' | 'bootstrap' | 'custom'
+
+const ADMIN_SCOPE = 'agents:admin'
+const BOOTSTRAP_ROTATION_QUERY = 'rotation'
+const BOOTSTRAP_ROTATION_VALUE = 'bootstrap'
+
+const SCOPE_COPY: Record<string, Omit<ScopeOption, 'value'>> = {
+  'telemetry:read': { label: 'Telemetry read' },
+  'telemetry:write': { label: 'Telemetry write' },
+  'agents:read': { label: 'Agents read' },
+  'agents:write': { label: 'Agents write' },
+  'agents:admin': {
     label: 'Agents admin',
-    description: 'Grants elevated agent administration actions.',
+    description: 'Required to create, list, and revoke future API keys.',
   },
-  { value: 'commanders:read', label: 'Commanders read' },
-  { value: 'commanders:write', label: 'Commanders write' },
-  { value: 'commanders:channels:write', label: 'Channel bindings write' },
-  { value: 'org:write', label: 'Org write' },
-  { value: 'services:read', label: 'Services read' },
-  { value: 'services:write', label: 'Services write' },
-  { value: 'skills:read', label: 'Skills read' },
-] as const
-
-const ALL_SCOPE_VALUES = AVAILABLE_SCOPES.map((s) => s.value)
-
-const MOBILE_ACCESS_SCOPES = [
-  'agents:read',
-  'agents:write',
-  'commanders:read',
-  'commanders:write',
-  'services:read',
-  'services:write',
-  'skills:read',
-  'telemetry:read',
-] as const
+  'commanders:read': { label: 'Commanders read' },
+  'commanders:write': { label: 'Commanders write' },
+  'commanders:channels:write': { label: 'Channel bindings write' },
+  'org:write': { label: 'Org write' },
+  'services:read': { label: 'Services read' },
+  'services:write': { label: 'Services write' },
+  'skills:read': { label: 'Skills read' },
+  'skills:write': { label: 'Skills write' },
+}
 
 const MOBILE_INVITE_EXPIRY_OPTIONS = [
   { value: '900', label: '15 minutes' },
@@ -80,6 +81,85 @@ interface ConfirmationCopy {
   title: string
   message: string
   confirmLabel: string
+}
+
+function humanizeScope(value: string): string {
+  return value
+    .split(':')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function buildScopeOptions(scopes: readonly string[]): ScopeOption[] {
+  return scopes.map((value) => {
+    const copy = SCOPE_COPY[value]
+    return {
+      value,
+      label: copy?.label ?? humanizeScope(value),
+      ...(copy?.description ? { description: copy.description } : {}),
+    }
+  })
+}
+
+function sameScopeSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  const rightScopes = new Set(right)
+  return left.every((scope) => rightScopes.has(scope))
+}
+
+function inferScopePreset(
+  scopes: readonly string[],
+  operationalScopes: readonly string[],
+  bootstrapScopes: readonly string[],
+): ScopePreset {
+  if (bootstrapScopes.length > 0 && sameScopeSet(scopes, bootstrapScopes)) {
+    return 'bootstrap'
+  }
+  if (operationalScopes.length > 0 && sameScopeSet(scopes, operationalScopes)) {
+    return 'operational'
+  }
+  return 'custom'
+}
+
+function scrollCreateKeyIntoView() {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const schedule = window.requestAnimationFrame ?? window.setTimeout
+  schedule(() => {
+    const createKeyForm = document.getElementById('settings-create-api-key-form')
+    if (typeof createKeyForm?.scrollIntoView !== 'function') {
+      return
+    }
+
+    createKeyForm.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  })
+}
+
+function consumeBootstrapRotationRequest(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const url = new URL(window.location.href)
+  if (url.searchParams.get(BOOTSTRAP_ROTATION_QUERY) !== BOOTSTRAP_ROTATION_VALUE) {
+    return false
+  }
+
+  url.searchParams.delete(BOOTSTRAP_ROTATION_QUERY)
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${url.pathname}${url.search}${url.hash}`,
+  )
+  return true
 }
 
 function formatExpiry(expiresAt: string): string {
@@ -121,11 +201,9 @@ function getConfirmationCopy(action: PendingConfirmation): ConfirmationCopy {
 export default function ApiKeysPage() {
   const auth = useAuth()
   const [name, setName] = useState('')
-  const [selectedScopes, setSelectedScopes] = useState<string[]>([
-    ...AVAILABLE_SCOPES
-      .filter((scope) => scope.value !== 'agents:admin')
-      .map((scope) => scope.value),
-  ])
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([])
+  const [scopePreset, setScopePreset] = useState<ScopePreset>('operational')
+  const [scopeSelectionInitialized, setScopeSelectionInitialized] = useState(false)
   const [openAIApiKey, setOpenAIApiKey] = useState('')
   const [geminiApiKey, setGeminiApiKey] = useState('')
   const [createdKey, setCreatedKey] = useState<CreatedApiKey | null>(null)
@@ -144,6 +222,11 @@ export default function ApiKeysPage() {
     isLoading,
     error,
   } = useApiKeys()
+  const {
+    data: scopeCatalog,
+    isLoading: isScopeCatalogLoading,
+    error: scopeCatalogError,
+  } = useApiKeyScopeCatalog()
   const createMutation = useCreateApiKey()
   const createMobileInviteMutation = useCreateMobileAccessInvite()
   const revokeMutation = useRevokeApiKey()
@@ -164,11 +247,32 @@ export default function ApiKeysPage() {
       ),
     [keys],
   )
+  const allScopeValues = useMemo(() => scopeCatalog?.scopes ?? [], [scopeCatalog?.scopes])
+  const bootstrapScopeValues = useMemo(
+    () => scopeCatalog?.defaultBootstrapScopes ?? [],
+    [scopeCatalog?.defaultBootstrapScopes],
+  )
+  const operationalScopeValues = useMemo(
+    () => allScopeValues.filter((scope) => scope !== ADMIN_SCOPE),
+    [allScopeValues],
+  )
+  const mobileScopeValues = useMemo(
+    () => scopeCatalog?.mobilePairingScopes ?? [],
+    [scopeCatalog?.mobilePairingScopes],
+  )
+  const scopeOptions = useMemo(() => buildScopeOptions(allScopeValues), [allScopeValues])
+  const allScopesSelected = allScopeValues.length > 0 && sameScopeSet(selectedScopes, allScopeValues)
+  const bootstrapRotationState = useMemo(
+    () => getBootstrapKeyRotationState(sortedKeys, scopeCatalog),
+    [sortedKeys, scopeCatalog],
+  )
   const mobileInvitePayload = mobileInvite?.qrPayload ?? mobileInvite?.invite ?? null
-  const mobileScopes = mobileInvite?.scopes.length ? mobileInvite.scopes : MOBILE_ACCESS_SCOPES
+  const mobileScopes = mobileInvite?.scopes.length ? mobileInvite.scopes : mobileScopeValues
 
   const createError =
     createMutation.error instanceof Error ? createMutation.error.message : null
+  const scopeCatalogErrorMessage =
+    scopeCatalogError instanceof Error ? scopeCatalogError.message : null
   const mobileInviteError =
     createMobileInviteMutation.error instanceof Error
       ? createMobileInviteMutation.error.message
@@ -196,6 +300,49 @@ export default function ApiKeysPage() {
       ? geminiImageSettingsError.message
       : null)
   const listError = error instanceof Error ? error.message : null
+
+  function applyScopeSelection(scopes: readonly string[]) {
+    const uniqueScopes = [...new Set(scopes)].filter((scope) => allScopeValues.includes(scope))
+    setSelectedScopes(uniqueScopes)
+    setScopePreset(inferScopePreset(uniqueScopes, operationalScopeValues, bootstrapScopeValues))
+  }
+
+  function applyScopePreset(nextPreset: Exclude<ScopePreset, 'custom'>) {
+    const nextScopes = nextPreset === 'bootstrap' ? bootstrapScopeValues : operationalScopeValues
+    setSelectedScopes([...nextScopes])
+    setScopePreset(nextPreset)
+  }
+
+  function prepareBootstrapEquivalentKey() {
+    applyScopePreset('bootstrap')
+    setName((current) => current.trim() || 'Permanent Bootstrap Admin Key')
+    scrollCreateKeyIntoView()
+  }
+
+  useEffect(() => {
+    if (scopeSelectionInitialized || operationalScopeValues.length === 0) {
+      return
+    }
+
+    setSelectedScopes([...operationalScopeValues])
+    setScopePreset('operational')
+    setScopeSelectionInitialized(true)
+  }, [operationalScopeValues, scopeSelectionInitialized])
+
+  useEffect(() => {
+    if (!scopeSelectionInitialized || bootstrapScopeValues.length === 0) {
+      return
+    }
+
+    if (!consumeBootstrapRotationRequest()) {
+      return
+    }
+
+    setSelectedScopes([...bootstrapScopeValues])
+    setScopePreset('bootstrap')
+    setName((current) => current.trim() || 'Permanent Bootstrap Admin Key')
+    scrollCreateKeyIntoView()
+  }, [bootstrapScopeValues, scopeSelectionInitialized])
 
   useEffect(() => {
     let cancelled = false
@@ -270,10 +417,13 @@ export default function ApiKeysPage() {
 
   async function handleCreateMobileInvite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (mobileScopeValues.length === 0) {
+      return
+    }
 
     const created = await createMobileInviteMutation.mutateAsync({
       expiresInSeconds: Number(mobileInviteExpiry),
-      scopes: [...MOBILE_ACCESS_SCOPES],
+      scopes: [...mobileScopeValues],
     })
     setMobileInvite(created)
     setMobileInviteCopyState('idle')
@@ -348,6 +498,35 @@ export default function ApiKeysPage() {
             Keys are shown only once at creation time.
           </p>
         </div>
+
+        {bootstrapRotationState.shouldPrompt && bootstrapRotationState.expiresAt && (
+          <div
+            className="mt-6 flex flex-col gap-3 rounded-lg border border-[var(--hv-accent-warning)] bg-[var(--hv-accent-warning-wash)] p-4 text-sm text-[color:var(--hv-fg)] md:flex-row md:items-center md:justify-between"
+            data-testid="settings-bootstrap-rotation-prompt"
+          >
+            <div className="flex min-w-0 items-start gap-3">
+              <AlertTriangle
+                size={18}
+                className="mt-0.5 shrink-0 text-[color:var(--hv-accent-warning)]"
+                aria-hidden="true"
+              />
+              <div className="min-w-0">
+                <p className="font-medium">Rotate the temporary bootstrap API key.</p>
+                <p className="mt-1 text-[color:var(--hv-fg-subtle)]">
+                  {bootstrapRotationState.keyName ?? 'The bootstrap key'} expires {formatExpiry(bootstrapRotationState.expiresAt)}. Create a permanent bootstrap-equivalent admin key before it expires.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn-primary inline-flex shrink-0 items-center justify-center gap-2"
+              onClick={prepareBootstrapEquivalentKey}
+            >
+              <KeyRound size={14} />
+              Create bootstrap-equivalent key
+            </button>
+          </div>
+        )}
 
         <MagicBento className="mt-6 md:mt-8" data-testid="settings-magic-bento">
           <MagicBentoCard span={6} data-testid="settings-bento-org">
@@ -504,11 +683,17 @@ export default function ApiKeysPage() {
               <div className="mt-4">
                 <p className="text-whisper text-[color:var(--hv-fg-faint)]">Mobile scopes</p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {mobileScopes.map((scope) => (
-                    <span key={scope} className="badge-sumi badge-active font-mono">
-                      {scope}
+                  {mobileScopes.length > 0 ? (
+                    mobileScopes.map((scope) => (
+                      <span key={scope} className="badge-sumi badge-active font-mono">
+                        {scope}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-sm text-[color:var(--hv-fg-subtle)]">
+                      Loading mobile scopes...
                     </span>
-                  ))}
+                  )}
                 </div>
               </div>
 
@@ -545,7 +730,7 @@ export default function ApiKeysPage() {
 
                 <button
                   type="submit"
-                  disabled={createMobileInviteMutation.isPending}
+                  disabled={createMobileInviteMutation.isPending || mobileScopeValues.length === 0}
                   className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
                 >
                   <Smartphone size={14} />
@@ -709,10 +894,16 @@ export default function ApiKeysPage() {
           )}
 
           <MagicBentoCard span={9} data-testid="settings-bento-create-key">
-            <form onSubmit={handleCreateKey} className="space-y-4">
+            <form
+              id="settings-create-api-key-form"
+              data-testid="create-api-key-form"
+              onSubmit={handleCreateKey}
+              className="space-y-4"
+            >
               <div>
-                <label className="section-title block mb-2">Key Name</label>
+                <label htmlFor="api-key-name" className="section-title block mb-2">Key Name</label>
                 <input
+                  id="api-key-name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="Telemetry Ingest Key"
@@ -722,22 +913,76 @@ export default function ApiKeysPage() {
               </div>
 
               <div>
+                <p className="section-title block mb-2">Scope Preset</p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <button
+                    type="button"
+                    aria-pressed={scopePreset === 'operational'}
+                    onClick={() => applyScopePreset('operational')}
+                    disabled={operationalScopeValues.length === 0}
+                    className={`rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                      scopePreset === 'operational'
+                        ? 'border-[var(--hv-accent-primary)] bg-[var(--hv-bg-raised)]'
+                        : 'border-[var(--hv-border-hair)] bg-transparent hover:bg-[var(--hv-bg-raised)]'
+                    }`}
+                  >
+                    <span className="block text-sm font-medium text-[color:var(--hv-fg)]">
+                      Operational key
+                    </span>
+                    <span className="mt-1 block text-xs leading-relaxed text-[color:var(--hv-fg-subtle)]">
+                      Excludes agents:admin, so it can run agents and services but cannot manage future API keys.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={scopePreset === 'bootstrap'}
+                    onClick={() => applyScopePreset('bootstrap')}
+                    disabled={bootstrapScopeValues.length === 0}
+                    className={`rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                      scopePreset === 'bootstrap'
+                        ? 'border-[var(--hv-accent-primary)] bg-[var(--hv-bg-raised)]'
+                        : 'border-[var(--hv-border-hair)] bg-transparent hover:bg-[var(--hv-bg-raised)]'
+                    }`}
+                  >
+                    <span className="block text-sm font-medium text-[color:var(--hv-fg)]">
+                      Bootstrap-equivalent admin
+                    </span>
+                    <span className="mt-1 block text-xs leading-relaxed text-[color:var(--hv-fg-subtle)]">
+                      Selects every default bootstrap scope, including agents:admin and skills:write, for permanent admin recovery.
+                    </span>
+                  </button>
+                </div>
+                {scopePreset === 'custom' && (
+                  <p className="mt-2 text-xs text-[color:var(--hv-fg-subtle)]">
+                    Custom scope set selected.
+                  </p>
+                )}
+              </div>
+
+              <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="section-title block">Scopes</label>
                   <button
                     type="button"
-                    className="text-whisper text-sm text-[color:var(--hv-fg-subtle)] hover:text-[color:var(--hv-fg-muted)]"
-                    onClick={() => {
-                      setSelectedScopes((current) =>
-                        current.length === ALL_SCOPE_VALUES.length ? [] : [...ALL_SCOPE_VALUES],
-                      )
-                    }}
+                    className="text-whisper text-sm text-[color:var(--hv-fg-subtle)] hover:text-[color:var(--hv-fg-muted)] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isScopeCatalogLoading || allScopeValues.length === 0}
+                    onClick={() => applyScopeSelection(allScopesSelected ? [] : allScopeValues)}
                   >
-                    {selectedScopes.length === ALL_SCOPE_VALUES.length ? 'Clear all' : 'Select all'}
+                    {allScopesSelected ? 'Clear all' : 'Select all'}
                   </button>
                 </div>
                 <div className="grid gap-2 md:grid-cols-2">
-                  {AVAILABLE_SCOPES.map((scope) => {
+                  {isScopeCatalogLoading && (
+                    <div className="text-sm text-[color:var(--hv-fg-subtle)]">
+                      Loading available scopes...
+                    </div>
+                  )}
+                  {!isScopeCatalogLoading && scopeOptions.length === 0 && (
+                    <div className="text-sm text-[color:var(--hv-fg-subtle)]">
+                      No scopes available.
+                    </div>
+                  )}
+                  {scopeOptions.map((scope) => {
                     const checked = selectedScopes.includes(scope.value)
                     return (
                       <label
@@ -746,19 +991,18 @@ export default function ApiKeysPage() {
                       >
                         <input
                           type="checkbox"
+                          value={scope.value}
                           checked={checked}
                           onChange={(event) => {
-                            setSelectedScopes((current) => {
-                              if (event.target.checked) {
-                                return [...new Set([...current, scope.value])]
-                              }
-                              return current.filter((value) => value !== scope.value)
-                            })
+                            const nextScopes = event.target.checked
+                              ? [...selectedScopes, scope.value]
+                              : selectedScopes.filter((value) => value !== scope.value)
+                            applyScopeSelection(nextScopes)
                           }}
                         />
                         <span>
                           {scope.label}
-                          {'description' in scope ? ` (${scope.description})` : ''}
+                          {scope.description ? ` (${scope.description})` : ''}
                         </span>
                       </label>
                     )
@@ -768,17 +1012,21 @@ export default function ApiKeysPage() {
 
               <button
                 type="submit"
-                disabled={createMutation.isPending}
+                disabled={
+                  createMutation.isPending ||
+                  isScopeCatalogLoading ||
+                  allScopeValues.length === 0
+                }
                 className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
               >
                 <KeyRound size={14} />
                 {createMutation.isPending ? 'Creating...' : 'Create Key'}
               </button>
 
-              {createError && (
+              {(createError || scopeCatalogErrorMessage) && (
                 <div className={ERROR_CLASS}>
                   <AlertTriangle size={15} className="mt-0.5" />
-                  <span>{createError}</span>
+                  <span>{createError ?? scopeCatalogErrorMessage}</span>
                 </div>
               )}
             </form>

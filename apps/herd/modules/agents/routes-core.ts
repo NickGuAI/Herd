@@ -83,7 +83,6 @@ import { registerSessionCreateRoutes } from './routes/session-create-routes.js'
 import { registerSessionControlRoutes } from './routes/session-control-routes.js'
 import { registerSessionQueryRoutes } from './routes/session-query-routes.js'
 import { registerSessionSweepRoutes } from './routes/session-sweep-routes.js'
-import { registerWorkerDispatchRoutes } from './routes/worker-dispatch-routes.js'
 import { parseCodexApprovalId } from './codex-approval.js'
 import type {
   AgentsRouterOptions,
@@ -91,6 +90,7 @@ import type {
   AnySession,
   CodexApprovalQueueEvent,
   CompletedSession,
+  CredentialPoolRecoveryRequest,
   ExitedStreamSessionState,
   MachineConfig,
   PtyHandle,
@@ -132,6 +132,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
   const sessionEventHandlers = new Map<string, Set<(event: StreamJsonEvent) => void>>()
   const completedSessions = new Map<string, CompletedSession>()
   const exitedStreamSessions = new Map<string, ExitedStreamSessionState>()
+  const credentialRecoveryRequests = new Map<string, CredentialPoolRecoveryRequest>()
 
   const {
     broadcastStreamEvent,
@@ -294,27 +295,12 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
   const {
     requireReadAccess,
     requireWriteAccess,
-    requireDispatchWorkerAccess,
     issueSessionStreamTicket,
     verifyWsAuth,
   } = createAgentsAuthContext(options)
 
   router.post('/auth/stream-ticket', requireWriteAccess, (_req, res) => {
     res.json(issueSessionStreamTicket())
-  })
-
-  const {
-    markProviderAuthRequired,
-    refreshProviderAuthSnapshots,
-  } = registerProviderAuthRoutes({
-    router,
-    requireReadAccess,
-    requireWriteAccess,
-    sessions,
-    providerAuthStore,
-    questStore: options.questStore,
-    readMachineRegistry,
-    sessionCreatorIdFromUser,
   })
 
   const approvalRuntime: CodexApprovalQueueRuntime = createCodexApprovalQueueRuntime({
@@ -332,6 +318,57 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     getProviderRuntime: requireProviderRuntime,
     getApprovalRuntime: () => approvalRuntime,
     schedulePersistedSessionsWrite,
+  })
+
+  const {
+    markProviderAuthRequired,
+    refreshProviderAuthSnapshots,
+  } = registerProviderAuthRoutes({
+    router,
+    requireReadAccess,
+    requireWriteAccess,
+    sessions,
+    providerAuthStore,
+    questStore: options.questStore,
+    readMachineRegistry,
+    sessionCreatorIdFromUser,
+    appendStreamEvent,
+    broadcastStreamEvent,
+    schedulePersistedSessionsWrite,
+    markCredentialRecoveryRequest(sessionName, request) {
+      credentialRecoveryRequests.set(sessionName, request)
+    },
+    scheduleCredentialRecoveryReplacement(sessionName) {
+      requireAutoRotationRuntime().scheduleAutoRotationIfNeeded(sessionName)
+    },
+    async recoverCredentialPoolSession(sessionName, request) {
+      credentialRecoveryRequests.set(sessionName, request)
+      const session = sessions.get(sessionName)
+      if (session?.kind === 'stream') {
+        session.credentialPoolRecovery = request
+        schedulePersistedSessionsWrite()
+      } else {
+        return {
+          status: 'queued' as const,
+          sessionName,
+          ...(request.credentialPoolId ? { credentialPoolId: request.credentialPoolId } : {}),
+          clearResumeProviderContext: request.clearResumeProviderContext,
+        }
+      }
+      const recovered = await requireAutoRotationRuntime().awaitAutoRotationIfNeeded(sessionName)
+      if (recovered && recovered.credentialPoolId === request.credentialPoolId) {
+        return {
+          status: 'recovered_in_place' as const,
+          sessionName,
+          credentialPoolId: recovered.credentialPoolId,
+        }
+      }
+      return {
+        status: 'blocked' as const,
+        sessionName,
+        ...(request.blockedUntil ? { blockedUntil: request.blockedUntil } : {}),
+      }
+    },
   })
 
   providerRuntime = createProviderSessionRuntime({
@@ -355,6 +392,12 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     writeToStdin,
     writeTranscriptMeta,
     markProviderAuthRequired,
+    markCredentialRecoveryRequest(sessionName, request) {
+      credentialRecoveryRequests.set(sessionName, request)
+    },
+    scheduleCredentialRecoveryReplacement(sessionName) {
+      requireAutoRotationRuntime().scheduleAutoRotationIfNeeded(sessionName)
+    },
   })
 
   const resumeRuntime = createSessionResumeRuntime({
@@ -374,6 +417,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     exitedStreamSessions,
     applyStreamUsageEvent,
     restoreProviderSession: (...args) => requireProviderRuntime().restoreProviderStreamSession(...args),
+    restoreCredentialPoolRecovery: (...args) => requireProviderRuntime().restoreCredentialPoolRecovery(...args),
     teardownProviderSession: (...args) => requireProviderRuntime().teardownProviderSession(...args),
     isExitedSessionResumeAvailable: resumeRuntime.isExitedSessionResumeAvailable,
     isLiveSessionResumeAvailable: resumeRuntime.isLiveSessionResumeAvailable,
@@ -386,6 +430,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
 
   autoRotationRuntime = createSessionAutoRotationRuntime({
     sessions,
+    providerAuthStore,
     autoRotateEntryThreshold,
     buildCommanderReplacementPrompt,
     readMachineRegistry,
@@ -394,6 +439,12 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     appendStreamEvent,
     broadcastStreamEvent,
     schedulePersistedSessionsWrite,
+    markCredentialRecoveryRequest(sessionName, request) {
+      credentialRecoveryRequests.set(sessionName, request)
+    },
+    clearCredentialRecoveryRequest(sessionName) {
+      credentialRecoveryRequests.delete(sessionName)
+    },
     getQueueRuntime: requireQueueRuntime,
   })
 
@@ -499,16 +550,6 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     withMachineRegistryWriteLock,
     writeMachineRegistry,
     daemonRegistry,
-  })
-
-  registerWorkerDispatchRoutes({
-    router,
-    requireDispatchWorkerAccess,
-    maxSessions,
-    sessions,
-    createProviderStreamSession: (...args) => requireProviderRuntime().createProviderStreamSession(...args),
-    readMachineRegistry,
-    schedulePersistedSessionsWrite,
   })
 
   registerSessionSweepRoutes({
@@ -655,6 +696,19 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     sendImmediateTextToStreamSession: (...args) => requireQueueRuntime().sendImmediateTextToStreamSession(...args),
     teardownProviderSession: (...args) => requireProviderRuntime().teardownProviderSession(...args),
     shutdownProviderRuntimes: (...args) => requireProviderRuntime().shutdownProviderRuntimes(...args),
+    getCredentialRecoveryRequest(sessionName) {
+      return credentialRecoveryRequests.get(sessionName)
+    },
+    clearCredentialRecoveryRequest(sessionName) {
+      credentialRecoveryRequests.delete(sessionName)
+    },
+    async getActiveCredentialPoolId(provider) {
+      try {
+        return (await providerAuthStore.getActivePoolCredential(provider))?.id
+      } catch {
+        return undefined
+      }
+    },
   })
 
   const sessionsInterface = {

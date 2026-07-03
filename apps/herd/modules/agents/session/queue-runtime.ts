@@ -39,7 +39,15 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
   }
 
   function getCurrentQueueMessage(session: StreamSession): QueuedMessage | null {
-    return session.currentQueuedMessage ?? session.pendingDirectSendMessages[0] ?? null
+    if (session.currentQueuedMessage) {
+      const currentMessageId = session.currentQueuedMessage.id
+      const currentIsVisible = session.pendingDirectSendMessages.some((message) => message.id === currentMessageId)
+        || session.messageQueue.list().some((message) => message.id === currentMessageId)
+      if (currentIsVisible || getQueuedBacklogCount(session) > 0) {
+        return session.currentQueuedMessage
+      }
+    }
+    return session.pendingDirectSendMessages[0] ?? null
   }
 
   function getQueuedBacklogCount(session: StreamSession): number {
@@ -396,6 +404,9 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
       scheduleQueuedMessageDrain(liveSession, options)
       return
     }
+    if (liveSession.credentialPoolRecovery) {
+      return
+    }
 
     const nextMessage = session.pendingDirectSendMessages[0] ?? session.messageQueue.peek()
     if (!nextMessage) {
@@ -465,6 +476,18 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
     }
 
     const message = createQueuedMessage(text, 'high', images, displayText, clientSendId, userEventSubtype)
+    if (liveSession.credentialPoolRecovery) {
+      if (getQueuedBacklogCount(liveSession) >= liveSession.messageQueue.maxSize) {
+        return { ok: false, error: `Queue is full (max ${liveSession.messageQueue.maxSize} messages)` }
+      }
+      liveSession.pendingDirectSendMessages.unshift(message)
+      broadcastQueueUpdate(liveSession)
+      deps.schedulePersistedSessionsWrite()
+      if (liveSession.credentialPoolRecovery.credentialPoolId) {
+        scheduleQueuedMessageDrain(liveSession, { force: true })
+      }
+      return { ok: true, queued: true, message }
+    }
 
     if (
       liveSession.lastTurnCompleted &&
@@ -480,9 +503,6 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
       if (result.ok) {
         clearQueuedMessageRetry(liveSession)
         resetQueuedMessageRetryDelay(liveSession)
-        if (liveSession.currentQueuedMessage?.id === message.id) {
-          liveSession.currentQueuedMessage = undefined
-        }
         broadcastQueueUpdate(liveSession)
         deps.schedulePersistedSessionsWrite()
         return { ok: true, queued: false, message }

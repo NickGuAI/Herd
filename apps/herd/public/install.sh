@@ -21,10 +21,10 @@ DIM='\033[2m'
 NC='\033[0m'
 
 PRODUCT_NAME="Herd"
-NODE_VERSION="${HERD_NODE_VERSION:-${HERD_NODE_VERSION:-22.16.0}}"
-PNPM_VERSION="${HERD_PNPM_VERSION:-${HERD_PNPM_VERSION:-10.23.0}}"
+NODE_VERSION="${HERD_NODE_VERSION:-${HERVALD_NODE_VERSION:-22.16.0}}"
+PNPM_VERSION="${HERD_PNPM_VERSION:-${HERVALD_PNPM_VERSION:-10.23.0}}"
 INSTALLER_MARKER=".herd-installer-checkout"
-LEGACY_INSTALLER_MARKER=".herd-installer-checkout"
+LEGACY_INSTALLER_MARKER=".hervald-installer-checkout"
 
 step() { printf "${CYAN}==>${NC} %s\n" "$*"; }
 ok()   { printf "${GREEN}✓${NC} %s\n" "$*"; }
@@ -86,12 +86,12 @@ prompt_select_menu() {
 
 choose_setup_path() {
   local choice normalized setup_path_env
-  setup_path_env="${HERD_SETUP_PATH:-${HERD_SETUP_PATH:-}}"
+  setup_path_env="${HERD_SETUP_PATH:-${HERVALD_SETUP_PATH:-}}"
   if [[ -n "$setup_path_env" ]]; then
     normalized="$(printf '%s' "$setup_path_env" | tr '[:upper:]' '[:lower:]')"
     case "$normalized" in
       quickstart|advanced) printf '%s' "$normalized"; return 0 ;;
-      *) warn "Unknown HERD_SETUP_PATH/HERD_SETUP_PATH=$setup_path_env; using Quickstart." ;;
+      *) warn "Unknown HERD_SETUP_PATH/HERVALD_SETUP_PATH=$setup_path_env; using Quickstart." ;;
     esac
   fi
 
@@ -234,7 +234,7 @@ repo_archive_url() {
   local repo_path
 
   local archive_override
-  archive_override="${HERD_ARCHIVE_URL:-${HERD_ARCHIVE_URL:-}}"
+  archive_override="${HERD_ARCHIVE_URL:-${HERVALD_ARCHIVE_URL:-}}"
   if [[ -n "$archive_override" ]]; then
     printf '%s' "$archive_override"
     return 0
@@ -300,13 +300,13 @@ replace_checkout_with_archive() {
 clone_and_exec_installer() {
   local default_checkout checkout_override
   default_checkout="$HOME/Herd"
-  if [[ -z "${HERD_CHECKOUT_DIR:-${HERD_CHECKOUT_DIR:-}}" && ! -e "$default_checkout" && -d "$HOME/Herd/.git" ]]; then
+  if [[ -z "${HERD_CHECKOUT_DIR:-${HERVALD_CHECKOUT_DIR:-}}" && ! -e "$default_checkout" && -d "$HOME/Herd/.git" ]]; then
     default_checkout="$HOME/Herd"
   fi
 
-  REPO_URL="${HERD_REPO_URL:-${HERD_REPO_URL:-https://github.com/NickGuAI/Herd.git}}"
-  REPO_REF="${HERD_REPO_REF:-${HERD_REPO_REF:-main}}"
-  checkout_override="${HERD_CHECKOUT_DIR:-${HERD_CHECKOUT_DIR:-}}"
+  REPO_URL="${HERD_REPO_URL:-${HERVALD_REPO_URL:-https://github.com/NickGuAI/Herd.git}}"
+  REPO_REF="${HERD_REPO_REF:-v0.0.4-beta}"
+  checkout_override="${HERD_CHECKOUT_DIR:-${HERVALD_CHECKOUT_DIR:-}}"
   CHECKOUT_DIR="${checkout_override:-$default_checkout}"
   ARCHIVE_URL="$(repo_archive_url "$REPO_URL" "$REPO_REF" || true)"
 
@@ -376,8 +376,8 @@ SHIM_PATH="$BIN_DIR/herd"
 DEFAULT_PORT="20001"
 HEALTHCHECK_TIMEOUT_SECONDS="${HERD_INSTALL_TIMEOUT_SECONDS:-120}"
 LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
-LAUNCH_AGENT_PATH="$LAUNCH_AGENT_DIR/io.gehirn.herd.plist"
-LAUNCH_LOG_DIR="$HOME/Library/Logs/herd"
+LAUNCH_AGENT_PATH="$LAUNCH_AGENT_DIR/io.gehirn.hervald.plist"
+LAUNCH_LOG_DIR="$HOME/Library/Logs/hervald"
 SKILLS_INSTALLER="$REPO_ROOT/agent-skills/install.sh"
 CLAUDE_RUNTIME_ROOT="$HOME/.claude"
 CODEX_RUNTIME_ROOT="$HOME/.codex"
@@ -415,9 +415,9 @@ ensure_path_block() {
   touch "$file"
   if ! grep -Fq "$export_line" "$file"; then
     {
-      printf '\n# >>> herd installer >>>\n'
+      printf '\n# >>> hervald installer >>>\n'
       printf '%s\n' "$export_line"
-      printf '# <<< herd installer <<<\n'
+      printf '# <<< hervald installer <<<\n'
     } >> "$file"
   fi
 }
@@ -461,7 +461,7 @@ ensure_node() {
 
   step "Installing hermetic Node v${NODE_VERSION}"
   mkdir -p "$TOOLCHAIN_DIR"
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/herd-node.XXXXXX")"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/hervald-node.XXXXXX")"
   archive="$tmp_dir/${stem}.tar.gz"
   url="https://nodejs.org/dist/v${NODE_VERSION}/${stem}.tar.gz"
 
@@ -500,7 +500,7 @@ ensure_pnpm() {
 }
 
 auth0_enabled() {
-  [[ "${HERD_ENABLE_AUTH0:-${HERD_ENABLE_AUTH0:-0}}" == "1" ]]
+  [[ "${HERD_ENABLE_AUTH0:-${HERVALD_ENABLE_AUTH0:-0}}" == "1" ]]
 }
 
 configure_environment() {
@@ -537,7 +537,7 @@ ensure_sqlite_control_plane() {
     HERD_DATA_DIR="$DATA_DIR" \
     HERD_DB_PATH="$DATA_DIR/herd.sqlite" \
     "$PNPM_BIN" --dir "$REPO_ROOT" --filter herd run db:ready -- --source-root "$DATA_DIR" --db "$DATA_DIR/herd.sqlite"; then
-    fail "SQLite runtime-session store is not ready. Run the migration command printed above, then rerun install.sh."
+    fail "SQLite runtime-session store is not ready. Resolve the db:ready error above, then rerun install.sh."
   fi
 }
 
@@ -610,7 +610,7 @@ write_local_provider_secret() {
   chmod 600 "$LOCAL_MACHINE_ENV_FILE" 2>/dev/null || true
 
   quoted_value="$(single_quote "$value")"
-  tmp_file="$(mktemp "${TMPDIR:-/tmp}/herd-env.XXXXXX")"
+  tmp_file="$(mktemp "${TMPDIR:-/tmp}/hervald-env.XXXXXX")"
   awk -v key="$key" '
     BEGIN { pattern = "^[[:space:]]*(export[[:space:]]+)?" key "=" }
     $0 !~ pattern { print }
@@ -682,10 +682,10 @@ provider_secret_key() {
 
 provider_env_secret() {
   case "$1" in
-    claude) printf '%s' "${HERD_CLAUDE_SETUP_TOKEN:-${HERD_CLAUDE_SETUP_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}}}}" ;;
-    codex) printf '%s' "${HERD_CODEX_API_KEY:-${HERD_CODEX_API_KEY:-${OPENAI_API_KEY:-}}}" ;;
-    gemini) printf '%s' "${HERD_GEMINI_API_KEY:-${HERD_GEMINI_API_KEY:-${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}}}" ;;
-    opencode) printf '%s' "${HERD_OPENCODE_API_KEY:-${HERD_OPENCODE_API_KEY:-${OPENCODE_API_KEY:-}}}" ;;
+    claude) printf '%s' "${HERD_CLAUDE_SETUP_TOKEN:-${HERVALD_CLAUDE_SETUP_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-${ANTHROPIC_API_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}}}}" ;;
+    codex) printf '%s' "${HERD_CODEX_API_KEY:-${HERVALD_CODEX_API_KEY:-${OPENAI_API_KEY:-}}}" ;;
+    gemini) printf '%s' "${HERD_GEMINI_API_KEY:-${HERVALD_GEMINI_API_KEY:-${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}}}" ;;
+    opencode) printf '%s' "${HERD_OPENCODE_API_KEY:-${HERVALD_OPENCODE_API_KEY:-${OPENCODE_API_KEY:-}}}" ;;
     *) return 1 ;;
   esac
 }
@@ -894,12 +894,12 @@ configure_providers() {
   local setup_path="${1:-advanced}"
   local raw_selection selected provider
 
-  if [[ "${HERD_CONFIGURE_PROVIDERS:-${HERD_CONFIGURE_PROVIDERS:-1}}" == "0" ]]; then
+  if [[ "${HERD_CONFIGURE_PROVIDERS:-${HERVALD_CONFIGURE_PROVIDERS:-1}}" == "0" ]]; then
     warn "Skipping provider setup because HERD_CONFIGURE_PROVIDERS=0"
     return 0
   fi
 
-  raw_selection="${HERD_PROVIDERS:-${HERD_PROVIDERS:-}}"
+  raw_selection="${HERD_PROVIDERS:-${HERVALD_PROVIDERS:-}}"
   if [[ "$setup_path" != "advanced" && -z "$raw_selection" ]]; then
     warn "Quickstart skips provider CLI customization."
     printf "  ${DIM}%s${NC}\n" "Choose Advanced setup, or set HERD_PROVIDERS=claude,codex,gemini,opencode for non-interactive provider setup."
@@ -990,7 +990,7 @@ install_launch_agent_if_needed() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>io.gehirn.herd</string>
+  <string>io.gehirn.hervald</string>
   <key>ProgramArguments</key>
   <array>
     <string>$(xml_escape "$SHIM_PATH")</string>
@@ -1292,7 +1292,7 @@ if [[ "$(uname -s)" == "Darwin" && "${HERD_INSTALL_AUTOSTART:-1}" != "0" ]]; the
   printf "  2. Complete browser onboarding within 24 hours, then create a permanent API key in Settings and rotate or revoke the expiring bootstrap key.\n"
   printf "  3. Herd now auto-starts at login via launchd.\n"
   printf "     Reload after config changes with:\n"
-  printf "       ${CYAN}launchctl kickstart -k gui/%s/io.gehirn.herd${NC}\n" "$(id -u)"
+  printf "       ${CYAN}launchctl kickstart -k gui/%s/io.gehirn.hervald${NC}\n" "$(id -u)"
   printf "  4. Run ${CYAN}herd doctor${NC} after provider authentication if you want a readiness report.\n"
 else
   printf "  1. Sign in with the bootstrap key shown above.\n"

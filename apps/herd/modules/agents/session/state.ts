@@ -1,12 +1,10 @@
-import { createReadStream } from 'node:fs'
-import { homedir } from 'node:os'
 import * as path from 'node:path'
 import type { Response } from 'express'
 import type { CommanderSession } from '../../commanders/store.js'
 import {
   parseCanonicalProviderContext,
   sanitizeProviderContextForPersistence,
-} from '../providers/provider-context-migration.js'
+} from '../providers/provider-context-normalization.js'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   normalizeClaudeAdaptiveThinkingMode,
@@ -22,11 +20,7 @@ import {
   normalizeClaudeMaxThinkingTokens,
   type ClaudeMaxThinkingTokens,
 } from '../../claude-max-thinking-tokens.js'
-import {
-  getMimeType,
-  resolveWorkspacePath,
-  toWorkspaceError,
-} from '../../workspace/index.js'
+import { toWorkspaceError } from '../../workspace/index.js'
 import {
   COMMANDER_SESSION_NAME_PREFIX,
   EXTERNAL_SESSION_STALE_MS,
@@ -40,7 +34,7 @@ import {
   parseSessionType,
 } from './input.js'
 import type { ProviderSessionContext } from '../providers/provider-session-context.js'
-import { getProvider, parseProviderId } from '../providers/registry.js'
+import { getProvider, parseProviderId, resolveDefaultProviderId } from '../providers/registry.js'
 import type {
   ActiveSkillInvocation,
   AgentRuntimeSessionAllowedActions,
@@ -55,14 +49,13 @@ import type {
   AnySession,
   CompletedSession,
   CompletedSessionMetadata,
+  CredentialPoolRecoveryRequest,
   ExitedStreamSessionState,
   MachineConfig,
-  PersistedSessionsState,
   PersistedDaemonProcess,
   PersistedStreamSession,
   SessionCreator,
   SessionTransportType,
-  SessionType,
   StreamJsonEvent,
   StreamSession,
   WorkerPhase,
@@ -204,45 +197,71 @@ function parseQueuedMessages(value: unknown): QueuedMessage[] | undefined {
     .filter((message): message is QueuedMessage => message !== null)
 }
 
+function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecoveryRequest | undefined {
+  const recovery = asObject(value)
+  if (!recovery) {
+    return undefined
+  }
+
+  const parsedProvider = parseProviderId(recovery.provider)
+  const provider = parsedProvider === 'claude' || parsedProvider === 'codex'
+    ? parsedProvider
+    : undefined
+  const reason = recovery.reason === 'manual_switch' || recovery.reason === 'usage_limit'
+    ? recovery.reason
+    : undefined
+  const requestedAt = typeof recovery.requestedAt === 'string' && recovery.requestedAt.trim().length > 0
+    ? recovery.requestedAt.trim()
+    : undefined
+  if (!provider || !reason || !requestedAt) {
+    return undefined
+  }
+
+  const credentialPoolId = typeof recovery.credentialPoolId === 'string' && recovery.credentialPoolId.trim().length > 0
+    ? recovery.credentialPoolId.trim()
+    : undefined
+  const previousCredentialPoolId = typeof recovery.previousCredentialPoolId === 'string'
+    && recovery.previousCredentialPoolId.trim().length > 0
+    ? recovery.previousCredentialPoolId.trim()
+    : undefined
+  const resetAt = typeof recovery.resetAt === 'string' && recovery.resetAt.trim().length > 0
+    ? recovery.resetAt.trim()
+    : undefined
+  const blockedUntil = typeof recovery.blockedUntil === 'string' && recovery.blockedUntil.trim().length > 0
+    ? recovery.blockedUntil.trim()
+    : undefined
+  const interruptedTurnId = typeof recovery.interruptedTurnId === 'string' && recovery.interruptedTurnId.trim().length > 0
+    ? recovery.interruptedTurnId.trim()
+    : undefined
+  const interruptedMessage = parseQueuedMessage(recovery.interruptedMessage)
+  return {
+    provider,
+    ...(credentialPoolId ? { credentialPoolId } : {}),
+    ...(previousCredentialPoolId ? { previousCredentialPoolId } : {}),
+    clearResumeProviderContext: recovery.clearResumeProviderContext !== false,
+    reason,
+    requestedAt,
+    ...(resetAt ? { resetAt } : {}),
+    ...(blockedUntil ? { blockedUntil } : {}),
+    ...(interruptedMessage ? { interruptedMessage } : {}),
+    ...(typeof recovery.interruptedTurnHadSideEffects === 'boolean'
+      ? { interruptedTurnHadSideEffects: recovery.interruptedTurnHadSideEffects }
+      : {}),
+    ...(interruptedTurnId ? { interruptedTurnId } : {}),
+  }
+}
+
 function parsePersistedProviderContext(
-  agentType: string,
   entry: Record<string, unknown>,
   effort?: ClaudeEffortLevel,
   adaptiveThinking?: ClaudeAdaptiveThinkingMode,
   maxThinkingTokens?: ClaudeMaxThinkingTokens,
-) {
-  const canonicalContext = parseCanonicalProviderContext(entry.providerContext, {
+): ProviderSessionContext | null {
+  return parseCanonicalProviderContext(entry.providerContext, {
     effort,
     adaptiveThinking,
     maxThinkingTokens,
   })
-  if (canonicalContext) {
-    return canonicalContext
-  }
-
-  const migratedContext = getProvider(agentType)?.migrateLegacyContext?.(entry)
-  if (migratedContext) {
-    return sanitizeProviderContextForPersistence(migratedContext, {
-      effort,
-      adaptiveThinking,
-      maxThinkingTokens,
-    }) ?? migratedContext
-  }
-
-  const provider = getProvider(agentType)
-  const fallback: ProviderSessionContext & Record<string, unknown> = {
-    providerId: agentType,
-  }
-  if ((provider?.uiCapabilities.supportsEffort ?? true) && effort) {
-    fallback.effort = effort
-  }
-  if ((provider?.uiCapabilities.supportsAdaptiveThinking ?? true) && adaptiveThinking) {
-    fallback.adaptiveThinking = adaptiveThinking
-  }
-  if ((provider?.uiCapabilities.supportsMaxThinkingTokens ?? true) && maxThinkingTokens) {
-    fallback.maxThinkingTokens = maxThinkingTokens
-  }
-  return fallback
 }
 
 function providerSupportsEffort(agentType: string): boolean {
@@ -286,7 +305,10 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     return null
   }
 
-  const agentType = parseProviderId(entry.agentType) ?? 'claude'
+  const agentType = parseProviderId(entry.agentType)
+  if (!agentType) {
+    return null
+  }
   const model = typeof entry.model === 'string' && entry.model.trim().length > 0
     ? entry.model.trim()
     : undefined
@@ -350,6 +372,10 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
   const activeTurnId = typeof entry.activeTurnId === 'string' && entry.activeTurnId.trim().length > 0
     ? entry.activeTurnId.trim()
     : undefined
+  const credentialPoolId = typeof entry.credentialPoolId === 'string' && entry.credentialPoolId.trim().length > 0
+    ? entry.credentialPoolId.trim()
+    : undefined
+  const credentialPoolRecovery = parseCredentialPoolRecoveryRequest(entry.credentialPoolRecovery)
   const approvalBridgeNonce = typeof entry.approvalBridgeNonce === 'string'
     && entry.approvalBridgeNonce.trim().length > 0
     ? entry.approvalBridgeNonce.trim()
@@ -359,12 +385,14 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
   const supportsAdaptiveThinking = providerSupportsAdaptiveThinking(agentType)
   const supportsMaxThinkingTokens = providerSupportsMaxThinkingTokens(agentType)
   const providerContext = parsePersistedProviderContext(
-    agentType,
     entry,
     supportsEffort ? effort : undefined,
     supportsAdaptiveThinking ? adaptiveThinking : undefined,
     supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
   )
+  if (!providerContext) {
+    return null
+  }
 
   return {
     name,
@@ -382,6 +410,8 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     currentSkillInvocation,
     createdAt,
     providerContext,
+    credentialPoolId,
+    credentialPoolRecovery,
     approvalBridgeNonce,
     activeTurnId,
     conversationEntryCount,
@@ -396,17 +426,6 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     currentQueuedMessage: currentQueuedMessage ?? undefined,
     pendingDirectSendMessages,
   }
-}
-
-export function parsePersistedSessionsState(value: unknown): PersistedSessionsState {
-  const payload = asObject(value)
-  const sessions = Array.isArray(payload?.sessions)
-    ? payload.sessions
-      .map((entry) => parsePersistedStreamSessionEntry(entry))
-      .filter((entry): entry is PersistedStreamSession => entry !== null)
-    : []
-
-  return { sessions }
 }
 
 export function getWorldAgentRole(session: AnySession): WorldAgentRole {
@@ -502,7 +521,7 @@ export function toCommanderWorldAgent(
 ): WorldAgent {
   return {
     id: getCommanderWorldAgentId(session.id),
-    agentType: session.agentType ?? 'claude',
+    agentType: session.agentType ?? resolveDefaultProviderId(),
     transportType: 'stream',
     status: getCommanderWorldAgentStatus(session),
     usage: {
@@ -524,24 +543,8 @@ export function extractClaudeSessionId(event: StreamJsonEvent): string | undefin
     if (typeof sessionId === 'string' && sessionId.trim().length > 0) {
       return sessionId.trim()
     }
-    return undefined
   }
-  const direct = typeof (event as Record<string, unknown>).session_id === 'string'
-    ? (event as Record<string, unknown>).session_id as string
-    : undefined
-  if (direct && direct.trim().length > 0) {
-    return direct.trim()
-  }
-  const camel = typeof (event as Record<string, unknown>).sessionId === 'string'
-    ? (event as Record<string, unknown>).sessionId as string
-    : undefined
-  if (camel && camel.trim().length > 0) {
-    return camel.trim()
-  }
-  const message = asObject(event.message)
-  const metadata = asObject(message?.metadata)
-  const nested = typeof metadata?.session_id === 'string' ? metadata.session_id : undefined
-  return nested?.trim() || undefined
+  return undefined
 }
 
 export function toCompletedSession(
@@ -666,16 +669,26 @@ export function mergePersistedSessionWithTranscriptMeta(
   const supportsEffort = providerSupportsEffort(agentType)
   const supportsAdaptiveThinking = providerSupportsAdaptiveThinking(agentType)
   const supportsMaxThinkingTokens = providerSupportsMaxThinkingTokens(agentType)
-  const providerContext = parsePersistedProviderContext(
-    agentType,
+  const metaProviderContext = parsePersistedProviderContext(
     {
-      ...entry,
-      providerContext: meta.providerContext ?? entry.providerContext,
+      providerContext: meta.providerContext,
     },
     supportsEffort ? effort : undefined,
     supportsAdaptiveThinking ? adaptiveThinking : undefined,
     supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
   )
+  const entryProviderContext = parsePersistedProviderContext(
+    {
+      providerContext: entry.providerContext,
+    },
+    supportsEffort ? effort : undefined,
+    supportsAdaptiveThinking ? adaptiveThinking : undefined,
+    supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
+  )
+  const providerContext = metaProviderContext ?? entryProviderContext
+  if (!providerContext) {
+    return entry
+  }
 
   return {
     ...entry,
@@ -898,34 +911,6 @@ export function getLastToolUse(session: StreamSession | AnySession): string | nu
     }
   }
   return null
-}
-
-export function hasPendingAskUserQuestion(session: StreamSession | AnySession): boolean {
-  if (session.kind === 'pty') {
-    return false
-  }
-  const answeredToolIds = new Set<string>()
-  for (let i = session.events.length - 1; i >= 0; i -= 1) {
-    const event = session.events[i]
-    for (const toolResultId of getToolResultIds(event)) {
-      answeredToolIds.add(toolResultId)
-    }
-
-    const toolUses = getToolUses(event)
-    for (let j = toolUses.length - 1; j >= 0; j -= 1) {
-      const toolUse = toolUses[j]
-      if (toolUse.name !== 'AskUserQuestion') {
-        continue
-      }
-      if (!toolUse.id) {
-        return true
-      }
-      if (!answeredToolIds.has(toolUse.id)) {
-        return true
-      }
-    }
-  }
-  return false
 }
 
 export function hasPendingUserInteraction(session: StreamSession | AnySession): boolean {
@@ -1280,7 +1265,6 @@ export function getWorldAgentPhase(session: AnySession, nowMs: number): WorldAge
       return 'thinking'
     }
     if (
-      event.type === 'message_start' ||
       event.type === 'assistant' ||
       event.type === 'message_delta' ||
       event.type === 'content_block_start' ||
@@ -1330,27 +1314,6 @@ export function toWorldAgent(session: AnySession, nowMs: number): WorldAgent {
 export function sendWorkspaceError(res: Response, error: unknown): void {
   const workspaceError = toWorkspaceError(error)
   res.status(workspaceError.statusCode).json({ error: workspaceError.message })
-}
-
-export async function sendWorkspaceRawFile(
-  res: Response,
-  workspace: Parameters<typeof resolveWorkspacePath>[0],
-  rawPath: string,
-): Promise<void> {
-  const { absolutePath } = await resolveWorkspacePath(workspace, rawPath, {
-    expectFile: true,
-  })
-  const mimeType = getMimeType(absolutePath) ?? 'application/octet-stream'
-  res.setHeader('Content-Type', mimeType)
-  const stream = createReadStream(absolutePath)
-  stream.on('error', (error) => {
-    if (!res.headersSent) {
-      sendWorkspaceError(res, error)
-      return
-    }
-    res.destroy(error)
-  })
-  stream.pipe(res)
 }
 
 export function hasResumeIdentifier(entry: PersistedStreamSession): boolean {
@@ -1416,6 +1379,7 @@ export function snapshotExitedStreamSession(session: StreamSession): ExitedStrea
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    credentialPoolRecovery: session.credentialPoolRecovery,
   }
 }
 
@@ -1445,6 +1409,8 @@ export function snapshotDeletedResumableStreamSession(session: StreamSession): E
     spawnedWorkers: [...(persisted.spawnedWorkers ?? session.spawnedWorkers)],
     createdAt: persisted.createdAt,
     providerContext: persisted.providerContext,
+    credentialPoolId: persisted.credentialPoolId,
+    credentialPoolRecovery: persisted.credentialPoolRecovery,
     activeTurnId: persisted.activeTurnId,
     resumedFrom: persisted.resumedFrom,
     conversationEntryCount: persisted.conversationEntryCount ?? session.conversationEntryCount,
@@ -1479,6 +1445,8 @@ export function buildPersistedEntryFromExitedSession(
       adaptiveThinking: exited.adaptiveThinking,
       maxThinkingTokens: exited.maxThinkingTokens,
     }) ?? exited.providerContext,
+    credentialPoolId: exited.credentialPoolId,
+    credentialPoolRecovery: exited.credentialPoolRecovery,
     activeTurnId: exited.activeTurnId,
     spawnedBy: exited.spawnedBy,
     spawnedWorkers: [...exited.spawnedWorkers],
@@ -1525,6 +1493,8 @@ export function buildPersistedEntryFromLiveStreamSession(
       adaptiveThinking: session.adaptiveThinking,
       maxThinkingTokens: session.maxThinkingTokens,
     }) ?? session.providerContext,
+    credentialPoolId: session.credentialPoolId,
+    credentialPoolRecovery: session.credentialPoolRecovery,
     approvalBridgeNonce: session.approvalBridgeNonce,
     activeTurnId: session.activeTurnId,
     spawnedBy: session.spawnedBy,

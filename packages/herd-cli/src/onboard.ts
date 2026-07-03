@@ -27,7 +27,7 @@ import {
 } from './prompts.js'
 import {
   formatStatusLine,
-  printHerdBrand,
+  printHervaldBrand,
   withTerminalSpinner,
 } from './terminal-style.js'
 import { validateTelemetryWriteKey } from './validate.js'
@@ -652,7 +652,7 @@ function printProviderRuntimeInstructions(providers: readonly ProviderRegistryEn
 }
 
 function printOnboardHeader(): void {
-  printHerdBrand('Herd onboard')
+  printHervaldBrand('Herd onboard')
 }
 
 async function chooseSetupPath(options: ParsedOnboardArgs): Promise<SetupPath> {

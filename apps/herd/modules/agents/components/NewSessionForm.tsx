@@ -47,6 +47,7 @@ export interface NewSessionFormProps {
   schedule?: string
   setSchedule?: (value: string) => void
   submitLabel?: string
+  submitDisabled?: boolean
   nameLabel?: string
   namePlaceholder?: string
   namePattern?: string
@@ -89,6 +90,7 @@ function NewSessionFormComponent({
   schedule,
   setSchedule,
   submitLabel = 'Start Session',
+  submitDisabled = false,
   nameLabel = 'Session Name',
   namePlaceholder = 'agent-fix-auth',
   namePattern = '[a-zA-Z0-9_\\-]+',
@@ -107,6 +109,7 @@ function NewSessionFormComponent({
   const providers = registeredProviders.filter((provider) =>
     !agentOptions || agentOptions.includes(provider.id),
   )
+  const providerReady = providers.some((provider) => provider.id === agentType)
 
   useNewSessionConstraints({
     providers,
@@ -181,6 +184,7 @@ function NewSessionFormComponent({
         beforeTaskField={beforeTaskField}
         createError={createError}
         isCreating={isCreating}
+        submitDisabled={submitDisabled || !providerReady}
         submitLabel={submitLabel}
       />
     </form>

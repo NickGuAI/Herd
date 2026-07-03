@@ -293,7 +293,7 @@ async function installCommanderPackageLocked(
       conversationId = conversation.id
     }
     await setCommanderDisplayName(options.commanderDataDir, created.id, displayName)
-    await writeCommanderUiProfile(created.id, commanderBasePath, ensureCommanderVisualProfile(created.id, {
+    await writeCommanderUiProfile(created.id, commanderBasePath, ensureCommanderVisualProfile({
       ...definition.uiProfile,
     }))
     await writeInstalledPackageSnapshot(created.id, definition, commanderBasePath, options.now)

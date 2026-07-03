@@ -1,7 +1,7 @@
 import type { RequestHandler, Router } from 'express'
 import { MAX_STREAM_EVENTS } from '../constants.js'
 import { parseSessionName } from '../session/input.js'
-import { parseProviderId } from '../providers/registry.js'
+import { resolveProviderIdForRequest } from '../providers/registry.js'
 import type {
   AnySession,
   ExternalSession,
@@ -37,7 +37,15 @@ export function registerExternalSessionRoutes(deps: ExternalSessionRouteDeps): v
       return
     }
 
-    const agentType = parseProviderId(req.body?.agentType) ?? 'claude'
+    const providerResolution = resolveProviderIdForRequest(req.body?.agentType)
+    if (providerResolution.error || !providerResolution.providerId) {
+      res.status(400).json({
+        error: providerResolution.error ?? 'agentType must be a registered provider id',
+        validIds: providerResolution.validIds,
+      })
+      return
+    }
+    const agentType = providerResolution.providerId
     const machine = typeof req.body?.machine === 'string' ? req.body.machine.trim() : ''
     const cwd = typeof req.body?.cwd === 'string' ? req.body.cwd.trim() : ''
     const task = typeof req.body?.task === 'string' ? req.body.task.trim() : undefined

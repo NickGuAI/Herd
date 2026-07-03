@@ -755,7 +755,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   }
 
   return (
-    <div className={cn('herd-session-composer', isMobileVariant && 'herd-session-composer--mobile')}>
+    <div className={cn('hervald-session-composer', isMobileVariant && 'hervald-session-composer--mobile')}>
       <div className="input-bar">
         {hasContextAttachments && (
           <div className="flex flex-wrap gap-1.5 px-1 pb-1">
@@ -1102,7 +1102,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
 
       <SkillsPicker
         visible={showSkills}
-        variant="herd"
+        variant="hervald"
         theme={theme}
         onSelectSkill={(command) => {
           if (skillsPickerMode === 'quick-slot') {

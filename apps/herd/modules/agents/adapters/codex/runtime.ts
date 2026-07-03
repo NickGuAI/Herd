@@ -33,11 +33,14 @@ type CodexNotificationCallback = (message: CodexProtocolMessage) => void
 
 const CODEX_INITIALIZE_CAPABILITIES = {
   experimentalApi: true,
+  requestAttestation: false,
 } as const
 
 const CODEX_GLOBAL_NOTIFICATION_METHODS = new Set([
   'account/rateLimits/updated',
 ])
+const LOCAL_CODEX_SOCKET_CONNECT_TIMEOUT_MS = 15_000
+const LOCAL_CODEX_SOCKET_ATTEMPT_TIMEOUT_MS = 1_000
 
 export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
   readonly sessionName: string
@@ -495,7 +498,10 @@ export class CodexSessionRuntime implements CodexSessionRuntimeHandle {
     }
 
     if (this.transportMode === 'ws') {
-      const ws = await this.connectSocket(this.port)
+      const ws = await this.connectSocket(this.port, {
+        totalTimeoutMs: LOCAL_CODEX_SOCKET_CONNECT_TIMEOUT_MS,
+        attemptTimeoutMs: LOCAL_CODEX_SOCKET_ATTEMPT_TIMEOUT_MS,
+      })
       this.log('info', 'Connected to Codex sidecar WebSocket')
 
       ws.on('message', (data: RawData) => {

@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { CommanderChannelBindingStore } from '../store.js'
 import { checkAccountInboundPolicy } from '../policy.js'
+import { effectiveBindingCommanderId } from '../binding-routing.js'
+import { buildChannelLastDrop, readDroppedChannelResponse } from '../drop-status.js'
 import type {
   ChannelAdapter,
   ChannelInboundDecision,
   ChannelInboundEvent,
+  ChannelLastDrop,
   ChannelOutboundPayload,
   ChannelPairingChallenge,
   ChannelPairingInput,
@@ -26,6 +29,7 @@ import type {
 
 interface WhatsAppRuntime extends ChannelRuntime<WhatsAppChannelConfig> {
   transportRuntime: WhatsAppTransportRuntime
+  lastDrop?: ChannelLastDrop
 }
 
 interface PendingPairing {
@@ -135,6 +139,18 @@ function statusInstructions(status: WhatsAppRuntimeStatus): string {
   return 'Waiting for WhatsApp pairing status.'
 }
 
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function whatsappMentionedBot(event: ChannelInboundEvent): boolean {
+  const metadata = metadataRecord(event.metadata)
+  const whatsapp = metadataRecord(metadata.whatsapp)
+  return metadata.mentionedBot === true || whatsapp.mentionedBot === true
+}
+
 export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelConfig> {
   readonly provider = 'whatsapp' as const
   readonly capabilities = {
@@ -155,6 +171,7 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
   private readonly transport: WhatsAppTransport
   private readonly logger: Pick<Console, 'warn' | 'error' | 'log'>
   private readonly runtimesByAccount = new Map<string, WhatsAppRuntime>()
+  private readonly lastDropsByAccount = new Map<string, ChannelLastDrop>()
   private readonly pendingPairings = new Map<string, PendingPairing>()
 
   constructor(options: WhatsAppChannelAdapterOptions) {
@@ -403,16 +420,45 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
     event: ChannelInboundEvent,
   ): Promise<ChannelInboundDecision> {
     const binding = await this.resolveBindingForEvent(runtime, event)
-    return checkAccountInboundPolicy(binding, event)
+    return this.checkInboundAllowedForBinding(binding, event)
+  }
+
+  private checkInboundAllowedForBinding(
+    binding: CommanderChannelBinding,
+    event: ChannelInboundEvent,
+  ): ChannelInboundDecision {
+    const decision = checkAccountInboundPolicy(binding, event)
+    if (!decision.allowed) {
+      return decision
+    }
+    return this.checkMentionAllowedForBinding(binding, event)
+  }
+
+  private checkMentionAllowedForBinding(
+    binding: CommanderChannelBinding,
+    event: ChannelInboundEvent,
+  ): ChannelInboundDecision {
+    const config = parseWhatsAppChannelConfig(binding.config, binding.accountId, this.dataDir)
+    if (event.chatType !== 'direct' && config.requireMention) {
+      return whatsappMentionedBot(event) ? { allowed: true } : { allowed: false, reason: 'mention-required' }
+    }
+    return { allowed: true }
   }
 
   async getStatus(binding: CommanderChannelBinding): Promise<WhatsAppRuntimeStatus> {
     const runtime = this.runtimesByAccount.get(binding.accountId)
+    const lastDrop = runtime?.lastDrop ?? this.lastDropsByAccount.get(binding.accountId)
     if (runtime) {
-      return runtime.transportRuntime.status()
+      return {
+        ...runtime.transportRuntime.status(),
+        ...(lastDrop ? { lastDrop } : {}),
+      }
     }
     const config = parseWhatsAppChannelConfig(binding.config, binding.accountId, this.dataDir)
-    return statusForStoppedBinding(binding, config)
+    return {
+      ...statusForStoppedBinding(binding, config),
+      ...(lastDrop ? { lastDrop } : {}),
+    }
   }
 
   private async ensureRuntime(
@@ -433,6 +479,17 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
   }
 
   private async forwardInbound(event: ChannelInboundEvent): Promise<void> {
+    const runtime = this.runtimesByAccount.get(event.accountId)
+    const binding = runtime
+      ? await this.resolveBindingForEvent(runtime, event).catch(() => null)
+      : null
+    if (binding) {
+      const decision = this.checkMentionAllowedForBinding(binding, event)
+      if (!decision.allowed) {
+        this.recordDroppedInbound(event.accountId, event, decision.reason ?? 'policy-denied')
+        return
+      }
+    }
     const message = formatInboundMessage(event)
     const payload: WhatsAppChannelMessagePayload = {
       provider: 'whatsapp',
@@ -464,14 +521,39 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
       if (binding) {
         response = await this.postInboundPayload({
           ...payload,
-          commanderId: binding.commanderId,
+          commanderId: effectiveBindingCommanderId(binding),
         })
       }
     }
     if (!response.ok) {
       const text = await response.text().catch(() => '')
+      if (response.status === 409) {
+        this.recordDroppedInbound(event.accountId, event, 'binding-resolution')
+      }
       this.logger.warn(`[channels/whatsapp] Failed to ingest WhatsApp message ${event.rawSourceId}: ${response.status} ${text}`)
+      return
     }
+    const droppedReason = await readDroppedChannelResponse(response)
+    if (droppedReason) {
+      this.recordDroppedInbound(event.accountId, event, droppedReason)
+    }
+  }
+
+  private recordDroppedInbound(
+    accountId: string,
+    event: ChannelInboundEvent,
+    reason: string,
+  ): void {
+    const at = new Date().toISOString()
+    const lastDrop = buildChannelLastDrop(event, reason, at)
+    this.lastDropsByAccount.set(accountId, lastDrop)
+    const runtime = this.runtimesByAccount.get(accountId)
+    if (runtime) {
+      runtime.lastDrop = lastDrop
+    }
+    this.logger.warn(
+      `[channels/whatsapp] Dropped WhatsApp message ${event.rawSourceId}: inbound denied ${reason} (${event.chatType} ${event.peerId})`,
+    )
   }
 
   private postInboundPayload(payload: WhatsAppChannelMessagePayload): Promise<Response> {

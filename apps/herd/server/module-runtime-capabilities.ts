@@ -1,7 +1,6 @@
 import type { Router } from 'express'
 import type { ApiKeyStoreLike, ApiKeyScope } from './api-keys/store.js'
 import type { ProviderSecretsStoreLike } from './api-keys/provider-secrets-store.js'
-import type { OpenAITranscriptionKeyStoreLike } from './api-keys/transcription-store.js'
 import type { AgentsRouterResult } from '../modules/agents/routes.js'
 import type { CommanderSessionsInterface, ApprovalSessionsInterface } from '../modules/agents/types.js'
 import type { AutomationExecutor } from '../modules/automations/executor.js'
@@ -41,7 +40,6 @@ export interface HerdRuntimeCapabilities {
   'api-key-store': ApiKeyStoreLike | undefined
   'settings.provider-secrets': ProviderSecretsStoreLike
   'provider-secrets-store': ProviderSecretsStoreLike
-  'realtime.transcription-key-store': OpenAITranscriptionKeyStoreLike | undefined
 
   'agents.provider-registry': ProviderRegistryCapability
   'agents.sessions': AgentsRouterResult['sessionsInterface']

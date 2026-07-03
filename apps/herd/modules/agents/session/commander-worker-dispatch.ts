@@ -61,7 +61,6 @@ export function createCommanderWorkerDispatcher(deps: CommanderWorkerDispatcherD
       rawBody,
       requireName: true,
       routeLabel: '/api/commanders/:id/workers',
-      unknownKeyStyle: 'quoted',
     })
     if (!parsed.ok) {
       return { status: parsed.status, body: parsed.body }

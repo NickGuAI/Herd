@@ -60,6 +60,9 @@ export interface WorkerLifecycleSessionLike {
 }
 
 export type WorkerLifecycle = 'running' | 'stale' | 'exited' | 'completed'
+export type AgentRuntimeSessionState = 'active' | 'paused' | 'archived'
+export type RuntimeSessionAllowedActions = Record<string, boolean>
+export type RuntimeSessionDisabledReasons = Record<string, string | null>
 
 export function normalizeSessionType(value: unknown): SessionType | null {
   if (value === 'commander' || value === 'worker' || value === 'automation') {
@@ -89,6 +92,78 @@ export function normalizeSessionCreator(value: unknown): SessionCreator | null {
   return { kind, ...(id ? { id } : {}) }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function normalizeRuntimeSessionState(value: unknown): AgentRuntimeSessionState | null {
+  if (value === 'active' || value === 'paused' || value === 'archived') {
+    return value
+  }
+  return null
+}
+
+export function parseRuntimeSessionAllowedActions(value: unknown): RuntimeSessionAllowedActions | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+
+  const parsed: RuntimeSessionAllowedActions = {}
+  for (const [key, actionValue] of Object.entries(value)) {
+    const action = key.trim()
+    if (!action || typeof actionValue !== 'boolean') {
+      continue
+    }
+    parsed[action] = actionValue
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined
+}
+
+export function parseRuntimeSessionDisabledReasons(value: unknown): RuntimeSessionDisabledReasons | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+
+  const parsed: RuntimeSessionDisabledReasons = {}
+  for (const [key, reasonValue] of Object.entries(value)) {
+    const action = key.trim()
+    if (!action) {
+      continue
+    }
+    if (reasonValue === null) {
+      parsed[action] = null
+      continue
+    }
+    if (typeof reasonValue === 'string') {
+      const reason = reasonValue.trim()
+      parsed[action] = reason.length > 0 ? reason : null
+    }
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined
+}
+
+export function formatRuntimeAllowedActions(actions: RuntimeSessionAllowedActions | undefined): string | null {
+  if (!actions) {
+    return null
+  }
+
+  const allowed = Object.entries(actions)
+    .filter(([, allowedAction]) => allowedAction)
+    .map(([action]) => action)
+  return allowed.length > 0 ? allowed.join(', ') : 'none'
+}
+
+export function formatRuntimeDisabledReasons(reasons: RuntimeSessionDisabledReasons | undefined): string | null {
+  if (!reasons) {
+    return null
+  }
+
+  const disabled = Object.entries(reasons)
+    .filter(([, reason]) => reason !== null)
+    .map(([action, reason]) => `${action}=${reason}`)
+  return disabled.length > 0 ? disabled.join('; ') : null
+}
+
 export function buildCommanderSessionName(commanderId: string): string {
   return `${COMMANDER_SESSION_NAME_PREFIX}${commanderId.trim()}`
 }
@@ -116,4 +191,25 @@ export function workerLifecycle(session: WorkerLifecycleSessionLike): WorkerLife
     return 'stale'
   }
   return 'running'
+}
+
+export function workerLifecycleFromRuntimeState(
+  state: AgentRuntimeSessionState | null | undefined,
+): WorkerLifecycle | null {
+  if (state === 'active') {
+    return 'running'
+  }
+  if (state === 'paused') {
+    return 'stale'
+  }
+  if (state === 'archived') {
+    return 'exited'
+  }
+  return null
+}
+
+export function workerLifecycleWithRuntimeState(
+  session: WorkerLifecycleSessionLike & { state?: AgentRuntimeSessionState | null },
+): WorkerLifecycle {
+  return workerLifecycleFromRuntimeState(session.state) ?? workerLifecycle(session)
 }

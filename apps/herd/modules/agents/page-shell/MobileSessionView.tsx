@@ -397,8 +397,6 @@ export function MobileSessionView({
         try {
           const raw = JSON.parse(evt.data as string) as {
             type: string
-            events?: StreamEvent[]
-            messages?: unknown
             projection?: { messages?: unknown }
             usage?: { inputTokens: number; outputTokens: number; costUsd: number }
             toolId?: string
@@ -407,23 +405,11 @@ export function MobileSessionView({
           if (raw.type === 'replay') {
             const projectedMessages = isProjectedMessages(raw.projection?.messages)
               ? raw.projection.messages
-              : (isProjectedMessages(raw.messages) ? raw.messages : null)
+              : null
             if (projectedMessages) {
-              hydrateReplayMessages(projectedMessages, Array.isArray(raw.events) ? raw.events : [])
+              hydrateReplayMessages(projectedMessages, [])
             } else {
-              if (!Array.isArray(raw.events)) {
-                resetMessages()
-                return
-              }
-              if (raw.events.length === 0) {
-                resetMessages()
-                setMessages([{ id: `system-${Date.now()}`, kind: 'system', text: 'Session started' }])
-              } else {
-                resetMessages()
-                for (const event of raw.events) {
-                  processEvent(event, true)
-                }
-              }
+              resetMessages()
             }
             if (raw.queue) {
               setQueueSnapshot(normalizeQueueSnapshot(raw.queue))
@@ -684,26 +670,28 @@ export function MobileSessionView({
     setDispatchError(null)
 
     try {
-      const created = await fetchJson<{ name: string }>(
-        '/api/agents/sessions/dispatch-worker',
+      const workerName = `${sessionName}-worker-${Date.now()}`
+      const created = await fetchJson<{ sessionName?: string; name?: string }>(
+        `/api/agents/sessions/${encodeURIComponent(sessionName)}/workers`,
         {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
           },
           body: JSON.stringify({
-            spawnedBy: sessionName,
-            cwd: sessionCwd,
+            name: workerName,
+            sessionType: 'worker',
             task: task || undefined,
           }),
         },
       )
+      const createdName = created.sessionName ?? created.name ?? workerName
 
-      setKnownWorkerNames((prev) => (prev.includes(created.name) ? prev : [...prev, created.name]))
+      setKnownWorkerNames((prev) => (prev.includes(createdName) ? prev : [...prev, createdName]))
       setWorkers((prev) => (
-        prev.some((worker) => worker.name === created.name)
+        prev.some((worker) => worker.name === createdName)
           ? prev
-          : [{ name: created.name, status: 'starting', phase: 'starting' }, ...prev]
+          : [{ name: createdName, status: 'starting', phase: 'starting' }, ...prev]
       ))
       setDispatchTask('')
       setDispatchOpen(false)
@@ -718,7 +706,7 @@ export function MobileSessionView({
     } finally {
       setIsDispatching(false)
     }
-  }, [dispatchTask, isDispatching, onRefreshSessions, refreshWorkers, sessionCwd, sessionName])
+  }, [dispatchTask, isDispatching, onRefreshSessions, refreshWorkers, sessionName])
 
   const handleOpenWorker = useCallback((workerSessionName: string) => {
     setWorkersOpen(false)

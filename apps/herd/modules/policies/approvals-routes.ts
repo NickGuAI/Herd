@@ -19,6 +19,7 @@ import { ApprovalCoordinator } from './pending-store.js'
 import type { ApprovalCoordinatorEvent, ApprovalHistoryEntry, PendingApproval } from './types.js'
 
 type CommanderNameLookup = (commanderId: string | null | undefined) => string | null
+type CodexResolverRef = Extract<NonNullable<PendingApproval['resolverRef']>, { kind: 'codex' }>
 
 export interface ApprovalsRouterOptions {
   apiKeyStore?: ApiKeyStoreLike
@@ -35,6 +36,44 @@ export interface ApprovalsRouterOptions {
 function normalizeCommanderName(resolved: string | null | undefined): string | null {
   const name = typeof resolved === 'string' ? resolved.trim() : ''
   return name || null
+}
+
+function readDetail(details: Record<string, string> | undefined, labels: readonly string[]): string | undefined {
+  if (!details) {
+    return undefined
+  }
+  const normalizedLabels = new Set(labels.map((label) => label.trim().toLowerCase()))
+  for (const [label, value] of Object.entries(details)) {
+    if (!normalizedLabels.has(label.trim().toLowerCase())) {
+      continue
+    }
+    const trimmed = value.trim()
+    if (trimmed) {
+      return trimmed
+    }
+  }
+  return undefined
+}
+
+function readRequestId(details: Record<string, string> | undefined): string | number | undefined {
+  const value = readDetail(details, ['Request ID', 'Request'])
+  if (!value) {
+    return undefined
+  }
+  const numeric = Number(value)
+  return Number.isSafeInteger(numeric) && String(numeric) === value ? numeric : value
+}
+
+function resolveQueuedCodexIds(
+  resolverRef: CodexResolverRef | null,
+  details: Record<string, string> | undefined,
+) {
+  return {
+    requestId: resolverRef?.requestId ?? readRequestId(details),
+    threadId: resolverRef?.threadId ?? readDetail(details, ['Thread ID', 'Thread']),
+    turnId: resolverRef?.turnId ?? readDetail(details, ['Turn ID', 'Turn']),
+    itemId: resolverRef?.itemId ?? readDetail(details, ['Item ID', 'Item']),
+  }
 }
 
 async function buildCommanderNameLookup(options: ApprovalsRouterOptions): Promise<CommanderNameLookup> {
@@ -55,6 +94,10 @@ function toQueuedApprovalResponse(
   approval: PendingApproval,
 ) {
   const redactedContext = redactApprovalContext(approval.context)
+  const codexResolverRef = approval.resolverRef?.kind === 'codex' ? approval.resolverRef : null
+  const codexIds = approval.source === 'codex' || codexResolverRef
+    ? resolveQueuedCodexIds(codexResolverRef, redactedContext.details)
+    : { requestId: undefined, threadId: undefined, turnId: undefined, itemId: undefined }
   const details = Object.entries(redactedContext.details ?? {}).map(([label, value]) => ({
     label,
     value,
@@ -65,12 +108,16 @@ function toQueuedApprovalResponse(
     id: approval.id,
     approvalId: approval.id,
     decisionId: approval.id,
-    requestId: approval.resolverRef?.kind === 'codex' ? approval.resolverRef.requestId : approval.id,
+    requestId: codexIds.requestId ?? approval.id,
     actionId: approval.actionId,
     actionLabel: approval.actionLabel,
     commanderId: approval.commanderId ?? null,
     commanderName,
     sessionName: approval.sessionId ?? null,
+    conversationId: approval.conversationId ?? null,
+    threadId: codexIds.threadId ?? null,
+    turnId: codexIds.turnId ?? null,
+    itemId: codexIds.itemId ?? null,
     source: approval.source,
     requestedAt: approval.requestedAt,
     summary: redactedContext.summary,
@@ -83,6 +130,10 @@ function toQueuedApprovalResponse(
       ...redactedContext,
       ...(commanderName ? { commanderName } : {}),
       sessionName: approval.sessionId ?? undefined,
+      conversationId: approval.conversationId ?? undefined,
+      threadId: codexIds.threadId,
+      turnId: codexIds.turnId,
+      itemId: codexIds.itemId,
     },
     raw: redactedPendingApprovalRaw({
       ...approval,
@@ -101,6 +152,8 @@ function toCodexApprovalResponse(
     approval.risk ? { label: 'Risk', value: approval.risk } : null,
     approval.threadId ? { label: 'Thread', value: approval.threadId } : null,
     approval.turnId ? { label: 'Turn', value: approval.turnId } : null,
+    approval.itemId ? { label: 'Item', value: approval.itemId } : null,
+    approval.conversationId ? { label: 'Conversation', value: approval.conversationId } : null,
   ].filter((detail): detail is { label: string; value: string } => detail !== null)
   const commanderName = normalizeCommanderName(getCommanderName(approval.commanderScopeId))
 
@@ -114,6 +167,10 @@ function toCodexApprovalResponse(
     commanderId: approval.commanderScopeId ?? null,
     commanderName,
     sessionName: approval.sessionName,
+    conversationId: approval.conversationId ?? null,
+    threadId: approval.threadId ?? null,
+    turnId: approval.turnId ?? null,
+    itemId: approval.itemId ?? null,
     source: 'codex',
     requestedAt: approval.requestedAt,
     summary: approval.reason ?? `${approval.actionLabel} requires approval.`,
@@ -126,6 +183,10 @@ function toCodexApprovalResponse(
       summary: approval.reason ?? `${approval.actionLabel} requires approval.`,
       details: Object.fromEntries(details.map((detail) => [detail.label, detail.value])),
       sessionName: approval.sessionName,
+      conversationId: approval.conversationId,
+      threadId: approval.threadId,
+      turnId: approval.turnId,
+      itemId: approval.itemId,
       ...(commanderName ? { commanderName } : {}),
     },
     raw: redactUnknown(approval),
@@ -223,6 +284,7 @@ function buildCodexHistoryEntry(event: CodexApprovalQueueEvent): ApprovalHistory
       actionLabel: event.approval.actionLabel,
       commanderId: event.approval.commanderScopeId,
       sessionId: event.approval.sessionName,
+      conversationId: event.approval.conversationId,
       source: 'codex',
       summary,
       decision: event.decision,
@@ -244,6 +306,7 @@ function buildCodexHistoryEntry(event: CodexApprovalQueueEvent): ApprovalHistory
     actionLabel: event.approval.actionLabel,
     commanderId: event.approval.commanderScopeId,
     sessionId: event.approval.sessionName,
+    conversationId: event.approval.conversationId,
     source: 'codex',
     summary,
   }

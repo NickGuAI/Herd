@@ -2,14 +2,16 @@ import type { AuthUser } from '@gehirn/auth-providers'
 import { Router } from 'express'
 import type { ApiKeyStoreLike } from '../../../server/api-keys/store.js'
 import { combinedAuth } from '../../../server/middleware/combined-auth.js'
-import { listProviders } from './registry.js'
 import {
   resolveProviderDefaults,
   type ProviderAdapter,
   type ProviderRegistryEntry,
 } from './provider-adapter.js'
-
-const DEFAULT_PROVIDER_ID = 'claude'
+import {
+  listProviders,
+  resolveAutomationDefaultProviderId as resolveRegisteredAutomationDefaultProviderId,
+  resolveDefaultProviderId as resolveRegisteredDefaultProviderId,
+} from './registry.js'
 
 export interface ProviderRegistryRouterOptions {
   apiKeyStore?: ApiKeyStoreLike
@@ -83,9 +85,8 @@ export function createProviderRegistryRouter(
   router.get('/providers', requireReadAccess, (_req, res) => {
     const providers = listProviders().map(toRegistryEntry)
     res.json({
-      defaultProviderId: providers.some((provider) => provider.id === DEFAULT_PROVIDER_ID)
-        ? DEFAULT_PROVIDER_ID
-        : (providers[0]?.id ?? DEFAULT_PROVIDER_ID),
+      defaultProviderId: resolveRegisteredDefaultProviderId(),
+      automationDefaultProviderId: resolveRegisteredAutomationDefaultProviderId(),
       providers,
     })
   })

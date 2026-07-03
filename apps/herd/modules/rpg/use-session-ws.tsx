@@ -269,15 +269,20 @@ export function useSessionWs({
         try {
           const raw = JSON.parse(incoming.data as string) as {
             type: string
-            events?: StreamEvent[]
+            projection?: {
+              envelopes?: StreamEvent[]
+            }
             toolId?: string
           }
 
-          if (raw.type === 'replay' && Array.isArray(raw.events)) {
+          if (raw.type === 'replay') {
             pendingAskRef.current = null
             setPendingAsks([])
             onReplayStart?.()
-            for (const event of raw.events) {
+            const replayEvents = Array.isArray(raw.projection?.envelopes)
+              ? raw.projection.envelopes
+              : []
+            for (const event of replayEvents) {
               processEvent(event, true)
             }
             return

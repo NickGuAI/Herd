@@ -46,6 +46,13 @@ function approvalMatchesCommander(approval: PendingApproval, commander: Commande
   return approval.commanderId === commander.id || approval.commanderName === commander.name
 }
 
+function approvalMatchesCommanderConversation(
+  approval: PendingApproval,
+  conversationIds: ReadonlySet<string>,
+): boolean {
+  return Boolean(approval.conversationId && conversationIds.has(approval.conversationId))
+}
+
 function resolveMobileTab(pathname: string, metadata: CommandRoomRouteMetadata): MobileTab {
   const inboxMode = metadata.mobile.modes.find((mode) => mode.id === 'inbox')
   if (inboxMode && pathname.startsWith(inboxMode.path)) {
@@ -259,11 +266,20 @@ export function MobileCommandRoom({
   const selectedCommander = commanders.find((commander) => commander.id === selectedCommanderId) ?? commanders[0] ?? null
   const activeCommanderId = commanderId ?? selectedCommander?.id ?? null
   const activeCommander = commanders.find((commander) => commander.id === activeCommanderId) ?? selectedCommander
+  const activeCommanderConversationIds = useMemo(
+    () => new Set((conversations ?? [])
+      .filter((conversation) => conversation.commanderId === activeCommander?.id)
+      .map((conversation) => conversation.id)),
+    [activeCommander?.id, conversations],
+  )
   const activeCommanderApprovals = useMemo(
     () => activeCommander
-      ? pendingApprovals.filter((approval) => approvalMatchesCommander(approval, activeCommander))
+      ? pendingApprovals.filter((approval) => (
+        approvalMatchesCommander(approval, activeCommander)
+        || approvalMatchesCommanderConversation(approval, activeCommanderConversationIds)
+      ))
       : [],
-    [activeCommander, pendingApprovals],
+    [activeCommander, activeCommanderConversationIds, pendingApprovals],
   )
   const hasConversationMode = Array.isArray(conversations)
   const activeCommanderWorkers = useMemo(

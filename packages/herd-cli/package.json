@@ -1,6 +1,6 @@
 {
   "name": "@gehirn/herd-cli",
-  "version": "0.0.3-beta",
+  "version": "0.0.4-beta",
   "private": false,
   "description": "Herd onboarding CLI — configure agents to send telemetry.",
   "type": "module",
@@ -36,7 +36,8 @@
   "devDependencies": {
     "@gehirn/tsconfig": "workspace:*",
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.0"
   },
   "dependencies": {
     "smol-toml": "^1.6.0"

@@ -162,6 +162,9 @@ function normalizePendingApproval(entry: unknown): PendingApproval | null {
   if (typeof entry.sessionId === 'string' && entry.sessionId.trim().length > 0) {
     approval.sessionId = entry.sessionId.trim()
   }
+  if (typeof entry.conversationId === 'string' && entry.conversationId.trim().length > 0) {
+    approval.conversationId = entry.conversationId.trim()
+  }
   if (typeof entry.currentSkillId === 'string' && entry.currentSkillId.trim().length > 0) {
     approval.currentSkillId = entry.currentSkillId.trim()
   }
@@ -309,6 +312,9 @@ function normalizeHistoryEntry(entry: unknown): ApprovalHistoryEntry | null {
   if (typeof entry.sessionId === 'string' && entry.sessionId.trim().length > 0) {
     normalized.sessionId = entry.sessionId.trim()
   }
+  if (typeof entry.conversationId === 'string' && entry.conversationId.trim().length > 0) {
+    normalized.conversationId = entry.conversationId.trim()
+  }
   if (entry.source === 'claude' || entry.source === 'codex') {
     normalized.source = entry.source
   }
@@ -435,6 +441,7 @@ export class ApprovalCoordinator {
         actionLabel: approval.actionLabel,
         commanderId: approval.commanderId,
         sessionId: approval.sessionId,
+        conversationId: approval.conversationId,
         source: approval.source,
         toolName: approval.toolName,
         summary: approval.context.summary,
@@ -454,6 +461,7 @@ export class ApprovalCoordinator {
     sessionName?: string
     commanderId?: string
     commanderScopeId?: string
+    conversationId?: string
     actionId: string
     actionLabel: string
     toolName: string
@@ -468,6 +476,7 @@ export class ApprovalCoordinator {
       source: input.source,
       sessionId: input.sessionId ?? input.sessionName,
       commanderId: input.commanderId ?? input.commanderScopeId,
+      conversationId: input.conversationId,
       actionId: input.actionId,
       actionLabel: input.actionLabel,
       toolName: input.toolName,
@@ -491,6 +500,9 @@ export class ApprovalCoordinator {
           return false
         }
         if (filter?.sessionId && approval.sessionId !== filter.sessionId) {
+          return false
+        }
+        if (filter?.conversationId && approval.conversationId !== filter.conversationId) {
           return false
         }
         if (filter?.actionId && approval.actionId !== filter.actionId) {
@@ -758,6 +770,7 @@ export class ApprovalCoordinator {
         actionLabel: approval.actionLabel,
         commanderId: approval.commanderId,
         sessionId: approval.sessionId,
+        conversationId: approval.conversationId,
         source: approval.source,
         toolName: approval.toolName,
         summary: approval.context.summary,

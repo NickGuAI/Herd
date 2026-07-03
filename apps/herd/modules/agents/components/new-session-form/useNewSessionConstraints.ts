@@ -4,18 +4,10 @@ import type {
   ProviderRegistryEntry,
   SessionTransportType,
 } from '@/types'
-import {
-  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
-  type ClaudeAdaptiveThinkingMode,
-} from '../../../claude-adaptive-thinking.js'
-import {
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
-  type ClaudeEffortLevel,
-} from '../../../claude-effort.js'
-import {
-  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
-  type ClaudeMaxThinkingTokens,
-} from '../../../claude-max-thinking-tokens.js'
+import { getProviderControlDefaults } from '@/hooks/use-providers'
+import type { ClaudeAdaptiveThinkingMode } from '../../../claude-adaptive-thinking.js'
+import type { ClaudeEffortLevel } from '../../../claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '../../../claude-max-thinking-tokens.js'
 
 interface UseNewSessionConstraintsOptions {
   providers: readonly ProviderRegistryEntry[]
@@ -63,9 +55,10 @@ export function getNormalizedEffort(
   agentType: AgentType,
   effort: ClaudeEffortLevel,
 ): ClaudeEffortLevel | null {
-  return !findProvider(providers, agentType)?.uiCapabilities.supportsEffort
-    && effort !== DEFAULT_CLAUDE_EFFORT_LEVEL
-    ? DEFAULT_CLAUDE_EFFORT_LEVEL
+  const provider = findProvider(providers, agentType)
+  const defaultEffort = getProviderControlDefaults(provider).effort
+  return !provider?.uiCapabilities.supportsEffort && effort !== defaultEffort
+    ? defaultEffort
     : null
 }
 
@@ -74,9 +67,10 @@ export function getNormalizedAdaptiveThinking(
   agentType: AgentType,
   adaptiveThinking: ClaudeAdaptiveThinkingMode,
 ): ClaudeAdaptiveThinkingMode | null {
-  return !findProvider(providers, agentType)?.uiCapabilities.supportsAdaptiveThinking
-    && adaptiveThinking !== DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE
-    ? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE
+  const provider = findProvider(providers, agentType)
+  const defaultAdaptiveThinking = getProviderControlDefaults(provider).adaptiveThinking
+  return !provider?.uiCapabilities.supportsAdaptiveThinking && adaptiveThinking !== defaultAdaptiveThinking
+    ? defaultAdaptiveThinking
     : null
 }
 
@@ -85,9 +79,10 @@ export function getNormalizedMaxThinkingTokens(
   agentType: AgentType,
   maxThinkingTokens: ClaudeMaxThinkingTokens,
 ): ClaudeMaxThinkingTokens | null {
-  return !findProvider(providers, agentType)?.uiCapabilities.supportsMaxThinkingTokens
-    && maxThinkingTokens !== DEFAULT_CLAUDE_MAX_THINKING_TOKENS
-    ? DEFAULT_CLAUDE_MAX_THINKING_TOKENS
+  const provider = findProvider(providers, agentType)
+  const defaultMaxThinkingTokens = getProviderControlDefaults(provider).maxThinkingTokens
+  return !provider?.uiCapabilities.supportsMaxThinkingTokens && maxThinkingTokens !== defaultMaxThinkingTokens
+    ? defaultMaxThinkingTokens
     : null
 }
 

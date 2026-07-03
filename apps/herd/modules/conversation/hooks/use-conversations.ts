@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/api'
 import type { AgentSession, AgentType } from '@/types'
 import type { MsgItem } from '@modules/agents/messages/model'
@@ -15,6 +15,7 @@ import type {
 import type { WorkspaceContextPayload } from '@modules/workspace/types'
 
 const CONVERSATIONS_POLL_INTERVAL_MS = 5000
+const CONVERSATIONS_LIST_STALE_MS = 30_000
 const CONVERSATION_DETAIL_STALE_MS = 30_000
 const ACTIVE_CONVERSATION_STALE_MS = 30_000
 const COMMANDER_CONVERSATIONS_QUERY_KEY = ['commanders', 'conversations'] as const
@@ -37,6 +38,7 @@ export interface ConversationRecord extends Omit<ConversationContract, 'currentT
   displayState?: ConversationDisplayState
   sendTarget?: ConversationSendTarget | null
   allowedActions?: ConversationAllowedActions
+  initialMessagePage?: ConversationMessagesPage
 }
 
 export type ConversationRuntimeState = 'idle' | 'starting' | 'active' | 'failed' | 'archived'
@@ -181,12 +183,10 @@ function conversationStatusPriority(status: ConversationStatus): number {
       return 0
     case 'idle':
       return 1
-    case 'paused':
-      return 2
     case 'archived':
-      return 3
+      return 2
     default:
-      return 4
+      return 3
   }
 }
 
@@ -246,6 +246,25 @@ function conversationReadinessRank(conversation: ConversationRecord | null | und
   return 0
 }
 
+function conversationNeedsLiveRefresh(conversation: ConversationRecord): boolean {
+  const runtimeState = conversation.displayState?.runtimeState ?? conversation.runtimeState
+  return runtimeState === 'starting' || runtimeState === 'active' || conversation.status === 'active'
+}
+
+function conversationsListRefetchInterval(query: {
+  state: {
+    error: unknown
+    data?: ConversationRecord[]
+  }
+}): number | false {
+  if (query.state.error) {
+    return CONVERSATIONS_POLL_INTERVAL_MS
+  }
+  return query.state.data?.some(conversationNeedsLiveRefresh)
+    ? CONVERSATIONS_POLL_INTERVAL_MS
+    : false
+}
+
 function timestampMs(value: string | null | undefined): number {
   if (!value) {
     return 0
@@ -299,9 +318,17 @@ export function conversationMessagesQueryKey(conversationId: string) {
   return [...CONVERSATION_MESSAGES_QUERY_KEY, conversationId] as const
 }
 
-async function fetchCommanderConversations(commanderId: string): Promise<ConversationRecord[]> {
+async function fetchCommanderConversations(
+  commanderId: string,
+  initialMessagesFor?: string | null,
+): Promise<ConversationRecord[]> {
+  const params = new URLSearchParams()
+  if (initialMessagesFor) {
+    params.set('initialMessagesFor', initialMessagesFor)
+  }
+  const query = params.toString()
   return fetchJson<ConversationRecord[]>(
-    `/api/commanders/${encodeURIComponent(commanderId)}/conversations`,
+    `/api/commanders/${encodeURIComponent(commanderId)}/conversations${query ? `?${query}` : ''}`,
   )
 }
 
@@ -541,6 +568,63 @@ function removeConversationCaches(
   })
 }
 
+function getRecordInitialMessagePage(
+  conversation: ConversationRecord | null | undefined,
+  conversationId: string,
+): ConversationMessagesPage | undefined {
+  return conversation?.id === conversationId && conversation.initialMessagePage?.conversationId === conversationId
+    ? conversation.initialMessagePage
+    : undefined
+}
+
+function getInitialConversationMessagePage(
+  queryClient: QueryClient,
+  conversationId: string,
+): ConversationMessagesPage | undefined {
+  const detailPage = getRecordInitialMessagePage(
+    queryClient.getQueryData<ConversationRecord>(conversationDetailQueryKey(conversationId)),
+    conversationId,
+  )
+  if (detailPage) {
+    return detailPage
+  }
+
+  for (const [, activeConversation] of queryClient.getQueriesData<ConversationRecord | null>({
+    queryKey: COMMANDER_ACTIVE_CONVERSATION_QUERY_KEY,
+  })) {
+    const page = getRecordInitialMessagePage(activeConversation, conversationId)
+    if (page) {
+      return page
+    }
+  }
+
+  for (const [, conversations] of queryClient.getQueriesData<unknown>({
+    queryKey: COMMANDER_CONVERSATIONS_QUERY_KEY,
+  })) {
+    if (!Array.isArray(conversations)) {
+      continue
+    }
+    const cachedConversations = conversations as ConversationRecord[]
+    const page = cachedConversations
+      .map((conversation) => getRecordInitialMessagePage(conversation, conversationId))
+      .find(Boolean)
+    if (page) {
+      return page
+    }
+  }
+
+  return undefined
+}
+
+function toConversationMessagesInfiniteData(
+  page: ConversationMessagesPage,
+): ConversationMessagesInfiniteData {
+  return {
+    pages: [page],
+    pageParams: [null],
+  }
+}
+
 export function useConversations(
   commanderId?: string | null,
   selectedConversationId?: string | null,
@@ -555,9 +639,10 @@ export function useConversations(
 
   const listQuery = useQuery({
     queryKey: safeCommanderId ? commanderConversationsQueryKey(safeCommanderId) : [...COMMANDER_CONVERSATIONS_QUERY_KEY, 'none'],
-    queryFn: () => fetchCommanderConversations(safeCommanderId ?? ''),
+    queryFn: () => fetchCommanderConversations(safeCommanderId ?? '', safeSelectedConversationId),
     enabled: Boolean(safeCommanderId),
-    refetchInterval: safeCommanderId ? CONVERSATIONS_POLL_INTERVAL_MS : false,
+    staleTime: CONVERSATIONS_LIST_STALE_MS,
+    refetchInterval: safeCommanderId ? conversationsListRefetchInterval : false,
   })
 
   const detailQuery = useQuery({
@@ -593,28 +678,11 @@ export function useConversations(
   }
 }
 
-export function useActiveConversation(
-  commanderId?: string | null,
-  enabled = true,
-) {
-  const safeCommanderId = typeof commanderId === 'string' && commanderId.trim().length > 0
-    ? commanderId.trim()
-    : null
-
-  return useQuery({
-    queryKey: safeCommanderId
-      ? commanderActiveConversationQueryKey(safeCommanderId)
-      : [...COMMANDER_ACTIVE_CONVERSATION_QUERY_KEY, 'none'],
-    queryFn: () => fetchCommanderActiveConversation(safeCommanderId ?? ''),
-    enabled: Boolean(safeCommanderId) && enabled,
-    staleTime: ACTIVE_CONVERSATION_STALE_MS,
-  })
-}
-
 export function useConversationMessages(
   conversationId?: string | null,
   enabled = true,
 ) {
+  const queryClient = useQueryClient()
   const safeConversationId = typeof conversationId === 'string' && conversationId.trim().length > 0
     ? conversationId.trim()
     : null
@@ -625,12 +693,21 @@ export function useConversationMessages(
       : [...CONVERSATION_MESSAGES_QUERY_KEY, 'none'],
     queryFn: ({ pageParam }) => fetchConversationMessagesPage({
       conversationId: safeConversationId ?? '',
-      before: pageParam,
+      before: pageParam as string | null,
       limit: CONVERSATION_MESSAGES_PAGE_SIZE,
     }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextBefore ?? undefined,
     enabled: Boolean(safeConversationId) && enabled,
+    initialData: () => {
+      if (!safeConversationId) {
+        return undefined
+      }
+      const initialMessagePage = getInitialConversationMessagePage(queryClient, safeConversationId)
+      return initialMessagePage
+        ? toConversationMessagesInfiniteData(initialMessagePage)
+        : undefined
+    },
     staleTime: 5_000,
   })
 }

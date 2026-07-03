@@ -8,6 +8,7 @@ import type {
   CommanderChannelBinding,
   CommanderChannelProvider,
 } from '../types'
+import type { ChannelFormState } from '../form-contract'
 
 export const CHANNELS_QUERY_KEY = ['commander-channels'] as const
 export const CHANNEL_PROVIDER_DESCRIPTORS_QUERY_KEY = ['channel-provider-descriptors'] as const
@@ -18,7 +19,7 @@ export interface CreateChannelBindingInput {
   accountId: string
   displayName: string
   enabled?: boolean
-  config?: Record<string, unknown>
+  formValues?: ChannelFormState
 }
 
 export interface BeginChannelPairingInput {
@@ -26,7 +27,7 @@ export interface BeginChannelPairingInput {
   provider: CommanderChannelProvider
   accountId?: string
   displayName?: string
-  config?: Record<string, unknown>
+  formValues?: ChannelFormState
 }
 
 export interface CompleteChannelPairingInput {
@@ -35,7 +36,7 @@ export interface CompleteChannelPairingInput {
   challengeId: string
   accountId?: string
   displayName?: string
-  config?: Record<string, unknown>
+  formValues?: ChannelFormState
 }
 
 export interface UpdateChannelBindingInput {
@@ -43,7 +44,7 @@ export interface UpdateChannelBindingInput {
   bindingId: string
   displayName?: string
   enabled?: boolean
-  config?: Record<string, unknown>
+  formValues?: ChannelFormState
 }
 
 function commanderChannelsPath(commanderId: string): string {

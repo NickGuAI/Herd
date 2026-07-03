@@ -1,9 +1,10 @@
 import { Circle } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { buildCommandRoomLaunchTarget } from '@modules/command-room/route-metadata'
 import type { OrgNode } from '../types'
 
 function statusPath(commanderId: string, panel: string): string {
-  return `/command-room?commander=${encodeURIComponent(commanderId)}&panel=${encodeURIComponent(panel)}`
+  return buildCommandRoomLaunchTarget({ commanderId, panel }).path
 }
 
 function StatusChip({

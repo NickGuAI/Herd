@@ -55,12 +55,12 @@ export function QueuePanel({
       position="bottom-sheet"
       portalThemeClassName={themeRootClassName}
       backdropClassName={cn(
-        'sheet-backdrop--herd',
-        theme === 'dark' && 'sheet-backdrop--herd-dark',
+        'sheet-backdrop--hervald',
+        theme === 'dark' && 'sheet-backdrop--hervald-dark',
       )}
       contentClassName={cn(
-        'sheet visible sheet--herd',
-        theme === 'dark' && 'sheet--herd-dark',
+        'sheet visible sheet--hervald',
+        theme === 'dark' && 'sheet--hervald-dark',
         themeRootClassName,
       )}
       contentProps={{

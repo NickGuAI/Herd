@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Plus } from 'lucide-react'
 import type { AgentType, ProviderRegistryEntry } from '@/types'
+import { getProviderControlDefaults } from '@/hooks/use-providers'
 import {
   CLAUDE_ADAPTIVE_THINKING_MODES,
-  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   type ClaudeAdaptiveThinkingMode,
 } from '@modules/claude-adaptive-thinking.js'
 import {
   CLAUDE_EFFORT_LEVELS,
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
   type ClaudeEffortLevel,
 } from '@modules/claude-effort.js'
 import {
-  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   MAX_CLAUDE_MAX_THINKING_TOKENS,
   MIN_CLAUDE_MAX_THINKING_TOKENS,
   type ClaudeMaxThinkingTokens,
@@ -59,11 +57,12 @@ export function CreateConversationPanel({
     () => resolveInitialAgentType(providerOptions, defaultAgentType),
   )
   const [model, setModel] = useState<string | null>(null)
-  const [effort, setEffort] = useState<ClaudeEffortLevel>(DEFAULT_CLAUDE_EFFORT_LEVEL)
+  const initialProviderControls = getProviderControlDefaults(null)
+  const [effort, setEffort] = useState<ClaudeEffortLevel>(initialProviderControls.effort)
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
-    DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+    initialProviderControls.adaptiveThinking,
   )
-  const [maxThinkingTokens, setMaxThinkingTokens] = useState(String(DEFAULT_CLAUDE_MAX_THINKING_TOKENS))
+  const [maxThinkingTokens, setMaxThinkingTokens] = useState(String(initialProviderControls.maxThinkingTokens))
   const [reasoningError, setReasoningError] = useState<string | null>(null)
   const userSelectedAgentTypeRef = useRef(false)
   const previousDefaultAgentTypeRef = useRef(defaultAgentType)
@@ -100,10 +99,10 @@ export function CreateConversationPanel({
   }, [availableModels, model])
 
   useEffect(() => {
-    const defaults = activeProvider?.defaults
-    setEffort(defaults?.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL)
-    setAdaptiveThinking(defaults?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
-    setMaxThinkingTokens(String(defaults?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS))
+    const defaults = getProviderControlDefaults(activeProvider)
+    setEffort(defaults.effort)
+    setAdaptiveThinking(defaults.adaptiveThinking)
+    setMaxThinkingTokens(String(defaults.maxThinkingTokens))
     setReasoningError(null)
   }, [activeProvider])
 

@@ -57,7 +57,7 @@ export const HERD_MODULE_GRAPH = [
     ui: {
       kind: 'embedded',
       routes: [],
-      componentKeys: ['modules/agents/page', 'modules/agents/page-shell'],
+      componentKeys: ['modules/agents/page-shell'],
       surfaces: ['desktop', 'mobile'],
     },
     routeIds: ['agents.api', 'agents.providers-api'],
@@ -70,7 +70,7 @@ export const HERD_MODULE_GRAPH = [
     label: 'Settings',
     directory: 'api-keys',
     status: 'public',
-    summary: 'API key, transcription key, image-generation key, account, and provider secret settings surface.',
+    summary: 'API key, provider secret, account, and provider settings surface.',
     dependencies: {
       modules: ['org-identity', 'operators'],
       capabilities: ['org-identity.profile', 'operators.founder-profile'],
@@ -81,7 +81,6 @@ export const HERD_MODULE_GRAPH = [
         'api-key-store',
         'settings.provider-secrets',
         'provider-secrets-store',
-        'realtime.transcription-key-store',
       ],
       consumes: ['org-identity.profile', 'operators.founder-profile'],
     },
@@ -390,7 +389,7 @@ export const HERD_MODULE_GRAPH = [
     summary: 'Shared module-owned UI primitives consumed by Herd feature modules.',
     dependencies: emptyDependencies,
     capabilities: {
-      provides: ['components.herd-ui', 'components.modal-form'],
+      provides: ['components.hervald-ui', 'components.modal-form'],
       consumes: [],
     },
     ui: {
@@ -696,31 +695,6 @@ export const HERD_MODULE_GRAPH = [
     storageKeys: [],
   },
   {
-    id: 'sentinels',
-    label: 'Sentinels',
-    directory: 'sentinels',
-    status: 'retired',
-    summary: 'Legacy sentinel scheduler, executor, store, and routes retained for explicit retirement or future reactivation.',
-    dependencies: {
-      modules: ['agents', 'commanders'],
-      capabilities: ['agents.sessions-interface'],
-    },
-    capabilities: {
-      provides: ['sentinels.legacy-store', 'sentinels.legacy-scheduler'],
-      consumes: ['agents.sessions-interface'],
-    },
-    ui: {
-      kind: 'embedded',
-      routes: [],
-      componentKeys: ['modules/sentinels/page'],
-      surfaces: ['desktop'],
-    },
-    routeIds: ['sentinels.legacy-api'],
-    parserIds: [],
-    websocketIds: [],
-    storageKeys: ['sentinels.legacy'],
-  },
-  {
     id: 'settings',
     label: 'App Settings',
     directory: 'settings',
@@ -761,16 +735,35 @@ export const HERD_MODULE_GRAPH = [
   },
   {
     id: 'skills',
-    label: 'Skills Discovery',
+    label: 'Skills',
     directory: 'skills',
     status: 'experimental',
-    summary: 'Installed skill discovery API consumed by composer, automations, sentinels, and policies.',
+    summary: 'Installed skill discovery, package management, export preview, and read-only workflow visualization.',
     dependencies: emptyDependencies,
     capabilities: {
-      provides: ['skills.discovery'],
+      provides: ['skills.discovery', 'skills.management-ui'],
       consumes: [],
     },
-    ui: noUi,
+    ui: {
+      kind: 'route',
+      routes: [
+        {
+          id: 'skills.ui',
+          path: '/skills',
+          componentKey: 'modules/skills/page',
+          surfaces: ['desktop'],
+          nav: {
+            label: 'Skills',
+            icon: 'Sparkles',
+            group: 'primary',
+            surfaces: ['desktop'],
+            order: 35,
+          },
+        },
+      ],
+      componentKeys: ['modules/skills/page'],
+      surfaces: ['desktop'],
+    },
     routeIds: ['skills.api'],
     parserIds: [],
     websocketIds: [],
@@ -868,11 +861,11 @@ export const HERD_MODULE_GRAPH = [
     summary: 'Realtime browser-to-provider transcription proxy and websocket bridge.',
     dependencies: {
       modules: ['api-keys'],
-      capabilities: ['realtime.transcription-key-store'],
+      capabilities: ['provider-secrets-store'],
     },
     capabilities: {
       provides: ['realtime.transcription-websocket'],
-      consumes: ['realtime.transcription-key-store'],
+      consumes: ['provider-secrets-store'],
     },
     ui: noUi,
     routeIds: ['realtime.api'],

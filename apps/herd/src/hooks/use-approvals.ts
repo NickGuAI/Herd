@@ -27,12 +27,17 @@ export interface PendingApproval {
   commanderId: string | null
   commanderName: string | null
   sessionName: string | null
+  conversationId: string | null
   requestedAt: string
   requestId: string | number | null
+  threadId: string | null
+  turnId: string | null
+  itemId: string | null
   reason: string | null
   risk: string | null
   summary: string | null
   previewText: string | null
+  commandText: string | null
   details: ApprovalDetailLine[]
   raw: Record<string, unknown>
   context: Record<string, unknown> | null
@@ -301,6 +306,61 @@ function collectPreviewText(
   return previewValue ? formatUnknownValue(previewValue) : null
 }
 
+function readDetailValue(
+  raw: Record<string, unknown>,
+  context: Record<string, unknown> | null,
+  labels: string[],
+): string | null {
+  const normalizedLabels = new Set(labels.map((label) => label.trim().toLowerCase()))
+  const candidates = [
+    pickValue(raw, ['details', 'detailLines', 'previewFields']),
+    pickValue(context ?? {}, ['details', 'detailLines', 'previewFields']),
+  ]
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      for (const entry of candidate) {
+        const record = asRecord(entry)
+        if (!record) {
+          continue
+        }
+        const label = readString(record, ['label', 'name', 'title'])
+        if (!label || !normalizedLabels.has(label.toLowerCase())) {
+          continue
+        }
+        const value = formatUnknownValue(pickValue(record, ['value', 'text', 'content', 'summary']))
+        if (value) {
+          return value
+        }
+      }
+      continue
+    }
+
+    if (isRecord(candidate)) {
+      for (const [key, value] of Object.entries(candidate)) {
+        if (!normalizedLabels.has(key.trim().toLowerCase())) {
+          continue
+        }
+        const formatted = formatUnknownValue(value)
+        if (formatted) {
+          return formatted
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function collectCommandText(
+  raw: Record<string, unknown>,
+  context: Record<string, unknown> | null,
+): string | null {
+  return readString(raw, ['commandText', 'command'])
+    ?? readString(context ?? {}, ['commandText', 'command'])
+    ?? readDetailValue(raw, context, ['Command'])
+}
+
 export function normalizeApproval(input: unknown): PendingApproval | null {
   const raw = asRecord(input)
   if (!raw) {
@@ -336,12 +396,28 @@ export function normalizeApproval(input: unknown): PendingApproval | null {
     sessionName:
       readString(raw, ['sessionName', 'agentName']) ??
       readString(context ?? {}, ['sessionName', 'agentName']),
+    conversationId:
+      readString(raw, ['conversationId']) ??
+      readString(context ?? {}, ['conversationId']),
     requestedAt,
     requestId,
+    threadId:
+      readString(raw, ['threadId']) ??
+      readString(context ?? {}, ['threadId']) ??
+      readDetailValue(raw, context, ['Thread', 'Thread ID']),
+    turnId:
+      readString(raw, ['turnId']) ??
+      readString(context ?? {}, ['turnId']) ??
+      readDetailValue(raw, context, ['Turn', 'Turn ID']),
+    itemId:
+      readString(raw, ['itemId']) ??
+      readString(context ?? {}, ['itemId']) ??
+      readDetailValue(raw, context, ['Item', 'Item ID']),
     reason: readString(raw, ['reason']),
     risk: readString(raw, ['risk']),
     summary,
     previewText: collectPreviewText(raw, context),
+    commandText: collectCommandText(raw, context),
     details: collectDetailLines(raw, context),
     raw,
     context,

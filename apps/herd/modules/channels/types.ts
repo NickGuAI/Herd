@@ -40,29 +40,25 @@ export interface ChannelDescriptorField {
   defaultValue?: string | number | boolean | string[]
   section?: string
   configPath?: string
-  formKey?: string
   options?: ChannelDescriptorOption[]
   min?: number
+  storageMultiplier?: number
+}
+
+export interface ChannelSetupGuideStep {
+  title: string
+  body: string
+}
+
+export interface ChannelSetupGuide {
+  summary: string
+  steps: ChannelSetupGuideStep[]
 }
 
 export interface ChannelProviderPairingDescriptor {
   mode: 'none' | 'qr'
   transport?: string
   statusPollIntervalMs?: number
-}
-
-export interface ChannelCommanderBindingDescriptor {
-  mode: 'account-commander'
-  fieldKey: string
-  label: string
-  source: 'bindingState.defaultCommanderId'
-  emptyLabel?: string
-}
-
-export interface ChannelCommanderBindingState {
-  defaultCommanderId?: string
-  effectiveCommanderId: string
-  source: 'binding-state' | 'binding-owner' | 'legacy-provider-config'
 }
 
 export interface ChannelProviderDescriptor {
@@ -74,8 +70,7 @@ export interface ChannelProviderDescriptor {
   credentialFields: string[]
   policyFields: string[]
   pairing: ChannelProviderPairingDescriptor
-  commanderBinding: ChannelCommanderBindingDescriptor
-  bindingState?: ChannelCommanderBindingState
+  setupGuide?: ChannelSetupGuide
 }
 
 export type ChannelPolicyMode = 'open' | 'allowlist' | 'disabled'
@@ -209,6 +204,13 @@ export type ChannelInboundDecision =
   | { allowed: true; reason?: string }
   | { allowed: false; reason?: string }
 
+export interface ChannelLastDrop {
+  reason: string
+  at: string
+  chatType?: string
+  sourceHash?: string
+}
+
 export interface ChannelAdapterStatus {
   provider: ChannelProvider
   accountId: string
@@ -218,6 +220,7 @@ export interface ChannelAdapterStatus {
   lastQrAt?: string
   lastError?: string
   lastEventAt?: string
+  lastDrop?: ChannelLastDrop
   qrCode?: string
   qrDataUrl?: string
   metadata?: Record<string, unknown>
@@ -261,7 +264,7 @@ export interface ChannelBindingPolicyConfig {
 export interface CommanderChannelBindingConfig extends ChannelBindingPolicyConfig {
   readonly provider?: ChannelProvider
   // Future provider-specific fields must be adapter-only optional members.
-  // Core routing code must not read them to choose provider-specific paths.
+  // Core routing code may use only the binding owner for generic commander selection.
 }
 
 export interface CommanderChannelBinding {

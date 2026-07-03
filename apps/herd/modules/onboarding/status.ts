@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import type { AuthUser } from '@gehirn/auth-providers'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../claude-effort.js'
 import { createMachineRegistryStore } from '../agents/machines.js'
+import { resolveDefaultProviderId } from '../agents/providers/registry.js'
 import type { ProviderAdapter } from '../agents/providers/provider-adapter.js'
 import type { AutomationScheduler } from '../automations/scheduler.js'
 import type { AutomationStore } from '../automations/store.js'
@@ -34,6 +35,7 @@ import {
   STARTER_COMMANDER_PACKAGE_IDS,
   loadCommanderPackage,
 } from '../commanders/packages/registry.js'
+import { buildCommandRoomLaunchTarget } from '../command-room/route-metadata.js'
 import type { CommanderPackageDefinition } from '../commanders/packages/types.js'
 import {
   getCommanderPackageInstallState,
@@ -251,20 +253,34 @@ async function getConversationId(
   return selected?.id ?? null
 }
 
-async function buildGaiaStatus(
-  options: Pick<BuildOnboardingStatusOptions, 'sessionStore' | 'conversationStore' | 'commanderDataDir' | 'providers'>,
-  providers: readonly ProviderOnboardingReadiness[],
-): Promise<GaiaOnboardingStatus> {
+async function findGaiaCommander(
+  options: Pick<BuildOnboardingStatusOptions, 'sessionStore' | 'commanderDataDir'>,
+): Promise<CommanderSession | null> {
   const [sessions, displayNames] = await Promise.all([
     options.sessionStore.list(),
     readCommanderDisplayNames(options.commanderDataDir),
   ])
-  const gaia = sessions
+  return sessions
     .filter((session) => session.archived !== true)
     .find((session) => (
       session.host === GAIA_HOST ||
       displayNames[session.id]?.trim().toLowerCase() === GAIA_DISPLAY_NAME.toLowerCase()
-    ))
+    )) ?? null
+}
+
+export async function gaiaCommanderExists(
+  options: Pick<BuildOnboardingStatusOptions, 'sessionStore' | 'commanderDataDir'>,
+): Promise<boolean> {
+  return Boolean(await findGaiaCommander(options))
+}
+
+async function buildGaiaStatus(
+  options: Pick<BuildOnboardingStatusOptions, 'sessionStore' | 'conversationStore' | 'commanderDataDir' | 'providers'>,
+  providersInput: readonly ProviderOnboardingReadiness[] | Promise<readonly ProviderOnboardingReadiness[]>,
+): Promise<GaiaOnboardingStatus> {
+  const gaiaPromise = findGaiaCommander(options)
+  const providers = await providersInput
+  const gaia = await gaiaPromise
   const defaultProviderId = gaia?.agentType
     ?? providers.find((provider) => provider.state === 'ready')?.id
     ?? options.providers[0]?.id
@@ -287,7 +303,7 @@ async function buildGaiaStatus(
   }
 }
 
-async function buildStarterWorkforceStatus(
+export async function buildStarterWorkforceStatus(
   options: Pick<BuildOnboardingStatusOptions, 'sessionStore' | 'commanderDataDir'>,
 ): Promise<StarterWorkforceOnboardingStatus> {
   const [packages, onboardingState] = await Promise.all([
@@ -350,14 +366,16 @@ async function probeProvider(
   }
 
   const cliBinaryName = machineAuth.cliBinaryName
-  const installed = (await shellRunner('sh', ['-lc', `command -v ${quoteShell(cliBinaryName)}`])).ok
   const envSourceKey = machineAuth.authEnvKeys.find((key) => (
     Boolean(env[key]?.trim()) || Boolean(fileEnv[key]?.trim())
   )) ?? null
-  let loginConfigured = false
-  if (machineAuth.loginStatusCommand) {
-    loginConfigured = (await shellRunner('sh', ['-lc', machineAuth.loginStatusCommand])).ok
-  }
+  const installedPromise = shellRunner('sh', ['-lc', `command -v ${quoteShell(cliBinaryName)}`])
+  const loginPromise = !envSourceKey && machineAuth.loginStatusCommand
+    ? shellRunner('sh', ['-lc', machineAuth.loginStatusCommand])
+    : Promise.resolve({ ok: false, stdout: '' })
+  const [installedResult, loginResult] = await Promise.all([installedPromise, loginPromise])
+  const installed = installedResult.ok
+  const loginConfigured = loginResult.ok
 
   const authConfigured = Boolean(envSourceKey || loginConfigured)
   const state: OnboardingReadinessState = !installed
@@ -520,13 +538,18 @@ function buildReceiptUrl(publicBaseUrl: string | undefined): string {
 export async function buildOnboardingStatus(
   options: BuildOnboardingStatusOptions,
 ): Promise<OnboardingStatus> {
-  const providers = await buildProviderReadiness(options)
-  const [founderSetup, machines] = await Promise.all([
-    buildFounderStatus(options),
-    buildMachineReadiness(options.env ?? process.env),
+  const providersPromise = buildProviderReadiness(options)
+  const founderSetupPromise = buildFounderStatus(options)
+  const machinesPromise = buildMachineReadiness(options.env ?? process.env)
+  const gaiaPromise = buildGaiaStatus(options, providersPromise)
+  const starterWorkforcePromise = buildStarterWorkforceStatus(options)
+  const [providers, founderSetup, machines, gaia, starterWorkforce] = await Promise.all([
+    providersPromise,
+    founderSetupPromise,
+    machinesPromise,
+    gaiaPromise,
+    starterWorkforcePromise,
   ])
-  const gaia = await buildGaiaStatus(options, providers)
-  const starterWorkforce = await buildStarterWorkforceStatus(options)
   const { currentStepId, steps } = buildSteps({
     founderSetup,
     gaia,
@@ -551,7 +574,10 @@ export async function buildOnboardingStatus(
       publicBaseUrl: options.publicBaseUrl,
     }),
     launchTarget: gaia.commanderId && gaia.conversationId
-      ? `/command-room?commander=${encodeURIComponent(gaia.commanderId)}&conversation=${encodeURIComponent(gaia.conversationId)}`
+      ? buildCommandRoomLaunchTarget({
+          commanderId: gaia.commanderId,
+          conversationId: gaia.conversationId,
+        }).path
       : FOUNDER_SETUP_COMPLETED_PATH,
   }
 }
@@ -587,11 +613,12 @@ export async function skipStarterWorkforce(
 }
 
 export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaOnboardingStatus> {
-  const providers = await buildProviderReadiness(options)
-  const existing = await buildGaiaStatus(options, providers)
+  const providersPromise = buildProviderReadiness(options)
+  const existing = await buildGaiaStatus(options, providersPromise)
   if (existing.exists) {
     return existing
   }
+  const providers = await providersPromise
 
   const runtimeConfig = createDefaultCommanderRuntimeConfig()
   const createdAt = new Date().toISOString()
@@ -600,7 +627,7 @@ export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaO
     host: GAIA_HOST,
     state: 'idle',
     created: createdAt,
-    agentType: (providers.find((provider) => provider.state === 'ready')?.id ?? 'claude') as CommanderSession['agentType'],
+    agentType: (providers.find((provider) => provider.state === 'ready')?.id ?? resolveDefaultProviderId()) as CommanderSession['agentType'],
     effort: DEFAULT_CLAUDE_EFFORT_LEVEL,
     heartbeat: createDefaultHeartbeatConfig(),
     maxTurns: runtimeConfig.defaults.maxTurns,
@@ -614,7 +641,7 @@ export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaO
   const sideEffects: Array<Promise<unknown>> = [
     mergeIdentityOperatingStyleIntoCommanderWorkflow(created.id, GAIA_IDENTITY, { basePath: options.commanderDataDir }),
     setCommanderDisplayName(options.commanderDataDir, created.id, GAIA_DISPLAY_NAME),
-    writeCommanderUiProfile(created.id, options.commanderDataDir, ensureCommanderVisualProfile(created.id, {
+    writeCommanderUiProfile(created.id, options.commanderDataDir, ensureCommanderVisualProfile({
       avatar: GAIA_COMMANDER_AVATAR_URL,
       speakingTone: GAIA_SPEAKING_TONE,
     })),

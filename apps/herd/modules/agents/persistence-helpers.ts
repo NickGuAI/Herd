@@ -84,6 +84,7 @@ export interface PersistenceHelpersContext {
   exitedStreamSessions: Map<string, ExitedStreamSessionState>
   applyStreamUsageEvent: ApplyStreamUsageEvent
   restoreProviderSession: ProviderSessionRestorer
+  restoreCredentialPoolRecovery?(session: StreamSession): void
   teardownProviderSession: ProviderSessionTeardown
   isExitedSessionResumeAvailable(
     entry: ReturnType<typeof buildPersistedEntryFromExitedSession>,
@@ -142,6 +143,7 @@ export function createPersistenceHelpers(
     exitedStreamSessions,
     applyStreamUsageEvent,
     restoreProviderSession,
+    restoreCredentialPoolRecovery,
     teardownProviderSession,
     isExitedSessionResumeAvailable,
     isLiveSessionResumeAvailable,
@@ -205,6 +207,7 @@ export function createPersistenceHelpers(
       machineRegistry,
       applyUsageEvent: applyStreamUsageEvent,
       restoreProviderSession,
+      restoreCredentialPoolRecovery,
     })
   }
 
@@ -310,6 +313,13 @@ export function createPersistenceHelpers(
     return session.sessionType === 'worker' && session.creator.kind === 'commander'
   }
 
+  function isCommanderConversationSession(session: Pick<StreamSession, 'creator' | 'sessionType' | 'conversationId'>): boolean {
+    return session.sessionType === 'commander'
+      && session.creator.kind === 'commander'
+      && typeof session.conversationId === 'string'
+      && session.conversationId.trim().length > 0
+  }
+
   async function getStaleNonHumanSessionCandidates(
     config: SessionPrunerConfig,
     nowMs: number = Date.now(),
@@ -324,6 +334,7 @@ export function createPersistenceHelpers(
       if (session.kind !== 'stream') continue
       if (session.creator.kind === 'human') continue
       if (session.clients.size > 0) continue
+      if (isCommanderConversationSession(session)) continue
 
       const lifecycle = getWorldAgentStatus(session, nowMs)
       if (lifecycle === 'stale') {

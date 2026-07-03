@@ -26,39 +26,6 @@ import {
   createGeminiSessionAdapter,
 } from './session.js'
 
-function asObject(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0
-    ? value.trim()
-    : undefined
-}
-
-function migrateLegacyGeminiProviderContext(rawProviderContext: unknown) {
-  const raw = asObject(rawProviderContext)
-  if (!raw) {
-    return null
-  }
-
-  const nested = asObject(raw.providerContext)
-  const agentType = readOptionalString(raw.agentType)
-  const sessionId = readOptionalString(raw.geminiSessionId)
-    ?? readOptionalString(nested?.sessionId)
-
-  if (agentType && agentType !== 'gemini') {
-    return null
-  }
-  if (!sessionId) {
-    return null
-  }
-
-  return createGeminiProviderContext({ sessionId })
-}
-
 function snapshotGeminiSession(session: StreamSession): PersistedStreamSession | null {
   const context = asGeminiProviderContext(session.providerContext)
   if (!context?.sessionId) {
@@ -82,6 +49,8 @@ function snapshotGeminiSession(session: StreamSession): PersistedStreamSession |
     providerContext: createGeminiProviderContext({
       sessionId: context.sessionId,
     }),
+    credentialPoolId: session.credentialPoolId,
+    credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     spawnedBy: session.spawnedBy,
     spawnedWorkers: [...session.spawnedWorkers],
@@ -118,6 +87,8 @@ function snapshotExitedGeminiSession(session: StreamSession): ExitedStreamSessio
     providerContext: createGeminiProviderContext({
       sessionId: context.sessionId,
     }),
+    credentialPoolId: session.credentialPoolId,
+    credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     resumedFrom: session.resumedFrom,
     conversationEntryCount: session.conversationEntryCount,
@@ -192,7 +163,7 @@ export const geminiProvider: ProviderAdapter = registerProvider({
       deps,
     )
   },
-  restore(entry, machine, deps) {
+  restore(entry, machine, deps, providerAuth) {
     const context = asGeminiProviderContext(entry.providerContext)
     return this.create({
       sessionName: entry.name,
@@ -212,6 +183,7 @@ export const geminiProvider: ProviderAdapter = registerProvider({
       creator: entry.creator,
       conversationId: entry.conversationId,
       currentSkillInvocation: entry.currentSkillInvocation,
+      providerAuth,
     }, deps)
   },
   snapshotForPersist(session) {
@@ -274,8 +246,5 @@ export const geminiProvider: ProviderAdapter = registerProvider({
         await this.teardown(session, reason ?? 'Herd shutdown')
       }),
     )
-  },
-  migrateLegacyContext(rawProviderContext) {
-    return migrateLegacyGeminiProviderContext(rawProviderContext)
   },
 })

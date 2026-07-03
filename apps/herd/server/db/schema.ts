@@ -1,6 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
 
-const AGENT_RUNTIME_SESSIONS_V1_SCHEMA_VERSION = '001_agent_runtime_sessions'
 export const HERD_SQLITE_SCHEMA_VERSION = '002_agent_runtime_session_payload'
 
 const AGENT_RUNTIME_SESSION_REQUIRED_COLUMNS = new Set([
@@ -62,16 +61,6 @@ function readAgentRuntimeSessionColumns(db: DatabaseSync): Set<string> {
   )
 }
 
-function ensureAgentRuntimeSessionPayloadColumns(db: DatabaseSync): void {
-  const columns = readAgentRuntimeSessionColumns(db)
-  if (columns.size === 0) {
-    return
-  }
-  if (!columns.has('runtime_state_json')) {
-    db.exec("ALTER TABLE agent_runtime_sessions ADD COLUMN runtime_state_json TEXT NOT NULL DEFAULT '{}'")
-  }
-}
-
 export function hasCurrentHerdSqliteSchemaColumns(db: DatabaseSync): boolean {
   const columns = readAgentRuntimeSessionColumns(db)
   if (columns.size === 0) {
@@ -91,7 +80,6 @@ export function applyHerdSqliteSchema(
   options: { markApplied?: boolean } = {},
 ): void {
   db.exec(SCHEMA_SQL)
-  ensureAgentRuntimeSessionPayloadColumns(db)
   if (options.markApplied === false) {
     return
   }
@@ -119,10 +107,4 @@ export function readAppliedHerdSchemaVersions(db: DatabaseSync): string[] {
 export function isHerdSqliteSchemaCurrent(db: DatabaseSync): boolean {
   return readAppliedHerdSchemaVersions(db).includes(HERD_SQLITE_SCHEMA_VERSION)
     && hasCurrentHerdSqliteSchemaColumns(db)
-}
-
-export function canUpgradeHerdSqliteSchemaInPlace(db: DatabaseSync): boolean {
-  const versions = readAppliedHerdSchemaVersions(db)
-  return versions.includes(AGENT_RUNTIME_SESSIONS_V1_SCHEMA_VERSION)
-    || versions.includes(HERD_SQLITE_SCHEMA_VERSION)
 }

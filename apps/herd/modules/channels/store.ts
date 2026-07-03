@@ -297,9 +297,7 @@ export class CommanderChannelBindingStore {
       return []
     }
 
-    const candidates = Array.isArray(parsed)
-      ? parsed
-      : (isObject(parsed) && Array.isArray(parsed.bindings) ? parsed.bindings : [])
+    const candidates = isObject(parsed) && Array.isArray(parsed.bindings) ? parsed.bindings : []
     return candidates
       .map((candidate) => parsePersistedBinding(candidate))
       .filter((binding): binding is CommanderChannelBinding => binding !== null)

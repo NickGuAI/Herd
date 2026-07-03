@@ -35,14 +35,20 @@ import { createHttpConversationDispatcher } from '@/hooks/send-dispatcher'
 import { useTheme } from '@/lib/theme-context'
 import { fetchJson } from '@/lib/api'
 import {
+  buildTouchedReasoningPayload,
+  findProviderEntry,
+  getProviderControlDefaults,
+  resolveDefaultProviderId,
+  useProviderRegistry,
+  type ProviderReasoningTouched,
+} from '@/hooks/use-providers'
+import {
   findModuleGraphUiRouteMetadata,
   resolveModuleGraphWebSocketPath,
 } from '@/module-graph-bindings'
 import { useModuleGraphContext } from '@/module-graph-context'
-import {
-  workerLifecycle,
-} from '@gehirn/herd-cli/session-contract'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
+import { workerLifecycleWithRuntimeState } from '@modules/agents/session-lifecycle'
 import type {
   AgentSession,
   AgentType,
@@ -52,23 +58,15 @@ import type {
 } from '@/types'
 import { AddWorkerWizard } from '@modules/agents/components/AddWorkerWizard'
 import { NewSessionForm } from '@modules/agents/components/NewSessionForm'
-import {
-  DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
-  type ClaudeAdaptiveThinkingMode,
-} from '@modules/claude-adaptive-thinking.js'
-import {
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
-  type ClaudeEffortLevel,
-} from '@modules/claude-effort.js'
-import {
-  DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
-  type ClaudeMaxThinkingTokens,
-} from '@modules/claude-max-thinking-tokens.js'
+import type { ClaudeAdaptiveThinkingMode } from '@modules/claude-adaptive-thinking.js'
+import type { ClaudeEffortLevel } from '@modules/claude-effort.js'
+import type { ClaudeMaxThinkingTokens } from '@modules/claude-max-thinking-tokens.js'
 import {
   formatError,
   isNotFoundRequestFailure,
   shouldAttemptDebriefOnKill,
 } from '@modules/agents/page-shell/session-helpers'
+import { Toast } from '@modules/components/Toast'
 import { runQueueMutationRequest } from '@modules/agents/queue-mutation'
 import {
   clearSessionQueue,
@@ -112,7 +110,7 @@ import { SessionsColumn } from './desktop/SessionsColumn'
 import type { ChatSession } from './desktop/SessionsColumn'
 import type { Commander, Worker, Approval } from './desktop/SessionRow'
 import { CenterColumn } from './desktop/CenterColumn'
-import type { HerdCommander } from './desktop/CenterColumn'
+import type { HervaldCommander } from './desktop/CenterColumn'
 import { AutomationPanel } from '@modules/commanders/components/AutomationPanel'
 import { CommanderIdentityTab } from '@modules/commanders/components/CommanderIdentityTab'
 import { QuestBoard } from '@modules/commanders/components/QuestBoard'
@@ -171,7 +169,7 @@ const RIGHT_PANEL_TABS = [
   { id: 'identity', label: 'Identity' },
 ] as const
 const SUMI_BUTTON_RADIUS = '2px 12px 2px 12px'
-const WORKSPACE_OPEN_STORAGE_KEY = 'herd.command-room.workspace-open'
+const WORKSPACE_OPEN_STORAGE_KEY = 'hervald.command-room.workspace-open'
 type WorkspacePanelDefault = 'open' | 'closed' | 'last-used'
 type WorkspaceTargetOrigin = 'auto' | 'manual'
 type WorkspaceTargetState = {
@@ -201,7 +199,7 @@ const GLOBAL_COMMANDER_ROW: Commander = {
 }
 
 function resolvePanelTab(panel: string | null): string {
-  if (panel === 'cron' || panel === 'sentinels' || panel === 'automation') {
+  if (panel === 'cron' || panel === 'automation') {
     return 'automation'
   }
 
@@ -341,7 +339,7 @@ function formatSessionAge(lastActivityAt: unknown): string | undefined {
   return `${Math.floor(elapsedHours / 24)}d`
 }
 
-interface HerdCommanderSession extends CommanderSession {
+interface HervaldCommanderSession extends CommanderSession {
   name: string
   status: string
   description?: string
@@ -353,7 +351,7 @@ interface HerdCommanderSession extends CommanderSession {
   }
 }
 
-interface HerdAgentSession extends AgentSession {
+interface HervaldAgentSession extends AgentSession {
   id?: string
   lastActivityAt?: string
   parentCommanderId?: string | null
@@ -437,7 +435,7 @@ function resolveSessionParentCommanderId(session: {
 }
 
 function mapAgentSessionToChatSession(
-  session: HerdAgentSession,
+  session: HervaldAgentSession,
   automationsById?: ReadonlyMap<string, CommandRoomAutomationRecord>,
 ): ChatSession {
   const spawnedBy = typeof session.spawnedBy === 'string'
@@ -462,6 +460,7 @@ function mapAgentSessionToChatSession(
     created: typeof session.created === 'string' ? session.created : new Date(0).toISOString(),
     pid: typeof session.pid === 'number' ? session.pid : 0,
     age: formatSessionAge(session.lastActivityAt),
+    state: session.state,
     status: typeof session.status === 'string' ? session.status : undefined,
     agentType: typeof session.agentType === 'string' ? session.agentType : undefined,
     sessionType: typeof session.sessionType === 'string' ? session.sessionType : undefined,
@@ -516,13 +515,17 @@ function mapConversationLiveSession(conversation: ConversationRecord | null): Ch
   }
 
   return mapAgentSessionToChatSession({
-    ...(conversation.liveSession as HerdAgentSession),
+    ...(conversation.liveSession as HervaldAgentSession),
     name: conversation.sendTarget.sessionName,
     id: conversation.sendTarget.sessionName,
   })
 }
 
 export function CommandRoom() {
+  return <CommandRoomContent />
+}
+
+function CommandRoomContent() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const isMobile = useIsMobile()
@@ -539,6 +542,8 @@ export function CommandRoom() {
   const { data: rawAgentSessions = [], refetch: refetchAgentSessions } = useAgentSessions()
   const { data: pendingApprovals = [] } = usePendingApprovals()
   const { data: machines } = useMachines()
+  const { data: providers = [], defaultProviderId } = useProviderRegistry()
+  const initialProviderControls = getProviderControlDefaults(null)
   const { launch: commandRoomLaunch, globalCommander: globalCommanderRoute } = commandRoomRouteMetadata
   const panelParam = searchParams.get(globalCommanderRoute.panelParam)
   const commanderParam = searchParams.get(commandRoomLaunch.commanderParam)
@@ -589,27 +594,60 @@ export function CommandRoom() {
   const [sessionName, setSessionName] = useState('')
   const [sessionCwd, setSessionCwd] = useState('')
   const [sessionTask, setSessionTask] = useState('')
-  const [sessionEffort, setSessionEffort] = useState<ClaudeEffortLevel>(DEFAULT_CLAUDE_EFFORT_LEVEL)
+  const [sessionEffort, setSessionEffort] = useState<ClaudeEffortLevel>(initialProviderControls.effort)
   const [sessionAdaptiveThinking, setSessionAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
-    DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
+    initialProviderControls.adaptiveThinking,
   )
   const [sessionMaxThinkingTokens, setSessionMaxThinkingTokens] = useState<ClaudeMaxThinkingTokens>(
-    DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
+    initialProviderControls.maxThinkingTokens,
   )
-  const [sessionAgentType, setSessionAgentType] = useState<AgentType>('claude')
+  const [sessionReasoningTouched, setSessionReasoningTouched] = useState<ProviderReasoningTouched>({})
+  const [sessionAgentType, setSessionAgentType] = useState<AgentType>('')
   const [sessionTransportType, setSessionTransportType] =
-    useState<Exclude<SessionTransportType, 'external'>>('stream')
+    useState<Exclude<SessionTransportType, 'external'>>(initialProviderControls.transportType)
   const [sessionSelectedMachineId, setSessionSelectedMachineId] = useState('')
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [createSessionError, setCreateSessionError] = useState<string | null>(null)
 
   /* ---- Derived ---- */
   const machineList = machines ?? []
+  const defaultSessionAgentType = resolveDefaultProviderId(
+    providers,
+    defaultProviderId,
+    { predicate: (provider) => provider.capabilities?.supportsWorkerDispatch === true },
+  )
+  const sessionProvider = findProviderEntry(
+    providers.filter((provider) => provider.capabilities?.supportsWorkerDispatch === true),
+    sessionAgentType,
+  )
   const selectedCommanderId = commanderState.selectedCommanderId ?? ''
-  const selectedCommander = commanderState.selectedCommander as HerdCommanderSession | null
+  const selectedCommander = commanderState.selectedCommander as HervaldCommanderSession | null
   const setCommanderSelection = commanderState.setSelectedCommanderId
   const isGlobalScope = !selectedChatSessionId && isGlobalCommanderId(selectedCommanderId)
-  const agentSessions = rawAgentSessions as HerdAgentSession[]
+  const agentSessions = rawAgentSessions as HervaldAgentSession[]
+  useEffect(() => {
+    if (!defaultSessionAgentType) {
+      return
+    }
+    if (!providers.some((provider) => (
+      provider.id === sessionAgentType && provider.capabilities?.supportsWorkerDispatch === true
+    ))) {
+      setSessionAgentType(defaultSessionAgentType)
+    }
+  }, [defaultSessionAgentType, providers, sessionAgentType])
+
+  useEffect(() => {
+    if (!sessionProvider) {
+      return
+    }
+    const defaults = getProviderControlDefaults(sessionProvider)
+    setSessionTransportType(defaults.transportType)
+    setSessionEffort(defaults.effort)
+    setSessionAdaptiveThinking(defaults.adaptiveThinking)
+    setSessionMaxThinkingTokens(defaults.maxThinkingTokens)
+    setSessionReasoningTouched({})
+  }, [sessionProvider])
+
   useEffect(() => {
     selectedCommanderIdRef.current = selectedCommanderId
   }, [selectedCommanderId])
@@ -717,7 +755,8 @@ export function CommandRoom() {
       const processAlive = typeof session.processAlive === 'boolean'
         ? session.processAlive
         : undefined
-      const lifecycle = workerLifecycle({
+      const lifecycle = workerLifecycleWithRuntimeState({
+        state: session.state,
         status: typeof session.status === 'string' ? session.status : undefined,
         processAlive,
       })
@@ -770,7 +809,9 @@ export function CommandRoom() {
 
     return [{
       id: approval.id,
-      commanderId: approval.commanderId ?? approval.sessionName ?? '',
+      commanderId: approval.commanderId ?? '',
+      conversationId: approval.conversationId,
+      sessionName: approval.sessionName,
       workerId: rawWorkerId ?? contextWorkerId ?? approval.sessionName ?? '',
       action: approval.actionLabel,
     }]
@@ -824,8 +865,8 @@ export function CommandRoom() {
     ) ?? undefined
   }, [activeStandaloneSession, moduleGraph, selectedConversation, selectedConversationWebSocketReady])
   const composerSessionName = selectedConversation
-    ? (selectedConversation.sendTarget?.sessionName ?? activeStandaloneSession?.id ?? streamSessionName ?? 'herd-command-room')
-    : (activeStandaloneSession?.id ?? streamSessionName ?? 'herd-command-room')
+    ? (selectedConversation.sendTarget?.sessionName ?? activeStandaloneSession?.id ?? streamSessionName ?? 'hervald-command-room')
+    : (activeStandaloneSession?.id ?? streamSessionName ?? 'hervald-command-room')
   const workspaceSource = resolveWorkspaceSource({
     targetId: workspaceTarget?.targetId,
     label: workspaceTarget?.label,
@@ -884,9 +925,9 @@ export function CommandRoom() {
     selectedConversation?.id ?? null,
     Boolean(selectedConversation),
   )
-  // Per issue 1362 contract: an idle selected conversation (no live session) must
-  // NOT enable normal send/queue. The backend read model owns that policy now,
-  // so Command Room only consumes the projected action flags.
+  // The backend read model owns send/queue/media policy. Idle conversations may
+  // allow normal text send because POST /message can auto-start them; queue and
+  // media still require a live stream.
   const conversationCanSend = conversationActionAllowed(selectedConversation, 'send')
   const conversationCanSendMedia = conversationActionAllowed(selectedConversation, 'media')
   const composerEnabled = isGlobalScope
@@ -901,6 +942,13 @@ export function CommandRoom() {
     : activeStandaloneSession
       ? streamStatus === 'connected'
       : false
+  const conversationComposerDisabledMessage = selectedConversation && !conversationCanSend && !conversationCanSendMedia
+    ? conversationDisabledReason(
+      selectedConversation,
+      'send',
+      'Start or resume the conversation before sending messages.',
+    )
+    : undefined
   const liveTranscript = mapSessionMessagesToTranscript(sessionMessages)
   const historicalConversationMessages = useMemo(() => {
     const pages = conversationMessagesQuery.data?.pages ?? []
@@ -1633,7 +1681,7 @@ export function CommandRoom() {
   ])
 
   // Deep-link hydration: when the URL arrives with a commander param but no
-  // conversation param (e.g. /command-room?commander=arnold), do exactly one
+  // conversation param on a commander launch route, do exactly one
   // backend lookup per commander id transition and then write ?conversation=
   // atomically. This is the ONLY autonomous selection write — clicks go
   // through handleSelectCommanderId. Guarded by a ref so dep churn (poll
@@ -1829,7 +1877,7 @@ export function CommandRoom() {
   }, [canQueueDraft, fetchQueueSnapshot, selectedConversationRunning, streamSessionName])
 
   /* ---- Build CenterColumn commander shape ---- */
-  const centerCommander: HerdCommander = activeStandaloneSession
+  const centerCommander: HervaldCommander = activeStandaloneSession
     ? {
         id: '',
         name: activeStandaloneSession.label ?? activeStandaloneSession.name,
@@ -1870,9 +1918,6 @@ export function CommandRoom() {
   )
   const commanderAutomationSessions = automationSessions.filter(
     (session) => session.parentCommanderId === selectedCommanderId.trim(),
-  )
-  const commanderApprovals = approvals.filter(
-    (a) => a.commanderId === selectedCommanderId,
   )
   const submitConversationMessage = useCallback(async ({
     message,
@@ -2415,13 +2460,18 @@ export function CommandRoom() {
     setCreateSessionError(null)
 
     try {
+      if (!sessionProvider) {
+        throw new Error('Select an available provider before creating a session.')
+      }
       const created = await createSession({
         name: sessionName.trim(),
         cwd: sessionCwd.trim(),
         task: sessionTask.trim(),
-        effort: sessionEffort,
-        adaptiveThinking: sessionAdaptiveThinking,
-        maxThinkingTokens: sessionMaxThinkingTokens,
+        ...buildTouchedReasoningPayload(sessionProvider, {
+          effort: sessionEffort,
+          adaptiveThinking: sessionAdaptiveThinking,
+          maxThinkingTokens: sessionMaxThinkingTokens,
+        }, sessionReasoningTouched),
         agentType: sessionAgentType,
         transportType: sessionTransportType,
         machineId: sessionSelectedMachineId.trim() || undefined,
@@ -2431,11 +2481,15 @@ export function CommandRoom() {
       setSessionName('')
       setSessionCwd('')
       setSessionTask('')
-      setSessionEffort(DEFAULT_CLAUDE_EFFORT_LEVEL)
-      setSessionAdaptiveThinking(DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE)
-      setSessionMaxThinkingTokens(DEFAULT_CLAUDE_MAX_THINKING_TOKENS)
-      setSessionAgentType('claude')
-      setSessionTransportType('stream')
+      const defaults = getProviderControlDefaults(sessionProvider)
+      setSessionEffort(defaults.effort)
+      setSessionAdaptiveThinking(defaults.adaptiveThinking)
+      setSessionMaxThinkingTokens(defaults.maxThinkingTokens)
+      setSessionReasoningTouched({})
+      if (defaultSessionAgentType) {
+        setSessionAgentType(defaultSessionAgentType)
+      }
+      setSessionTransportType(defaults.transportType)
       setSessionSelectedMachineId('')
       setShowCreateSessionForm(false)
     } catch (error) {
@@ -2452,9 +2506,12 @@ export function CommandRoom() {
     sessionEffort,
     sessionMaxThinkingTokens,
     sessionName,
+    sessionProvider,
+    sessionReasoningTouched,
     sessionSelectedMachineId,
     sessionTask,
     sessionTransportType,
+    defaultSessionAgentType,
   ])
 
   const handleCreateCommander = useCallback(async (
@@ -2688,7 +2745,6 @@ export function CommandRoom() {
           automationSessions={automationSessions}
           onKillSession={handleKillSession}
           onResumeSession={handleResumeSession}
-          sessionActionError={sessionActionError ?? conversationErrorMessage}
         />
 
         <CenterColumn
@@ -2699,6 +2755,8 @@ export function CommandRoom() {
           conversationLoadError={conversationErrorMessage}
           onRetryConversations={handleRetryConversationLoad}
           activeChatSession={activeChatSession}
+          activeConversationId={selectedConversation?.id ?? null}
+          pendingApprovals={pendingApprovals}
           transcript={chatTranscript}
           hasOlderMessages={hasOlderConversationMessages}
           loadingOlderMessages={loadingOlderConversationMessages}
@@ -2742,6 +2800,7 @@ export function CommandRoom() {
           }}
           composerSessionName={composerSessionName}
           composerEnabled={composerEnabled}
+          composerDisabledMessage={conversationComposerDisabledMessage}
           composerSendReady={composerSendReady}
           canQueueDraft={canQueueDraft}
           contextFilePaths={contextFilePaths}
@@ -2842,11 +2901,20 @@ export function CommandRoom() {
           task={sessionTask}
           setTask={setSessionTask}
           effort={sessionEffort}
-          setEffort={setSessionEffort}
+          setEffort={(value) => {
+            setSessionEffort(value)
+            setSessionReasoningTouched((current) => ({ ...current, effort: true }))
+          }}
           adaptiveThinking={sessionAdaptiveThinking}
-          setAdaptiveThinking={setSessionAdaptiveThinking}
+          setAdaptiveThinking={(value) => {
+            setSessionAdaptiveThinking(value)
+            setSessionReasoningTouched((current) => ({ ...current, adaptiveThinking: true }))
+          }}
           maxThinkingTokens={sessionMaxThinkingTokens}
-          setMaxThinkingTokens={setSessionMaxThinkingTokens}
+          setMaxThinkingTokens={(value) => {
+            setSessionMaxThinkingTokens(value)
+            setSessionReasoningTouched((current) => ({ ...current, maxThinkingTokens: true }))
+          }}
           agentType={sessionAgentType}
           setAgentType={setSessionAgentType}
           transportType={sessionTransportType}
@@ -2887,6 +2955,7 @@ export function CommandRoom() {
           }}
         />
       </ModalFormContainer>
+      <Toast open={Boolean(sessionActionError)} message={sessionActionError ?? ''} tone="error" />
     </div>
   )
 }

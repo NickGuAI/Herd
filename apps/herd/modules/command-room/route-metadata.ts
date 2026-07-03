@@ -25,6 +25,7 @@ export interface CommandRoomLaunchTarget {
   path: string
   commanderId: string
   conversationId: string | null
+  panel: string | null
 }
 
 export const COMMAND_ROOM_ROUTE_METADATA = {
@@ -131,16 +132,21 @@ export function buildCommandRoomLaunchTarget(
   input: {
     commanderId: string
     conversationId?: string | null
+    panel?: string | null
   },
   metadata: CommandRoomRouteMetadata = COMMAND_ROOM_ROUTE_METADATA,
 ): CommandRoomLaunchTarget {
   const commanderId = input.commanderId.trim()
   const conversationId = input.conversationId?.trim() || null
+  const panel = input.panel?.trim() || null
   const params = new URLSearchParams({
     [metadata.launch.commanderParam]: commanderId,
   })
   if (conversationId) {
     params.set(metadata.launch.conversationParam, conversationId)
+  }
+  if (panel) {
+    params.set(metadata.globalCommander.panelParam, panel)
   }
 
   return {
@@ -148,6 +154,7 @@ export function buildCommandRoomLaunchTarget(
     path: `${metadata.launch.path}?${params.toString()}`,
     commanderId,
     conversationId,
+    panel,
   }
 }
 
@@ -160,13 +167,4 @@ export function normalizeCommandRoomGlobalSearchParams(
   nextParams.set(metadata.globalCommander.panelParam, metadata.globalCommander.defaultPanel)
   nextParams.delete(metadata.launch.conversationParam)
   return nextParams
-}
-
-export function buildCommandRoomGlobalPath(
-  source: URLSearchParams = new URLSearchParams(),
-  metadata: CommandRoomRouteMetadata = COMMAND_ROOM_ROUTE_METADATA,
-): string {
-  const params = normalizeCommandRoomGlobalSearchParams(source, metadata)
-  const search = params.toString()
-  return search ? `${metadata.launch.path}?${search}` : metadata.launch.path
 }

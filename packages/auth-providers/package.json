@@ -32,9 +32,12 @@
       "optional": true
     }
   },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  },
   "scripts": {
-    "build": "npx --yes -p typescript tsc -p tsconfig.json",
-    "typecheck": "npx --yes -p typescript tsc -p tsconfig.json --noEmit",
-    "test": "echo \"Release source does not include tests\""
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
   }
 }

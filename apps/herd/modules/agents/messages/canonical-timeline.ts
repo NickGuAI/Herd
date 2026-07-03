@@ -9,6 +9,7 @@ interface CanonicalEventRecord {
   timeMs: number | null
   sourceRank: number
   index: number
+  timelineIndex: number
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -60,20 +61,9 @@ function readEventTimeMs(event: StreamJsonEvent): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function readLegacyUserClientSendId(event: StreamJsonEvent): string | undefined {
-  const record = asRecord(event)
-  if (record?.type !== 'user') {
-    return undefined
-  }
-  return readTrimmedString(record.clientSendId)
-}
-
 function durableEventKey(event: StreamJsonEvent): string | null {
   if (!isTranscriptEnvelope(event)) {
-    const clientSendId = readLegacyUserClientSendId(event)
-    return clientSendId
-      ? `user:${clientSendId}`
-      : null
+    return null
   }
 
   const clientSendId = readTrimmedString(event.clientSendId)
@@ -118,6 +108,7 @@ function buildRecord(
   event: StreamJsonEvent,
   sourceRank: number,
   index: number,
+  timelineIndex: number,
 ): CanonicalEventRecord {
   const durable = durableEventKey(event)
   return {
@@ -128,12 +119,35 @@ function buildRecord(
     timeMs: readEventTimeMs(event),
     sourceRank,
     index,
+    timelineIndex,
   }
 }
 
 function compareCanonicalEventRecords(left: CanonicalEventRecord, right: CanonicalEventRecord): number {
   if (left.timeMs !== null && right.timeMs !== null && left.timeMs !== right.timeMs) {
     return left.timeMs - right.timeMs
+  }
+  if (
+    left.timelineIndex !== right.timelineIndex
+    && (
+      left.timeMs === null
+      || right.timeMs === null
+      || left.seq === null
+      || right.seq === null
+    )
+  ) {
+    return left.timelineIndex - right.timelineIndex
+  }
+  if (
+    left.sourceRank === right.sourceRank
+    && (
+      left.timeMs === null
+      || right.timeMs === null
+      || left.seq === null
+      || right.seq === null
+    )
+  ) {
+    return left.index - right.index
   }
   if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
     return left.seq - right.seq
@@ -156,20 +170,26 @@ export function mergeCanonicalStreamEvents(input: {
 }): StreamJsonEvent[] {
   const recordsByDurableKey = new Map<string, CanonicalEventRecord>()
   const records: CanonicalEventRecord[] = []
+  const persistedTimelineLength = input.persistedEvents.length
 
   const addEvents = (events: readonly StreamJsonEvent[], sourceRank: number) => {
     for (const [index, event] of events.entries()) {
       if (sourceRank > 0 && !isTranscriptEnvelope(event)) {
         continue
       }
-      const record = buildRecord(event, sourceRank, index)
+      const timelineIndex = sourceRank === 0
+        ? index
+        : persistedTimelineLength + index
+      const record = buildRecord(event, sourceRank, index, timelineIndex)
       if (!record.durable) {
         records.push(record)
         continue
       }
       const existing = recordsByDurableKey.get(record.key)
       if (!existing || record.sourceRank >= existing.sourceRank) {
-        recordsByDurableKey.set(record.key, record)
+        recordsByDurableKey.set(record.key, existing
+          ? { ...record, timelineIndex: existing.timelineIndex }
+          : record)
       }
     }
   }

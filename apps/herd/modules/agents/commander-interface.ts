@@ -15,16 +15,18 @@
  * Non-closure dependencies stay imported directly so the context interface
  * stays focused on what's actually router-local.
  */
-import type { QueuedMessage, QueuedMessageImage, QueuedMessagePriority } from './message-queue.js'
+import { SessionMessageQueue, type QueuedMessage, type QueuedMessageImage, type QueuedMessagePriority } from './message-queue.js'
 import { WebSocket } from 'ws'
 import type { ProviderCreateOptions } from './providers/provider-adapter.js'
 import { getProvider } from './providers/registry.js'
+import { getNextStreamEventSeq } from './messages/canonical-timeline.js'
 import { resolveNativeProviderResumeId } from './providers/native-resume.js'
 import type {
   AgentType,
   AnySession,
   ClaudePermissionMode,
   CommanderSessionsInterface,
+  CredentialPoolRecoveryRequest,
   MachineConfig,
   SessionSendPayload,
   StreamJsonEvent,
@@ -106,6 +108,10 @@ export interface CommanderInterfaceContext {
 
   teardownProviderSession: SessionTeardown
   shutdownProviderRuntimes: RuntimeShutdown
+
+  getCredentialRecoveryRequest?: (sessionName: string) => CredentialPoolRecoveryRequest | undefined
+  clearCredentialRecoveryRequest?: (sessionName: string) => void
+  getActiveCredentialPoolId?: (provider: AgentType) => Promise<string | undefined>
 }
 
 /**
@@ -160,6 +166,9 @@ export function createCommanderSessionsInterface(
     sendImmediateTextToStreamSession,
     teardownProviderSession,
     shutdownProviderRuntimes,
+    getCredentialRecoveryRequest,
+    clearCredentialRecoveryRequest,
+    getActiveCredentialPoolId,
   } = ctx
 
   async function buildCommanderSession({
@@ -174,6 +183,7 @@ export function createCommanderSessionsInterface(
     maxThinkingTokens,
     cwd,
     resumeProviderContext,
+    credentialPoolId,
     maxTurns,
   }: CreateCommanderSessionInput): Promise<StreamSession> {
     const creator = {
@@ -202,6 +212,8 @@ export function createCommanderSessionsInterface(
       sessionType: 'commander',
       creator,
       conversationId,
+      resumeProviderContext,
+      credentialPoolId,
     }
 
     return resumeSessionId
@@ -240,18 +252,37 @@ export function createCommanderSessionsInterface(
     async replaceCommanderSession(input) {
       const { name } = input
       const previous = sessions.get(name)
-      if (previous && previous.kind === 'stream') {
-        await teardownProviderSession(previous, `Provider swap on session "${name}"`)
-      }
-
       const replacement = await buildCommanderSession(input)
       if (previous && previous.kind === 'stream' && replacement.kind === 'stream') {
         // Mirror websocket.ts auto-rotate replacement so same-name provider
         // swaps preserve replay, usage, entry count, and auto-rotate state.
         replacement.events = previous.events.slice()
+        replacement.nextEventSeq = getNextStreamEventSeq(replacement.events)
         replacement.usage = previous.usage ? { ...previous.usage } : previous.usage
         replacement.conversationEntryCount = previous.conversationEntryCount
         replacement.autoRotatePending = previous.autoRotatePending
+        const queuedMessages = previous.messageQueue ? previous.messageQueue.list() : replacement.messageQueue.list()
+        const pendingDirectSendMessages = [...previous.pendingDirectSendMessages]
+        const currentQueuedMessage = previous.currentQueuedMessage
+        if (currentQueuedMessage) {
+          if (currentQueuedMessage.priority === 'high') {
+            pendingDirectSendMessages.unshift(currentQueuedMessage)
+          } else {
+            queuedMessages.unshift(currentQueuedMessage)
+          }
+        }
+        replacement.currentQueuedMessage = undefined
+        replacement.pendingDirectSendMessages = pendingDirectSendMessages.filter((message, index, messages) => {
+          return message.priority === 'high'
+            && messages.findIndex((candidate) => candidate.id === message.id) === index
+        })
+        replacement.messageQueue = new SessionMessageQueue(
+          previous.messageQueue?.maxSize ?? replacement.messageQueue.maxSize,
+          queuedMessages.filter((message, index, messages) => {
+            return message.priority !== 'high'
+              && messages.findIndex((candidate) => candidate.id === message.id) === index
+          }),
+        )
         // Transfer connected WS clients to the replacement so broadcasts
         // from the new runtime reach them without a reconnect round-trip.
         for (const client of previous.clients) {
@@ -263,6 +294,16 @@ export function createCommanderSessionsInterface(
       // reuses the same slot naturally keeps prior subscribers attached.
       sessions.set(name, replacement)
       schedulePersistedSessionsWrite()
+      if (
+        replacement.kind === 'stream' &&
+        !replacement.currentQueuedMessage &&
+        (replacement.pendingDirectSendMessages.length > 0 || replacement.messageQueue.size > 0)
+      ) {
+        scheduleQueuedMessageDrain(replacement, { force: true })
+      }
+      if (previous && previous.kind === 'stream') {
+        await teardownProviderSession(previous, `Provider swap on session "${name}"`)
+      }
       return replacement
     },
 
@@ -272,6 +313,7 @@ export function createCommanderSessionsInterface(
         return false
       }
       const { text, images, displayText, clientSendId, userEventSubtype } = normalizeSendPayload(payload)
+      const recovery = getCredentialRecoveryRequest?.(name) ?? session.credentialPoolRecovery
       if (options?.queue) {
         const message = displayText !== undefined || clientSendId || userEventSubtype
           ? createQueuedMessage(text, options.priority ?? 'normal', images, displayText, clientSendId, userEventSubtype)
@@ -281,6 +323,18 @@ export function createCommanderSessionsInterface(
           return false
         }
         scheduleQueuedMessageDrain(session)
+        return true
+      }
+
+      if (recovery) {
+        const message = displayText !== undefined || clientSendId || userEventSubtype
+          ? createQueuedMessage(text, 'high', images, displayText, clientSendId, userEventSubtype)
+          : createQueuedMessage(text, 'high', images)
+        const queued = enqueueQueuedMessage(session, message)
+        if (!queued.ok) {
+          return false
+        }
+        scheduleQueuedMessageDrain(session, { force: true })
         return true
       }
 
@@ -344,6 +398,12 @@ export function createCommanderSessionsInterface(
       const session = sessions.get(name)
       return session?.kind === 'stream' ? session : undefined
     },
+
+    getCredentialRecoveryRequest,
+
+    clearCredentialRecoveryRequest,
+
+    getActiveCredentialPoolId,
 
     subscribeToEvents(name, handler) {
       let handlers = sessionEventHandlers.get(name)

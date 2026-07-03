@@ -17,7 +17,7 @@ interface MobileBottomTabsProps {
  *
  * Mounted by `src/surfaces/mobile/MobileShell.tsx` on any Herd mobile route
  * and hydrated from backend module graph nav metadata. Self-hides on the
- * immersive chat route `/command-room?commander=<id>`.
+ * immersive chat route for a selected commander.
  */
 export function MobileBottomTabs({ modules, pendingCount }: MobileBottomTabsProps) {
   const location = useLocation()
@@ -54,7 +54,7 @@ export function MobileBottomTabs({ modules, pendingCount }: MobileBottomTabsProp
   }
 
   return (
-    <div data-testid="herd-mobile-tabs">
+    <div data-testid="hervald-mobile-tabs">
       <BottomNav modules={mobileModules} forceVisible />
     </div>
   )

@@ -141,7 +141,6 @@ const maxAgentSessions = process.env.HERD_MAX_AGENT_SESSIONS
 const { modules, otelRouter, moduleGraph } = createModules({
   apiKeyStore,
   providerSecretsStore,
-  transcriptionKeyStore: providerSecretsStore,
   auth0Domain: process.env.AUTH0_DOMAIN,
   auth0Audience: process.env.AUTH0_AUDIENCE,
   auth0ClientId: process.env.AUTH0_CLIENT_ID,
@@ -187,8 +186,6 @@ app.get('/api/health', (_req, res) => {
       schemaVersion: readyDatabaseReadiness.schemaVersion,
       requiredSchemaVersion: readyDatabaseReadiness.requiredSchemaVersion,
       migrationStatus: readyDatabaseReadiness.migrationStatus,
-      migrationRequired: readyDatabaseReadiness.migrationRequired,
-      remediationCommand: readyDatabaseReadiness.ready ? null : readyDatabaseReadiness.remediationCommand,
     },
     modules: modules.map((m) => m.name),
     memory: {

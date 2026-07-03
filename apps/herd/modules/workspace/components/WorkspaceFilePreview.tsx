@@ -317,7 +317,7 @@ export function WorkspaceFilePreview({
                 'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]',
               )}
             >
-              <article className="herd-prose max-w-none break-words">
+              <article className="hervald-prose max-w-none break-words">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {draftContent}
                 </ReactMarkdown>

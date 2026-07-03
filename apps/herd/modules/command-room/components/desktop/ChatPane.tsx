@@ -45,7 +45,7 @@ export function ChatPane({
   onDeny,
   onAnswer,
   agentAvatarUrl,
-  sessionId = 'herd-chat',
+  sessionId = 'hervald-chat',
   hasOlderMessages = false,
   loadingOlderMessages = false,
   onLoadOlderMessages,
@@ -53,7 +53,7 @@ export function ChatPane({
 }: ChatPaneProps) {
   return (
     <div
-      className="herd-chat-pane"
+      className="hervald-chat-pane"
       style={{
         minWidth: 0,
         padding: '16px 18px 12px',
@@ -89,7 +89,7 @@ export function ChatPane({
         sessionId={sessionId}
         onAnswer={onAnswer}
         agentAvatarUrl={agentAvatarUrl ?? undefined}
-        className="herd-chat-transcript"
+        className="hervald-chat-transcript"
         onOpenWorkspaceFile={onOpenWorkspaceFile}
       />
 
@@ -103,6 +103,7 @@ export function ChatPane({
               onApprove={() => onApprove(approval)}
               onDeny={() => onDeny(approval)}
               compact
+              variant="inline"
             />
           ))}
         </div>

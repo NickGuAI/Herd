@@ -102,6 +102,7 @@ function enrichApprovalContext(
   addDetail(details, 'Item ID', providerContext?.itemId)
   addDetail(details, 'Turn ID', providerContext?.turnId)
   addDetail(details, 'Session', sessionContext?.sessionName ?? request.fallbackSessionName)
+  addDetail(details, 'Conversation', sessionContext?.conversationId)
   addDetail(details, 'CWD', sessionContext?.cwd)
 
   return {
@@ -138,6 +139,7 @@ export class ActionPolicyGate {
         ? {
           commanderId: sessionContext.commanderScopeId,
           sessionId: sessionContext.sessionName,
+          conversationId: sessionContext.conversationId,
           cwd: sessionContext.cwd,
           currentSkillId: sessionContext.currentSkillInvocation.skillId,
           currentSkillName: sessionContext.currentSkillInvocation.displayName,
@@ -149,6 +151,7 @@ export class ActionPolicyGate {
         : {
           commanderId: sessionContext?.commanderScopeId,
           sessionId: sessionContext?.sessionName,
+          conversationId: sessionContext?.conversationId,
           cwd: sessionContext?.cwd,
         },
     })
@@ -187,6 +190,7 @@ export class ActionPolicyGate {
         source: request.source,
         sessionId: sessionContext?.sessionName ?? request.fallbackSessionName,
         commanderId: sessionContext?.commanderScopeId,
+        conversationId: sessionContext?.conversationId,
         actionId,
         actionLabel,
         toolName: request.toolName,

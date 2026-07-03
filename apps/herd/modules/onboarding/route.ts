@@ -10,7 +10,9 @@ import type { CommanderSessionStore } from '../commanders/store.js'
 import type { OperatorStore } from '../operators/store.js'
 import { OrgIdentityStore } from '../org-identity/store.js'
 import {
+  buildStarterWorkforceStatus,
   buildOnboardingStatus,
+  gaiaCommanderExists,
   seedGaiaCommander,
   seedStarterWorkforce,
   skipStarterWorkforce,
@@ -119,7 +121,10 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
   })
 
   router.post('/actions/seed-gaia', requireWriteAccess, async (req, res) => {
-    const before = await status(req)
+    const existedBefore = await gaiaCommanderExists({
+      sessionStore: options.sessionStore,
+      commanderDataDir: options.commanderDataDir,
+    })
     const gaia = await seedGaiaCommander({
       user: req.user,
       operatorStore: options.operatorStore,
@@ -131,16 +136,19 @@ export function createOnboardingRouter(options: OnboardingRouterOptions): Router
       env: options.env,
       shellRunner: options.shellRunner,
     })
-    res.status(before.gaia.exists ? 200 : 201).json({
+    res.status(existedBefore ? 200 : 201).json({
       gaia,
       status: await status(req),
     })
   })
 
   router.post('/actions/seed-starter-workforce', requireWriteAccess, async (req, res) => {
-    const before = await status(req)
-    const installedBefore = before.starterWorkforce.totalCount > 0 &&
-      before.starterWorkforce.installedCount === before.starterWorkforce.totalCount
+    const before = await buildStarterWorkforceStatus({
+      sessionStore: options.sessionStore,
+      commanderDataDir: options.commanderDataDir,
+    })
+    const installedBefore = before.totalCount > 0 &&
+      before.installedCount === before.totalCount
     const starterWorkforce = await seedStarterWorkforce({
       user: req.user,
       operatorStore: options.operatorStore,

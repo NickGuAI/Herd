@@ -97,17 +97,6 @@ export function normalizeStandingApprovalEntry(
   value: unknown,
   options: StandingApprovalNormalizationOptions,
 ): StandingApprovalEntry | null {
-  if (typeof value === 'string') {
-    return createStandingApprovalEntry({
-      email: value,
-      now: options.now,
-      added_at: options.default_added_at,
-      added_by: options.default_added_by,
-      reason: options.default_reason,
-      expiry_days: options.expiry_days,
-    })
-  }
-
   if (typeof value !== 'object' || value === null) {
     return null
   }
@@ -118,18 +107,15 @@ export function normalizeStandingApprovalEntry(
     now: options.now,
     added_at:
       (typeof record.added_at === 'string' ? record.added_at : undefined)
-      ?? (typeof record.addedAt === 'string' ? record.addedAt : undefined)
       ?? options.default_added_at,
     added_by:
       (typeof record.added_by === 'string' ? record.added_by : undefined)
-      ?? (typeof record.addedBy === 'string' ? record.addedBy : undefined)
       ?? options.default_added_by,
     reason:
       (typeof record.reason === 'string' ? record.reason : undefined)
       ?? options.default_reason,
     expires_at:
-      (typeof record.expires_at === 'string' ? record.expires_at : undefined)
-      ?? (typeof record.expiresAt === 'string' ? record.expiresAt : undefined),
+      (typeof record.expires_at === 'string' ? record.expires_at : undefined),
     permanent:
       typeof record.permanent === 'boolean'
         ? record.permanent

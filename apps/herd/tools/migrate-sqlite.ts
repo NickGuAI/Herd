@@ -2,7 +2,7 @@ import path from 'node:path'
 import {
   defaultSqliteMigrationOptions,
   runSqliteMigration,
-} from '../server/db/migration.js'
+} from './sqlite-migration.js'
 
 interface ParsedArgs {
   sourceRoot: string

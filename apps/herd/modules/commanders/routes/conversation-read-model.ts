@@ -7,6 +7,7 @@ import type { CommanderRoutesContext } from './types.js'
 import {
   buildConversationSessionName,
   getLiveConversationSession,
+  type ConversationMessagesPage,
 } from './conversation-runtime.js'
 import {
   getConversationRuntimeOverlay,
@@ -88,6 +89,7 @@ export interface ConversationSummaryDTO extends Conversation {
     }
   }
   allowedActions: ConversationAllowedActions
+  initialMessagePage?: ConversationMessagesPage
 }
 
 function resolveTransportType(liveSession: LiveConversationSessionLike | undefined): ConversationTransportType {
@@ -175,8 +177,12 @@ export function buildConversationSummaryDTO(
     && runtimeState === 'idle'
     && !hasLiveSession
     && !isArchived
+  const canAutoStartIdleTextSend = conversation.status === 'idle'
+    && runtimeState === 'idle'
+    && !hasLiveSession
+    && !isArchived
   const canStartOrResume = (
-    (conversation.status === 'idle' || runtimeState === 'failed')
+    (conversation.status === 'idle' || canRecoverActiveNoLiveSession)
     && runtimeState !== 'starting'
     && !hasLiveSession
   )
@@ -190,14 +196,16 @@ export function buildConversationSummaryDTO(
     sendReason = 'Conversation is starting'
   } else if (runtimeState === 'failed') {
     sendReason = 'Conversation start failed'
-  } else if (!hasActiveStream && !canRecoverActiveNoLiveSession) {
+  } else if (!hasActiveStream && !canRecoverActiveNoLiveSession && !canAutoStartIdleTextSend) {
     sendReason = conversation.status !== 'active'
       ? 'Conversation must be active before sending'
       : transportType === null
         ? 'Conversation has no live session'
         : 'Conversation live session is not stream-sendable'
   }
-  const queueReason = hasActiveStream ? null : sendReason
+  const queueReason = hasActiveStream
+    ? null
+    : sendReason ?? 'Conversation queue requires an active stream session'
   const mediaReason = canSendMedia
     ? null
     : hasActiveStream
@@ -205,11 +213,11 @@ export function buildConversationSummaryDTO(
       : noActiveStreamReason
 
   const allowedActions: ConversationAllowedActions = {
-    send: hasActiveStream || canRecoverActiveNoLiveSession,
+    send: hasActiveStream || canRecoverActiveNoLiveSession || canAutoStartIdleTextSend,
     queue: hasActiveStream,
     media: canSendMedia,
     start: canStartOrResume,
-    pause: (runtimeState === 'starting' || conversation.status === 'active') && !isArchived,
+    pause: (runtimeState === 'starting' || (conversation.status === 'active' && hasLiveSession)) && !isArchived,
     resume: canStartOrResume,
     archive: true,
     delete: true,
