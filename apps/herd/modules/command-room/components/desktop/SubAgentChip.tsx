@@ -4,7 +4,7 @@
  * Inline worker chip: 5px status dot + name in mono 11.5px
  * Border radius: 2px 8px 2px 8px
  */
-import { STATE_COLOR } from '@modules/components/hervald'
+import { STATE_COLOR } from '@modules/components/herd'
 
 export interface Worker {
   id: string

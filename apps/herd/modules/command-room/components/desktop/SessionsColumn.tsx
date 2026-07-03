@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Play, Square } from 'lucide-react'
 import { useFontScale } from '@/hooks/use-font-scale'
 import { useProviderRegistry } from '@/hooks/use-providers'
-import { Icon, STATE_COLOR } from '@modules/components/hervald'
+import { Icon, STATE_COLOR } from '@modules/components/herd'
 import type { AgentSession, AgentType, ProviderModelOption, ProviderRegistryEntry } from '@/types'
 import { SessionCard } from '@modules/agents/page-shell/SessionCard'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'

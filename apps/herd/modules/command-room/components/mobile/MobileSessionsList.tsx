@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import { SessionRow, type Approval, type Commander, type Worker } from '@modules/command-room/components/desktop/SessionRow'
-import { StatusDot } from '@modules/components/hervald'
+import { StatusDot } from '@modules/components/herd'
 
 type SessionFilter = 'all' | 'active' | 'waiting'
 

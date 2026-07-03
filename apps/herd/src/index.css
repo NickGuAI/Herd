@@ -1,5 +1,5 @@
-@import './styles/hervald/tokens.css';
-@import './styles/hervald/animations.css';
+@import './styles/herd/tokens.css';
+@import './styles/herd/animations.css';
 
 @tailwind base;
 @tailwind components;

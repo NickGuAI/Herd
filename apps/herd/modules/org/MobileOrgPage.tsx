@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { CommanderRow } from '@modules/org/components/CommanderRow'
 import type { OrgNode, OrgTree } from '@modules/org/types'
 import BottomSheet from '@/components/BottomSheet'
-import { AgentAvatar } from '@modules/components/hervald'
+import { AgentAvatar } from '@modules/components/herd'
 import { resolveFounderAvatarSrc } from '@modules/operators/founder-avatar'
 
 function statusDotClass(status: string) {

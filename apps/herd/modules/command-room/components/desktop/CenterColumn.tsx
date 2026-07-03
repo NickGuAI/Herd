@@ -33,7 +33,7 @@ import { ChatPane } from './ChatPane'
 import type { ChatSession } from './SessionsColumn'
 import { SubAgentChip, type Worker } from './SubAgentChip'
 import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
-import { STATE_COLOR } from '@modules/components/hervald'
+import { STATE_COLOR } from '@modules/components/herd'
 
 /* ---- local types ---- */
 
