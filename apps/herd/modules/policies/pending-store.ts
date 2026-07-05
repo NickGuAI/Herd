@@ -38,6 +38,7 @@ export const DEFAULT_APPROVAL_AUDIT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 const DEFAULT_APPROVAL_AUDIT_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 interface PersistedPendingSnapshot {
+  schemaVersion: 1
   version: 1
   approvals: PendingApproval[]
 }
@@ -247,7 +248,7 @@ function normalizePendingApproval(entry: unknown): PendingApproval | null {
 
 function normalizeSnapshot(raw: unknown): PersistedPendingSnapshot {
   if (!isRecord(raw)) {
-    return { version: 1, approvals: [] }
+    return { schemaVersion: 1, version: 1, approvals: [] }
   }
 
   const entries = Array.isArray(raw.approvals)
@@ -257,6 +258,7 @@ function normalizeSnapshot(raw: unknown): PersistedPendingSnapshot {
       : []
 
   return {
+    schemaVersion: 1,
     version: 1,
     approvals: entries
       .map(normalizePendingApproval)
@@ -858,6 +860,7 @@ export class ApprovalCoordinator {
 
   private async persistSnapshot(): Promise<void> {
     await writeJsonFile(this.snapshotFilePath, {
+      schemaVersion: 1,
       version: 1,
       approvals: Array.from(this.approvals.values()),
     })

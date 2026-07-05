@@ -3,11 +3,13 @@ import { execFile as execFileCallback } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { promisify } from 'node:util'
+import { isDeepStrictEqual, promisify } from 'node:util'
 import type { AuthUser } from '@gehirn/auth-providers'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../claude-effort.js'
 import { createMachineRegistryStore } from '../agents/machines.js'
+import { mapStreamEventsToMessages } from '../agents/messages/history.js'
 import { resolveDefaultProviderId } from '../agents/providers/registry.js'
+import { readTranscriptHeadPage } from '../agents/transcript-store.js'
 import type { ProviderAdapter } from '../agents/providers/provider-adapter.js'
 import type { AutomationScheduler } from '../automations/scheduler.js'
 import type { AutomationStore } from '../automations/store.js'
@@ -28,6 +30,7 @@ import {
   writeCommanderUiProfile,
 } from '../commanders/commander-profile.js'
 import { resolveHerdDataDir } from '../data-dir.js'
+import { defaultTelemetryStorePath, TelemetryJsonlStore } from '../telemetry/store.js'
 import { createFounderBootstrapCandidate } from '../operators/founder-bootstrap.js'
 import type { OperatorStore } from '../operators/store.js'
 import { OrgIdentityStore } from '../org-identity/store.js'
@@ -51,6 +54,7 @@ import {
   type MachineOnboardingReadiness,
   type OnboardingReadinessState,
   type OnboardingReceipt,
+  type OnboardingFirstReplyMetric,
   type OnboardingStatus,
   type OnboardingStep,
   type OnboardingStepId,
@@ -66,6 +70,9 @@ const GAIA_DISPLAY_NAME = 'Gaia'
 const GAIA_TEMPLATE_ID = 'gaia-onboarding'
 const GAIA_SPEAKING_TONE = 'Mother-of-all onboarding'
 const ONBOARDING_STATE_FILE = 'onboarding.json'
+const INSTALL_STARTED_AT_FILE = 'install-started-at.json'
+const FIRST_REPLY_TELEMETRY_SESSION_ID = 'onboarding-install'
+const FIRST_REPLY_TRANSCRIPT_HEAD_EVENT_LIMIT = 32
 const GAIA_IDENTITY = [
   'Gaia is the mother-of-all onboarding commander for Herd.',
   'She helps the founder complete first-run setup, create and manage commanders,',
@@ -110,6 +117,10 @@ export interface SeedStarterWorkforceOptions extends BuildOnboardingStatusOption
 
 interface OnboardingState {
   starterWorkforceSkipped?: boolean
+  installStartedAt?: string
+  firstCommanderReplyAt?: string
+  firstCommanderReplyElapsedMs?: number
+  firstCommanderReplyTelemetryRecordedAt?: string
 }
 
 function quoteShell(value: string): string {
@@ -173,11 +184,29 @@ function onboardingStatePath(commanderDataDir: string): string {
   return path.join(commanderDataDir, ONBOARDING_STATE_FILE)
 }
 
+function parseIsoTimestamp(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const trimmed = value.trim()
+  return Number.isFinite(Date.parse(trimmed)) ? trimmed : undefined
+}
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined
+}
+
 async function readOnboardingState(commanderDataDir: string): Promise<OnboardingState> {
   try {
     const parsed = JSON.parse(await readFile(onboardingStatePath(commanderDataDir), 'utf8')) as OnboardingState
     return {
       starterWorkforceSkipped: parsed.starterWorkforceSkipped === true,
+      installStartedAt: parseIsoTimestamp(parsed.installStartedAt),
+      firstCommanderReplyAt: parseIsoTimestamp(parsed.firstCommanderReplyAt),
+      firstCommanderReplyElapsedMs: parsePositiveInteger(parsed.firstCommanderReplyElapsedMs),
+      firstCommanderReplyTelemetryRecordedAt: parseIsoTimestamp(parsed.firstCommanderReplyTelemetryRecordedAt),
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -204,6 +233,138 @@ async function setStarterWorkforceSkipped(
     ...current,
     starterWorkforceSkipped: skipped,
   })
+}
+
+function installStartedAtCandidates(commanderDataDir: string): string[] {
+  const resolved = path.resolve(commanderDataDir)
+  const candidates = [path.join(resolved, INSTALL_STARTED_AT_FILE)]
+  if (path.basename(resolved) === 'commander') {
+    candidates.unshift(path.join(path.dirname(resolved), INSTALL_STARTED_AT_FILE))
+  }
+  return candidates
+}
+
+async function readInstallStartedAt(commanderDataDir: string, env: NodeJS.ProcessEnv | undefined): Promise<string | null> {
+  const envValue = parseIsoTimestamp(env?.HERD_INSTALL_STARTED_AT_ISO)
+  if (envValue) {
+    return envValue
+  }
+  for (const filePath of installStartedAtCandidates(commanderDataDir)) {
+    try {
+      const parsed = JSON.parse(await readFile(filePath, 'utf8')) as { startedAt?: unknown }
+      const startedAt = parseIsoTimestamp(parsed.startedAt)
+      if (startedAt) {
+        return startedAt
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
+    }
+  }
+  return null
+}
+
+function conversationSessionName(commanderId: string, conversationId: string): string {
+  return `commander-${commanderId}-conversation-${conversationId}`
+}
+
+async function readFirstAssistantReplyAt(
+  commanderId: string | null,
+  conversationId: string | null,
+): Promise<string | null> {
+  if (!commanderId || !conversationId) {
+    return null
+  }
+  const { events } = await readTranscriptHeadPage(
+    conversationSessionName(commanderId, conversationId),
+    { maxEvents: FIRST_REPLY_TRANSCRIPT_HEAD_EVENT_LIMIT },
+  )
+  const messages = mapStreamEventsToMessages(events)
+  const reply = messages.find((message) =>
+    message.kind === 'agent' && message.text.trim().length > 0)
+  return parseIsoTimestamp(reply?.timestamp) ?? null
+}
+
+async function appendFirstReplyTelemetry(input: {
+  recordedAt: string
+  elapsedMs: number
+  commanderId: string | null
+  conversationId: string | null
+}): Promise<void> {
+  const store = new TelemetryJsonlStore(defaultTelemetryStorePath())
+  await store.append({
+    type: 'heartbeat',
+    recordedAt: input.recordedAt,
+    payload: {
+      sessionId: FIRST_REPLY_TELEMETRY_SESSION_ID,
+      agentName: 'onboarding',
+      model: 'local',
+      currentTask: `time_to_first_reply_ms=${input.elapsedMs};commander=${input.commanderId ?? 'unknown'};conversation=${input.conversationId ?? 'unknown'}`,
+      completed: true,
+      timestamp: input.recordedAt,
+    },
+  })
+}
+
+function buildFirstReplyMetric(state: OnboardingState): OnboardingFirstReplyMetric {
+  const elapsedMs = state.firstCommanderReplyElapsedMs ?? null
+  return {
+    installStartedAt: state.installStartedAt ?? null,
+    firstReplyAt: state.firstCommanderReplyAt ?? null,
+    elapsedMs,
+    elapsedMinutes: elapsedMs === null ? null : Math.round((elapsedMs / 60_000) * 10) / 10,
+  }
+}
+
+async function recordFirstReplyMetricIfObserved(
+  options: BuildOnboardingStatusOptions,
+  gaia: GaiaOnboardingStatus,
+): Promise<OnboardingFirstReplyMetric> {
+  const state = await readOnboardingState(options.commanderDataDir)
+  const installStartedAt = state.installStartedAt ?? await readInstallStartedAt(options.commanderDataDir, options.env)
+  let nextState: OnboardingState = {
+    ...state,
+    ...(installStartedAt ? { installStartedAt } : {}),
+  }
+
+  if (!nextState.firstCommanderReplyAt && installStartedAt) {
+    const firstReplyAt = await readFirstAssistantReplyAt(gaia.commanderId, gaia.conversationId)
+    if (firstReplyAt) {
+      const elapsedMs = Math.max(0, Date.parse(firstReplyAt) - Date.parse(installStartedAt))
+      nextState = {
+        ...nextState,
+        firstCommanderReplyAt: firstReplyAt,
+        firstCommanderReplyElapsedMs: elapsedMs,
+      }
+    }
+  }
+
+  if (
+    nextState.firstCommanderReplyAt &&
+    nextState.firstCommanderReplyElapsedMs !== undefined &&
+    !nextState.firstCommanderReplyTelemetryRecordedAt
+  ) {
+    try {
+      await appendFirstReplyTelemetry({
+        recordedAt: nextState.firstCommanderReplyAt,
+        elapsedMs: nextState.firstCommanderReplyElapsedMs,
+        commanderId: gaia.commanderId,
+        conversationId: gaia.conversationId,
+      })
+      nextState = {
+        ...nextState,
+        firstCommanderReplyTelemetryRecordedAt: new Date().toISOString(),
+      }
+    } catch (error) {
+      console.warn('[onboarding] Failed to record first-reply telemetry:', error)
+    }
+  }
+
+  if (!isDeepStrictEqual(state, nextState)) {
+    await writeOnboardingState(options.commanderDataDir, nextState)
+  }
+  return buildFirstReplyMetric(nextState)
 }
 
 async function buildFounderStatus(
@@ -557,6 +718,7 @@ export async function buildOnboardingStatus(
     providers,
     machines,
   })
+  const timeToFirstReply = await recordFirstReplyMetricIfObserved(options, gaia)
 
   return {
     currentStepId,
@@ -573,6 +735,7 @@ export async function buildOnboardingStatus(
       machines,
       publicBaseUrl: options.publicBaseUrl,
     }),
+    timeToFirstReply,
     launchTarget: gaia.commanderId && gaia.conversationId
       ? buildCommandRoomLaunchTarget({
           commanderId: gaia.commanderId,
@@ -634,6 +797,7 @@ export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaO
     contextMode: 'thin',
     taskSource: null,
     templateId: GAIA_TEMPLATE_ID,
+    system: true,
   }
 
   const created = await options.sessionStore.create(session)

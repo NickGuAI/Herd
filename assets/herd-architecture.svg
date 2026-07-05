@@ -118,8 +118,8 @@
 
   <rect x="1030" y="292" width="110" height="52" rx="7" fill="#0f172a"/>
   <rect x="1030" y="292" width="110" height="52" rx="7" fill="#064e3b" fill-opacity="0.42" stroke="#34d399" stroke-width="1.5"/>
-  <text x="1085" y="315" class="box-title" text-anchor="middle">Mac mini</text>
-  <text x="1085" y="333" class="box-sub" text-anchor="middle">local box</text>
+  <text x="1085" y="315" class="box-title" text-anchor="middle">Linux VM</text>
+  <text x="1085" y="333" class="box-sub" text-anchor="middle">web host</text>
 
   <rect x="1030" y="380" width="110" height="52" rx="7" fill="#0f172a"/>
   <rect x="1030" y="380" width="110" height="52" rx="7" fill="#064e3b" fill-opacity="0.42" stroke="#34d399" stroke-width="1.5"/>

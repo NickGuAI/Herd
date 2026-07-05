@@ -1,0 +1,16 @@
+__DOMAIN__, :20001 {
+	encode zstd gzip
+
+	respond /healthz 200
+
+	@api path /api/* /v1/* /install.sh
+	handle @api {
+		reverse_proxy 127.0.0.1:__SERVICE_PORT__
+	}
+
+	handle {
+		root * __APP_DIR__/dist
+		try_files {path} /index.html
+		file_server
+	}
+}

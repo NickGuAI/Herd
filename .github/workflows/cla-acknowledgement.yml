@@ -1,0 +1,30 @@
+name: CLA acknowledgement
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  cla:
+    name: Require CLA acknowledgement
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check pull request body
+        run: |
+          node <<'NODE'
+          const fs = require('fs')
+
+          const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
+          const body = event.pull_request && event.pull_request.body ? event.pull_request.body : ''
+          const pattern = /- \[[xX]\] I have read and agree to the Herd Contributor License Agreement in CLA\.md\./
+
+          if (!pattern.test(body)) {
+            console.error('Missing checked CLA acknowledgement in the pull request body.')
+            console.error('Check this box from the pull request template:')
+            console.error('- [x] I have read and agree to the Herd Contributor License Agreement in CLA.md.')
+            process.exit(1)
+          }
+          NODE

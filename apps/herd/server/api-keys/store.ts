@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import path from 'node:path'
 import { resolveModuleDataDir } from '../../modules/data-dir.js'
 import { readJsonFileFailClosed, writeJsonFileAtomically } from '../../modules/json-file.js'
+import { withJsonStoreSchema } from '../../modules/json-store-schema.js'
 
 export const API_KEY_SCOPES = [
   'telemetry:read',
@@ -66,6 +67,7 @@ export type ApiKeyVerificationResult =
 
 export interface ApiKeyStoreLike {
   hasAnyKeys(): Promise<boolean>
+  createKey?(input: CreateApiKeyInput): Promise<CreatedApiKey>
   verifyKey(
     rawKey: string,
     options?: {
@@ -77,6 +79,7 @@ export interface ApiKeyStoreLike {
 }
 
 interface PersistedApiKeyCollection {
+  schemaVersion?: number
   keys: ApiKeyRecord[]
 }
 
@@ -514,6 +517,6 @@ export class ApiKeyJsonStore implements ApiKeyStoreLike {
     const payload: PersistedApiKeyCollection = {
       keys: records,
     }
-    await writeJsonFileAtomically(this.filePath, payload, { trailingNewline: true })
+    await writeJsonFileAtomically(this.filePath, withJsonStoreSchema(payload), { trailingNewline: true })
   }
 }

@@ -17,6 +17,11 @@ export interface TranscriptTailPage {
   hasMore: boolean
 }
 
+export interface TranscriptHeadPage {
+  events: TranscriptEvent[]
+  hasMore: boolean
+}
+
 export interface TranscriptPruneResult {
   pruned: boolean
   eventsKept: number
@@ -253,6 +258,84 @@ export async function readTranscriptTailPage(
   },
 ): Promise<TranscriptTailPage> {
   return readTranscriptTailPageInternal(sessionName, options.maxTurns, options.maxEvents)
+}
+
+export async function readTranscriptHeadPage(
+  sessionName: string,
+  options: {
+    maxEvents: number
+  },
+): Promise<TranscriptHeadPage> {
+  const transcriptPath = resolveTranscriptPath(sessionName)
+  const eventsToKeep = Math.max(0, Math.floor(options.maxEvents))
+  try {
+    const fileHandle = await open(transcriptPath, 'r')
+    try {
+      const { size } = await fileHandle.stat()
+      if (size === 0) {
+        return { events: [], hasMore: false }
+      }
+      if (eventsToKeep === 0) {
+        return { events: [], hasMore: true }
+      }
+
+      const chunkSize = 64 * 1024
+      const events: TranscriptEvent[] = []
+      let position = 0
+      let remainder = Buffer.alloc(0)
+      let reachedBoundary = false
+
+      while (position < size && !reachedBoundary) {
+        const bytesToRead = Math.min(chunkSize, size - position)
+        const chunk = Buffer.allocUnsafe(bytesToRead)
+        const { bytesRead } = await fileHandle.read(chunk, 0, bytesToRead, position)
+        if (bytesRead === 0) {
+          break
+        }
+        position += bytesRead
+        const combined = Buffer.concat([remainder, chunk.subarray(0, bytesRead)])
+        let lineStart = 0
+
+        for (let idx = 0; idx < combined.length; idx += 1) {
+          if (combined[idx] !== 0x0a) {
+            continue
+          }
+
+          const parsed = parseTranscriptEvent(combined.subarray(lineStart, idx))
+          lineStart = idx + 1
+          if (!parsed) {
+            continue
+          }
+          events.push(parsed)
+          if (events.length >= eventsToKeep) {
+            reachedBoundary = true
+            break
+          }
+        }
+
+        remainder = combined.subarray(lineStart)
+      }
+
+      if (!reachedBoundary && remainder.length > 0) {
+        const parsed = parseTranscriptEvent(remainder)
+        if (parsed) {
+          events.push(parsed)
+        }
+      }
+
+      return {
+        events,
+        hasMore: reachedBoundary,
+      }
+    } finally {
+      await fileHandle.close()
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { events: [], hasMore: false }
+    }
+    throw error
+  }
 }
 
 export async function pruneSessionTranscript(

@@ -6,7 +6,10 @@
   <a href="#quickstart"><strong>Quickstart</strong></a> &middot;
   <a href="./docs/index.md"><strong>Docs</strong></a> &middot;
   <a href="./docs/reference/cli.md"><strong>CLI</strong></a> &middot;
+  <a href="./CHANGELOG.md"><strong>Changelog</strong></a> &middot;
   <a href="./docs/operate/machines.md"><strong>Machines</strong></a> &middot;
+  <a href="./SECURITY.md"><strong>Security</strong></a> &middot;
+  <a href="#community-and-support"><strong>Community</strong></a> &middot;
   <a href="./docs/troubleshoot.md"><strong>Troubleshooting</strong></a> &middot;
   <a href="https://herd.gehirn.ai"><strong>Website</strong></a>
 </p>
@@ -44,7 +47,7 @@ operator intent -> Herd meta-harness -> agent harnesses -> your machines -> dura
 ## Herd Is Right For You If
 
 - You coordinate more than one AI agent harness and need a persistent command surface above them.
-- You run work on a Mac mini, VPS, EC2 box, or tailnet machine and want the control plane there too.
+- You run the web control plane on a Linux host and connect only machines you administer.
 - You want agents to keep mission memory across provider sessions, browser tabs, and worker restarts.
 - You need sensitive actions to be reviewable instead of blindly executed.
 - You want public, agent-readable docs that describe setup, operations, references, and recovery.
@@ -66,7 +69,7 @@ Continue with the [full quickstart](./docs/getting-started/quickstart.md) to com
 <table>
 <tr>
 <td width="33%"><strong>Commanders</strong><br/>Durable agent identities with memory, conversations, quests, and worker ownership.</td>
-<td width="33%"><strong>Workers</strong><br/>Delegated execution sessions on local hosts, SSH machines, Mac minis, or Tailscale boxes.</td>
+<td width="33%"><strong>Workers</strong><br/>Delegated execution sessions on registered machines the operator controls.</td>
 <td width="33%"><strong>Approvals</strong><br/>Action policy can auto-run, queue for review, or block external actions.</td>
 </tr>
 <tr>
@@ -99,28 +102,47 @@ Open the Marketplace page or complete first-run onboarding to install the starte
 
 | Shape | Use it when | Docs |
 | --- | --- | --- |
-| **Mac mini / workstation** | You want a personal operator box on a machine you already control. | [Quickstart](./docs/getting-started/quickstart.md) |
-| **EC2 / VPS** | You want a shared host behind your own reverse proxy or load balancer. | [Machines and workers](./docs/operate/machines.md) |
-| **Railway** | You want the fastest hosted control-plane path while workers stay on machines you control. | [Quickstart](./docs/getting-started/quickstart.md) |
+| **Linux web host** | You want the supported self-hosted control plane behind your own reverse proxy or load balancer. | [Hardening](./docs/operate/hardening.md) |
+| **iOS client** | You want a supported mobile client connected to your Herd instance. | [Platform support](./docs/reference/platforms.md) |
+| **macOS / Windows** | Unsupported for v1 self-hosted control-plane deployment. | [Platform support](./docs/reference/platforms.md) |
 
 ## Docs
 
 Full documentation lives under [`docs/`](./docs/index.md):
 
 - [Quickstart](./docs/getting-started/quickstart.md)
+- [Hardening](./docs/operate/hardening.md)
 - [Provider auth](./docs/operate/provider-auth.md)
+- [Credential pools](./docs/operate/credential-pools.md)
 - [Machines and workers](./docs/operate/machines.md)
+- [Uninstall](./docs/operate/uninstall.md)
 - [Workspace](./docs/operate/workspace.md)
 - [Channels](./docs/operate/channels.md)
 - [Commanders](./docs/concepts/commanders.md)
+- [Organization](./docs/concepts/org.md)
 - [Workers](./docs/concepts/workers.md)
 - [Command Room](./docs/concepts/command-room.md)
 - [Approvals](./docs/concepts/approvals.md)
 - [CLI reference](./docs/reference/cli.md)
+- [Changelog](./CHANGELOG.md)
 - [API reference](./docs/reference/api.md)
+- [Platform support](./docs/reference/platforms.md)
 - [Naming policy](./docs/reference/naming.md)
+- [Security policy](./SECURITY.md)
 - [Troubleshooting](./docs/troubleshoot.md)
 - [Agent-readable llms.txt](./docs/llms.txt)
+
+## Community And Support
+
+Use GitHub issues for reproducible bugs and scoped feature requests. Use the
+Pioneering Minds AI community at https://pioneeringminds.ai for support,
+operator discussion, roadmap discussion, and open-ended community conversation.
+
+GitHub Discussions are intentionally disabled for this repository.
+
+Before opening a pull request, read [CONTRIBUTING.md](./CONTRIBUTING.md) and
+the [Contributor License Agreement](./CLA.md). Maintainers review and merge
+accepted pull requests.
 
 ## License
 

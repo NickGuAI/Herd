@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { fetchJson, getAccessToken, handleUnauthorized, isAuthRecoveryRequiredError } from '@/lib/api'
 import { getFullUrl, getWsBase } from '@/lib/api-base'
-import type { SessionQueueSnapshot, StreamEvent } from '@/types'
+import type { AgentSession, SessionQueueSnapshot, StreamEvent } from '@/types'
 import {
   createWsDirectDispatcher,
   type AgentSessionStreamInputImage,
   type SendInput,
 } from '@/hooks/send-dispatcher'
+import { AGENT_SESSIONS_QUERY_KEY } from '@/hooks/use-agents'
 import { useStreamEventProcessor } from '../../modules/agents/components/use-stream-event-processor'
 import { capMessages, createUserMessage, type MsgItem } from '../../modules/agents/messages/model'
 import {
@@ -14,6 +16,12 @@ import {
   normalizeQueueSnapshot,
 } from '../../modules/agents/queue-state'
 import { createReconnectBackoff, shouldReconnectWebSocketClose } from '../../modules/agents/ws-reconnect'
+import {
+  COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY,
+  conversationDetailQueryKey,
+  type CommanderConversationBootstrapProjection,
+  type ConversationRecord,
+} from '../../modules/conversation/hooks/use-conversations'
 
 export type AgentSessionStreamStatus = 'connecting' | 'connected' | 'disconnected'
 export type { AgentSessionStreamInputImage }
@@ -79,6 +87,136 @@ function isProjectedMessages(value: unknown): value is MsgItem[] {
   ))
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function eventTimestamp(value: unknown): string | null {
+  const candidates: unknown[] = []
+  if (isRecord(value)) {
+    if (value.type === 'replay') {
+      return null
+    }
+    candidates.push(value.timestamp, value.createdAt)
+    const ev = value.ev
+    if (isRecord(ev)) {
+      candidates.push(ev.timestamp)
+    }
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && Number.isFinite(Date.parse(candidate))) {
+      return candidate
+    }
+  }
+  return null
+}
+
+export function conversationIdFromWebSocketPath(path: string | undefined): string | null {
+  if (!path) {
+    return null
+  }
+  const match = /\/api\/conversations\/([^/?#]+)\/ws(?:[?#].*)?$/u.exec(path)
+  if (!match?.[1]) {
+    return null
+  }
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return null
+  }
+}
+
+function patchConversationFromStreamEvent(
+  conversation: ConversationRecord,
+  conversationId: string,
+  timestamp: string,
+): ConversationRecord {
+  if (conversation.id !== conversationId) {
+    return conversation
+  }
+  const liveSession = conversation.liveSession
+    ? {
+        ...conversation.liveSession,
+        lastActivityAt: timestamp,
+      }
+    : conversation.liveSession
+  return {
+    ...conversation,
+    lastMessageAt: timestamp,
+    ...(liveSession ? { liveSession } : {}),
+  }
+}
+
+export function applyAgentSessionStreamListDeltas(
+  queryClient: QueryClient,
+  input: {
+    sessionName: string
+    websocketPath?: string
+    event: unknown
+  },
+): void {
+  const timestamp = eventTimestamp(input.event)
+  if (!timestamp) {
+    return
+  }
+  queryClient.setQueryData<AgentSession[]>(AGENT_SESSIONS_QUERY_KEY, (current) => {
+    if (!current?.some((session) => session.name === input.sessionName)) {
+      return current
+    }
+    return current.map((session) => (
+      session.name === input.sessionName
+        ? {
+            ...session,
+            lastActivityAt: timestamp,
+          }
+        : session
+    ))
+  })
+
+  const conversationId = conversationIdFromWebSocketPath(input.websocketPath)
+  if (!conversationId) {
+    return
+  }
+  const detail = queryClient.getQueryData<ConversationRecord>(conversationDetailQueryKey(conversationId))
+  if (detail) {
+    queryClient.setQueryData(
+      conversationDetailQueryKey(conversationId),
+      patchConversationFromStreamEvent(detail, conversationId, timestamp),
+    )
+  }
+  queryClient.setQueriesData<ConversationRecord[]>(
+    { queryKey: ['commanders', 'conversations'] },
+    (current) => Array.isArray(current)
+      ? current.map((conversation) => patchConversationFromStreamEvent(conversation, conversationId, timestamp))
+      : current,
+  )
+  queryClient.setQueriesData<CommanderConversationBootstrapProjection>(
+    { queryKey: COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY },
+    (current) => {
+      if (!current) {
+        return current
+      }
+      const hasConversation = current.conversations.some((conversation) => conversation.id === conversationId)
+      const hasActive = current.activeConversation?.id === conversationId
+      const hasSelected = current.selectedConversation?.id === conversationId
+      if (!hasConversation && !hasActive && !hasSelected) {
+        return current
+      }
+      return {
+        ...current,
+        conversations: current.conversations.map((conversation) =>
+          patchConversationFromStreamEvent(conversation, conversationId, timestamp)),
+        activeConversation: current.activeConversation
+          ? patchConversationFromStreamEvent(current.activeConversation, conversationId, timestamp)
+          : current.activeConversation,
+        selectedConversation: current.selectedConversation
+          ? patchConversationFromStreamEvent(current.selectedConversation, conversationId, timestamp)
+          : current.selectedConversation,
+      }
+    },
+  )
+}
+
 /**
  * POST the pending input to the queue-backed /message endpoint when the
  * WebSocket transport is not available (reconnecting, disconnected, or never
@@ -129,6 +267,7 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
   const enabled = options.enabled ?? true
   const websocketPath = options.websocketPath
   const onQueueUpdate = options.onQueueUpdate
+  const queryClient = useQueryClient()
   const {
     messages,
     processEvent,
@@ -279,6 +418,11 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
             return
           }
           if (raw.type === 'queue_update') {
+            applyAgentSessionStreamListDeltas(queryClient, {
+              sessionName,
+              websocketPath,
+              event: raw,
+            })
             onQueueUpdate?.(normalizeQueueSnapshot(raw.queue))
             return
           }
@@ -299,6 +443,11 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
             )))
             return
           }
+          applyAgentSessionStreamListDeltas(queryClient, {
+            sessionName,
+            websocketPath,
+            event: raw,
+          })
           processEvent(raw as StreamEvent)
         } catch {
           // Ignore malformed websocket payloads and keep the stream alive.
@@ -314,7 +463,7 @@ export function useAgentSessionStream(sessionName?: string, options: AgentSessio
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [enabled, hydrateReplayMessages, onQueueUpdate, processEvent, resetMessages, sessionName, websocketPath])
+  }, [enabled, hydrateReplayMessages, onQueueUpdate, processEvent, queryClient, resetMessages, sessionName, websocketPath])
 
   const pushOptimisticUserMessage = useCallback(
     (text: string, images?: AgentSessionStreamInputImage[], clientSendId?: string) => {

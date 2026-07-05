@@ -887,13 +887,22 @@ export function ProviderActivityGroup({ messages }: { messages: MsgItem[] }) {
 export function UserMessage({
   text,
   images,
+  channelFate,
   onOpenWorkspaceFile,
 }: {
   text: string
   images?: MessageImageAttachment[]
+  channelFate?: MsgItem['channelFate']
   onOpenWorkspaceFile?: (path: string) => void
 }) {
   const messageCopyText = text && text !== '[image]' ? text : ''
+  const fateLabel = channelFate
+    ? [
+        `Fate: ${channelFate.fate}`,
+        channelFate.sourceHash ? `source ${channelFate.sourceHash}` : null,
+        channelFate.error ?? null,
+      ].filter(Boolean).join(' · ')
+    : null
 
   return (
     <div className="message msg-user-row flex justify-end">
@@ -929,6 +938,11 @@ export function UserMessage({
             variant="plain"
           />
         </div>
+        {fateLabel ? (
+          <div className="msg-channel-fate max-w-full break-words pr-1 text-right text-[11px] leading-4 text-[color:var(--hv-fg-muted)]">
+            {fateLabel}
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -1207,7 +1221,7 @@ function renderActivityMessage(
     case 'planning':
       return <PlanningBlock key={message.id} msg={message} />
     case 'user':
-      return <UserMessage key={message.id} text={message.text} images={message.images} />
+      return <UserMessage key={message.id} text={message.text} images={message.images} channelFate={message.channelFate} />
     case 'ask':
       return (
         <AskUserQuestionBlock

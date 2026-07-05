@@ -177,6 +177,7 @@ function buildPackageAutomationInput(
     model: automation.model,
     sessionType: automation.sessionType,
     seedMemory: automation.seedMemory,
+    sourceConversationId: automation.sourceConversationId,
     maxRuns: automation.maxRuns,
   }
 }

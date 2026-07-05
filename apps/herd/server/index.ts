@@ -26,6 +26,10 @@ import {
   openHerdSqliteDatabase,
   type HerdDatabaseReadiness,
 } from './db/index.js'
+import {
+  ensureHerdJsonStoresReadyForBoot,
+  type HerdJsonStoreReadiness,
+} from './json-store-readiness.js'
 
 const buildVersion = process.env.LAUNCH_COMMIT ?? 'dev'
 const startedAt = Date.now()
@@ -64,6 +68,7 @@ const storeProcessLock = await acquireHerdStoreProcessLock().catch((error) => {
 })
 
 let databaseReadiness: HerdDatabaseReadiness | null = null
+let jsonStoreReadiness: HerdJsonStoreReadiness | null = null
 let sqliteDb: ReturnType<typeof openHerdSqliteDatabase> | null = null
 
 async function exitStartupFailure(message: string): Promise<never> {
@@ -113,6 +118,21 @@ if (!databaseReadiness || !sqliteDb) {
 }
 const readyDatabaseReadiness = databaseReadiness as HerdDatabaseReadiness
 const readySqliteDb = sqliteDb as ReturnType<typeof openHerdSqliteDatabase>
+
+try {
+  jsonStoreReadiness = await ensureHerdJsonStoresReadyForBoot(process.env)
+  logInfo(
+    `[json-stores] JSON data stores ready at ${jsonStoreReadiness.sourceRoot} `
+    + `(schema ${jsonStoreReadiness.requiredSchemaVersion}, ${jsonStoreReadiness.migrationStatus})`,
+  )
+} catch (error) {
+  await exitStartupFailure(formatError(error))
+}
+
+if (!jsonStoreReadiness) {
+  await exitStartupFailure('[json-stores] JSON data stores did not initialize before module startup.')
+}
+const readyJsonStoreReadiness = jsonStoreReadiness as HerdJsonStoreReadiness
 
 if (shouldStopActiveSessionsOnBoot(process.env.HERD_STOP_ACTIVE_SESSIONS_ON_BOOT)) {
   const resetResult = await resetActiveRuntimeStateForLaunch({ sqliteDb: readySqliteDb })
@@ -187,6 +207,21 @@ app.get('/api/health', (_req, res) => {
       requiredSchemaVersion: readyDatabaseReadiness.requiredSchemaVersion,
       migrationStatus: readyDatabaseReadiness.migrationStatus,
     },
+    jsonStores: {
+      ready: readyJsonStoreReadiness.ready,
+      sourceRoot: readyJsonStoreReadiness.sourceRoot,
+      requiredSchemaVersion: readyJsonStoreReadiness.requiredSchemaVersion,
+      migrationStatus: readyJsonStoreReadiness.migrationStatus,
+      checked: readyJsonStoreReadiness.stores.length,
+      quarantined: readyJsonStoreReadiness.stores
+        .filter((store) => store.migrationStatus === 'quarantined')
+        .map((store) => ({
+          id: store.id,
+          path: store.path,
+          quarantinePath: store.quarantinePath,
+          error: store.error,
+        })),
+    },
     modules: modules.map((m) => m.name),
     memory: {
       rss: memory.rss,
@@ -204,8 +239,12 @@ for (const mod of modules) {
 const distDir = path.resolve(process.cwd(), 'dist')
 
 function applyInitialThemeClass(html: string, theme: AppTheme): string {
+  // `system` cannot be resolved server-side; serve the light class and let the
+  // inline boot script in index.html resolve `prefers-color-scheme` before
+  // first paint. `data-theme` always carries the persisted value so the client
+  // ThemeProvider hydrates with the right fallback theme.
   const themeClass = theme === 'dark' ? 'hv-dark' : 'hv-light'
-  return html.replace(/<html\b([^>]*)>/i, (match, attrs: string) => {
+  const withClass = html.replace(/<html\b([^>]*)>/i, (match, attrs: string) => {
     if (/\sclass=/.test(attrs)) {
       return match.replace(
         /\sclass=(["'])(.*?)\1/i,
@@ -220,6 +259,13 @@ function applyInitialThemeClass(html: string, theme: AppTheme): string {
     }
 
     return `<html${attrs} class="${themeClass}">`
+  })
+
+  return withClass.replace(/<html\b([^>]*)>/i, (match, attrs: string) => {
+    if (/\sdata-theme=/.test(attrs)) {
+      return match.replace(/\sdata-theme=(["'])(?:.*?)\1/i, ` data-theme="${theme}"`)
+    }
+    return `<html${attrs} data-theme="${theme}">`
   })
 }
 

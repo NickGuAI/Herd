@@ -11,6 +11,7 @@ import { buildVoiceTranscriptionContext } from '../../../server/voice/transcript
 import {
   buildConversationSessionName,
   deliverConversationMessage,
+  recordChannelInboundFate,
   recordChannelReplyDeliveryDelivered,
   stopConversationSession,
 } from './conversation-runtime.js'
@@ -338,6 +339,17 @@ export function registerChannelRoutes(
 
       const commander = await context.sessionStore.get(resolved.conversation.commanderId)
       if (!commander) {
+        const orphanDeliveryIdentity = {
+          provider: event.provider,
+          accountId: event.accountId,
+          rawSourceId: event.rawSourceId,
+        }
+        await recordChannelInboundFate(context, resolved.conversation.id, {
+          ...orphanDeliveryIdentity,
+          clientSendId: channelClientSendId(orphanDeliveryIdentity, Boolean(explicitRawSourceId), context.now()),
+          fate: 'ingest-failed',
+          error: `Channel surface is bound to deleted commander "${resolved.conversation.commanderId}"`,
+        })
         if (resolved.conversation.status !== 'archived') {
           await stopConversationSession(context, resolved.conversation, 'archived').catch((cleanupError) => {
             console.warn(
@@ -358,6 +370,12 @@ export function registerChannelRoutes(
 
       let message = parsed.value.message
       const adapter = getChannelAdapter(resolved.binding.provider)
+      const deliveryIdentity = {
+        provider: event.provider,
+        accountId: event.accountId,
+        rawSourceId: event.rawSourceId,
+      }
+      const clientSendId = channelClientSendId(deliveryIdentity, Boolean(explicitRawSourceId), context.now())
       const voicePreflight = await applyInboundVoicePreflight({
         event,
         conversation: resolved.conversation,
@@ -365,6 +383,12 @@ export function registerChannelRoutes(
         message,
       })
       if (!voicePreflight.ok) {
+        await recordChannelInboundFate(context, resolved.conversation.id, {
+          ...deliveryIdentity,
+          clientSendId,
+          fate: 'ingest-failed',
+          error: voicePreflight.reason,
+        })
         res.status(202).json({
           accepted: true,
           delivered: false,
@@ -384,6 +408,12 @@ export function registerChannelRoutes(
             error: 'no text after voice preflight',
           })
         }
+        await recordChannelInboundFate(context, resolved.conversation.id, {
+          ...deliveryIdentity,
+          clientSendId,
+          fate: 'ingest-failed',
+          error: 'empty-message',
+        })
         res.status(202).json({
           accepted: true,
           delivered: false,
@@ -393,11 +423,6 @@ export function registerChannelRoutes(
         return
       }
 
-      const deliveryIdentity = {
-        provider: event.provider,
-        accountId: event.accountId,
-        rawSourceId: event.rawSourceId,
-      }
       const idempotencyInput = explicitRawSourceId ? deliveryIdentity : null
       if (idempotencyInput) {
         if (
@@ -407,6 +432,11 @@ export function registerChannelRoutes(
             now: context.now(),
           })
         ) {
+          await recordChannelInboundFate(context, resolved.conversation.id, {
+            ...deliveryIdentity,
+            clientSendId,
+            fate: 'duplicate',
+          })
           sendDuplicateChannelMessageResponse({
             res,
             commanderId: commander.id,
@@ -429,6 +459,11 @@ export function registerChannelRoutes(
             now: context.now(),
           })
         ) {
+          await recordChannelInboundFate(context, resolved.conversation.id, {
+            ...deliveryIdentity,
+            clientSendId,
+            fate: 'duplicate',
+          })
           sendDuplicateChannelMessageResponse({
             res,
             commanderId: commander.id,
@@ -460,7 +495,7 @@ export function registerChannelRoutes(
         delivered = await deliverConversationMessage(
           context,
           resolved.conversation,
-          { message, clientSendId: channelClientSendId(deliveryIdentity, Boolean(explicitRawSourceId), context.now()) },
+          { message, clientSendId },
           {
             ...sendOptions,
             autoStartIdle: true,
@@ -484,6 +519,12 @@ export function registerChannelRoutes(
       }
 
       if (!delivered.ok) {
+        await recordChannelInboundFate(context, resolved.conversation.id, {
+          ...deliveryIdentity,
+          clientSendId,
+          fate: 'ingest-failed',
+          error: delivered.error,
+        })
         res.status(delivered.status).json({
           accepted: false,
           delivered: false,

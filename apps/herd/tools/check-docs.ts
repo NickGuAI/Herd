@@ -38,17 +38,38 @@ type ActionPolicyDocsRegistry = {
 const requiredPublicDocs = [
   'getting-started/quickstart.md',
   'concepts/commanders.md',
+  'concepts/org.md',
   'concepts/workers.md',
   'concepts/command-room.md',
   'concepts/approvals.md',
   'operate/provider-auth.md',
+  'operate/credential-pools.md',
   'operate/machines.md',
+  'operate/hardening.md',
+  'operate/enterprise-ec2.md',
+  'operate/uninstall.md',
   'operate/workspace.md',
   'operate/channels.md',
   'reference/cli.md',
   'reference/api.md',
+  'reference/platforms.md',
   'reference/naming.md',
   'troubleshoot.md',
+]
+
+const publicDocsRootFiles = [
+  'index.md',
+  'llms.txt',
+  'docs-directory.md',
+  'troubleshoot.md',
+]
+
+const publicDocsDirectories = [
+  'getting-started',
+  'concepts',
+  'guides',
+  'operate',
+  'reference',
 ]
 
 function relative(filePath: string): string {
@@ -77,6 +98,32 @@ function assertExists(filePath: string, context: string): void {
   if (!existsSync(filePath)) {
     fail(`${context} is missing ${relative(filePath)}`)
   }
+}
+
+function docsRelative(filePath: string): string {
+  return path.relative(docsRoot, filePath).replaceAll(path.sep, '/')
+}
+
+function isInsideDirectory(childPath: string, parentPath: string): boolean {
+  const relativePath = path.relative(parentPath, childPath)
+  return relativePath === '' || (
+    !relativePath.startsWith('..') &&
+    !path.isAbsolute(relativePath)
+  )
+}
+
+function isPublishedPublicDocTarget(filePath: string): boolean {
+  if (!isInsideDirectory(filePath, docsRoot)) {
+    return false
+  }
+
+  const docsPath = docsRelative(filePath)
+  if (publicDocsRootFiles.includes(docsPath)) {
+    return true
+  }
+
+  const [topLevel] = docsPath.split('/')
+  return publicDocsDirectories.includes(topLevel)
 }
 
 function escapeMarkdownTableCell(value: string): string {
@@ -179,7 +226,7 @@ function moduleDirectories(): string[] {
     .sort()
 }
 
-function checkMarkdownLinks(filePath: string): void {
+function checkMarkdownLinks(filePath: string, options: { publicDocsOnly?: boolean } = {}): void {
   const source = readText(filePath)
   const linkPattern = /\[[^\]]+\]\(([^)]+)\)/g
   const baseDir = path.dirname(filePath)
@@ -201,13 +248,45 @@ function checkMarkdownLinks(filePath: string): void {
     const resolved = path.resolve(baseDir, targetWithoutAnchor)
     if (!existsSync(resolved)) {
       fail(`${relative(filePath)} links missing target ${rawTarget}`)
+      continue
+    }
+
+    if (
+      options.publicDocsOnly &&
+      isInsideDirectory(resolved, docsRoot) &&
+      !isPublishedPublicDocTarget(resolved)
+    ) {
+      fail(`${relative(filePath)} links internal-only docs target ${rawTarget}`)
     }
   }
 }
 
-function checkPublicReadmeDocsLinks(): void {
-  const readmePath = path.join(appRoot, 'public', 'repo-root', 'README.md')
-  const source = readText(readmePath)
+function publicMarkdownFiles(): string[] {
+  const files = publicDocsRootFiles.map((file) => path.join(docsRoot, file))
+  for (const directory of publicDocsDirectories) {
+    const directoryPath = path.join(docsRoot, directory)
+    for (const filePath of walkFiles(directoryPath)) {
+      if (/\.(?:md|txt)$/u.test(filePath)) {
+        files.push(filePath)
+      }
+    }
+  }
+  return [...new Set(files)].sort()
+}
+
+function checkPublicMarkdownLinkIntegrity(): void {
+  for (const filePath of publicMarkdownFiles()) {
+    checkMarkdownLinks(filePath, { publicDocsOnly: true })
+  }
+}
+
+function checkPublicRootMarkdownLinks(filePath: string): void {
+  if (!existsSync(filePath)) {
+    fail(`public root markdown target is missing ${relative(filePath)}`)
+    return
+  }
+
+  const source = readText(filePath)
   const linkPattern = /\[[^\]]+\]\(([^)]+)\)/g
 
   for (const match of source.matchAll(linkPattern)) {
@@ -232,6 +311,14 @@ function checkPublicReadmeDocsLinks(): void {
       docsTarget = 'index.md'
     }
 
+    if (targetWithoutAnchor === './SECURITY.md' || targetWithoutAnchor === 'SECURITY.md') {
+      const resolved = publicSecurityPolicyPath()
+      if (!existsSync(resolved)) {
+        fail(`${relative(filePath)} links missing published security target ${rawTarget}`)
+      }
+      continue
+    }
+
     if (!docsTarget) {
       continue
     }
@@ -242,9 +329,20 @@ function checkPublicReadmeDocsLinks(): void {
 
     const resolved = path.join(docsRoot, docsTarget)
     if (!existsSync(resolved)) {
-      fail(`${relative(readmePath)} links missing published docs target ${rawTarget}`)
+      fail(`${relative(filePath)} links missing published docs target ${rawTarget}`)
     }
   }
+}
+
+function publicReadmePath(): string {
+  return publicReleaseDocsOnly
+    ? path.join(repoRoot, 'README.md')
+    : path.join(appRoot, 'public', 'repo-root', 'README.md')
+}
+
+function checkPublicReadmeDocsLinks(): void {
+  checkPublicRootMarkdownLinks(publicReadmePath())
+  checkPublicRootMarkdownLinks(publicSecurityPolicyPath())
 }
 
 function checkDocsIndex(): void {
@@ -255,9 +353,7 @@ function checkDocsIndex(): void {
   const directory = readText(directoryPath)
   const index = readText(indexPath)
 
-  checkMarkdownLinks(indexPath)
-  checkMarkdownLinks(llmsPath)
-  checkMarkdownLinks(directoryPath)
+  checkPublicMarkdownLinkIntegrity()
   checkPublicReadmeDocsLinks()
 
   for (const doc of requiredPublicDocs) {
@@ -276,6 +372,34 @@ function checkDocsIndex(): void {
   }
   if (/Source And Runtime|module-index\.xml|architecture\//u.test(directory)) {
     fail('docs-directory.md must expose only public Herd docs, not source/runtime maps')
+  }
+}
+
+function publicSecurityPolicyPath(): string {
+  return publicReleaseDocsOnly
+    ? path.join(repoRoot, 'SECURITY.md')
+    : path.join(appRoot, 'public', 'repo-root', 'SECURITY.md')
+}
+
+function checkSecurityPolicy(): void {
+  const securityPath = publicSecurityPolicyPath()
+  assertExists(securityPath, 'public SECURITY.md')
+  if (!existsSync(securityPath)) {
+    return
+  }
+
+  const security = readText(securityPath)
+  for (const required of [
+    '## Supported Versions',
+    '## Reporting A Vulnerability',
+    '## Threat Model Summary',
+    'bootstrap key',
+    'Agent Execution',
+    'Approval Gating',
+    'source-available',
+    'PolyForm',
+  ]) {
+    assertContains(security, required, 'public SECURITY.md')
   }
 }
 
@@ -683,15 +807,24 @@ function checkNamingPolicy(): void {
     path.join(docsRoot, 'llms.txt'),
     path.join(docsRoot, 'docs-directory.md'),
     ...requiredPublicDocs.map((doc) => path.join(docsRoot, doc)),
-    path.join(appRoot, 'public', 'repo-root', 'README.md'),
+    publicReadmePath(),
+    publicSecurityPolicyPath(),
   ]
 
   const forbiddenPublicBranding = /Herd|herd|HERD|X-Herd/u
+  const forbiddenSourceLabeling = /\bopen source\b/iu
 
   for (const filePath of files) {
+    if (!existsSync(filePath)) {
+      fail(`public naming policy target is missing ${relative(filePath)}`)
+      continue
+    }
     readText(filePath).split(/\r?\n/u).forEach((line, index) => {
       if (forbiddenPublicBranding.test(line)) {
         fail(`${relative(filePath)}:${index + 1} contains deprecated public product wording`)
+      }
+      if (forbiddenSourceLabeling.test(line)) {
+        fail(`${relative(filePath)}:${index + 1} says open source; public docs must say source-available`)
       }
     })
   }
@@ -715,6 +848,7 @@ function checkNamingPolicy(): void {
 
 async function main(): Promise<void> {
   checkDocsIndex()
+  checkSecurityPolicy()
   checkForbiddenRoots()
   checkNamingPolicy()
 

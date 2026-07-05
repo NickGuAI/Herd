@@ -826,7 +826,7 @@ function buildTurnEndProviderError(
     message,
     classification: classifyProviderError(message, code),
     ...(code ? { code } : {}),
-    retryable: false,
+    retryable: classifyProviderError(message, code) === 'resume_not_found',
     payload,
   }
 }

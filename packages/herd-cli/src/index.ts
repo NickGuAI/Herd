@@ -12,6 +12,7 @@ import { runSessionCli } from './session.js'
 import { runConversationsCli } from './conversations.js'
 import { runEvalCli } from './eval.js'
 import { listWorkerDispatchProviderIds, loadProviderRegistry } from './providers.js'
+import { runConnectCli } from './connect.js'
 import { runDaemonCli } from './daemon.js'
 import { runDoctorCli } from './doctor.js'
 import {
@@ -20,6 +21,7 @@ import {
   workerLifecycle,
 } from './session-contract.js'
 import { runUpCli } from './up.js'
+import { runUpdateCli } from './update.js'
 
 interface Writable {
   write(chunk: string): boolean
@@ -102,6 +104,7 @@ function printRootUsage(stdout: Writable): void {
   stdout.write('  herd quests <command>\n')
   stdout.write('  herd workers <command>\n')
   stdout.write('  herd conversations <command>\n')
+  stdout.write('  herd connect <url> --token <enrollment-token>\n')
   stdout.write('  herd daemon run --machine <id> --pairing-token <token> --endpoint <url>\n')
   stdout.write('  herd automation <command>\n')
   stdout.write('  herd commander <command>\n')
@@ -115,6 +118,7 @@ function printRootUsage(stdout: Writable): void {
   stdout.write('  herd sessions <command>\n')
   stdout.write('  herd up [--dev] [--port <port>]\n')
   stdout.write('  herd run [--dev] [--port <port>]\n')
+  stdout.write('  herd update [--tag <release-tag>]\n')
 }
 
 function printCommandersUsage(stdout: Writable): void {
@@ -356,6 +360,9 @@ export async function runCli(args: readonly string[]): Promise<number> {
   if (command === 'conversations') {
     return runConversationsCli(args.slice(1))
   }
+  if (command === 'connect') {
+    return runConnectCli(args.slice(1))
+  }
   if (command === 'daemon') {
     return runDaemonCli(args.slice(1))
   }
@@ -380,6 +387,9 @@ export async function runCli(args: readonly string[]): Promise<number> {
   if (command === 'up' || command === 'run') {
     return runUpCli(args.slice(1))
   }
+  if (command === 'update') {
+    return runUpdateCli(args.slice(1))
+  }
 
   printRootUsage(process.stdout)
   return 1
@@ -397,4 +407,5 @@ export { runMemoryCli } from './memory.js'
 export { runEvalCli } from './eval.js'
 export { runSessionCli } from './session.js'
 export { runTranscriptsCli } from './transcripts.js'
+export { runUpdateCli } from './update.js'
 export { buildCommanderSessionName, isOwnedByCommander, workerLifecycle }

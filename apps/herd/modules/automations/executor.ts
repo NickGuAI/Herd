@@ -14,6 +14,7 @@ import type {
   AutomationExecutionSource,
   AutomationHistoryEntry,
   AutomationRunMetadata,
+  AutomationRunTranscriptRef,
 } from './types.js'
 
 interface AgentSessionClientLike {
@@ -159,8 +160,8 @@ function parseStructuredOutput(text: string): ParsedRunPayload {
   const normalized = text.trim()
   if (!normalized) {
     return {
-      action: 'No summary generated',
-      result: 'The automation session finished without a structured response.',
+      action: 'Run completed without final output',
+      result: 'The automation session completed, but the agent returned an empty final comment.',
       memoryUpdated: false,
     }
   }
@@ -186,6 +187,24 @@ function parseStructuredOutput(text: string): ParsedRunPayload {
   }
 }
 
+function buildTranscriptRef(sessionId: string): AutomationRunTranscriptRef | undefined {
+  const normalized = sessionId.trim()
+  return normalized ? { sessionId: normalized } : undefined
+}
+
+function resolveEmptyOutputReason(
+  completionOutput: string,
+  status: AgentSessionCompletion['status'],
+): string | undefined {
+  if (completionOutput.trim().length > 0) {
+    return undefined
+  }
+  if (status === 'SUCCESS' || status === 'PARTIAL') {
+    return 'The automation session completed, but the agent returned an empty final comment.'
+  }
+  return 'The automation session ended without a final comment.'
+}
+
 function completionToRunStatus(
   status: AgentSessionCompletion['status'],
 ): AutomationRunMetadata['status'] {
@@ -199,6 +218,7 @@ async function assembleAutomationPrompt(
   automation: Automation,
   memoryContent: string,
   now: Date,
+  runFile: string,
 ): Promise<string> {
   const commanderSkillsDir = automation.parentCommanderId
     ? resolveCommanderPaths(automation.parentCommanderId).skillsRoot
@@ -251,7 +271,7 @@ async function assembleAutomationPrompt(
     '',
     '## Output Requirements',
     `1. If you learned new facts, update memory at ${automation.memoryPath ?? '(unset)'}.`,
-    `2. Write a markdown run report to ${(automation.outputDir ?? '(unset)')}/runs/<timestamp>.md.`,
+    `2. Write a markdown run report to ${runFile}.`,
     '3. End with exactly one JSON block:',
     '```json',
     '{',
@@ -319,7 +339,7 @@ export class AutomationExecutor {
     const runFile = path.join(outputDir, 'runs', `${runTimestampKey}.md`)
     const runJsonPath = this.store.resolveRunJsonPath(automation, runTimestampKey)
     const memoryContent = (await this.store.readMemory(automation.id)) ?? ''
-    const prompt = await assembleAutomationPrompt(automation, memoryContent, startedAtDate)
+    const prompt = await assembleAutomationPrompt(automation, memoryContent, startedAtDate, runFile)
 
     let sessionId = ''
     let client: AgentSessionClientLike | null = null
@@ -362,7 +382,11 @@ export class AutomationExecutor {
       const completion = await client.monitorSession(sessionId, this.monitorOptions)
       await killSessionSafely()
 
-      const parsedOutput = parseStructuredOutput(completion.finalComment)
+      const completionSessionId = completion.sessionId || sessionId
+      const transcriptRef = buildTranscriptRef(completionSessionId)
+      const completionOutput = completion.finalComment
+      const emptyOutputReason = resolveEmptyOutputReason(completionOutput, completion.status)
+      const parsedOutput = parseStructuredOutput(completionOutput)
       const finishedAt = this.now().toISOString()
       const durationSec = Math.max(
         0,
@@ -375,8 +399,12 @@ export class AutomationExecutor {
         result: parsedOutput.result,
         costUsd,
         durationSec,
-        sessionId,
+        runKey: runTimestampKey,
+        sessionId: completionSessionId,
+        transcriptRef,
         runFile,
+        completionOutput,
+        emptyOutputReason,
         memoryUpdated: parsedOutput.memoryUpdated,
         source,
       }
@@ -384,12 +412,17 @@ export class AutomationExecutor {
         automationId: automation.id,
         automationName: automation.name,
         runNumber: (automation.totalRuns ?? 0) + 1,
+        runKey: runTimestampKey,
+        startedAt,
         timestamp: finishedAt,
         action: parsedOutput.action,
         result: parsedOutput.result,
         costUsd,
         durationSec,
-        sessionId,
+        sessionId: completionSessionId,
+        transcriptRef,
+        completionOutput,
+        emptyOutputReason,
         memoryUpdated: parsedOutput.memoryUpdated,
         status: completionToRunStatus(completion.status),
         source,
@@ -414,8 +447,11 @@ export class AutomationExecutor {
         result,
         costUsd: 0,
         durationSec,
+        runKey: runTimestampKey,
         sessionId,
+        transcriptRef: buildTranscriptRef(sessionId),
         runFile,
+        completionOutput: result,
         memoryUpdated: false,
         source,
       }
@@ -423,12 +459,16 @@ export class AutomationExecutor {
         automationId: automation.id,
         automationName: automation.name,
         runNumber: (automation.totalRuns ?? 0) + 1,
+        runKey: runTimestampKey,
+        startedAt,
         timestamp: finishedAt,
         action: historyEntry.action,
         result,
         costUsd: 0,
         durationSec,
         sessionId,
+        transcriptRef: buildTranscriptRef(sessionId),
+        completionOutput: result,
         memoryUpdated: false,
         status,
         source,

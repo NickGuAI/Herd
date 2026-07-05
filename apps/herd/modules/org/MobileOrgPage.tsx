@@ -1,18 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronRight, Zap } from 'lucide-react'
+import { Archive, ChevronRight, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { CommanderRow } from '@modules/org/components/CommanderRow'
 import type { OrgNode, OrgTree } from '@modules/org/types'
 import BottomSheet from '@/components/BottomSheet'
-import { AgentAvatar } from '@modules/components/herd'
+import { AgentAvatar, Chip, StatusDot } from '@modules/components/hervald'
 import { resolveFounderAvatarSrc } from '@modules/operators/founder-avatar'
-
-function statusDotClass(status: string) {
-  return status === 'running' || status === 'active'
-    ? 'bg-[var(--hv-button-primary-bg)]'
-    : 'bg-[var(--hv-fg-subtle)]'
-}
 
 function statusLabel(status: string, archived: boolean | undefined) {
   if (archived) {
@@ -25,6 +19,16 @@ function statusLabel(status: string, archived: boolean | undefined) {
     return 'Idle'
   }
   return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
+function statusDotState(status: string, archived: boolean | undefined) {
+  if (archived) {
+    return 'idle'
+  }
+  if (status === 'active' || status === 'running') {
+    return 'active'
+  }
+  return status || 'idle'
 }
 
 function initials(name?: string | null): string {
@@ -49,7 +53,7 @@ function MobileCommanderTile({
       data-testid="mobile-org-commander-tile"
       data-commander-card={commander.id}
       className={[
-        'rounded-[12px] border border-[color:var(--hv-border-soft)] bg-[var(--hv-surface-card)] transition-colors',
+        'card-sumi rounded-lg transition-colors',
         selected ? 'bg-[var(--hv-surface-selected)] ring-1 ring-[color:var(--hv-border-firm)]' : '',
         commander.archived ? 'opacity-60' : '',
       ].join(' ').trim()}
@@ -58,7 +62,7 @@ function MobileCommanderTile({
         type="button"
         data-testid="mobile-org-commander-toggle"
         onClick={onSelect}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+        className="flex min-h-[58px] w-full appearance-none items-center justify-between gap-3 px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]"
       >
         <span className="flex min-w-0 items-center gap-3">
           <AgentAvatar
@@ -72,9 +76,9 @@ function MobileCommanderTile({
           />
           <span className="min-w-0">
             <span className="block truncate text-sm font-medium text-[color:var(--hv-fg)]">{commander.displayName}</span>
-            <span className="mt-0.5 flex items-center gap-2 text-xs text-[color:var(--hv-fg-subtle)]">
-              <span className={`h-2 w-2 rounded-full ${statusDotClass(commander.status)}`} />
-              <span>
+            <span className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-[color:var(--hv-fg-subtle)]">
+              <StatusDot state={statusDotState(commander.status, commander.archived)} size={6} />
+              <span className="truncate">
                 Commander · {statusLabel(commander.status, commander.archived)} · {automationCount} automation
                 {automationCount === 1 ? '' : 's'}
               </span>
@@ -204,24 +208,24 @@ export function MobileOrgPage({
     <>
       <div
         data-testid="mobile-org-page"
-        className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-[calc(5rem+env(safe-area-inset-bottom,0px))] pt-4"
+        className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 overflow-y-auto bg-[var(--hv-bg)] px-3 pb-[calc(3.75rem+env(safe-area-inset-bottom,0px))] pt-3"
       >
-        <header className="flex items-start justify-between gap-3">
+        <header className="flex items-center justify-between gap-3 px-1">
           <div className="min-w-0">
-            <h1 className="truncate text-2xl font-medium text-[color:var(--hv-fg)]">{tree.orgIdentity?.name || 'Organization'}</h1>
-            <p className="mt-1 truncate text-sm text-[color:var(--hv-fg-subtle)]">Organization · {founder.displayName}</p>
+            <h1 className="truncate text-[22px] font-medium leading-7 text-[color:var(--hv-fg)]">{tree.orgIdentity?.name || 'Organization'}</h1>
+            <p className="mt-0.5 truncate text-[11px] text-[color:var(--hv-fg-subtle)]">Organization · {founder.displayName}</p>
           </div>
           <button
             type="button"
             data-testid="mobile-commander-hire-button"
             onClick={onHire}
-            className="shrink-0 rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)]"
+            className="btn-primary inline-flex h-9 shrink-0 items-center justify-center rounded-lg px-3 py-0 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]"
           >
             Hire
           </button>
         </header>
 
-        <article className="rounded-[12px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
+        <article className="card-sumi rounded-lg px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
               {founderAvatarSrc ? (
@@ -245,9 +249,7 @@ export function MobileOrgPage({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="truncate text-base font-medium text-[color:var(--hv-fg)]">{founder.displayName}</p>
-                  <span className="rounded-full bg-[var(--hv-surface-selected)] px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-[color:var(--hv-fg-subtle)]">
-                    Founder
-                  </span>
+                  <Chip>Founder</Chip>
                 </div>
               </div>
             </div>
@@ -255,7 +257,7 @@ export function MobileOrgPage({
               type="button"
               disabled
               title="Multi-operator coming soon"
-              className="rounded-full border border-[color:var(--hv-border-hair)] px-3 py-1.5 text-sm text-[color:var(--hv-fg-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
+              className="btn-ghost inline-flex h-8 items-center justify-center rounded-lg px-3 py-0 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
               Invite
             </button>
@@ -266,20 +268,20 @@ export function MobileOrgPage({
           type="button"
           data-testid="mobile-global-automation-chip"
           onClick={() => navigate('/automations?commander=global')}
-          className="flex w-full items-center justify-between gap-3 rounded-[12px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-4 text-left"
+          className="card-sumi flex min-h-[58px] w-full appearance-none items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[var(--hv-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]"
         >
           <span className="flex min-w-0 items-center gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--hv-surface-selected)] text-[color:var(--hv-fg)]">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]">
               <Zap size={15} aria-hidden="true" />
             </span>
             <span className="min-w-0">
               <span className="block truncate text-sm font-medium text-[color:var(--hv-fg)]">
                 Global Automation · {operatorAutomationCount} active
               </span>
-              <span className="mt-0.5 block text-xs text-[color:var(--hv-fg-subtle)]">Automation page</span>
+              <span className="mt-0.5 block text-[11px] text-[color:var(--hv-fg-subtle)]">Automation page</span>
             </span>
           </span>
-          <span className="text-[color:var(--hv-fg-subtle)]" aria-hidden="true">&gt;</span>
+          <ChevronRight size={16} className="shrink-0 text-[color:var(--hv-fg-subtle)]" aria-hidden="true" />
         </button>
 
         {tree.archivedCommandersCount > 0 ? (
@@ -287,14 +289,15 @@ export function MobileOrgPage({
             type="button"
             data-testid="mobile-archived-commanders-toggle"
             onClick={onToggleArchived}
-            className="self-start rounded-full border border-[color:var(--hv-border-hair)] px-3 py-1.5 text-sm text-[color:var(--hv-fg)]"
+            className="btn-ghost inline-flex h-8 items-center justify-center gap-2 self-start rounded-lg px-3 py-0 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]"
           >
+            <Archive className="h-4 w-4" aria-hidden="true" />
             {showArchived ? 'Hide archived' : `View archived (${tree.archivedCommandersCount})`}
           </button>
         ) : null}
 
         {commanders.length === 0 ? (
-          <div className="rounded-[12px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-8 text-center">
+          <div className="card-sumi rounded-lg px-4 py-8 text-center">
             <div className="space-y-2">
               <p className="text-sm text-[color:var(--hv-fg)]">Hire your first commander.</p>
               <p className="text-xs leading-5 text-[color:var(--hv-fg-subtle)]">
@@ -305,13 +308,13 @@ export function MobileOrgPage({
               type="button"
               data-testid="mobile-empty-org-hire-button"
               onClick={onHire}
-              className="mt-4 rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)]"
+              className="btn-primary mt-4 inline-flex h-9 items-center justify-center rounded-lg px-4 py-0 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]"
             >
               Start setup chat
             </button>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {commanders.map((commander) => (
               <MobileCommanderTile
                 key={commander.id}

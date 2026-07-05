@@ -6,7 +6,13 @@ import type {
 } from '../../server/module-runtime.js'
 
 export function createAgentsRuntime(context: ModuleRuntimeContext): ModuleRouteRegistration {
-  const { approvalBridgeSigningSecret, capabilities, internalToken, options } = context
+  const {
+    approvalBridgeSigningSecret,
+    capabilities,
+    internalToken,
+    machineEnrollmentSigningSecret,
+    options,
+  } = context
   const initializeAgentSessionRuntimes = options.initializeAgentSessionRuntimes !== false
   if (!options.sqliteDb) {
     throw new Error('SQLite runtime-session database is required for agents runtime')
@@ -23,6 +29,7 @@ export function createAgentsRuntime(context: ModuleRuntimeContext): ModuleRouteR
     maxSessions: options.maxAgentSessions,
     internalToken,
     approvalBridgeSigningSecret,
+    machineEnrollmentSigningSecret,
     commanderSessionStore: capabilities.consume('commanders.store', 'agents'),
     commanderConversationStore: capabilities.consume('commanders.conversations', 'agents'),
     buildCommanderSessionSeed: capabilities.consume('commanders.session-seed-builder', 'agents'),

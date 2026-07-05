@@ -41,6 +41,26 @@ interface UseWorkspaceOverlayTreeOptions {
   onRecoverStaleTarget?: WorkspaceSourceRecovery
 }
 
+export interface WorkspaceOverlayTreeError {
+  message: string
+}
+
+type WorkspaceOverlayTreeFailure =
+  | {
+    kind: 'directory'
+    parentPath: string
+    expand: boolean
+  }
+  | {
+    kind: 'requested-path'
+    path: string
+    token: number
+  }
+
+function formatWorkspaceOverlayTreeError(error: unknown): string {
+  return error instanceof Error ? error.message : 'Failed to load workspace'
+}
+
 export function useWorkspaceOverlayTree({
   open,
   source,
@@ -58,8 +78,10 @@ export function useWorkspaceOverlayTree({
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
   const [addedPaths, setAddedPaths] = useState<Set<string>>(new Set())
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [treeError, setTreeError] = useState<WorkspaceOverlayTreeError | null>(null)
   const addFeedbackTimersRef = useRef<number[]>([])
   const handledRequestedPathRef = useRef<{ path: string; token: number } | null>(null)
+  const lastFailureRef = useRef<WorkspaceOverlayTreeFailure | null>(null)
 
   const selectedNode = useMemo(
     () => findNodeByPath(nodesByParent, selectedPath),
@@ -95,6 +117,8 @@ export function useWorkspaceOverlayTree({
     setLoadingPaths(new Set())
     setAddedPaths(new Set())
     setSelectedPath(null)
+    setTreeError(null)
+    lastFailureRef.current = null
     clearAddFeedbackTimers()
   }, [clearAddFeedbackTimers, sourceKey])
 
@@ -123,6 +147,7 @@ export function useWorkspaceOverlayTree({
     sourceOverride?: WorkspaceSource,
   ): Promise<void> => {
     setLoadingPaths((prev) => new Set(prev).add(parentPath))
+    setTreeError(null)
     try {
       const response = sourceOverride
         ? (
@@ -141,8 +166,17 @@ export function useWorkspaceOverlayTree({
         ...prev,
         [response.parentPath]: response.nodes,
       }))
-    } catch {
-      // Silently fail — user can retry by collapsing/expanding.
+      const lastFailure = lastFailureRef.current
+      if (
+        lastFailure?.kind === 'directory'
+        && lastFailure.parentPath === parentPath
+        && lastFailure.expand === expand
+      ) {
+        lastFailureRef.current = null
+      }
+    } catch (error) {
+      lastFailureRef.current = { kind: 'directory', parentPath, expand }
+      setTreeError({ message: formatWorkspaceOverlayTreeError(error) })
     } finally {
       setLoadingPaths((prev) => {
         const next = new Set(prev)
@@ -182,6 +216,7 @@ export function useWorkspaceOverlayTree({
     }
     void (async () => {
       try {
+        setTreeError(null)
         const { result: resolvedPath, source: resolvedSource } = await readWorkspaceWithRecovery(
           (readSource) => fetchWorkspacePathResolution(readSource, rawRequestedPath),
         )
@@ -192,10 +227,23 @@ export function useWorkspaceOverlayTree({
         if (resolvedPath.treePath) {
           void loadDirectory(resolvedPath.treePath, true, resolvedSource)
         }
+        const lastFailure = lastFailureRef.current
+        if (
+          lastFailure?.kind === 'requested-path'
+          && lastFailure.path === rawRequestedPath
+          && lastFailure.token === requestedPathToken
+        ) {
+          lastFailureRef.current = null
+        }
         markRequestedPathConsumed()
-      } catch {
-        // Silently fail — user can open the workspace tree manually.
+      } catch (error) {
         if (!cancelled) {
+          lastFailureRef.current = {
+            kind: 'requested-path',
+            path: rawRequestedPath,
+            token: requestedPathToken,
+          }
+          setTreeError({ message: formatWorkspaceOverlayTreeError(error) })
           markRequestedPathConsumed()
         }
       }
@@ -250,6 +298,40 @@ export function useWorkspaceOverlayTree({
     addFeedbackTimersRef.current.push(timerId)
   }, [nodesByParent, onSelectFile])
 
+  const handleRetryTreeError = useCallback(() => {
+    const failure = lastFailureRef.current
+    if (!failure) {
+      void loadDirectory('')
+      return
+    }
+    setTreeError(null)
+    if (failure.kind === 'directory') {
+      void loadDirectory(failure.parentPath, failure.expand)
+      return
+    }
+    handledRequestedPathRef.current = null
+    void (async () => {
+      try {
+        const { result: resolvedPath, source: resolvedSource } = await readWorkspaceWithRecovery(
+          (readSource) => fetchWorkspacePathResolution(readSource, failure.path),
+        )
+        setSelectedPath(resolvedPath.path)
+        if (resolvedPath.treePath) {
+          void loadDirectory(resolvedPath.treePath, true, resolvedSource)
+        }
+        lastFailureRef.current = null
+        handledRequestedPathRef.current = {
+          path: failure.path,
+          token: failure.token,
+        }
+        onRequestedPathConsumed?.(failure.token)
+      } catch (error) {
+        lastFailureRef.current = failure
+        setTreeError({ message: formatWorkspaceOverlayTreeError(error) })
+      }
+    })()
+  }, [loadDirectory, onRequestedPathConsumed, readWorkspaceWithRecovery])
+
   const filteredNodesByParent = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     if (!normalizedQuery) {
@@ -293,9 +375,11 @@ export function useWorkspaceOverlayTree({
     selectedPath,
     selectedPreviewPath,
     previewQuery,
+    treeError,
     handlePreviewPath,
     handleToggleDirectory,
     handleAddPath,
+    handleRetryTreeError,
     closePreview,
   }
 }

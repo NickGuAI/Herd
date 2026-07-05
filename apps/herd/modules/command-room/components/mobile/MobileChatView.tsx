@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { Plus } from 'lucide-react'
+import { Plus, RefreshCw } from 'lucide-react'
 import type { AgentType, SessionQueueSnapshot } from '@/types'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import { useProviderRegistry } from '@/hooks/use-providers'
@@ -23,6 +23,12 @@ type MobileStreamStatus = 'connecting' | 'connected' | 'disconnected' | 'closed'
 
 interface MobileChatViewProps {
   commander: Commander | null
+  /**
+   * Per issue 1878: true while the active conversation for the commander in
+   * the URL is still resolving (cold cache). The shell then renders header +
+   * composer + transcript skeleton instead of the create-chat empty state.
+   */
+  conversationResolutionPending?: boolean
   workers: Worker[]
   transcript: MsgItem[]
   hasOlderMessages?: boolean
@@ -94,16 +100,17 @@ function MobileConversationStreamStatusNotice({
   status: Exclude<MobileStreamStatus, null | 'connected'>
 }) {
   const message = status === 'connecting'
-    ? 'Conversation stream reconnecting...'
-    : 'Conversation stream unavailable. Reconnecting to the live session.'
+    ? 'Reconnecting…'
+    : 'Stream unavailable · reconnecting…'
 
   return (
     <div
-      className="rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2 font-mono text-[11px] leading-5 text-[color:var(--hv-fg-muted)]"
+      className="mobile-stream-status-strip"
       data-testid="mobile-conversation-stream-status"
       role="status"
     >
-      {message}
+      <RefreshCw size={11} className="mobile-stream-status-strip-icon" aria-hidden="true" />
+      <span className="mobile-stream-status-strip-text">{message}</span>
     </div>
   )
 }
@@ -113,6 +120,21 @@ const EMPTY_QUEUE_SNAPSHOT: SessionQueueSnapshot = {
   items: [],
   totalCount: 0,
   maxSize: 0,
+}
+
+function MobileTranscriptSkeleton() {
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col justify-end gap-3 px-4 py-4"
+      data-testid="mobile-chat-transcript-skeleton"
+      aria-hidden="true"
+    >
+      <div className="h-10 w-3/5 animate-pulse rounded-[2px_12px_12px_12px] bg-[var(--hv-fg-faint)]" />
+      <div className="ml-auto h-9 w-1/2 animate-pulse rounded-[12px_2px_12px_12px] bg-[var(--hv-fg-faint)]" />
+      <div className="h-16 w-4/5 animate-pulse rounded-[2px_12px_12px_12px] bg-[var(--hv-fg-faint)]" />
+      <div className="h-9 w-2/5 animate-pulse rounded-[2px_12px_12px_12px] bg-[var(--hv-fg-faint)]" />
+    </div>
+  )
 }
 
 function resolveConversationSessionName(
@@ -206,6 +228,7 @@ function PageDots({
 
 export function MobileChatView({
   commander,
+  conversationResolutionPending = false,
   workers,
   transcript,
   hasOlderMessages = false,
@@ -579,6 +602,63 @@ export function MobileChatView({
         onOpenWorkers={onOpenTeam}
         rootClassName={`mobile-session-shell session-view-overlay ${theme === 'dark' ? 'hv-dark' : 'hv-light'}`}
         composerDisabledMessage={`Create a chat to message ${commander.name}.`}
+        dataTestId="mobile-chat-view"
+      />
+    )
+  }
+
+  if (
+    conversationResolutionPending
+    && !showCreateConversationPanel
+    && visibleConversations.length === 0
+  ) {
+    // Per issue 1878: the conversation id is still resolving. Paint the full
+    // chat shell (header + typable composer + transcript skeleton) instead of
+    // flashing the create-chat empty state or a blank section; the resolved
+    // transcript hydrates in place.
+    return (
+      <MobileSessionShell
+        sessionName={sessionName || commander.id}
+        sessionLabel={commander.name || '…'}
+        agentType={agentType}
+        commanderId={commander.id}
+        wsStatus={null}
+        messages={[]}
+        onAnswer={onAnswer}
+        approvals={[]}
+        onApprovalDecision={(approval, decision) =>
+          decision === 'approve'
+            ? onApproveApproval(approval)
+            : onDenyApproval(approval)
+        }
+        agentAvatarUrl={commander.avatarUrl ?? undefined}
+        onSend={onSend ?? (() => undefined)}
+        canQueueDraft={false}
+        queueSnapshot={EMPTY_QUEUE_SNAPSHOT}
+        queueError={null}
+        isQueueMutating={false}
+        onClearQueue={onClearQueue}
+        onMoveQueuedMessage={onMoveQueuedMessage}
+        onRemoveQueuedMessage={onRemoveQueuedMessage}
+        composerEnabled
+        composerSendReady={false}
+        isStreaming={false}
+        composerPlaceholder={commander.name
+          ? `Send a message to ${commander.name}…`
+          : 'Send a message…'}
+        theme={theme}
+        onSetTheme={onSetTheme}
+        onBack={onBack}
+        onOpenWorkspace={onOpenWorkspace}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+        workers={workers.map((worker) => ({
+          id: worker.id,
+          label: worker.name,
+          status: worker.state,
+        }))}
+        onOpenWorkers={onOpenTeam}
+        rootClassName={`mobile-session-shell session-view-overlay ${theme === 'dark' ? 'hv-dark' : 'hv-light'}`}
+        transcriptPlaceholder={<MobileTranscriptSkeleton />}
         dataTestId="mobile-chat-view"
       />
     )

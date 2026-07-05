@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto'
 import type { CommanderChannelBindingStore } from '../store.js'
 import { checkAccountInboundPolicy } from '../policy.js'
 import { effectiveBindingCommanderId } from '../binding-routing.js'
-import { buildChannelLastDrop, readDroppedChannelResponse } from '../drop-status.js'
+import { ChannelDropStatusStore, buildChannelLastDrop, readDroppedChannelResponse } from '../drop-status.js'
 import type {
   ChannelAdapter,
   ChannelInboundDecision,
   ChannelInboundEvent,
   ChannelLastDrop,
+  ChannelOutboundMessageRef,
   ChannelOutboundPayload,
   ChannelPairingChallenge,
   ChannelPairingInput,
@@ -160,6 +161,7 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
     typingIndicators: false,
     presence: false,
     reactions: false,
+    supportsMessageEdit: true,
     markdownDialect: 'whatsapp' as const,
   }
 
@@ -170,6 +172,7 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
   private readonly fetchImpl: typeof fetch
   private readonly transport: WhatsAppTransport
   private readonly logger: Pick<Console, 'warn' | 'error' | 'log'>
+  private readonly dropStatusStore: ChannelDropStatusStore
   private readonly runtimesByAccount = new Map<string, WhatsAppRuntime>()
   private readonly lastDropsByAccount = new Map<string, ChannelLastDrop>()
   private readonly pendingPairings = new Map<string, PendingPairing>()
@@ -182,6 +185,7 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
     this.fetchImpl = options.fetchImpl ?? fetch
     this.transport = options.transport ?? new BaileysWhatsAppTransport()
     this.logger = options.logger ?? console
+    this.dropStatusStore = new ChannelDropStatusStore(this.dataDir)
   }
 
   normalizeInbound(payload: unknown): ChannelInboundEvent {
@@ -403,14 +407,49 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
       if (!peerId) {
         throw new Error(`No WhatsApp peer id for conversation "${conversation.id}"`)
       }
-      await activeRuntime.transportRuntime.send(peerId, payload, {
+      const result = await activeRuntime.transportRuntime.send(peerId, payload, {
         sendTextWithVoiceNote: config.baileys.sendTextWithVoiceNote,
       })
-      return { success: true }
+      return {
+        success: true,
+        rawResponse: result?.rawResponse,
+        ...(result?.messageRef ? { messageRef: result.messageRef } : {}),
+      }
     } catch (error) {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to send WhatsApp message',
+      }
+    }
+  }
+
+  async editMessage(
+    runtime: ChannelRuntime<WhatsAppChannelConfig>,
+    conversation: Conversation,
+    messageRef: ChannelOutboundMessageRef,
+    payload: ChannelOutboundPayload,
+  ): Promise<{ success: true; rawResponse?: unknown; messageRef?: ChannelOutboundMessageRef } | { success: false; error: string; rawResponse?: unknown }> {
+    try {
+      const binding = await this.resolveBinding(runtime, conversation)
+      const config = parseWhatsAppChannelConfig(binding.config, binding.accountId, this.dataDir)
+      const activeRuntime = await this.ensureRuntime(binding, config)
+      const peerId = conversation.lastRoute?.to ?? messageRef.peerId ?? activeRuntime.surfaceBinding?.peerId ?? runtime.surfaceBinding?.peerId
+      if (!peerId) {
+        throw new Error(`No WhatsApp peer id for conversation "${conversation.id}"`)
+      }
+      if (!activeRuntime.transportRuntime.edit) {
+        throw new Error('WhatsApp transport does not support message editing')
+      }
+      const result = await activeRuntime.transportRuntime.edit(peerId, messageRef, payload)
+      return {
+        success: true,
+        rawResponse: result.rawResponse,
+        ...(result.messageRef ? { messageRef: result.messageRef } : { messageRef }),
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to edit WhatsApp message',
       }
     }
   }
@@ -447,17 +486,22 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
 
   async getStatus(binding: CommanderChannelBinding): Promise<WhatsAppRuntimeStatus> {
     const runtime = this.runtimesByAccount.get(binding.accountId)
-    const lastDrop = runtime?.lastDrop ?? this.lastDropsByAccount.get(binding.accountId)
+    const persistedDrops = await this.dropStatusStore.read('whatsapp', binding.accountId)
+    const lastDrop = runtime?.lastDrop ?? this.lastDropsByAccount.get(binding.accountId) ?? persistedDrops.lastDrop
     if (runtime) {
       return {
         ...runtime.transportRuntime.status(),
         ...(lastDrop ? { lastDrop } : {}),
+        dropCount: persistedDrops.dropCount,
+        recentDrops: persistedDrops.recentDrops,
       }
     }
     const config = parseWhatsAppChannelConfig(binding.config, binding.accountId, this.dataDir)
     return {
       ...statusForStoppedBinding(binding, config),
       ...(lastDrop ? { lastDrop } : {}),
+      dropCount: persistedDrops.dropCount,
+      recentDrops: persistedDrops.recentDrops,
     }
   }
 
@@ -486,7 +530,7 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
     if (binding) {
       const decision = this.checkMentionAllowedForBinding(binding, event)
       if (!decision.allowed) {
-        this.recordDroppedInbound(event.accountId, event, decision.reason ?? 'policy-denied')
+        await this.recordDroppedInbound(event.accountId, event, decision.reason ?? 'policy-denied')
         return
       }
     }
@@ -528,29 +572,35 @@ export class WhatsAppChannelAdapter implements ChannelAdapter<WhatsAppChannelCon
     if (!response.ok) {
       const text = await response.text().catch(() => '')
       if (response.status === 409) {
-        this.recordDroppedInbound(event.accountId, event, 'binding-resolution')
+        await this.recordDroppedInbound(event.accountId, event, 'binding-resolution', `${response.status} ${text}`)
+      } else {
+        await this.recordDroppedInbound(event.accountId, event, 'ingest-failed', `${response.status} ${text}`)
       }
       this.logger.warn(`[channels/whatsapp] Failed to ingest WhatsApp message ${event.rawSourceId}: ${response.status} ${text}`)
       return
     }
     const droppedReason = await readDroppedChannelResponse(response)
     if (droppedReason) {
-      this.recordDroppedInbound(event.accountId, event, droppedReason)
+      await this.recordDroppedInbound(event.accountId, event, droppedReason)
     }
   }
 
-  private recordDroppedInbound(
+  private async recordDroppedInbound(
     accountId: string,
     event: ChannelInboundEvent,
     reason: string,
-  ): void {
+    detail?: string,
+  ): Promise<void> {
     const at = new Date().toISOString()
-    const lastDrop = buildChannelLastDrop(event, reason, at)
+    const lastDrop = buildChannelLastDrop(event, reason, at, detail)
     this.lastDropsByAccount.set(accountId, lastDrop)
     const runtime = this.runtimesByAccount.get(accountId)
     if (runtime) {
       runtime.lastDrop = lastDrop
     }
+    await this.dropStatusStore.record(event, reason, detail).catch((error) => {
+      this.logger.warn(`[channels/whatsapp] Failed to persist dropped WhatsApp message ${event.rawSourceId}:`, error)
+    })
     this.logger.warn(
       `[channels/whatsapp] Dropped WhatsApp message ${event.rawSourceId}: inbound denied ${reason} (${event.chatType} ${event.peerId})`,
     )

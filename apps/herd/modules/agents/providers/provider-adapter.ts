@@ -142,6 +142,7 @@ export interface ProviderCreateOptions {
   resumeProviderContext?: ProviderSessionContext
   providerAuth?: ProviderSpawnAuth
   credentialPoolId?: string
+  env?: NodeJS.ProcessEnv
 }
 
 export interface ProviderTeardownOptions {

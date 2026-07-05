@@ -127,6 +127,13 @@ export interface OnboardingReceipt {
   providerSummary: string
 }
 
+export interface OnboardingFirstReplyMetric {
+  installStartedAt: string | null
+  firstReplyAt: string | null
+  elapsedMs: number | null
+  elapsedMinutes: number | null
+}
+
 export interface OnboardingStatus {
   currentStepId: OnboardingStepId
   steps: OnboardingStep[]
@@ -136,6 +143,7 @@ export interface OnboardingStatus {
   providers: ProviderOnboardingReadiness[]
   machines: MachineOnboardingReadiness[]
   receipt: OnboardingReceipt
+  timeToFirstReply: OnboardingFirstReplyMetric
   launchTarget: string
 }
 

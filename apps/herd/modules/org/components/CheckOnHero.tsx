@@ -5,28 +5,9 @@ import {
   buildCommandRoomLaunchTarget,
   normalizeCommandRoomRouteMetadata,
 } from '@modules/command-room/route-metadata'
-import { fetchJson } from '@/lib/api'
 import { findModuleGraphUiRouteMetadata } from '@/module-graph-bindings'
 import { useModuleGraphContext } from '@/module-graph-context'
-import type { OrgCheckOnTargetResponse } from '../types'
 import type { OrgNode } from '../types'
-
-function isStillViewingCommanderLaunch(
-  commanderId: string,
-  routePath: string,
-  commanderParam: string,
-  conversationParam: string,
-): boolean {
-  if (typeof window === 'undefined') {
-    return false
-  }
-  const params = new URLSearchParams(window.location.search)
-  return (
-    window.location.pathname === routePath
-    && params.get(commanderParam) === commanderId
-    && !params.has(conversationParam)
-  )
-}
 
 export function CheckOnHero({
   commander,
@@ -43,31 +24,11 @@ export function CheckOnHero({
   )
 
   const handleClick = () => {
-    const fallback = buildCommandRoomLaunchTarget({ commanderId: commander.id }, routeMetadata)
-    navigate(fallback.path)
-
-    void fetchJson<OrgCheckOnTargetResponse>(
-      `/api/org/commanders/${encodeURIComponent(commander.id)}/check-on-target`,
-    ).then((response) => {
-      if (
-        response.target.conversationId
-        && response.target.commanderId === commander.id
-        && isStillViewingCommanderLaunch(
-          commander.id,
-          routeMetadata.launch.path,
-          routeMetadata.launch.commanderParam,
-          routeMetadata.launch.conversationParam,
-        )
-      ) {
-        const target = buildCommandRoomLaunchTarget({
-          commanderId: commander.id,
-          conversationId: response.target.conversationId,
-        }, routeMetadata)
-        navigate(target.path, { replace: true })
-      }
-    }).catch(() => {
-      // Initial navigation already landed on the commander; lookup failure is non-blocking.
-    })
+    // Per issue 1878: navigate-only. The command room owns the single
+    // conversation-resolution rail (cached active chat first, else one
+    // bootstrap fetch); no parallel check-on-target lookup races it.
+    const target = buildCommandRoomLaunchTarget({ commanderId: commander.id }, routeMetadata)
+    navigate(target.path)
   }
 
   return (

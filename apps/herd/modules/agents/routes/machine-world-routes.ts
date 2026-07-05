@@ -1,5 +1,6 @@
 import type { Request, RequestHandler, Router } from 'express'
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { parseTailscaleStatusJson } from '@gehirn/herd-cli/tailscale-status'
 import type { CommanderSessionStore } from '../../commanders/store.js'
@@ -26,7 +27,12 @@ import {
 } from '../daemon/status.js'
 import { buildMachineDaemonPairCommand } from '../daemon/pairing-command.js'
 import {
+  createMachineEnrollmentToken,
+  verifyMachineEnrollmentToken,
+} from '../daemon/enrollment-token.js'
+import {
   createDaemonPairingToken,
+  createDaemonPairingTokenExpiresAt,
   hashDaemonPairingToken,
   type MachineDaemonRegistry,
 } from '../daemon/registry.js'
@@ -40,6 +46,7 @@ import type { ConversationStore } from '../../commanders/conversation-store.js'
 import type {
   AnySession,
   MachineConfig,
+  MachineDaemonPairCommand,
   MachineHealthReport,
   WorldAgent,
 } from '../types.js'
@@ -84,6 +91,7 @@ interface MachineWorldRouteDeps {
   withMachineRegistryWriteLock<T>(operation: () => Promise<T>): Promise<T>
   writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]>
   daemonRegistry: MachineDaemonRegistry
+  machineEnrollmentSigningSecret: string
 }
 
 class MachineCreateLaunchVerificationError extends Error {
@@ -190,6 +198,108 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
         res.status(409).json({ error: message })
         return
       }
+      res.status(500).json({ error: message })
+    }
+  })
+
+  router.post('/machines/enrollment-token', requireWriteAccess, async (req, res) => {
+    const request = parseMachineEnrollmentTokenRequest(req.body)
+    if (!request.ok) {
+      res.status(400).json({ error: request.error })
+      return
+    }
+
+    try {
+      const endpoint = resolveRequestEndpoint(req)
+      const enrollment = createMachineEnrollmentToken({
+        signingSecret: deps.machineEnrollmentSigningSecret,
+        endpoint,
+        ...(request.value.label ? { label: request.value.label } : {}),
+        ...(request.value.cwd ? { cwd: request.value.cwd } : {}),
+      })
+      res.status(201).json({
+        enrollment: {
+          token: enrollment.token,
+          endpoint,
+          expiresAt: enrollment.expiresAt,
+          command: buildMachineEnrollmentCommand({
+            endpoint,
+            token: enrollment.token,
+          }),
+        },
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to mint machine enrollment token'
+      res.status(500).json({ error: message })
+    }
+  })
+
+  router.post('/machines/enroll', async (req, res) => {
+    const request = parseMachineEnrollRequest(req.body)
+    if (!request.ok) {
+      res.status(400).json({ error: request.error })
+      return
+    }
+
+    const verification = verifyMachineEnrollmentToken(request.value.token, {
+      signingSecret: deps.machineEnrollmentSigningSecret,
+    })
+    if (!verification.ok) {
+      if (verification.reason === 'expired') {
+        res.status(401).json({
+          error: 'Enrollment token expired. Mint a new enrollment token in Herd Machines and run the new herd connect command.',
+        })
+        return
+      }
+      res.status(401).json({
+        error: 'Enrollment token is invalid. Mint a new enrollment token in Herd Machines and try again.',
+      })
+      return
+    }
+
+    const endpoint = verification.endpoint ?? resolveRequestEndpoint(req)
+    const token = createDaemonPairingToken()
+    const pairedAt = new Date().toISOString()
+    const expiresAt = createDaemonPairingTokenExpiresAt()
+
+    try {
+      const enrolledMachine = await deps.withMachineRegistryWriteLock(async () => {
+        const current = await deps.readMachineRegistry()
+        const label = verification.label ?? request.value.label ?? 'Herd daemon'
+        const machineId = createEnrollmentMachineId(label, current, deps.parseSessionName)
+        const nextMachine: MachineConfig = {
+          id: machineId,
+          label,
+          host: null,
+          transport: 'daemon',
+          cwd: verification.cwd ?? request.value.cwd,
+          daemon: {
+            pairingTokenHash: hashDaemonPairingToken(token),
+            pairedAt,
+            expiresAt,
+          },
+        }
+        const persisted = await deps.writeMachineRegistry([...current, nextMachine])
+        return persisted.find((entry) => entry.id === machineId) ?? nextMachine
+      })
+
+      res.status(201).json({
+        machine: serializeMachineForResponse(enrolledMachine),
+        credentials: {
+          machineId: enrolledMachine.id,
+          pairingToken: token,
+          endpoint,
+          websocketPath: `/api/agents/daemons/ws?machine_id=${encodeURIComponent(enrolledMachine.id)}`,
+          pairedAt,
+          expiresAt,
+        },
+        status: buildMachineDaemonStatus(
+          enrolledMachine,
+          deps.daemonRegistry.getConnection(enrolledMachine.id),
+        ),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to enroll daemon machine'
       res.status(500).json({ error: message })
     }
   })
@@ -380,6 +490,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
 
     const token = createDaemonPairingToken()
     const pairedAt = new Date().toISOString()
+    const expiresAt = createDaemonPairingTokenExpiresAt()
 
     try {
       const pairedMachine = await deps.withMachineRegistryWriteLock(async () => {
@@ -398,6 +509,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
           daemon: {
             pairingTokenHash: hashDaemonPairingToken(token),
             pairedAt,
+            expiresAt,
           },
         }
         const next = existing
@@ -414,6 +526,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
           token,
           websocketPath: `/api/agents/daemons/ws?machine_id=${encodeURIComponent(machineId)}`,
           pairedAt,
+          expiresAt,
           command: buildMachineDaemonPairCommand({
             machineId,
             token,
@@ -454,6 +567,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
           ...existing,
           daemon: {
             pairedAt: existing.daemon?.pairedAt,
+            expiresAt: existing.daemon?.expiresAt,
             revokedAt,
             lastSeenAt: existing.daemon?.lastSeenAt,
             daemonVersion: existing.daemon?.daemonVersion,
@@ -653,6 +767,17 @@ interface ParsedDaemonPairRequest {
   cwd?: string
 }
 
+interface ParsedMachineEnrollmentTokenRequest {
+  label?: string
+  cwd?: string
+}
+
+interface ParsedMachineEnrollRequest {
+  token: string
+  label?: string
+  cwd?: string
+}
+
 function serializeMachineForResponse(machine: MachineConfig): Record<string, unknown> {
   return {
     id: machine.id,
@@ -668,6 +793,7 @@ function serializeMachineForResponse(machine: MachineConfig): Record<string, unk
       ? {
           daemon: {
             pairedAt: machine.daemon.pairedAt ?? null,
+            expiresAt: machine.daemon.expiresAt ?? null,
             revokedAt: machine.daemon.revokedAt ?? null,
             lastSeenAt: machine.daemon.lastSeenAt ?? null,
             daemonVersion: machine.daemon.daemonVersion ?? null,
@@ -688,6 +814,110 @@ function resolveRequestEndpoint(req: Request): string {
   const protocol = forwardedProto || req.protocol || 'http'
   const host = forwardedHost || req.header('host')?.trim()
   return host ? `${protocol}://${host}` : '<herd-endpoint>'
+}
+
+function buildMachineEnrollmentCommand(options: {
+  endpoint: string
+  token: string
+}): MachineDaemonPairCommand {
+  const endpoint = options.endpoint.replace(/\/+$/u, '')
+  return {
+    shortCommand: `herd connect ${endpoint} --token <enrollment-token>`,
+    fullCommand: `herd connect ${endpoint} --token ${options.token}`,
+    disclosureLabel: 'Show full enrollment command',
+  }
+}
+
+function parseMachineEnrollmentTokenRequest(
+  value: unknown,
+): { ok: true; value: ParsedMachineEnrollmentTokenRequest } | { ok: false; error: string } {
+  const record = typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : {}
+
+  const label = typeof record.label === 'string' && record.label.trim().length > 0
+    ? record.label.trim()
+    : undefined
+  const cwd = typeof record.cwd === 'string' && record.cwd.trim().length > 0
+    ? record.cwd.trim()
+    : undefined
+  if (cwd && !cwd.startsWith('/')) {
+    return { ok: false, error: 'cwd must be an absolute path when provided' }
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...(label ? { label } : {}),
+      ...(cwd ? { cwd } : {}),
+    },
+  }
+}
+
+function parseMachineEnrollRequest(
+  value: unknown,
+): { ok: true; value: ParsedMachineEnrollRequest } | { ok: false; error: string } {
+  const record = typeof value === 'object' && value !== null
+    ? value as Record<string, unknown>
+    : null
+  if (!record) {
+    return { ok: false, error: 'Invalid enrollment payload' }
+  }
+
+  const token = typeof record.token === 'string' && record.token.trim().length > 0
+    ? record.token.trim()
+    : ''
+  const label = typeof record.label === 'string' && record.label.trim().length > 0
+    ? record.label.trim()
+    : undefined
+  const cwd = typeof record.cwd === 'string' && record.cwd.trim().length > 0
+    ? record.cwd.trim()
+    : undefined
+  if (!token) {
+    return { ok: false, error: 'token is required' }
+  }
+  if (cwd && !cwd.startsWith('/')) {
+    return { ok: false, error: 'cwd must be an absolute path when provided' }
+  }
+
+  return {
+    ok: true,
+    value: {
+      token,
+      ...(label ? { label } : {}),
+      ...(cwd ? { cwd } : {}),
+    },
+  }
+}
+
+function slugifyMachineIdSeed(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 42) || 'daemon'
+}
+
+function createEnrollmentMachineId(
+  label: string,
+  current: readonly MachineConfig[],
+  parseMachineId: typeof parseSessionName,
+): string {
+  const existingIds = new Set(current.map((entry) => entry.id))
+  const seed = parseMachineId(slugifyMachineIdSeed(label)) ?? 'daemon'
+  if (!existingIds.has(seed) && seed !== 'local') {
+    return seed
+  }
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = `${seed}-${randomBytes(3).toString('hex')}`
+    if (!existingIds.has(candidate) && candidate !== 'local') {
+      return candidate
+    }
+  }
+
+  return `daemon-${randomBytes(8).toString('hex')}`
 }
 
 function parseDaemonPairRequest(

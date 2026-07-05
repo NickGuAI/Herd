@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
+import { CheckCircle2, ExternalLink, Loader2, MessageSquarePlus, RefreshCw } from 'lucide-react'
 import {
   createMachine,
   setupMachineAuth,
@@ -16,6 +16,8 @@ import type {
   ProviderRegistryEntry,
 } from '@/types'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
+import { buildGaiaCreateMachinePrompt } from '@modules/command-room/gaia-entry-prompts'
+import { openGaiaConversationWithDraft } from '@modules/command-room/gaia-launch'
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-[color:var(--hv-border-hair)] px-3 py-2 text-[16px] md:text-sm bg-[var(--hv-surface-card)] focus:outline-none focus:ring-1 focus:ring-[color:var(--hv-field-focus-border)] placeholder:text-[color:var(--hv-fg-faint)]'
@@ -145,6 +147,8 @@ export function AddWorkerWizard({
   const [machine, setMachine] = useState<Machine | null>(initialMachine)
   const [selectedProviders, setSelectedProviders] = useState<Record<string, boolean>>({})
   const [providerDrafts, setProviderDrafts] = useState<Record<string, ProviderDraftState>>({})
+  const [isOpeningWithGaia, setIsOpeningWithGaia] = useState(false)
+  const [gaiaError, setGaiaError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open) {
@@ -164,6 +168,8 @@ export function AddWorkerWizard({
     setMachine(initialMachine)
     setSelectedProviders(buildInitialProviderSelection(machineProviders))
     setProviderDrafts(buildInitialProviderDrafts(machineProviders))
+    setIsOpeningWithGaia(false)
+    setGaiaError(null)
   }, [initialMachine, machineProviders, open])
 
   const parsedTailscaleStatus = useMemo(() => {
@@ -326,6 +332,18 @@ export function AddWorkerWizard({
     }
   }
 
+  async function handleOpenWithGaia(): Promise<void> {
+    setIsOpeningWithGaia(true)
+    setGaiaError(null)
+    try {
+      await openGaiaConversationWithDraft(buildGaiaCreateMachinePrompt())
+    } catch (error) {
+      setGaiaError(error instanceof Error ? error.message : 'Failed to open Gaia.')
+    } finally {
+      setIsOpeningWithGaia(false)
+    }
+  }
+
   return (
     <ModalFormContainer
       open={open}
@@ -333,6 +351,23 @@ export function AddWorkerWizard({
       title={step === 1 ? 'Add Machine' : 'Machine Provider Auth'}
       contentClassName="space-y-4"
     >
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => void handleOpenWithGaia()}
+          disabled={isOpeningWithGaia}
+          className="min-h-[44px] min-w-[44px] rounded-lg border border-[color:var(--hv-border-soft)] px-3 py-1.5 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:opacity-60"
+        >
+          <MessageSquarePlus size={15} className="mr-2 inline" />
+          {isOpeningWithGaia ? 'Opening Gaia...' : 'Do it with Gaia'}
+        </button>
+      </div>
+      {gaiaError ? (
+        <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {gaiaError}
+        </div>
+      ) : null}
+
       <div className="rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-3">
         <div className="text-xs uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">
           {step === 1 ? 'Step 1 of 2' : 'Step 2 of 2'}

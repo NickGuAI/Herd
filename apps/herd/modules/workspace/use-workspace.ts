@@ -32,7 +32,13 @@ export function getWorkspaceSourceKey(source: WorkspaceSource): string {
 }
 
 export function isWorkspaceTargetNotFoundError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('Workspace target not found')
+  if (!(error instanceof Error)) {
+    return false
+  }
+  if (/\bRequest failed \(404\):/u.test(error.message)) {
+    return true
+  }
+  return error.message.trim() === 'Workspace target not found'
 }
 
 async function fetchWithWorkspaceTargetRecovery<T>(

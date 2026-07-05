@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/api'
 import type { AgentSession, AgentType } from '@/types'
@@ -16,10 +16,10 @@ import type { WorkspaceContextPayload } from '@modules/workspace/types'
 
 const CONVERSATIONS_POLL_INTERVAL_MS = 5000
 const CONVERSATIONS_LIST_STALE_MS = 30_000
-const CONVERSATION_DETAIL_STALE_MS = 30_000
 const ACTIVE_CONVERSATION_STALE_MS = 30_000
 const COMMANDER_CONVERSATIONS_QUERY_KEY = ['commanders', 'conversations'] as const
 const COMMANDER_ACTIVE_CONVERSATION_QUERY_KEY = ['commanders', 'conversations', 'active'] as const
+export const COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY = ['commanders', 'conversations', 'bootstrap'] as const
 const CONVERSATION_DETAIL_QUERY_KEY = ['conversations', 'detail'] as const
 const CONVERSATION_MESSAGES_QUERY_KEY = ['conversations', 'messages'] as const
 
@@ -177,6 +177,32 @@ interface DeleteConversationResponse {
   commanderId: string
 }
 
+export interface CommanderConversationBootstrapProjection {
+  commanderId: string
+  conversations: ConversationRecord[]
+  activeConversation: ConversationRecord | null
+  selectedConversation: ConversationRecord | null
+  selectedConversationId: string | null
+}
+
+function isCommanderConversationBootstrapProjection(
+  value: unknown,
+): value is CommanderConversationBootstrapProjection {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const candidate = value as Partial<CommanderConversationBootstrapProjection>
+  return typeof candidate.commanderId === 'string'
+    && Array.isArray(candidate.conversations)
+    && (candidate.activeConversation === null || typeof candidate.activeConversation === 'object')
+    && (candidate.selectedConversation === null || typeof candidate.selectedConversation === 'object')
+    && (
+      candidate.selectedConversationId === null
+      || typeof candidate.selectedConversationId === 'string'
+      || candidate.selectedConversationId === undefined
+    )
+}
+
 function conversationStatusPriority(status: ConversationStatus): number {
   switch (status) {
     case 'active':
@@ -246,23 +272,43 @@ function conversationReadinessRank(conversation: ConversationRecord | null | und
   return 0
 }
 
-function conversationNeedsLiveRefresh(conversation: ConversationRecord): boolean {
-  const runtimeState = conversation.displayState?.runtimeState ?? conversation.runtimeState
-  return runtimeState === 'starting' || runtimeState === 'active' || conversation.status === 'active'
-}
-
-function conversationsListRefetchInterval(query: {
+function conversationBootstrapRefetchInterval(query: {
   state: {
+    data?: unknown
     error: unknown
-    data?: ConversationRecord[]
   }
-}): number | false {
+}, options: UseConversationsOptions = {}): number | false {
   if (query.state.error) {
     return CONVERSATIONS_POLL_INTERVAL_MS
   }
-  return query.state.data?.some(conversationNeedsLiveRefresh)
-    ? CONVERSATIONS_POLL_INTERVAL_MS
-    : false
+  if (bootstrapNeedsPushFallbackPolling(query.state.data, options)) {
+    return CONVERSATIONS_POLL_INTERVAL_MS
+  }
+  return false
+}
+
+function conversationNeedsPushFallbackPolling(
+  conversation: ConversationRecord | null | undefined,
+  options: UseConversationsOptions,
+): boolean {
+  if (!conversation) {
+    return false
+  }
+  const isLiveOrStarting = conversation.runtimeState === 'starting'
+    || conversation.runtimeState === 'active'
+    || conversation.status === 'active'
+  const websocketReady = conversation.websocketReady === true
+    || conversation.displayState?.websocketReady === true
+  return isLiveOrStarting && (!websocketReady || options.clientPushConnected === false)
+}
+
+function bootstrapNeedsPushFallbackPolling(value: unknown, options: UseConversationsOptions): boolean {
+  if (!isCommanderConversationBootstrapProjection(value)) {
+    return false
+  }
+  return conversationNeedsPushFallbackPolling(value.selectedConversation, options)
+    || conversationNeedsPushFallbackPolling(value.activeConversation, options)
+    || value.conversations.some((conversation) => conversationNeedsPushFallbackPolling(conversation, options))
 }
 
 function timestampMs(value: string | null | undefined): number {
@@ -310,6 +356,17 @@ export function commanderActiveConversationQueryKey(commanderId: string) {
   return [...COMMANDER_ACTIVE_CONVERSATION_QUERY_KEY, commanderId] as const
 }
 
+export function commanderConversationBootstrapQueryKey(
+  commanderId: string,
+  selectedConversationId?: string | null,
+) {
+  return [
+    ...COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY,
+    commanderId,
+    selectedConversationId ?? 'active',
+  ] as const
+}
+
 export function conversationDetailQueryKey(conversationId: string) {
   return [...CONVERSATION_DETAIL_QUERY_KEY, conversationId] as const
 }
@@ -318,17 +375,17 @@ export function conversationMessagesQueryKey(conversationId: string) {
   return [...CONVERSATION_MESSAGES_QUERY_KEY, conversationId] as const
 }
 
-async function fetchCommanderConversations(
+export async function fetchCommanderConversationBootstrap(
   commanderId: string,
-  initialMessagesFor?: string | null,
-): Promise<ConversationRecord[]> {
+  selectedConversationId?: string | null,
+): Promise<CommanderConversationBootstrapProjection> {
   const params = new URLSearchParams()
-  if (initialMessagesFor) {
-    params.set('initialMessagesFor', initialMessagesFor)
+  if (selectedConversationId) {
+    params.set('conversationId', selectedConversationId)
   }
   const query = params.toString()
-  return fetchJson<ConversationRecord[]>(
-    `/api/commanders/${encodeURIComponent(commanderId)}/conversations${query ? `?${query}` : ''}`,
+  return fetchJson<CommanderConversationBootstrapProjection>(
+    `/api/commanders/${encodeURIComponent(commanderId)}/conversations/bootstrap${query ? `?${query}` : ''}`,
   )
 }
 
@@ -342,12 +399,6 @@ export async function fetchCommanderActiveConversation(
 
 export const ACTIVE_CONVERSATION_FETCH_STALE_MS = ACTIVE_CONVERSATION_STALE_MS
 export const CONVERSATION_MESSAGES_PAGE_SIZE = 50
-
-async function fetchConversation(conversationId: string): Promise<ConversationRecord> {
-  return fetchJson<ConversationRecord>(
-    `/api/conversations/${encodeURIComponent(conversationId)}`,
-  )
-}
 
 async function fetchConversationMessagesPage(input: {
   conversationId: string
@@ -500,7 +551,7 @@ export function upsertConversationList(
 }
 
 function updateConversationMessagePageCache(
-  queryClient: ReturnType<typeof useQueryClient>,
+  queryClient: QueryClient,
   messagePage: ConversationMessagesPage,
 ) {
   queryClient.setQueryData(
@@ -519,7 +570,7 @@ function updateConversationMessagePageCache(
 }
 
 function updateConversationCaches(
-  queryClient: ReturnType<typeof useQueryClient>,
+  queryClient: QueryClient,
   conversation: ConversationRecord,
   options: {
     messagePage?: ConversationMessagesPage
@@ -534,6 +585,27 @@ function updateConversationCaches(
     (current: ConversationRecord[] | undefined) =>
       upsertConversationList(current, conversation),
   )
+  queryClient.setQueriesData<CommanderConversationBootstrapProjection>(
+    { queryKey: COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY },
+    (current) => {
+      if (!current || current.commanderId !== conversation.commanderId) {
+        return current
+      }
+      return {
+        ...current,
+        conversations: upsertConversationList(current.conversations, conversation),
+        activeConversation: conversation.status === 'active'
+          ? conversation
+          : current.activeConversation?.id === conversation.id
+            ? null
+            : current.activeConversation,
+        selectedConversation: current.selectedConversation?.id === conversation.id
+          || current.selectedConversationId === conversation.id
+          ? conversation
+          : current.selectedConversation,
+      }
+    },
+  )
   void queryClient.invalidateQueries({
     queryKey: commanderActiveConversationQueryKey(conversation.commanderId),
   })
@@ -547,7 +619,7 @@ function updateConversationCaches(
 }
 
 function removeConversationCaches(
-  queryClient: ReturnType<typeof useQueryClient>,
+  queryClient: QueryClient,
   payload: DeleteConversationResponse,
 ) {
   queryClient.removeQueries({
@@ -563,9 +635,50 @@ function removeConversationCaches(
     (current: ConversationRecord[] | undefined) =>
       (current ?? []).filter((conversation) => conversation.id !== payload.id),
   )
+  queryClient.setQueriesData<CommanderConversationBootstrapProjection>(
+    { queryKey: COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY },
+    (current) => {
+      if (!current || current.commanderId !== payload.commanderId) {
+        return current
+      }
+      return {
+        ...current,
+        conversations: current.conversations.filter((conversation) => conversation.id !== payload.id),
+        activeConversation: current.activeConversation?.id === payload.id
+          ? null
+          : current.activeConversation,
+        selectedConversation: current.selectedConversation?.id === payload.id
+          ? null
+          : current.selectedConversation,
+        selectedConversationId: current.selectedConversationId === payload.id
+          ? null
+          : current.selectedConversationId,
+      }
+    },
+  )
   void queryClient.invalidateQueries({
     queryKey: commanderActiveConversationQueryKey(payload.commanderId),
   })
+}
+
+export function applyCommanderConversationBootstrapProjection(
+  queryClient: QueryClient,
+  projection: CommanderConversationBootstrapProjection,
+): void {
+  queryClient.setQueryData(
+    commanderConversationsQueryKey(projection.commanderId),
+    sortConversations(projection.conversations),
+  )
+  queryClient.setQueryData(
+    commanderActiveConversationQueryKey(projection.commanderId),
+    projection.activeConversation,
+  )
+  for (const conversation of projection.conversations) {
+    queryClient.setQueryData(conversationDetailQueryKey(conversation.id), conversation)
+    if (conversation.initialMessagePage) {
+      updateConversationMessagePageCache(queryClient, conversation.initialMessagePage)
+    }
+  }
 }
 
 function getRecordInitialMessagePage(
@@ -613,6 +726,28 @@ function getInitialConversationMessagePage(
     }
   }
 
+  for (const [, projection] of queryClient.getQueriesData<CommanderConversationBootstrapProjection>({
+    queryKey: COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY,
+  })) {
+    if (!isCommanderConversationBootstrapProjection(projection)) {
+      continue
+    }
+    const selectedPage = getRecordInitialMessagePage(projection.selectedConversation, conversationId)
+    if (selectedPage) {
+      return selectedPage
+    }
+    const activePage = getRecordInitialMessagePage(projection.activeConversation, conversationId)
+    if (activePage) {
+      return activePage
+    }
+    const listPage = projection.conversations
+      .map((conversation) => getRecordInitialMessagePage(conversation, conversationId))
+      .find(Boolean)
+    if (listPage) {
+      return listPage
+    }
+  }
+
   return undefined
 }
 
@@ -625,9 +760,14 @@ function toConversationMessagesInfiniteData(
   }
 }
 
+interface UseConversationsOptions {
+  clientPushConnected?: boolean | null
+}
+
 export function useConversations(
   commanderId?: string | null,
   selectedConversationId?: string | null,
+  options: UseConversationsOptions = {},
 ) {
   const safeCommanderId = typeof commanderId === 'string' && commanderId.trim().length > 0
     ? commanderId.trim()
@@ -636,44 +776,58 @@ export function useConversations(
     typeof selectedConversationId === 'string' && selectedConversationId.trim().length > 0
       ? selectedConversationId.trim()
       : null
+  const explicitEmptySelection = selectedConversationId !== undefined && safeSelectedConversationId === null
+  const queryClient = useQueryClient()
 
-  const listQuery = useQuery({
-    queryKey: safeCommanderId ? commanderConversationsQueryKey(safeCommanderId) : [...COMMANDER_CONVERSATIONS_QUERY_KEY, 'none'],
-    queryFn: () => fetchCommanderConversations(safeCommanderId ?? '', safeSelectedConversationId),
+  const bootstrapQuery = useQuery({
+    queryKey: safeCommanderId
+      ? commanderConversationBootstrapQueryKey(safeCommanderId, safeSelectedConversationId)
+      : [...COMMANDER_CONVERSATION_BOOTSTRAP_QUERY_KEY, 'none'],
+    queryFn: () => fetchCommanderConversationBootstrap(safeCommanderId ?? '', safeSelectedConversationId),
     enabled: Boolean(safeCommanderId),
     staleTime: CONVERSATIONS_LIST_STALE_MS,
-    refetchInterval: safeCommanderId ? conversationsListRefetchInterval : false,
+    refetchInterval: safeCommanderId
+      ? (query) => conversationBootstrapRefetchInterval(query, options)
+      : false,
   })
+  const bootstrapProjection = isCommanderConversationBootstrapProjection(bootstrapQuery.data)
+    ? bootstrapQuery.data
+    : undefined
 
-  const detailQuery = useQuery({
-    queryKey: safeSelectedConversationId
-      ? conversationDetailQueryKey(safeSelectedConversationId)
-      : [...CONVERSATION_DETAIL_QUERY_KEY, 'none'],
-    queryFn: () => fetchConversation(safeSelectedConversationId ?? ''),
-    enabled: Boolean(safeSelectedConversationId),
-    staleTime: CONVERSATION_DETAIL_STALE_MS,
-    initialData: () => listQuery.data?.find((conversation) => conversation.id === safeSelectedConversationId),
-  })
+  useEffect(() => {
+    if (bootstrapProjection) {
+      applyCommanderConversationBootstrapProjection(queryClient, bootstrapProjection)
+    }
+  }, [bootstrapProjection, queryClient])
 
+  const cachedConversations = safeCommanderId
+    ? queryClient.getQueryData<ConversationRecord[]>(commanderConversationsQueryKey(safeCommanderId))
+    : undefined
+  const cachedConversationList = Array.isArray(cachedConversations) ? cachedConversations : undefined
   const conversations = useMemo(
-    () => listQuery.data ? sortConversations(listQuery.data) : [],
-    [listQuery.data],
+    () => sortConversations(bootstrapProjection?.conversations ?? cachedConversationList ?? []),
+    [bootstrapProjection?.conversations, cachedConversationList],
   )
   const selectedConversationFromList =
     conversations.find((conversation) => conversation.id === safeSelectedConversationId) ?? null
-  const selectedConversation = selectConversationCandidate(detailQuery.data, selectedConversationFromList)
+  const cachedSelectedConversation = safeSelectedConversationId
+    ? queryClient.getQueryData<ConversationRecord>(conversationDetailQueryKey(safeSelectedConversationId))
+    : null
+  const selectedConversation = explicitEmptySelection
+    ? null
+    : selectConversationCandidate(
+        bootstrapProjection?.selectedConversation ?? cachedSelectedConversation,
+        selectedConversationFromList,
+      )
 
   return {
     conversations,
     selectedConversation,
-    isLoading: listQuery.isLoading || detailQuery.isLoading,
-    isFetching: listQuery.isFetching || detailQuery.isFetching,
-    error: listQuery.error ?? detailQuery.error ?? null,
+    isLoading: bootstrapQuery.isLoading,
+    isFetching: bootstrapQuery.isFetching,
+    error: bootstrapQuery.error ?? null,
     refetch: async () => {
-      await Promise.all([
-        listQuery.refetch(),
-        safeSelectedConversationId ? detailQuery.refetch() : Promise.resolve(),
-      ])
+      await bootstrapQuery.refetch()
     },
   }
 }

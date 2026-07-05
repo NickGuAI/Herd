@@ -9,6 +9,7 @@ import {
   isMissingFounderOperatorError,
   resolveFounderOperatorId,
 } from '../modules/automations/resolve-founder-operator.js'
+import { withJsonStoreSchema } from '../modules/json-store-schema.js'
 import type {
   Automation,
   AutomationExecutionSource,
@@ -625,10 +626,10 @@ async function globalizeAthenaHygieneAutomations(
       continue
     }
 
-    await writeJsonFileAtomic(filePath, {
+    await writeJsonFileAtomic(filePath, withJsonStoreSchema({
       ...automation,
       parentCommanderId: null,
-    })
+    }))
     migratedIds.push(automation.id)
   }
 
@@ -687,7 +688,7 @@ async function repairMemoryCleanupAutomations(
       continue
     }
 
-    await writeJsonFileAtomic(filePath, repairMemoryConsolidationAutomation(automation))
+    await writeJsonFileAtomic(filePath, withJsonStoreSchema({ ...repairMemoryConsolidationAutomation(automation) }))
     migratedIds.push(automation.id)
   }
 
@@ -889,7 +890,7 @@ export async function migrateLegacyAutomations(
 
         const automation = buildCronAutomation(task, requireMigrationOperatorId(), automationsDir, now)
         await ensureAutomationArtifacts(path.join(automationsDir, task.id), automation)
-        await writeJsonFileAtomic(filePath, automation)
+        await writeJsonFileAtomic(filePath, withJsonStoreSchema({ ...automation }))
         migratedIds.add(task.id)
       }
 
@@ -919,7 +920,7 @@ export async function migrateLegacyAutomations(
         }
 
         await ensureAutomationArtifacts(path.join(automationsDir, task.id), nextAutomation)
-        await writeJsonFileAtomic(filePath, nextAutomation)
+        await writeJsonFileAtomic(filePath, withJsonStoreSchema({ ...nextAutomation }))
         migratedIds.add(task.id)
       }
 
@@ -945,7 +946,7 @@ export async function migrateLegacyAutomations(
       }
 
       await ensureAutomationArtifacts(path.join(automationsDir, sentinel.id), nextAutomation)
-      await writeJsonFileAtomic(filePath, nextAutomation)
+      await writeJsonFileAtomic(filePath, withJsonStoreSchema({ ...nextAutomation }))
       migratedIds.add(sentinel.id)
     }
 

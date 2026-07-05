@@ -29,7 +29,11 @@ import {
   EMPTY_QUEUE_SNAPSHOT,
   normalizeQueueSnapshot,
 } from '../queue-state'
-import { openWorkspaceTarget, type WorkspaceSource } from '../../workspace/use-workspace'
+import {
+  openWorkspaceTarget,
+  type WorkspaceSource,
+  type WorkspaceSourceRecovery,
+} from '../../workspace/use-workspace'
 import type { WorkspaceContextPayload, WorkspaceTreeNode } from '../../workspace/types'
 import { MobileSessionShell } from './MobileSessionShell'
 import {
@@ -115,10 +119,15 @@ export function MobileSessionView({
   const wsRef = useRef<WebSocket | null>(null)
   const sessionNameRef = useRef(sessionName)
   const initialWorkersRef = useRef<string[]>(initialSpawnedWorkers ?? [])
+  const workspaceSourceRef = useRef<WorkspaceSource | null>(null)
 
   useEffect(() => {
     sessionNameRef.current = sessionName
   }, [sessionName])
+
+  useEffect(() => {
+    workspaceSourceRef.current = workspaceSource
+  }, [workspaceSource])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -785,6 +794,29 @@ export function MobileSessionView({
     }
   }, [sessionCwd, sessionName])
 
+  const recoverStaleWorkspaceTarget = useCallback<WorkspaceSourceRecovery>(async (staleSource) => {
+    if (!sessionCwd) {
+      return null
+    }
+    const currentSource = workspaceSourceRef.current
+    if (!currentSource || currentSource.targetId !== staleSource.targetId) {
+      return null
+    }
+    const openedTarget = await openWorkspaceTarget({ sessionName })
+    if (workspaceSourceRef.current?.targetId !== staleSource.targetId) {
+      return null
+    }
+    const nextSource: WorkspaceSource = {
+      kind: 'target',
+      targetId: openedTarget.targetId,
+      label: openedTarget.label,
+      readOnly: openedTarget.readOnly,
+    }
+    workspaceSourceRef.current = nextSource
+    setWorkspaceSource(nextSource)
+    return nextSource
+  }, [sessionCwd, sessionName])
+
   const handleAddFileChip = useCallback((filePath: string, type: WorkspaceTreeNode['type'] = 'file') => {
     const normalizedPath = filePath.trim().replace(/\/+$/u, '')
     if (!normalizedPath) {
@@ -1096,6 +1128,7 @@ export function MobileSessionView({
           onClose={() => setShowWorkspaceOverlay(false)}
           onSelectFile={handleAddFileChip}
           source={workspaceSource}
+          onRecoverStaleTarget={recoverStaleWorkspaceTarget}
         />
       )}
     </>

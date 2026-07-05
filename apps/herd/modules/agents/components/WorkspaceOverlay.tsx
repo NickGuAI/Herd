@@ -61,9 +61,11 @@ export function WorkspaceOverlay({
     selectedPath,
     selectedPreviewPath,
     previewQuery,
+    treeError,
     handlePreviewPath,
     handleToggleDirectory,
     handleAddPath,
+    handleRetryTreeError,
     closePreview,
   } = useWorkspaceOverlayTree({
     open,
@@ -147,15 +149,15 @@ export function WorkspaceOverlay({
         title="Workspace"
         position="bottom-sheet"
         contentClassName={cn(
-          'flex w-full flex-col overflow-hidden bg-[var(--hv-surface-card)]',
-          'max-h-[85dvh] rounded-t-2xl md:max-w-2xl md:rounded-xl',
+          'flex w-full max-w-full flex-col overflow-hidden bg-[var(--hv-surface-card)]',
+          'max-h-[92dvh] rounded-t-lg md:max-w-2xl md:rounded-lg',
         )}
       >
           <div className="flex justify-center pb-1 pt-2 md:hidden">
             <div className="h-1 w-8 rounded-full bg-ink-border" />
           </div>
 
-          <div className="border-b border-[color:var(--hv-border-hair)] px-4 pb-3 pt-2">
+          <div className="border-b border-[color:var(--hv-border-hair)] px-3 pb-3 pt-2">
             <div className="mb-3 flex items-center gap-2">
               <FolderOpen size={14} className="shrink-0 text-[color:var(--hv-fg-subtle)]" />
               <span className="flex-1 truncate font-mono text-xs text-[color:var(--hv-fg-muted)]">
@@ -164,7 +166,7 @@ export function WorkspaceOverlay({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-lg p-1.5 transition-colors hover:bg-[var(--hv-surface-hover)]"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-lg transition-colors hover:bg-[var(--hv-surface-hover)]"
                 aria-label="Close workspace"
               >
                 <X size={14} className="text-[color:var(--hv-fg-subtle)]" />
@@ -184,13 +186,13 @@ export function WorkspaceOverlay({
                 aria-label="Search workspace files"
               />
             </div>
-            <div className="mt-2 flex gap-1">
+            <div className="mt-2 grid grid-cols-3 gap-1 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-1">
               {OVERLAY_TABS.map((tab) => (
                 <button
                   key={tab.key}
                   type="button"
                   className={cn(
-                    'rounded-md px-2.5 py-1 text-xs transition-colors',
+                    'min-h-8 rounded-md px-2 text-xs font-medium transition-colors',
                     activeTab === tab.key
                       ? 'bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]'
                       : 'text-[color:var(--hv-fg-subtle)] hover:bg-[var(--hv-surface-hover)]',
@@ -208,7 +210,7 @@ export function WorkspaceOverlay({
             )}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-2">
             {activeTab === 'files' && (
               <WorkspaceFilesTab
                 filteredNodesByParent={filteredNodesByParent}
@@ -216,11 +218,13 @@ export function WorkspaceOverlay({
                 loadingPaths={loadingPaths}
                 addedPaths={addedPaths}
                 selectedPath={selectedPath}
+                error={treeError}
                 downloadingPath={downloadingPath}
                 onSelectPath={handlePreviewPath}
                 onToggleDirectory={(path) => void handleToggleDirectory(path)}
                 onAddPath={handleAddPath}
                 onDownloadPath={(path, knownType) => void handleDownloadPath(path, knownType)}
+                onRetry={handleRetryTreeError}
               />
             )}
 

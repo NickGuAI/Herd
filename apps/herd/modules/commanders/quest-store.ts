@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { readJsonFileFailClosed, writeJsonFileAtomically } from '../json-file.js'
+import { withJsonStoreSchema } from '../json-store-schema.js'
 import { resolveCommanderDataDir } from './paths.js'
 import type { AutomationQuestEventBus } from '../automations/quest-event-bus.js'
 
@@ -41,6 +42,7 @@ export interface CommanderQuest {
 }
 
 interface PersistedCommanderQuests {
+  schemaVersion?: number
   quests: CommanderQuest[]
 }
 
@@ -798,7 +800,7 @@ export class QuestStore {
     const filePath = this.resolveCommanderFilePath(commanderId)
     await writeJsonFileAtomically(
       filePath,
-      { quests: sortQuests(quests) } satisfies PersistedCommanderQuests,
+      withJsonStoreSchema({ quests: sortQuests(quests) }) satisfies PersistedCommanderQuests,
     )
   }
 

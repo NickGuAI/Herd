@@ -1,0 +1,28 @@
+[Unit]
+Description=Herd server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_GROUP__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__APP_DIR__/.env
+Environment=HOME=__HOME_DIR__
+Environment=NODE_ENV=production
+Environment=PORT=__SERVICE_PORT__
+Environment=HERD_HOST=127.0.0.1
+Environment=HERD_DATA_DIR=__DATA_DIR__
+Environment=HERD_DB_PATH=__DATA_DIR__/herd.sqlite
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env PORT=__SERVICE_PORT__ HERD_HOST=127.0.0.1 node dist-server/server/index.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -42,6 +42,7 @@ interface StoredPolicyScope {
 }
 
 interface PersistedPolicyStore {
+  schemaVersion: 1
   version: 1
   updatedAt: string
   global: StoredPolicyScope
@@ -62,6 +63,7 @@ function emptyStoredScope(): StoredPolicyScope {
 
 function defaultPersistedStore(now: () => Date): PersistedPolicyStore {
   return {
+    schemaVersion: 1,
     version: 1,
     updatedAt: now().toISOString(),
     global: emptyStoredScope(),
@@ -172,6 +174,7 @@ function normalizePersistedStore(raw: unknown, now: () => Date): PersistedPolicy
   }
 
   return {
+    schemaVersion: 1,
     version: 1,
     updatedAt: asTrimmedString(raw.updatedAt) ?? now().toISOString(),
     global: normalizeStoredScope(raw.global, now, standingApprovalExpiryDays),

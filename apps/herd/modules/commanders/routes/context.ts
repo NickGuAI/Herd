@@ -1474,6 +1474,7 @@ export function buildCommandersContext(
     contextPressureInputTokenThreshold,
     fetchImpl,
     providerSecretsStore,
+    apiKeyStore: options.apiKeyStore,
     generateGeminiImage: generateGeminiImageWithFetch,
     githubToken,
     runtimeConfig,

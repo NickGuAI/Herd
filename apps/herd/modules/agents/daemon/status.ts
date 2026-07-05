@@ -9,7 +9,7 @@ import type {
 } from '../types.js'
 import { createMissingToolStatus } from '../machines.js'
 import { buildMachineDaemonDisplayDto } from '../machine-daemon-dtos.js'
-import type { DaemonConnectionSnapshot } from './registry.js'
+import { isDaemonPairingTokenExpired, type DaemonConnectionSnapshot } from './registry.js'
 
 export const DAEMON_TRANSPORT_UNSUPPORTED_REASON =
   'daemon transport is not connected or provider auth is not ready'
@@ -37,14 +37,19 @@ export function resolveMachineTransportStatus(
   if (transport === 'daemon') {
     const connected = Boolean(daemonConnection)
     const authReady = providerReady(daemonConnection)
+    const pairingExpired = isDaemonPairingTokenExpired(machine.daemon?.expiresAt)
+    // An expired pairing blocks launches even while the daemon WebSocket is
+    // still connected; status must agree with resolveDaemonLaunchReadiness.
     return {
       type: 'daemon',
       connected,
       providerAuthReady: authReady,
-      launchable: connected && authReady,
-      reason: !connected
-        ? 'daemon is not connected'
-        : (authReady ? null : 'daemon provider auth is not ready'),
+      launchable: connected && authReady && !pairingExpired,
+      reason: pairingExpired
+        ? 'daemon pairing token expired; rotate pairing or mint a new enrollment token'
+        : !connected
+          ? 'daemon is not connected'
+          : (authReady ? null : 'daemon provider auth is not ready'),
     }
   }
   if (transport === 'ssh') {
@@ -70,7 +75,8 @@ export function buildMachineDaemonStatus(
   daemonConnection: DaemonConnectionSnapshot | null,
 ): MachineDaemonStatus {
   const daemonConfig = machine.daemon
-  const paired = Boolean(daemonConfig?.pairingTokenHash && !daemonConfig.revokedAt)
+  const pairingExpired = isDaemonPairingTokenExpired(daemonConfig?.expiresAt)
+  const paired = Boolean(daemonConfig?.pairingTokenHash && !daemonConfig.revokedAt && !pairingExpired)
   const transport = resolveMachineTransportStatus(machine, daemonConnection)
 
   return {
@@ -87,6 +93,8 @@ export function buildMachineDaemonStatus(
     launchable: transport.launchable,
     launchUnsupportedReason: transport.launchable ? null : transport.reason,
     pairedAt: daemonConfig?.pairedAt ?? null,
+    expiresAt: daemonConfig?.expiresAt ?? null,
+    pairingExpired,
     revokedAt: daemonConfig?.revokedAt ?? null,
     connectedAt: daemonConnection?.connectedAt ?? null,
     lastSeenAt: daemonConnection?.lastSeenAt ?? daemonConfig?.lastSeenAt ?? null,

@@ -19,7 +19,7 @@ deny it.
   commander or session.
 - Approval policy changes should be tested against the action gate and the UI.
 
-Source references:
+Related docs:
 
-- [Approvals feature guide](../features/approvals.md)
-- [Policies and approvals architecture](../architecture/policies-approvals.md)
+- [Command Room](command-room.md)
+- [Hardening](../operate/hardening.md)

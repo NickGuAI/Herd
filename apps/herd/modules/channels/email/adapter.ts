@@ -246,6 +246,7 @@ export class EmailChannelAdapter implements ChannelAdapter<EmailChannelConfig> {
     typingIndicators: false,
     presence: false,
     reactions: false,
+    supportsMessageEdit: false,
     markdownDialect: 'plain' as const,
   }
 

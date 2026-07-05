@@ -51,8 +51,9 @@ export function BottomNav({
 }) {
   return (
     <nav
+      aria-label="Primary mobile navigation"
       className={cn(
-        'fixed bottom-0 left-0 right-0 z-20 flex items-stretch justify-around border-t border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] pb-[env(safe-area-inset-bottom,0px)]',
+        'fixed bottom-0 left-0 right-0 z-20 flex min-h-[calc(3.5rem+env(safe-area-inset-bottom,0px))] items-stretch justify-around border-t border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-1 pb-[env(safe-area-inset-bottom,0px)] backdrop-blur',
         !forceVisible && 'md:hidden',
       )}
     >
@@ -64,25 +65,25 @@ export function BottomNav({
             to={mod.path}
             className={({ isActive }) =>
               cn(
-                'flex flex-1 flex-col items-center justify-center gap-1 pt-2.5 pb-2 text-[color:var(--hv-fg)] transition-colors duration-300',
+                'relative flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 pt-1.5 pb-1 text-[color:var(--hv-fg-subtle)] transition-colors duration-200',
                 isActive && 'text-[color:var(--hv-fg)]',
               )
             }
           >
             {({ isActive }) => (
               <>
-                <span className="relative">
-                  {Icon && <Icon size={24} />}
+                <span className="relative flex h-6 items-center justify-center">
+                  {Icon && <Icon size={20} strokeWidth={isActive ? 2.3 : 1.8} />}
                   {mod.badge && mod.badge > 0 ? (
-                    <span className="absolute right-[-6px] top-0 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-[var(--hv-accent-danger-wash)] px-1 text-[9px] font-medium leading-none text-[color:var(--hv-fg-inverse)]">
+                    <span className="absolute right-[-8px] top-[-2px] inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[var(--hv-accent-danger-wash)] px-1 text-[9px] font-medium leading-none text-[color:var(--hv-fg-inverse)]">
                       {mod.badge}
                     </span>
                   ) : null}
                 </span>
-                <span className="text-[12px] uppercase tracking-wider">
+                <span className="max-w-full truncate text-[10px] font-medium leading-none">
                   {mod.label}
                 </span>
-                <span className={cn('block w-1 h-1 rounded-full', isActive ? 'bg-[var(--hv-button-primary-bg)]' : 'bg-transparent')} />
+                <span className={cn('absolute top-0 block h-0.5 w-5 rounded-full', isActive ? 'bg-[var(--hv-button-primary-bg)]' : 'bg-transparent')} />
               </>
             )}
           </NavLink>

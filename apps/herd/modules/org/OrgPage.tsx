@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { Archive } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ConfirmModal } from '@modules/components/ConfirmModal'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
@@ -25,6 +26,12 @@ interface ToastState {
   message: string
   tone?: 'neutral' | 'error'
 }
+
+const primaryActionClass =
+  'btn-primary inline-flex items-center justify-center gap-2 px-4 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]'
+
+const secondaryActionClass =
+  'btn-ghost inline-flex items-center justify-center gap-2 px-4 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]'
 
 function CommanderCardSkeleton() {
   return (
@@ -52,14 +59,14 @@ function findCommanderAutomations(tree: OrgTree, commanderId: string) {
   return tree.automations.filter((automation) => automation.parentId === commanderId)
 }
 
-function templateFileName(commander: OrgNode): string {
+function bundleFileName(commander: OrgNode): string {
   const safeName = commander.displayName
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     || 'commander'
-  return `commander-${safeName}-${commander.id.slice(0, 8)}.json`
+  return `commander-${safeName}-${commander.id.slice(0, 8)}.bundle.json`
 }
 
 function downloadJsonFile(fileName: string, payload: unknown) {
@@ -181,7 +188,7 @@ export function OrgPage() {
           <button
             type="button"
             data-testid="commander-hire-button"
-            className="rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)]"
+            className={secondaryActionClass}
           >
             Hire
           </button>
@@ -212,7 +219,7 @@ export function OrgPage() {
             onClick={() => {
               void refetch()
             }}
-            className="rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)]"
+            className={primaryActionClass}
           >
             Retry
           </button>
@@ -261,11 +268,11 @@ export function OrgPage() {
   async function saveCommanderTemplate(commander: OrgNode) {
     try {
       const templatePackage = await exportOrgCommanderTemplate(commander.id)
-      downloadJsonFile(templateFileName(commander), templatePackage)
-      setToast({ message: `Saved template for ${commander.displayName}.` })
+      downloadJsonFile(bundleFileName(commander), templatePackage)
+      setToast({ message: `Exported bundle for ${commander.displayName}.` })
     } catch (exportError) {
       setToast({
-        message: exportError instanceof Error ? exportError.message : 'Failed to save template.',
+        message: exportError instanceof Error ? exportError.message : 'Failed to export commander bundle.',
         tone: 'error',
       })
     }
@@ -313,8 +320,9 @@ export function OrgPage() {
           type="button"
           data-testid="archived-commanders-toggle"
           onClick={() => setShowArchived((current) => !current)}
-          className="self-start rounded-full border border-[color:var(--hv-border-hair)] px-4 py-2 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
+          className={`${secondaryActionClass} self-start`}
         >
+          <Archive className="h-4 w-4" aria-hidden="true" />
           {showArchived ? 'Hide archived' : `View archived (${data.archivedCommandersCount})`}
         </button>
       ) : null}
@@ -331,7 +339,7 @@ export function OrgPage() {
             type="button"
             data-testid="empty-org-hire-button"
             onClick={() => setHireWizardOpen(true)}
-            className="rounded-full bg-[var(--hv-button-primary-bg)] px-4 py-2 text-sm text-[color:var(--hv-fg-inverse)] transition-colors hover:bg-[var(--hv-button-primary-bg)]"
+            className={primaryActionClass}
           >
             Start setup chat
           </button>

@@ -38,6 +38,13 @@ export interface ProviderErrorMessageMeta {
   retryable?: boolean
 }
 
+export interface ChannelInboundFateMessageMeta {
+  fate: 'replied' | 'turn-failed' | 'policy-denied' | 'ingest-failed' | 'duplicate'
+  at: string
+  sourceHash?: string
+  error?: string
+}
+
 export interface MsgItem {
   id: string
   kind: 'system' | 'user' | 'thinking' | 'agent' | 'tool' | 'ask' | 'planning' | 'provider' | 'error'
@@ -69,6 +76,7 @@ export interface MsgItem {
   planApprovalRejectLabel?: string
   planApprovalCustomResponseLabel?: string
   providerError?: ProviderErrorMessageMeta
+  channelFate?: ChannelInboundFateMessageMeta
 }
 
 export function capMessages(msgs: MsgItem[]): MsgItem[] {

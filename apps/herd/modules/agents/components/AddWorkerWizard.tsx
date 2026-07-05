@@ -1,10 +1,13 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { MessageSquarePlus } from 'lucide-react'
 import {
   createMachine,
   type CreateMachineInput,
 } from '@/hooks/use-agents'
 import { parseTailscaleStatusJson } from '@gehirn/herd-cli/tailscale-status'
+import { buildGaiaCreateMachinePrompt } from '@modules/command-room/gaia-entry-prompts'
+import { openGaiaConversationWithDraft } from '@modules/command-room/gaia-launch'
 
 type WorkerConnectionMode = 'same-machine' | 'direct-ssh' | 'tailscale'
 type TailscalePlatformOption = 'macos' | 'linux' | 'already-installed'
@@ -110,6 +113,8 @@ export function AddWorkerWizard({
   const [cwd, setCwd] = useState('')
   const [actionError, setActionError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isOpeningWithGaia, setIsOpeningWithGaia] = useState(false)
+  const [gaiaError, setGaiaError] = useState<string | null>(null)
 
   const parsedTailscaleStatus = useMemo(() => {
     const trimmed = tailscaleStatusJson.trim()
@@ -182,8 +187,38 @@ export function AddWorkerWizard({
     }
   }
 
+  async function handleOpenWithGaia(): Promise<void> {
+    setIsOpeningWithGaia(true)
+    setGaiaError(null)
+    try {
+      await openGaiaConversationWithDraft(buildGaiaCreateMachinePrompt())
+    } catch (error) {
+      setGaiaError(error instanceof Error ? error.message : 'Failed to open Gaia.')
+    } finally {
+      setIsOpeningWithGaia(false)
+    }
+  }
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => void handleOpenWithGaia()}
+          disabled={isOpeningWithGaia}
+          className="min-h-[44px] min-w-[44px] rounded-lg border border-[color:var(--hv-border-soft)] px-3 py-1.5 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:opacity-60"
+        >
+          <MessageSquarePlus size={15} className="mr-2 inline" />
+          {isOpeningWithGaia ? 'Opening Gaia...' : 'Do it with Gaia'}
+        </button>
+      </div>
+
+      {gaiaError ? (
+        <div className="rounded-lg border border-[color:var(--hv-accent-danger)] bg-[var(--hv-accent-danger-wash)] px-3 py-2 text-sm text-[color:var(--hv-accent-danger)]">
+          {gaiaError}
+        </div>
+      ) : null}
+
       <div className="space-y-2">
         <label className={LABEL_CLASS} htmlFor="worker-connection-mode">Machine location</label>
         <select

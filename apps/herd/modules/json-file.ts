@@ -1,4 +1,4 @@
-import { readFile, rename } from 'node:fs/promises'
+import { access, readFile, rename } from 'node:fs/promises'
 import {
   DEFAULT_BACKUP_RETENTION,
   type AtomicFileWriteOptions,
@@ -64,6 +64,21 @@ function isNodeErrorWithCode(error: unknown, code: string): error is NodeJS.Errn
 
 async function quarantineCorruptJsonFile(filePath: string): Promise<string> {
   const quarantinePath = buildCorruptPath(filePath)
+  await rename(filePath, quarantinePath)
+  return quarantinePath
+}
+
+export async function quarantineJsonFile(filePath: string): Promise<string> {
+  const quarantinePath = `${filePath}.corrupt`
+  try {
+    await access(quarantinePath)
+    return quarantineCorruptJsonFile(filePath)
+  } catch (error) {
+    if (!isNodeErrorWithCode(error, 'ENOENT')) {
+      throw error
+    }
+  }
+
   await rename(filePath, quarantinePath)
   return quarantinePath
 }

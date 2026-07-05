@@ -89,7 +89,7 @@ export const HERD_MODULE_GRAPH = [
       routes: [
         {
           id: 'api-keys.ui',
-          path: '/api-keys',
+          path: '/settings',
           componentKey: 'modules/api-keys/page',
           surfaces: ['desktop', 'mobile'],
           nav: {
@@ -99,6 +99,13 @@ export const HERD_MODULE_GRAPH = [
             surfaces: ['desktop'],
             order: 60,
           },
+        },
+      ],
+      redirects: [
+        {
+          id: 'api-keys.legacy-redirect',
+          from: '/api-keys',
+          toRouteId: 'api-keys.ui',
         },
       ],
       componentKeys: ['modules/api-keys/page'],
@@ -249,8 +256,8 @@ export const HERD_MODULE_GRAPH = [
           nav: {
             label: 'Channels',
             icon: 'RadioTower',
-            group: 'primary',
-            order: 50,
+            group: 'secondary',
+            order: 40.5,
           },
         },
       ],
@@ -364,7 +371,9 @@ export const HERD_MODULE_GRAPH = [
             label: 'Marketplace',
             icon: 'Sparkles',
             group: 'primary',
-            surfaces: ['desktop', 'mobile'],
+            // Route stays mobile-reachable; the tab bar is capped at the
+            // canonical five-tab IA (Org · Sessions · Automations · Inbox · Settings).
+            surfaces: ['desktop'],
             order: 30,
           },
         },
@@ -377,7 +386,7 @@ export const HERD_MODULE_GRAPH = [
       surfaces: ['desktop', 'mobile'],
     },
     routeIds: ['commanders.api', 'commanders.packages-api', 'commanders.quests-api'],
-    parserIds: ['commanders.avatar-multipart'],
+    parserIds: ['commanders.bundle-import-json', 'commanders.avatar-multipart'],
     websocketIds: [],
     storageKeys: ['commanders.sessions', 'commanders.memory', 'commanders.quests', 'commanders.transcripts'],
   },
@@ -755,9 +764,9 @@ export const HERD_MODULE_GRAPH = [
           nav: {
             label: 'Skills',
             icon: 'Sparkles',
-            group: 'primary',
+            group: 'secondary',
             surfaces: ['desktop'],
-            order: 35,
+            order: 41.5,
           },
         },
       ],
@@ -899,6 +908,7 @@ export const HERD_MODULE_GRAPH = [
             label: 'Eval',
             icon: 'Gauge',
             group: 'secondary',
+            hidden: true,
             surfaces: ['desktop'],
             order: 110,
           },

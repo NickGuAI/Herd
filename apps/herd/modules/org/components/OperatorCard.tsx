@@ -1,4 +1,4 @@
-import { AgentAvatar } from '@modules/components/herd'
+import { AgentAvatar } from '@modules/components/hervald'
 import { cn } from '@/lib/utils'
 import { resolveFounderAvatarSrc } from '@modules/operators/founder-avatar'
 import type { Operator } from '../../operators/types'

@@ -8,6 +8,7 @@ import type {
   ChannelInboundDecision,
   ChannelInboundEvent,
   ChannelLastDrop,
+  ChannelOutboundMessageRef,
   ChannelOutboundPayload,
   ChannelRuntime,
   CommanderChannelBinding,
@@ -170,6 +171,7 @@ export class TelegramChannelAdapter implements ChannelAdapter<TelegramChannelCon
     typingIndicators: false,
     presence: false,
     reactions: false,
+    supportsMessageEdit: true,
     markdownDialect: 'telegram' as const,
   }
 
@@ -297,11 +299,82 @@ export class TelegramChannelAdapter implements ChannelAdapter<TelegramChannelCon
           ...(conversation.lastRoute?.threadId ? { message_thread_id: Number(conversation.lastRoute.threadId) } : {}),
         }))
       }
-      return { success: true as const, rawResponse: responses.length === 1 ? responses[0] : responses }
+      const firstResponse = responses[0] as TelegramMessage | undefined
+      const messageRef = responses.length === 1 && firstResponse?.message_id !== undefined
+        ? {
+            provider: 'telegram',
+            accountId: binding.accountId,
+            peerId: chatId,
+            ...(conversation.lastRoute?.threadId ? { threadId: conversation.lastRoute.threadId } : {}),
+            rawResponse: firstResponse,
+            telegram: {
+              chatId: firstResponse.chat?.id ?? chatId,
+              messageId: firstResponse.message_id,
+            },
+          } satisfies ChannelOutboundMessageRef
+        : undefined
+      return {
+        success: true as const,
+        rawResponse: responses.length === 1 ? responses[0] : responses,
+        ...(messageRef ? { messageRef } : {}),
+      }
     } catch (error) {
       return {
         success: false as const,
         error: error instanceof Error ? error.message : 'Failed to send Telegram message',
+      }
+    }
+  }
+
+  async editMessage(
+    runtime: ChannelRuntime<TelegramChannelConfig>,
+    conversation: Conversation,
+    messageRef: ChannelOutboundMessageRef,
+    payload: ChannelOutboundPayload,
+  ) {
+    try {
+      const binding = await this.resolveBinding(runtime, conversation)
+      const config = parseTelegramChannelConfig(binding.config, binding.accountId)
+      if (!config.credentialRef) {
+        return { success: false as const, error: 'Telegram bot token is not configured' }
+      }
+      const botToken = await this.secretsStore.getSecret(binding.commanderId, config.credentialRef)
+      if (!botToken) {
+        return { success: false as const, error: 'Telegram bot token is missing from the encrypted vault' }
+      }
+      const chatId = messageRef.telegram?.chatId ?? messageRef.peerId
+      const messageId = messageRef.telegram?.messageId
+      const text = payload.text?.trim() ?? ''
+      if (messageId === undefined) {
+        return { success: false as const, error: 'Telegram message reference is missing message id' }
+      }
+      if (!text) {
+        return { success: false as const, error: 'Telegram outbound text is empty' }
+      }
+      if (text.length > config.maxMessageLength) {
+        return { success: false as const, error: `Telegram edited text exceeds ${config.maxMessageLength} characters` }
+      }
+      const response = await this.callTelegramApi<TelegramMessage>(botToken, 'editMessageText', {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+      })
+      return {
+        success: true as const,
+        rawResponse: response,
+        messageRef: {
+          ...messageRef,
+          rawResponse: response,
+          telegram: {
+            chatId: response.chat?.id ?? chatId,
+            messageId: response.message_id ?? messageId,
+          },
+        },
+      }
+    } catch (error) {
+      return {
+        success: false as const,
+        error: error instanceof Error ? error.message : 'Failed to edit Telegram message',
       }
     }
   }

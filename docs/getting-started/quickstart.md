@@ -47,7 +47,8 @@ Follow the First Run flow:
 
 1. Confirm the database step is ready.
 2. Confirm the founder and organization profile.
-3. Seed Gaia when prompted.
+3. Seed Gaia when prompted. Gaia is the built-in onboarding commander that
+   helps the operator finish first-run setup and starter workforce creation.
 4. Install or intentionally skip the starter workforce.
 5. Review provider readiness.
 6. Review machine readiness.
@@ -99,6 +100,7 @@ Verification:
 - Worker logs show commands executing on the expected host.
 
 See [machines and workers](../operate/machines.md) for host routing details.
+Review [platform support](../reference/platforms.md) before choosing a host.
 
 ## 6. Start The First Useful Commander Run
 
@@ -128,6 +130,8 @@ Verification:
 | Provider unavailable | native provider auth status on that host | Run the provider login command on the provider host. |
 | Machine unavailable | ordinary SSH, Tailscale status, machine registry | Fix SSH/Tailscale first, then bootstrap the machine. |
 | Docs link missing | Docs index, `llms.txt`, `docs:check` | Sync the public docs tree and run the docs guard before publishing. |
+| Removing Herd | API keys, mobile pairing, provider auth, local data | Follow the [uninstall guide](../operate/uninstall.md) so credentials are revoked before files are deleted. |
 
 Next: read [Commanders](../concepts/commanders.md), [Command Room](../concepts/command-room.md),
-and [Workspace](../operate/workspace.md).
+and [Workspace](../operate/workspace.md). Before public exposure, complete
+[Hardening](../operate/hardening.md).

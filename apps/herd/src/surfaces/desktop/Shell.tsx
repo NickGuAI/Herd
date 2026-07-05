@@ -55,7 +55,7 @@ export function Shell({ modules, counts = EMPTY_TOP_BAR_COUNTS, children }: Shel
           their own viewport-frame overlay — see issue 1107.
           Padding gate matches the MobileShell mount gate: apply only when
           mobile chrome is visible, so immersive chat (where MobileBottomTabs
-          self-hides) does not leak a ~4rem white bar — see issue 1152. */}
+          self-hides) does not leak a mobile-tab-height white bar — see issue 1152. */}
       <main
         style={{
           flex: 1,

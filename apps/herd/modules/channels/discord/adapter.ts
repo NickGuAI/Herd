@@ -165,6 +165,7 @@ export class DiscordChannelAdapter implements ChannelAdapter<DiscordChannelConfi
     typingIndicators: false,
     presence: false,
     reactions: false,
+    supportsMessageEdit: false,
     markdownDialect: 'discord' as const,
   }
 

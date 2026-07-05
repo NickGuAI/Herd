@@ -155,7 +155,7 @@ Before writing a new skill, check `agent-skills/index.md` to avoid duplicates.
 If a similar skill already exists, prefer updating it over creating a new one.
 
 For format references, inspect nearby skills such as
-`agent-skills/gehirn-devpkg/preflight/SKILL.md` and
-`agent-skills/gehirn-devpkg/extract-skill/SKILL.md`. Treat them as formatting
+`agent-skills/commander-ops/preflight/SKILL.md` and
+`agent-skills/commander-ops/extract-skill/SKILL.md`. Treat them as formatting
 references only. The core principles in this guide - result certainty and
 enabling guidance over SOP - matter more than any exact section layout.

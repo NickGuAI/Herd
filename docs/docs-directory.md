@@ -13,6 +13,7 @@ This is the complete grouped map for public Herd product docs.
 ### Concepts
 
 - [concepts/commanders.md](concepts/commanders.md)
+- [concepts/org.md](concepts/org.md)
 - [concepts/workers.md](concepts/workers.md)
 - [concepts/command-room.md](concepts/command-room.md)
 - [concepts/approvals.md](concepts/approvals.md)
@@ -20,12 +21,22 @@ This is the complete grouped map for public Herd product docs.
 ### Operate
 
 - [operate/provider-auth.md](operate/provider-auth.md)
+- [operate/credential-pools.md](operate/credential-pools.md)
 - [operate/machines.md](operate/machines.md)
+- [operate/hardening.md](operate/hardening.md)
+- [operate/enterprise-ec2.md](operate/enterprise-ec2.md)
+- [operate/uninstall.md](operate/uninstall.md)
 - [operate/workspace.md](operate/workspace.md)
 - [operate/channels.md](operate/channels.md)
+
+### Guides
+
+- [guides/commander-bundles.md](guides/commander-bundles.md)
+- [guides/commander-packages.md](guides/commander-packages.md)
 
 ### Reference
 
 - [reference/cli.md](reference/cli.md)
 - [reference/api.md](reference/api.md)
+- [reference/platforms.md](reference/platforms.md)
 - [reference/naming.md](reference/naming.md)

@@ -18,12 +18,12 @@ thread.
 
 Host routing is meaningful only when the worker process actually runs on that
 host. Verify ordinary SSH, Tailscale, and machine registration before assuming a
-worker is on Mac mini, home Mac, EC2, or another machine.
+worker is on any named machine.
 
 See [machines and workers](../operate/machines.md) for setup commands.
 
-Source references:
+Related docs:
 
-- [Commanders architecture](../architecture/commanders.md)
-- [Agents architecture](../architecture/agents.md)
-- [Routes and APIs](../architecture/routes-and-apis.md)
+- [Machines and workers](../operate/machines.md)
+- [Commanders](commanders.md)
+- [Hardening](../operate/hardening.md)

@@ -67,7 +67,12 @@ export function BootstrapKeyRotationPrompt() {
     return null
   }
 
-  if (location.pathname === '/api-keys' || location.pathname.startsWith('/api-keys/')) {
+  if (
+    location.pathname === '/settings'
+    || location.pathname.startsWith('/settings/')
+    || location.pathname === '/api-keys'
+    || location.pathname.startsWith('/api-keys/')
+  ) {
     return null
   }
 
@@ -109,7 +114,7 @@ export function BootstrapKeyRotationPrompt() {
         </div>
         <div className="mt-4 flex items-center justify-between gap-3">
           <Link
-            to="/api-keys?rotation=bootstrap"
+            to="/settings?rotation=bootstrap"
             className="btn-primary inline-flex min-h-10 flex-1 shrink-0 items-center justify-center gap-2"
           >
             <KeyRound size={14} />

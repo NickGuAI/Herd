@@ -343,6 +343,7 @@ export interface StreamSession {
   providerAuthSnapshot?: ProviderAuthSnapshot
   credentialPoolId?: string
   credentialPoolRecovery?: CredentialPoolRecoveryRequest
+  gaiaOpsApiKeyExpiresAt?: string
   approvalBridgeNonce?: string
   activeTurnId?: string
   resumedFrom?: string
@@ -555,6 +556,7 @@ export interface AgentsRouterOptions {
   verifyAuth0Token?: (token: string) => Promise<AuthUser>
   internalToken?: string
   approvalBridgeSigningSecret?: string
+  machineEnrollmentSigningSecret?: string
   getActionPolicyGate?: () => ActionPolicyGate | null
   getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   commanderSessionStore?: Pick<CommanderSessionStore, 'get' | 'list'>
@@ -678,6 +680,8 @@ export interface CommanderSessionsInterface {
     resumeProviderContext?: ProviderSessionContext
     credentialPoolId?: string
     maxTurns?: number
+    env?: NodeJS.ProcessEnv
+    gaiaOpsApiKeyExpiresAt?: string
   }): Promise<StreamSession>
   replaceCommanderSession(params: {
     name: string
@@ -693,6 +697,8 @@ export interface CommanderSessionsInterface {
     resumeProviderContext?: ProviderSessionContext
     credentialPoolId?: string
     maxTurns?: number
+    env?: NodeJS.ProcessEnv
+    gaiaOpsApiKeyExpiresAt?: string
   }): Promise<StreamSession>
   getCredentialRecoveryRequest?(sessionName: string): CredentialPoolRecoveryRequest | undefined
   clearCredentialRecoveryRequest?(sessionName: string): void
@@ -748,6 +754,7 @@ export interface MachineConfig {
 export interface MachineDaemonConfig {
   pairingTokenHash?: string
   pairedAt?: string
+  expiresAt?: string
   revokedAt?: string
   lastSeenAt?: string
   daemonVersion?: string
@@ -800,6 +807,8 @@ export interface MachineDaemonStatus {
   launchUnsupportedReason: string | null
   allowedActions: MachineDaemonAction[]
   pairedAt: string | null
+  expiresAt: string | null
+  pairingExpired: boolean
   revokedAt: string | null
   connectedAt: string | null
   lastSeenAt: string | null

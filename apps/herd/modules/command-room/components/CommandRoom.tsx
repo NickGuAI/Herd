@@ -91,8 +91,10 @@ import {
 } from '@modules/command-room/route-metadata'
 import {
   ACTIVE_CONVERSATION_FETCH_STALE_MS,
+  applyCommanderConversationBootstrapProjection,
   commanderActiveConversationQueryKey,
-  fetchCommanderActiveConversation,
+  commanderConversationBootstrapQueryKey,
+  fetchCommanderConversationBootstrap,
   useCreateConversation,
   useDeleteConversation,
   useConversationMessages,
@@ -538,7 +540,10 @@ function CommandRoomContent() {
     ),
     [moduleGraph],
   )
-  const { theme, setTheme } = useTheme()
+  // Downstream chrome (sheets, overlays, quick theme toggles) works with a
+  // binary light/dark, so pass the resolved theme; `system` resolution lives
+  // in the theme context.
+  const { resolvedTheme: theme, setTheme } = useTheme()
   const { data: rawAgentSessions = [], refetch: refetchAgentSessions } = useAgentSessions()
   const { data: pendingApprovals = [] } = usePendingApprovals()
   const { data: machines } = useMachines()
@@ -558,6 +563,11 @@ function CommandRoomContent() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
   const [requestedNewChatCommanderId, setRequestedNewChatCommanderId] = useState<string | null>(null)
   const [conversationLoadError, setConversationLoadError] = useState<unknown>(null)
+  const [conversationClientPushState, setConversationClientPushState] = useState<{
+    commanderId: string
+    conversationId: string
+    connected: boolean
+  } | null>(null)
   const [queueSnapshot, setQueueSnapshot] = useState<SessionQueueSnapshot>(EMPTY_QUEUE_SNAPSHOT)
   const [pendingConversationMessages, setPendingConversationMessages] = useState<PendingConversationMessage[]>([])
   const [queueError, setQueueError] = useState<string | null>(null)
@@ -698,14 +708,32 @@ function CommandRoomContent() {
     : selectedCommanderId && !isGlobalCommanderId(selectedCommanderId)
       ? selectedCommanderId
       : null
+  let conversationClientPushConnected: boolean | null = null
+  if (conversationClientPushState?.commanderId === conversationListCommanderScope) {
+    conversationClientPushConnected = selectedConversationId
+      && conversationClientPushState.conversationId !== selectedConversationId
+      ? null
+      : conversationClientPushState.connected
+  }
   const {
     conversations,
     selectedConversation: selectedConversationRecord,
+    isLoading: conversationsLoading,
     error: conversationsError,
     refetch: refetchConversations,
   } = useConversations(
     conversationListCommanderScope,
     urlSelectionPending ? null : selectedConversationId,
+    { clientPushConnected: conversationClientPushConnected },
+  )
+  // Per issue 1878: the mobile chat shell mounts keyed on the commander URL
+  // param; while the client has no cached knowledge of the commander list or
+  // this commander's conversations, the shell renders header + composer +
+  // transcript skeleton instead of a blank section or a create-chat flash.
+  const conversationResolutionPending = Boolean(
+    normalizedCommanderParam
+    && !isGlobalCommanderId(normalizedCommanderParam)
+    && (commanderState.commandersLoading || conversationsLoading),
   )
   const conversationFetchError = conversationsError
     ? formatError(conversationsError, 'Failed to load conversations')
@@ -921,6 +949,30 @@ function CommandRoomContent() {
     websocketPath: streamWebSocketPath,
     onQueueUpdate: setQueueSnapshot,
   })
+  useEffect(() => {
+    const nextState = selectedConversation && !activeStandaloneSession && selectedConversationRunning
+      ? {
+          commanderId: selectedConversation.commanderId,
+          conversationId: selectedConversation.id,
+          connected: streamStatus === 'connected',
+        }
+      : null
+    setConversationClientPushState((current) => {
+      if (
+        current?.commanderId === nextState?.commanderId
+        && current?.conversationId === nextState?.conversationId
+        && current?.connected === nextState?.connected
+      ) {
+        return current
+      }
+      return nextState
+    })
+  }, [
+    activeStandaloneSession,
+    selectedConversation,
+    selectedConversationRunning,
+    streamStatus,
+  ])
   const conversationMessagesQuery = useConversationMessages(
     selectedConversation?.id ?? null,
     Boolean(selectedConversation),
@@ -1115,10 +1167,11 @@ function CommandRoomContent() {
     }
 
     void queryClient.fetchQuery({
-      queryKey: activeQueryKey,
-      queryFn: () => fetchCommanderActiveConversation(commanderId),
+      queryKey: commanderConversationBootstrapQueryKey(commanderId),
+      queryFn: () => fetchCommanderConversationBootstrap(commanderId),
       staleTime: ACTIVE_CONVERSATION_FETCH_STALE_MS,
-    }).then((active) => {
+    }).then((projection) => {
+      applyCommanderConversationBootstrapProjection(queryClient, projection)
       if (
         commanderSelectionRequestRef.current !== requestId
         || manualConversationSelectionRef.current !== manualSelectionVersion
@@ -1127,7 +1180,7 @@ function CommandRoomContent() {
         return
       }
 
-      const activeChatId = active?.id ?? null
+      const activeChatId = projection.selectedConversation?.id ?? projection.activeConversation?.id ?? null
       setConversationLoadError(null)
       const currentParams = new URLSearchParams(window.location.search)
       currentParams.set(commandRoomLaunch.commanderParam, commanderId)
@@ -1709,26 +1762,15 @@ function CommandRoomContent() {
 
     deepLinkFetchedForCommanderRef.current = normalizedCommanderParam
     const targetCommander = normalizedCommanderParam
-    void (async () => {
-      let activeChatId: string | null = null
-      try {
-        const active = await queryClient.fetchQuery({
-          queryKey: commanderActiveConversationQueryKey(targetCommander),
-          queryFn: () => fetchCommanderActiveConversation(targetCommander),
-          staleTime: ACTIVE_CONVERSATION_FETCH_STALE_MS,
-        })
-        activeChatId = active?.id ?? null
-      } catch (error) {
-        setConversationLoadError(error)
+
+    // Per issue 1878: apply the resolved conversation only while the user is
+    // still viewing this commander-only launch URL. This preserves the
+    // still-viewing guard that used to live in the org CheckOnHero second
+    // rail (pathname + commander match + no manual conversation selection).
+    const applyResolvedConversation = (activeChatId: string) => {
+      if (window.location.pathname !== commandRoomLaunch.path) {
         return
       }
-
-      if (!activeChatId) {
-        return
-      }
-      setConversationLoadError(null)
-
-      // Bail if the user navigated again while we were fetching.
       const liveSearch = new URLSearchParams(window.location.search)
       if (liveSearch.get(commandRoomLaunch.commanderParam) !== targetCommander) {
         return
@@ -1740,12 +1782,53 @@ function CommandRoomContent() {
       liveSearch.set(commandRoomLaunch.conversationParam, activeChatId)
       setSearchParams(liveSearch, { replace: true })
       setSelectedConversationId(activeChatId)
+    }
+
+    // Cache-first rail (issue 1878): external commander-only arrivals resolve
+    // from the same cached active-chat projection in-room clicks use
+    // (handleSelectCommanderId). When the client already knows the answer the
+    // conversation param is written synchronously with zero fetches — even a
+    // cached "no active chat" skips the network round-trip.
+    const activeQueryState = queryClient.getQueryState<ConversationRecord | null>(
+      commanderActiveConversationQueryKey(targetCommander),
+    )
+    if (activeQueryState?.dataUpdatedAt) {
+      const cachedActiveChatId = activeQueryState.data?.id ?? null
+      if (cachedActiveChatId) {
+        applyResolvedConversation(cachedActiveChatId)
+      }
+      return
+    }
+
+    void (async () => {
+      let activeChatId: string | null = null
+      try {
+        const projection = await queryClient.fetchQuery({
+          queryKey: commanderConversationBootstrapQueryKey(targetCommander),
+          queryFn: () => fetchCommanderConversationBootstrap(targetCommander),
+          staleTime: ACTIVE_CONVERSATION_FETCH_STALE_MS,
+        })
+        applyCommanderConversationBootstrapProjection(queryClient, projection)
+        activeChatId = projection.selectedConversation?.id ?? projection.activeConversation?.id ?? null
+      } catch (error) {
+        setConversationLoadError(error)
+        return
+      }
+
+      if (!activeChatId) {
+        return
+      }
+      setConversationLoadError(null)
+
+      // Bail if the user navigated again while we were fetching.
+      applyResolvedConversation(activeChatId)
     })()
   }, [
     normalizedCommanderParam,
     normalizedConversationParam,
     commandRoomLaunch.commanderParam,
     commandRoomLaunch.conversationParam,
+    commandRoomLaunch.path,
     queryClient,
     requestedNewChatCommanderId,
     setSearchParams,
@@ -2639,6 +2722,7 @@ function CommandRoomContent() {
       <MobileCommandRoom
         commanders={mobileCommanders}
         commanderSessions={commanderState.commanders}
+        conversationResolutionPending={conversationResolutionPending}
         workers={workers}
         automationSessions={automationSessions}
         pendingApprovals={pendingApprovals}

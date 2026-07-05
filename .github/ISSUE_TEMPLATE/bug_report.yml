@@ -1,0 +1,86 @@
+name: Bug report
+description: Report a reproducible Herd defect. For support questions, use Pioneering Minds AI.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for reproducible repository bugs. For discussion or support, use https://pioneeringminds.ai.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install or upgrade
+        - Command Room
+        - Commanders
+        - Workers and machines
+        - Provider auth
+        - CLI
+        - Docs
+        - Security
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: List the exact steps needed to reproduce the issue.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment shape
+      options:
+        - Linux web host
+        - Mac mini or workstation
+        - EC2 or VPS
+        - Railway
+        - iOS client
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment details
+      description: Include Herd version or commit, OS, Node version, pnpm version, browser, and relevant provider CLI versions.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and pull requests.
+          required: true
+        - label: This is a reproducible repository bug, not a general support question.
+          required: true

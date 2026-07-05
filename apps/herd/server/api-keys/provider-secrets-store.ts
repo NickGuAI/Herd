@@ -7,6 +7,7 @@ import {
   writeJsonFileAtomically,
   writeTextFileAtomically,
 } from '../../modules/json-file.js'
+import { withJsonStoreSchema } from '../../modules/json-store-schema.js'
 
 export const OPENAI_REALTIME_TRANSCRIPTION_PROVIDER_ID = 'openai-realtime-transcription'
 export const GEMINI_IMAGE_GENERATION_PROVIDER_ID = 'gemini-image-generation'
@@ -21,6 +22,7 @@ interface EncryptedSecretRecord {
 }
 
 interface PersistedSecretCollection {
+  schemaVersion?: number
   secrets: Record<string, EncryptedSecretRecord>
 }
 
@@ -328,6 +330,6 @@ export class ProviderSecretsStore
   }
 
   private async writeCollection(collection: PersistedSecretCollection): Promise<void> {
-    await writeJsonFileAtomically(this.filePath, collection, { trailingNewline: true })
+    await writeJsonFileAtomically(this.filePath, withJsonStoreSchema(collection), { trailingNewline: true })
   }
 }

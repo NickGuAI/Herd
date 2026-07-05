@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { PendingApproval } from '@/hooks/use-approvals'
 import { SessionRow, type Approval, type Commander, type Worker } from '@modules/command-room/components/desktop/SessionRow'
-import { StatusDot } from '@modules/components/herd'
+import { StatusDot } from '@modules/components/hervald'
 
 type SessionFilter = 'all' | 'active' | 'waiting'
 
@@ -68,40 +68,39 @@ export function MobileSessionsList({
   )
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col" data-testid="mobile-sessions-list">
-      <div className="px-5 pb-3 pt-4">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">hervald</p>
-            <h1 className="mt-1 font-display text-4xl text-[color:var(--hv-fg)]">Sessions</h1>
+    <section className="flex min-h-0 flex-1 flex-col bg-[var(--hv-bg)]" data-testid="mobile-sessions-list">
+      <div className="border-b border-[color:var(--hv-border-hair)] px-4 pb-2.5 pt-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="truncate text-[22px] font-medium leading-7 text-[color:var(--hv-fg)]">Sessions</h1>
+            <p className="mt-0.5 flex items-center gap-2 text-[11px] text-[color:var(--hv-fg-subtle)]">
+              <span className="inline-flex items-center gap-1.5 text-moss-stone">
+                <StatusDot state="active" size={5} />
+                {activeCount} active
+              </span>
+              {waitingCount > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-persimmon">
+                  <StatusDot state="paused" size={5} />
+                  {waitingCount} waiting
+                </span>
+              ) : null}
+            </p>
           </div>
-        </div>
-
-        <div className="mt-4 flex items-center gap-4 text-[10px] uppercase tracking-[0.14em] text-[color:var(--hv-fg-subtle)]">
-          <span className="inline-flex items-center gap-1.5 text-moss-stone">
-            <StatusDot state="active" size={6} />
-            {activeCount} active
+          <span className="shrink-0 rounded-full bg-[var(--hv-accent-danger-wash)] px-2 py-1 text-[10px] font-medium text-[color:var(--hv-accent-danger)]">
+            {approvals.length} pending
           </span>
-          {waitingCount > 0 ? (
-            <span className="inline-flex items-center gap-1.5 text-persimmon">
-              <StatusDot state="paused" size={6} />
-              {waitingCount} waiting
-            </span>
-          ) : null}
-          <span className="ml-auto text-[color:var(--hv-accent-danger)]">{approvals.length} pend</span>
         </div>
 
-        <div className="mt-4 flex gap-2">
+        <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] p-1">
           {(['all', 'active', 'waiting'] as const).map((value) => (
             <button
               key={value}
               type="button"
               onClick={() => setFilter(value)}
-              className="rounded-[2px_10px_2px_10px] px-3 py-1.5 text-[11px] uppercase tracking-[0.08em] transition-colors"
+              className="min-h-8 rounded-md px-2 text-[11px] font-medium capitalize transition-colors"
               style={{
                 background: filter === value ? 'var(--hv-fg)' : 'transparent',
                 color: filter === value ? 'var(--hv-bg)' : 'var(--hv-fg-subtle)',
-                border: filter === value ? '1px solid var(--hv-fg)' : '1px solid var(--hv-border-hair)',
               }}
             >
               {value}
@@ -110,12 +109,12 @@ export function MobileSessionsList({
         </div>
       </div>
 
-      <div className="hv-scroll flex-1 overflow-y-auto px-4 pb-5">
-        <div className="space-y-3">
+      <div className="hv-scroll flex-1 overflow-y-auto px-3 pb-4 pt-3">
+        <div className="space-y-2.5">
           {visibleCommanders.map((commander) => (
             <div
               key={commander.id}
-              className="overflow-hidden rounded-[3px_16px_3px_16px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] shadow-[var(--hv-shadow-whisper)]"
+              className="overflow-hidden rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] shadow-[var(--hv-shadow-whisper)]"
             >
               <SessionRow
                 commander={commander}
@@ -126,7 +125,7 @@ export function MobileSessionsList({
             </div>
           ))}
           {visibleCommanders.length === 0 ? (
-            <div className="rounded-[3px_16px_3px_16px] border border-dashed border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-6 text-center text-sm italic text-[color:var(--hv-fg-subtle)]">
+            <div className="rounded-lg border border-dashed border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-6 text-center text-sm text-[color:var(--hv-fg-subtle)]">
               No commanders match this filter.
             </div>
           ) : null}

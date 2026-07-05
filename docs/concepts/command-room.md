@@ -17,8 +17,8 @@ automations, channels, and settings modules.
 - Workspace: confirms the target path used for file browsing and context.
 - Worker blocks: confirms delegated work appears under the correct worker.
 
-Source references:
+Related docs:
 
-- [Command Room architecture](../architecture/command-room.md)
-- [Frontend surfaces](../architecture/frontend-surfaces.md)
 - [Workspace](../operate/workspace.md)
+- [Approvals](approvals.md)
+- [Workers](workers.md)

@@ -149,6 +149,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
   const codexTurnWatchdogTimeoutMs = parseCodexTurnWatchdogTimeoutMs(options.codexTurnWatchdogTimeoutMs)
   const internalToken = options.internalToken
   const approvalBridgeSigningSecret = options.approvalBridgeSigningSecret ?? internalToken
+  const machineEnrollmentSigningSecret = options.machineEnrollmentSigningSecret ?? approvalBridgeSigningSecret ?? internalToken ?? ''
   const getActionPolicyGate = options.getActionPolicyGate
   const autoResumeSessions = options.autoResumeSessions ?? true
   const machinesFilePath = options.machinesFilePath
@@ -550,6 +551,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     withMachineRegistryWriteLock,
     writeMachineRegistry,
     daemonRegistry,
+    machineEnrollmentSigningSecret,
   })
 
   registerSessionSweepRoutes({

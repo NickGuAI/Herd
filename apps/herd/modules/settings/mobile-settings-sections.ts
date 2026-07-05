@@ -16,6 +16,7 @@ import {
   isMobileSettingsSectionId,
   listMobileSettingsSections,
   type MobileSettingsSectionDto,
+  type MobileSettingsSectionGroup,
   type MobileSettingsSectionIcon,
   type MobileSettingsSectionId,
 } from './mobile-settings-dtos'
@@ -25,6 +26,7 @@ export interface MobileSettingsSection {
   id: MobileSettingsSectionId
   label: string
   icon: LucideIcon
+  group: MobileSettingsSectionGroup
   path: string
   fullPagePath?: string
   visible: boolean
@@ -82,6 +84,7 @@ export {
   getMobileSettingsPath,
   isMobileSettingsSectionId,
   type MobileSettingsSectionDto,
+  type MobileSettingsSectionGroup,
   type MobileSettingsSectionIcon,
   type MobileSettingsSectionId,
 }

@@ -1,15 +1,13 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Code2, Copy, Download, FileText, FolderTree, MessageSquarePlus, Play, Plus, Trash2, X } from 'lucide-react'
+import { CalendarClock, Code2, Copy, Download, FileText, FolderTree, MessageSquarePlus, Play, Plus, Trash2, X } from 'lucide-react'
 import { buildRequestHeaders, fetchJson } from '@/lib/api'
 import { getApiBase } from '@/lib/api-base'
 import {
-  buildSessionDraftImagesStorageKey,
-  buildSessionDraftStorageKey,
-} from '@modules/agents/page-shell/use-session-draft'
-import { buildCommandRoomLaunchTarget } from '@modules/command-room/route-metadata'
-import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+  openGaiaConversationWithDraft,
+  type GaiaLaunchDeps,
+} from '@modules/command-room/gaia-launch'
 
 interface SkillInfo {
   name: string
@@ -56,26 +54,7 @@ interface CreationPromptResponse {
   prompt: string
 }
 
-interface GaiaOnboardingStatus {
-  exists: boolean
-  commanderId: string | null
-  conversationId: string | null
-  displayName: string
-}
-
-interface OnboardingStatusResponse {
-  gaia: GaiaOnboardingStatus
-}
-
-interface StartConversationResponse {
-  conversation: ConversationRecord
-}
-
-interface SkillEditWithGaiaDeps {
-  fetchJsonImpl?: typeof fetchJson
-  storage?: Pick<Storage, 'setItem' | 'removeItem'>
-  location?: Pick<Location, 'assign'>
-}
+type SkillEditWithGaiaDeps = GaiaLaunchDeps
 
 type Panel = 'hub' | 'detail' | 'export'
 
@@ -141,8 +120,26 @@ function fetchCreationPrompt(): Promise<CreationPromptResponse> {
   return fetchJson<CreationPromptResponse>('/api/skills/creation-prompt')
 }
 
-function fetchOnboardingStatus(fetchJsonImpl: typeof fetchJson = fetchJson): Promise<OnboardingStatusResponse> {
-  return fetchJsonImpl<OnboardingStatusResponse>('/api/onboarding/status')
+export function filterSkills(skills: SkillInfo[], query: string): SkillInfo[] {
+  const trimmedQuery = query.trim().toLowerCase()
+  if (!trimmedQuery) {
+    return skills
+  }
+
+  return skills.filter((skill) => [
+    skill.name,
+    skill.dirName,
+    skill.description,
+    skill.source,
+  ].some((value) => value.toLowerCase().includes(trimmedQuery)))
+}
+
+export function buildSkillScheduleUrl(skill: SkillInfo): string {
+  const query = new URLSearchParams({
+    trigger: 'schedule',
+    skill: skill.dirName,
+  })
+  return `/automations?${query.toString()}`
 }
 
 function buildGaiaSkillEditPrompt(skill: SkillPackageDetail): string {
@@ -155,55 +152,15 @@ function buildGaiaSkillEditPrompt(skill: SkillPackageDetail): string {
   ].join('\n')
 }
 
-function writeSkillEditDraft(
-  storage: Pick<Storage, 'setItem' | 'removeItem'>,
-  sessionName: string,
-  prompt: string,
-): void {
-  storage.setItem(buildSessionDraftStorageKey(sessionName), prompt)
-  storage.removeItem(buildSessionDraftImagesStorageKey(sessionName))
-}
-
 export async function openSkillEditWithGaia(
   skill: SkillPackageDetail,
   deps: SkillEditWithGaiaDeps = {},
 ): Promise<void> {
-  const fetchJsonImpl = deps.fetchJsonImpl ?? fetchJson
-  const storage = deps.storage ?? window.localStorage
-  const location = deps.location ?? window.location
-  const status = await fetchOnboardingStatus(fetchJsonImpl)
-  const { gaia } = status
-  if (!gaia.exists || !gaia.commanderId) {
-    throw new Error('Gaia is not ready. Finish onboarding before editing skills with Gaia.')
-  }
-
-  const createdConversation = await fetchJsonImpl<ConversationRecord>(
-    `/api/commanders/${encodeURIComponent(gaia.commanderId)}/conversations`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ surface: 'ui' }),
-    },
-  )
-  const startedConversation = await fetchJsonImpl<StartConversationResponse>(
-    `/api/conversations/${encodeURIComponent(createdConversation.id)}/start`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    },
-  )
-  const conversation = startedConversation.conversation
-  const sessionName = conversation.sendTarget?.sessionName
-  if (!sessionName) {
-    throw new Error('Gaia conversation is unavailable for skill editing.')
-  }
-
-  writeSkillEditDraft(storage, sessionName, buildGaiaSkillEditPrompt(skill))
-  location.assign(buildCommandRoomLaunchTarget({
-    commanderId: gaia.commanderId,
-    conversationId: conversation.id,
-  }).path)
+  await openGaiaConversationWithDraft(buildGaiaSkillEditPrompt(skill), {
+    ...deps,
+    gaiaNotReadyMessage: 'Gaia is not ready. Finish onboarding before editing skills with Gaia.',
+    conversationUnavailableMessage: 'Gaia conversation is unavailable for skill editing.',
+  })
 }
 
 function formatSize(value: number | undefined): string {
@@ -249,12 +206,14 @@ function SkillCard({
   skill,
   onOpen,
   onRun,
+  onSchedule,
   onExport,
   onDelete,
 }: {
   skill: SkillInfo
   onOpen: () => void
   onRun: () => void
+  onSchedule: () => void
   onExport: () => void
   onDelete: () => void
 }) {
@@ -278,6 +237,9 @@ function SkillCard({
         <div className="flex shrink-0 items-center gap-1">
           <button type="button" title="Run skill" onClick={onRun} className="rounded-md border border-ink-border bg-washi-aged p-2 text-sumi-diluted">
             <Play size={16} />
+          </button>
+          <button type="button" title="Schedule this skill" onClick={onSchedule} className="rounded-md border border-ink-border bg-washi-aged p-2 text-sumi-diluted">
+            <CalendarClock size={16} />
           </button>
           <button type="button" title="Export" onClick={onExport} className="rounded-md border border-ink-border bg-washi-aged p-2 text-sumi-diluted">
             <Download size={16} />
@@ -419,6 +381,7 @@ function SkillDetailPanel({
   skill,
   onBack,
   onRun,
+  onSchedule,
   onEditWithGaia,
   onExport,
   onDelete,
@@ -428,6 +391,7 @@ function SkillDetailPanel({
   skill: SkillPackageDetail
   onBack: () => void
   onRun: () => void
+  onSchedule: () => void
   onEditWithGaia: () => void
   onExport: () => void
   onDelete: () => void
@@ -449,6 +413,10 @@ function SkillDetailPanel({
             <button type="button" onClick={onRun} className="rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-sm text-sumi-diluted">
               <Play size={15} className="mr-2 inline" />
               Run skill
+            </button>
+            <button type="button" onClick={onSchedule} className="rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-sm text-sumi-diluted">
+              <CalendarClock size={15} className="mr-2 inline" />
+              Schedule this skill
             </button>
             <button
               type="button"
@@ -724,6 +692,7 @@ export function SkillsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SkillInfo | null>(null)
+  const [skillsSearch, setSkillsSearch] = useState('')
   const queryClient = useQueryClient()
   const panel = (searchParams.get('panel') as Panel | null) ?? 'hub'
   const selectedName = searchParams.get('skill') ?? ''
@@ -759,6 +728,10 @@ export function SkillsPage() {
     window.location.assign('/command-room')
   }
 
+  function scheduleSkill(skill: SkillInfo) {
+    window.location.assign(buildSkillScheduleUrl(skill))
+  }
+
   function openPanel(nextPanel: Panel, skill: SkillInfo) {
     setSearchParams({ panel: nextPanel, skill: skill.dirName })
   }
@@ -782,6 +755,7 @@ export function SkillsPage() {
           skill={detailQuery.data}
           onBack={() => setSearchParams({})}
           onRun={() => runSkill(detailQuery.data)}
+          onSchedule={() => scheduleSkill(detailQuery.data)}
           onEditWithGaia={() => editWithGaiaMutation.mutate(detailQuery.data)}
           onExport={() => setSearchParams({ panel: 'export', skill: detailQuery.data.dirName })}
           onDelete={() => setDeleteTarget(detailQuery.data)}
@@ -804,6 +778,8 @@ export function SkillsPage() {
     return <ExportPanel preview={exportQuery.data} onBack={() => setSearchParams({ panel: 'detail', skill: exportQuery.data.skill.dirName })} />
   }
 
+  const visibleSkills = filterSkills(skillsQuery.data, skillsSearch)
+
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-washi-aged/35" data-testid="skills-page">
       <div className="border-b border-ink-border bg-washi-white px-6 py-5">
@@ -822,19 +798,35 @@ export function SkillsPage() {
             New skill
           </button>
         </div>
+        <label className="mt-5 block max-w-xl">
+          <span className="section-title mb-2 block">Search skills</span>
+          <input
+            type="search"
+            value={skillsSearch}
+            onChange={(event) => setSkillsSearch(event.target.value)}
+            placeholder="Filter by name, description, or source"
+            className="w-full rounded-lg border border-ink-border bg-washi-aged px-3 py-2 text-[16px] text-sumi-black focus:outline-none focus:border-ink-border-hover md:text-sm"
+          />
+        </label>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-6">
         <div className="mx-auto grid max-w-5xl gap-4">
-          {skillsQuery.data.map((skill) => (
+          {visibleSkills.map((skill) => (
             <SkillCard
               key={`${skill.source}:${skill.dirName}`}
               skill={skill}
               onOpen={() => openPanel('detail', skill)}
               onRun={() => runSkill(skill)}
+              onSchedule={() => scheduleSkill(skill)}
               onExport={() => openPanel('export', skill)}
               onDelete={() => setDeleteTarget(skill)}
             />
           ))}
+          {visibleSkills.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-ink-border bg-washi-white p-5 text-sm text-sumi-diluted">
+              No skills match this search.
+            </div>
+          ) : null}
         </div>
       </div>
       {panel === 'detail' && selectedSkill && detailQuery.isError && (

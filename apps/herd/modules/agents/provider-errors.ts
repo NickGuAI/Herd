@@ -25,6 +25,13 @@ const AUTH_REQUIRED_PATTERNS = [
   /\bapi key\b/iu,
 ]
 
+const RESUME_NOT_FOUND_PATTERNS = [
+  /\bno conversation found with session id\b/iu,
+  /\bconversation\b.*\bsession id\b.*\bnot found\b/iu,
+  /\bthread\b.*\bnot found\b/iu,
+  /\bresume\b.*\bnot found\b/iu,
+]
+
 function matchesAny(value: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(value))
 }
@@ -34,6 +41,9 @@ export function classifyProviderError(
   code?: string,
 ): ProviderErrorClassification {
   const haystack = [code, message].filter(Boolean).join(' ')
+  if (matchesAny(haystack, RESUME_NOT_FOUND_PATTERNS)) {
+    return 'resume_not_found'
+  }
   if (matchesAny(haystack, USAGE_LIMIT_PATTERNS)) {
     return 'usage_limit'
   }
@@ -41,6 +51,13 @@ export function classifyProviderError(
     return 'auth_required'
   }
   return 'other'
+}
+
+export function isResumeNotFoundProviderError(
+  message?: string,
+  code?: string,
+): boolean {
+  return classifyProviderError(message, code) === 'resume_not_found'
 }
 
 function normalizeReferenceTime(value: Date | string | number | undefined): Date {

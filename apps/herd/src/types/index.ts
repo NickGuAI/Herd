@@ -250,6 +250,7 @@ export interface Machine {
   envFile?: string
   daemon?: {
     pairedAt: string | null
+    expiresAt: string | null
     revokedAt: string | null
     lastSeenAt: string | null
     daemonVersion: string | null
@@ -303,6 +304,8 @@ export interface MachineDaemonStatus {
   launchUnsupportedReason: string | null
   allowedActions: MachineDaemonAction[]
   pairedAt: string | null
+  expiresAt: string | null
+  pairingExpired: boolean
   revokedAt: string | null
   connectedAt: string | null
   lastSeenAt: string | null
@@ -323,9 +326,19 @@ export interface MachineDaemonPairResponse {
     token: string
     websocketPath: string
     pairedAt: string
+    expiresAt: string
     command: MachineDaemonPairCommand
   }
   status: MachineDaemonStatus
+}
+
+export interface MachineEnrollmentTokenResponse {
+  enrollment: {
+    token: string
+    endpoint: string
+    expiresAt: string
+    command: MachineDaemonPairCommand
+  }
 }
 
 export interface MachineDaemonRevokeResponse {

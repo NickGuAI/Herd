@@ -123,3 +123,10 @@ Recovery:
 - Ensure the public docs index and `llms.txt` exist.
 - Ensure release sync copies the public docs subset to root `docs/`.
 - Re-run the public release sync before publishing.
+
+## Uninstall Or Credential Cleanup
+
+If you are removing Herd from a host, do not delete files before revoking
+credentials. Follow [Uninstall](operate/uninstall.md) to stop the service,
+revoke keys, rotate provider and machine credentials, and then remove local
+state.

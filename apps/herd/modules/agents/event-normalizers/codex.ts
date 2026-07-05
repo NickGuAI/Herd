@@ -400,14 +400,17 @@ function createCodexProviderErrorEnvelope(
   const hint = readTrimmedString(error?.additionalDetails)
     ?? readTrimmedString(params.additionalDetails)
   const details = extractProviderLimitDetails(message, code)
+  const normalizedCode = details.classification === 'resume_not_found'
+    ? 'resume_not_found'
+    : code
   return createCodexEnvelope(method, params, {
     type: 'provider.error',
     message,
     classification: details.classification,
-    ...(code ? { code } : {}),
+    ...(normalizedCode ? { code: normalizedCode } : {}),
     ...(hint ? { hint } : {}),
     ...(details.resetAt ? { resetAt: details.resetAt } : {}),
-    retryable: details.classification === 'usage_limit' || params.willRetry === true,
+    retryable: details.classification === 'usage_limit' || details.classification === 'resume_not_found' || params.willRetry === true,
     data: params,
   })
 }
@@ -689,14 +692,20 @@ export function mapCodexToTranscriptEnvelopes(
       return [createCodexActivityEnvelope(method, p, 'Sandbox setup completed', undefined, p)]
     case 'error':
       {
+        const error = asObject(p.error)
+        const message = readTrimmedString(error?.message) ?? readTrimmedString(p.message)
+        const code = readCodeString(error?.codexErrorInfo)
+          ?? readCodeString(error?.code)
+          ?? readCodeString(p.code)
+        const details = extractProviderLimitDetails(message ?? '', code)
         const activityEnvelope = createCodexActivityEnvelope(
           method,
           p,
           'Codex error',
-          readTrimmedString(asObject(p.error)?.message) ?? readTrimmedString(p.message),
+          message,
           p,
         )
-        return p.willRetry === false
+        return p.willRetry === false || details.classification === 'resume_not_found'
           ? [activityEnvelope, createCodexProviderErrorEnvelope(method, p)]
           : [activityEnvelope]
       }

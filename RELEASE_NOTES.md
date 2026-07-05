@@ -24,9 +24,9 @@ Public beta release synced from monorepo `main` on 2026-07-02.
 - Channel inbound-drop accounting across Slack, Discord, Telegram, Google Chat, and WhatsApp.
 
 ### Cleanup and polish
-- Removed dead Hammurabi UI/code paths from issue #1807 (sentinels consolidation, mock assets, legacy command-room components).
+- Removed dead Herd UI/code paths from issue #1807 (sentinels consolidation, mock assets, legacy command-room components).
 - Replaced fake skill DAG with package inspector.
-- User-facing Hervald phrasing replaced with Herd across console UI, CLI, and ops output.
+- User-facing Herd phrasing replaced with Herd across console UI, CLI, and ops output.
 - Added UI-to-backend logic flow architecture diagram and engineering architecture-diagram skill in monorepo docs.
 
 ## Install

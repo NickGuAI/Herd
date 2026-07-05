@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 import { resolveHerdDataDir } from '../data-dir.js'
 import { writeJsonFileAtomically } from '../json-file.js'
+import { withJsonStoreSchema } from '../json-store-schema.js'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   getClaudeDisableAdaptiveThinkingEnvValue,
@@ -283,6 +284,9 @@ function parseMachineDaemonConfig(value: unknown, machineId: string): MachineDae
   const pairedAt = typeof record.pairedAt === 'string' && record.pairedAt.trim().length > 0
     ? record.pairedAt.trim()
     : undefined
+  const expiresAt = typeof record.expiresAt === 'string' && record.expiresAt.trim().length > 0
+    ? record.expiresAt.trim()
+    : undefined
   const revokedAt = typeof record.revokedAt === 'string' && record.revokedAt.trim().length > 0
     ? record.revokedAt.trim()
     : undefined
@@ -296,6 +300,7 @@ function parseMachineDaemonConfig(value: unknown, machineId: string): MachineDae
   return {
     ...(pairingTokenHash ? { pairingTokenHash } : {}),
     ...(pairedAt ? { pairedAt } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
     ...(revokedAt ? { revokedAt } : {}),
     ...(lastSeenAt ? { lastSeenAt } : {}),
     ...(daemonVersion ? { daemonVersion } : {}),
@@ -352,7 +357,7 @@ export function createMachineRegistryStore(machinesFilePath: string): MachineReg
     const validated = ensureDefaultLocalMachine(parseMachineRegistry({ machines }))
     await writeJsonFileAtomically(
       machinesFilePath,
-      { machines: validated },
+      withJsonStoreSchema({ machines: validated }),
       { trailingNewline: true },
     )
     invalidateMachineRegistryCache()

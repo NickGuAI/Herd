@@ -172,10 +172,10 @@ export function WorkspaceFilePreview({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]">
       {showHeader && (
-        <div className="flex items-center justify-between gap-3 border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2">
-          <div className="min-w-0">
+        <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] px-3 py-2">
+          <div className="min-w-0 flex-1">
             <p className="truncate font-mono text-xs text-[color:var(--hv-fg-muted)]">
               {preview.path}
             </p>
@@ -183,11 +183,11 @@ export function WorkspaceFilePreview({
               {preview.kind} • {preview.size} bytes
             </p>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             {onDownload ? (
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-2 py-1 text-xs hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-2 text-xs hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={onDownload}
                 disabled={downloading}
                 aria-label={`Download ${preview.name}`}
@@ -198,7 +198,7 @@ export function WorkspaceFilePreview({
             ) : downloadFileUrl && (
               <a
                 href={downloadFileUrl}
-                className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-2 py-1 text-xs hover:bg-[var(--hv-surface-hover)]"
+                className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-2 text-xs hover:bg-[var(--hv-surface-hover)]"
                 download
                 aria-label={`Download ${preview.name}`}
               >
@@ -209,7 +209,7 @@ export function WorkspaceFilePreview({
             {onInsertPath && (
               <button
                 type="button"
-                className="rounded-md px-2 py-1 text-xs hover:bg-[var(--hv-surface-hover)]"
+                className="min-h-9 rounded-md px-2 text-xs hover:bg-[var(--hv-surface-hover)]"
                 onClick={() => onInsertPath(preview.path, 'file')}
               >
                 Add to context
@@ -284,11 +284,11 @@ export function WorkspaceFilePreview({
       )}
 
       {preview.kind === 'text' && (
-        <div className="flex-1 min-h-0 flex flex-col">
-          <div className="flex items-center justify-between px-3 py-2 text-whisper text-[color:var(--hv-fg-subtle)]">
-            <div className="flex items-center gap-2">
+        <div className="flex-1 min-h-0 min-w-0 flex flex-col">
+          <div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2 text-whisper text-[color:var(--hv-fg-subtle)]">
+            <div className="flex min-w-0 items-center gap-2">
               <FileCode2 size={13} />
-              <span>
+              <span className="truncate">
                 {isMarkdownPreview
                   ? (preview.truncated ? 'Markdown preview truncated to 256KB' : 'Rendered markdown preview')
                   : isHtmlPreview
@@ -301,7 +301,7 @@ export function WorkspaceFilePreview({
             {!readOnly && showTextActions && (
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-2 py-1 text-xs hover:bg-[var(--hv-surface-hover)] disabled:opacity-60"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-[color:var(--hv-border-hair)] px-2 text-xs hover:bg-[var(--hv-surface-hover)] disabled:opacity-60"
                 onClick={onSave}
                 disabled={saving}
               >

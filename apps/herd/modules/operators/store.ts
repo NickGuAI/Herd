@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveHerdDataDir } from '../data-dir.js'
+import { withJsonStoreSchema } from '../json-store-schema.js'
 import type { Operator, OperatorKind } from './types.js'
 
 const OPERATOR_KINDS = new Set<OperatorKind>([
@@ -250,7 +251,7 @@ export class OperatorStore {
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await writeFile(
       this.filePath,
-      JSON.stringify(normalizeOperator(operator), null, 2),
+      `${JSON.stringify(withJsonStoreSchema({ ...normalizeOperator(operator) }), null, 2)}\n`,
       'utf8',
     )
   }

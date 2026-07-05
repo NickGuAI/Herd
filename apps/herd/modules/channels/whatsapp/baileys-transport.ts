@@ -12,7 +12,7 @@ import {
   type WASocket,
 } from '@whiskeysockets/baileys'
 import qrcode from 'qrcode'
-import type { ChannelInboundEvent, ChannelOutboundPayload } from '../types.js'
+import type { ChannelInboundEvent, ChannelOutboundMessageRef, ChannelOutboundPayload } from '../types.js'
 import type { WhatsAppChannelConfig } from './config.js'
 import type {
   WhatsAppPairingSession,
@@ -231,8 +231,16 @@ function rawMessageId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
 }
 
+function optionalJid(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+}
+
 function sentMessageId(message: unknown): string | undefined {
   return rawMessageId((message as { key?: { id?: unknown } } | undefined)?.key?.id)
+}
+
+function sentMessageKey(message: unknown): unknown {
+  return (message as { key?: unknown } | undefined)?.key
 }
 
 function extractText(message: WAMessage): string | undefined {
@@ -327,6 +335,17 @@ async function toInboundEvent(
   }
 
   const chatType = remoteJid.endsWith(GROUP_JID_SUFFIX) ? 'group' : 'direct'
+  const keyAliases = message.key as Record<string, unknown>
+  const phoneJid = optionalJid(keyAliases.remoteJidPn)
+    ?? optionalJid(keyAliases.remoteJidPN)
+    ?? optionalJid(keyAliases.participantPn)
+    ?? optionalJid(keyAliases.participantPN)
+    ?? optionalJid(keyAliases.senderPn)
+    ?? optionalJid(keyAliases.senderPN)
+  const whatsappMetadata = {
+    ...(remoteJid.endsWith(LID_JID_SUFFIX) ? { lidJid: remoteJid } : {}),
+    ...(phoneJid ? { phoneJid } : {}),
+  }
   const audio = audioMessage(message)
   const audioBuffer = audio ? await downloadAudioBuffer(message) : null
   const media = mediaSummary(message)
@@ -345,7 +364,14 @@ async function toInboundEvent(
     ...(text ? { text } : {}),
     ...(audio && audioBuffer ? { audio: { buffer: audioBuffer, mimeType: audio.mimeType, durationMs: audio.durationMs } } : {}),
     ...(media.length > 0 ? { media } : {}),
-    ...(options.fromMeSelfChat ? { metadata: { selfAuthored: true, selfChat: true } } : {}),
+    ...(options.fromMeSelfChat || Object.keys(whatsappMetadata).length > 0
+      ? {
+          metadata: {
+            ...(options.fromMeSelfChat ? { selfAuthored: true, selfChat: true } : {}),
+            ...(Object.keys(whatsappMetadata).length > 0 ? { whatsapp: whatsappMetadata } : {}),
+          },
+        }
+      : {}),
     rawTimestamp: typeof message.messageTimestamp === 'number'
       ? message.messageTimestamp * 1000
       : nowIso(),
@@ -388,6 +414,9 @@ class BaileysRuntime implements WhatsAppTransportRuntime {
       })
     })
     sock.ev.on('messages.upsert', (upsert) => {
+      if (upsert.type && upsert.type !== 'notify') {
+        return
+      }
       void this.handleMessages(upsert.messages ?? []).catch((error) => {
         this.markError(error)
       })
@@ -505,8 +534,10 @@ class BaileysRuntime implements WhatsAppTransportRuntime {
     peerId: string,
     payload: ChannelOutboundPayload,
     options: { sendTextWithVoiceNote?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<{ rawResponse?: unknown; messageRef?: ChannelOutboundMessageRef }> {
     const jid = normalizePeerJid(peerId)
+    let rawResponse: unknown
+    let messageRef: ChannelOutboundMessageRef | undefined
     if (payload.audio) {
       const audioMessageResult = await this.sock.sendMessage(jid, {
         audio: payload.audio.buffer,
@@ -514,13 +545,61 @@ class BaileysRuntime implements WhatsAppTransportRuntime {
         mimetype: payload.audio.mimeType || 'audio/ogg; codecs=opus',
       })
       this.rememberSentMessageId(sentMessageId(audioMessageResult))
+      rawResponse = audioMessageResult
       if (!options.sendTextWithVoiceNote) {
-        return
+        return { rawResponse }
       }
     }
     if (payload.text?.trim()) {
       const textMessageResult = await this.sock.sendMessage(jid, { text: payload.text.trim() })
       this.rememberSentMessageId(sentMessageId(textMessageResult))
+      rawResponse = textMessageResult
+      const key = sentMessageKey(textMessageResult)
+      if (key) {
+        messageRef = {
+          provider: 'whatsapp',
+          accountId: this.accountId,
+          peerId: jid,
+          rawResponse: textMessageResult,
+          whatsapp: { key },
+        }
+      }
+    }
+    return {
+      rawResponse,
+      ...(messageRef ? { messageRef } : {}),
+    }
+  }
+
+  async edit(
+    peerId: string,
+    messageRef: ChannelOutboundMessageRef,
+    payload: ChannelOutboundPayload,
+  ): Promise<{ rawResponse?: unknown; messageRef?: ChannelOutboundMessageRef }> {
+    const jid = normalizePeerJid(peerId)
+    const text = payload.text?.trim()
+    if (!text) {
+      throw new Error('WhatsApp outbound text is empty')
+    }
+    const key = messageRef.whatsapp?.key ?? sentMessageKey(messageRef.rawResponse)
+    if (!key) {
+      throw new Error('WhatsApp message reference is missing message key')
+    }
+    const rawResponse = await this.sock.sendMessage(jid, {
+      text,
+      edit: key,
+    } as never)
+    this.rememberSentMessageId(sentMessageId(rawResponse))
+    return {
+      rawResponse,
+      messageRef: {
+        ...messageRef,
+        peerId: jid,
+        rawResponse,
+        whatsapp: {
+          key: sentMessageKey(rawResponse) ?? key,
+        },
+      },
     }
   }
 

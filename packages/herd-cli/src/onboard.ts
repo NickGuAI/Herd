@@ -15,6 +15,11 @@ import {
   ensureCommanderRuntimeConfig,
   resolveHerdDataDir,
 } from './commander-runtime-config-node.js'
+import {
+  DEFAULT_PORT,
+  loadDotenv,
+  resolveAppDir,
+} from './up.js'
 import { applyManagedAgentTelemetryConfig } from './agent-telemetry.js'
 import { listMachineAuthProviders, loadProviderRegistry, type ProviderRegistryEntry } from './providers.js'
 import {
@@ -33,7 +38,6 @@ import {
 import { validateTelemetryWriteKey } from './validate.js'
 import { parseTailscaleStatusJson } from './tailscale-status.js'
 
-const DEFAULT_ENDPOINT = 'https://herd.gehirn.ai'
 const DEFAULT_AGENTS: readonly HerdAgent[] = [
   'claude-code',
   'codex',
@@ -84,6 +88,8 @@ type InteractiveCommandRunner = (
 ) => Promise<number>
 
 type SetupPath = 'quickstart' | 'advanced'
+
+const DEFAULT_LOCAL_ENDPOINT_HOST = '127.0.0.1'
 
 export interface OnboardCliDependencies {
   fetchImpl?: typeof fetch
@@ -438,6 +444,16 @@ function createFounderOperator(input: {
   }
 }
 
+export function resolveDefaultOnboardEndpoint(env: NodeJS.ProcessEnv = process.env): string {
+  const appDir = resolveAppDir(env)
+  const dotenv = appDir ? loadDotenv(appDir) : {}
+  const configuredPort = Number(dotenv.PORT)
+  const port = Number.isInteger(configuredPort) && configuredPort > 0
+    ? configuredPort
+    : DEFAULT_PORT
+  return `http://${DEFAULT_LOCAL_ENDPOINT_HOST}:${port}`
+}
+
 async function ensureFounderOperator(
   dependencies: OnboardCliDependencies,
 ): Promise<{ filePath: string; created: boolean }> {
@@ -468,7 +484,7 @@ async function ensureFounderOperator(
   })
 
   await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, `${JSON.stringify(founder, null, 2)}\n`, 'utf8')
+  await writeFile(filePath, `${JSON.stringify({ schemaVersion: 1, ...founder }, null, 2)}\n`, 'utf8')
 
   return {
     filePath,
@@ -682,11 +698,12 @@ async function resolveEndpoint(options: ParsedOnboardArgs, setupPath: SetupPath)
   if (options.endpoint) {
     return options.endpoint
   }
+  const defaultEndpoint = resolveDefaultOnboardEndpoint()
   if (setupPath === 'quickstart') {
-    return DEFAULT_ENDPOINT
+    return defaultEndpoint
   }
   return promptText('Herd endpoint', {
-    defaultValue: DEFAULT_ENDPOINT,
+    defaultValue: defaultEndpoint,
     required: true,
   })
 }

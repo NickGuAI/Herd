@@ -2,11 +2,11 @@
  * Herd shared presentation primitives.
  *
  * CSS imports:
- *   import '@/styles/herd/tokens.css'
- *   import '@/styles/herd/animations.css'
+ *   import '@/styles/hervald/tokens.css'
+ *   import '@/styles/hervald/animations.css'
  *
  * Component imports:
- *   import { Icon, StatusDot, AgentAvatar, Chip } from '@modules/components/herd'
+ *   import { Icon, StatusDot, AgentAvatar, Chip } from '@modules/components/hervald'
  */
 export { ICONS } from './icons'
 export {

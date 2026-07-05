@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { resolveModuleDataDir } from '../data-dir.js'
+import { withJsonStoreSchema } from '../json-store-schema.js'
 import type { AppSettings, AppTheme } from './types.js'
 import {
   cloneComposerAbilitySettings,
@@ -35,7 +36,7 @@ function cloneSettings(settings: AppSettings): AppSettings {
 }
 
 export function normalizeAppTheme(value: unknown): AppTheme | null {
-  return value === 'light' || value === 'dark' ? value : null
+  return value === 'light' || value === 'dark' || value === 'system' ? value : null
 }
 
 function roundAppFontScale(value: number): number {
@@ -173,7 +174,7 @@ export class AppSettingsStore {
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await writeFile(
       this.filePath,
-      `${JSON.stringify(cloneSettings(settings), null, 2)}\n`,
+      `${JSON.stringify(withJsonStoreSchema({ ...cloneSettings(settings) }), null, 2)}\n`,
       'utf8',
     )
   }

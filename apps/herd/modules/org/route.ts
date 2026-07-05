@@ -43,7 +43,6 @@ import {
   type FounderOrgSetupValidationErrors,
   type FounderOrgSetupResponse,
 } from '../onboarding/contracts.js'
-import { buildCommandRoomLaunchTarget } from '../command-room/route-metadata.js'
 import { createOrgIdentityRouter } from '../org-identity/route.js'
 import { normalizeOrgName, OrgIdentityStore, OrgIdentityValidationError } from '../org-identity/store.js'
 import {
@@ -76,6 +75,7 @@ type FutureCommanderOrgFields = {
   templateId?: string | null
   replicatedFromCommanderId?: string | null
   activeWorkers?: number
+  system?: boolean
   archived?: boolean
   archivedAt?: string
 }
@@ -87,7 +87,7 @@ type OrgLaunchConversationRecord = OrgConversationRecord & { id?: string }
 
 type OrgConversationStore = {
   listByCommander(commanderId: string): Promise<ReadonlyArray<OrgLaunchConversationRecord>>
-} & Partial<Pick<ConversationStore, 'ensureDefaultConversation' | 'getActiveChatForCommander'>>
+} & Partial<Pick<ConversationStore, 'ensureDefaultConversation'>>
 
 const GAIA_HOST = 'gaia'
 const GAIA_DISPLAY_NAME = 'Gaia'
@@ -153,6 +153,7 @@ function createCommanderOrgStore(
             templateId: future.templateId ?? null,
             replicatedFromCommanderId: future.replicatedFromCommanderId ?? null,
             activeWorkers: future.activeWorkers ?? (session.state === 'running' ? 1 : 0),
+            system: future.system === true,
             archived: future.archived === true,
             archivedAt: future.archivedAt,
           }
@@ -232,15 +233,6 @@ function parseFounderOrgSetupRequest(raw: unknown): FounderOrgSetupRequest {
       email: formValues.founderEmail.trim(),
     },
   }
-}
-
-function parseCommanderId(raw: unknown): string | null {
-  if (typeof raw !== 'string') {
-    return null
-  }
-
-  const normalized = raw.trim()
-  return normalized.length > 0 ? normalized : null
 }
 
 function buildFounderIdFromEmail(email: string): string {
@@ -341,17 +333,27 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
   let automationStorePromise: Promise<BuildOrgTreeDependencies['automationStore']> | null = null
   let gaiaSeedPromise: Promise<void> | null = null
 
+  async function findGaiaCommander(sessions: readonly CommanderSession[]): Promise<CommanderSession | null> {
+    const displayNames = await readCommanderDisplayNames(commanderDataDir)
+    return sessions
+      .filter((session) => session.archived !== true)
+      .find((session) => (
+        session.host === GAIA_HOST ||
+        session.templateId === GAIA_TEMPLATE_ID ||
+        displayNames[session.id]?.trim().toLowerCase() === GAIA_DISPLAY_NAME.toLowerCase()
+      )) ?? null
+  }
+
   async function ensureGaiaCommanderSeed(): Promise<CommanderSession[]> {
     const sessions = await sessionStore.list()
-    const activeSessions = sessions.filter((session) => session.archived !== true)
-    if (activeSessions.length > 0 || typeof sessionStore.create !== 'function') {
+    if (await findGaiaCommander(sessions) || typeof sessionStore.create !== 'function') {
       return sessions
     }
     const createSession = sessionStore.create.bind(sessionStore)
 
     gaiaSeedPromise ??= (async () => {
       const latestSessions = await sessionStore.list()
-      if (latestSessions.some((session) => session.archived !== true)) {
+      if (await findGaiaCommander(latestSessions)) {
         return
       }
 
@@ -369,6 +371,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
         contextMode: 'thin',
         taskSource: null,
         templateId: GAIA_TEMPLATE_ID,
+        system: true,
       }
 
       const created = await createSession(session)
@@ -430,57 +433,6 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
     verifyAuth0Token: options.verifyAuth0Token,
     internalToken: options.internalToken,
   }))
-
-  async function getActiveConversationId(commanderId: string): Promise<string | null> {
-    try {
-      if (typeof conversationStore.getActiveChatForCommander === 'function') {
-        const activeConversation = await conversationStore.getActiveChatForCommander(commanderId)
-        return activeConversation?.id ?? null
-      }
-
-      const conversations = await conversationStore.listByCommander(commanderId)
-      const activeConversation = conversations
-        .filter((conversation) => (
-          conversation.id
-          && (conversation.status === 'active' || conversation.status === 'idle')
-          && (conversation.surface === undefined || ['ui', 'cli', 'api'].includes(conversation.surface))
-        ))
-        .sort((left, right) => {
-          if (left.status !== right.status) {
-            return left.status === 'active' ? -1 : 1
-          }
-          const createdDelta = Date.parse(right.createdAt ?? '') - Date.parse(left.createdAt ?? '')
-          return Number.isFinite(createdDelta) && createdDelta !== 0
-            ? createdDelta
-            : String(left.id).localeCompare(String(right.id))
-        })[0]
-      return activeConversation?.id ?? null
-    } catch {
-      return null
-    }
-  }
-
-  router.get('/commanders/:id/check-on-target', requireReadAccess, async (req, res) => {
-    const commanderId = parseCommanderId(req.params.id)
-    if (!commanderId) {
-      res.status(400).json({ error: 'Invalid commander id' })
-      return
-    }
-
-    const sessions = await sessionStore.list()
-    if (!sessions.some((session) => session.id === commanderId)) {
-      res.status(404).json({ error: `Commander "${commanderId}" not found` })
-      return
-    }
-
-    const conversationId = await getActiveConversationId(commanderId)
-    res.json({
-      target: buildCommandRoomLaunchTarget({
-        commanderId,
-        conversationId,
-      }),
-    })
-  })
 
   router.post('/', requireWriteAccess, async (req, res) => {
     if (!founderWriteStore) {

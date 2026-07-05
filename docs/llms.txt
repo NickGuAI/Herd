@@ -13,11 +13,16 @@ pages first.
 - [Quickstart](getting-started/quickstart.md)
 - [Troubleshooting](troubleshoot.md)
 - [Provider auth](operate/provider-auth.md)
+- [Credential pools](operate/credential-pools.md)
 - [Machines and workers](operate/machines.md)
+- [Hardening](operate/hardening.md)
+- [Enterprise EC2](operate/enterprise-ec2.md)
+- [Uninstall](operate/uninstall.md)
 
 ## Concepts
 
 - [Commanders](concepts/commanders.md)
+- [Organization](concepts/org.md)
 - [Workers](concepts/workers.md)
 - [Command Room](concepts/command-room.md)
 - [Approvals](concepts/approvals.md)
@@ -27,11 +32,17 @@ pages first.
 - [Workspace](operate/workspace.md)
 - [Channels](operate/channels.md)
 - [Provider auth](operate/provider-auth.md)
+- [Credential pools](operate/credential-pools.md)
 - [Machines and workers](operate/machines.md)
+- [Hardening](operate/hardening.md)
+- [Enterprise EC2](operate/enterprise-ec2.md)
+- [Uninstall](operate/uninstall.md)
 
 ## Reference
 
 - [CLI reference](reference/cli.md)
 - [API reference](reference/api.md)
+- [Platform support](reference/platforms.md)
 - [Naming policy](reference/naming.md)
+- [Commander bundles](guides/commander-bundles.md)
 - [Full docs directory](docs-directory.md)

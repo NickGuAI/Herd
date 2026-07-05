@@ -1,14 +1,12 @@
 import { Router } from 'express'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
-import {
-  getProvider,
-  listProviders,
-  parseProviderId,
-  resolveAutomationDefaultProviderId,
-} from '../agents/providers/registry.js'
 import { validateModelForAgentType } from '../agents/providers/validate-model.js'
 import type { AgentType } from '../agents/types.js'
+import {
+  parseOptionalAutomationAgentType,
+  resolveDefaultAutomationAgentType,
+} from './agent-type.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import {
   AutomationExecutor,
@@ -34,6 +32,7 @@ import type {
 
 const AUTOMATION_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
 const COMMANDER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i
+const RUN_KEY_PATTERN = /^[a-zA-Z0-9_-]+$/
 
 interface CommanderLookupStore {
   get(commanderId: string): Promise<unknown | null>
@@ -70,6 +69,17 @@ function parseAutomationId(raw: unknown): string | null {
   }
   const trimmed = raw.trim()
   if (!trimmed || !AUTOMATION_ID_PATTERN.test(trimmed)) {
+    return null
+  }
+  return trimmed
+}
+
+function parseRunKey(raw: unknown): string | null {
+  if (typeof raw !== 'string') {
+    return null
+  }
+  const trimmed = raw.trim()
+  if (!trimmed || !RUN_KEY_PATTERN.test(trimmed)) {
     return null
   }
   return trimmed
@@ -134,24 +144,6 @@ function parseOptionalBoolean(raw: unknown): boolean | null | undefined {
     return raw
   }
   return null
-}
-
-function parseOptionalAgentType(raw: unknown): AgentType | null | undefined {
-  if (raw === undefined) {
-    return undefined
-  }
-  const agentType = parseProviderId(raw)
-  return agentType && getProvider(agentType)?.capabilities.supportsAutomation
-    ? agentType
-    : null
-}
-
-function resolveDefaultAutomationAgentType(): AgentType | null {
-  const projectedDefault = resolveAutomationDefaultProviderId()
-  if (getProvider(projectedDefault)?.capabilities.supportsAutomation) {
-    return projectedDefault
-  }
-  return listProviders().find((provider) => provider.capabilities.supportsAutomation)?.id ?? null
 }
 
 function parseOptionalSessionType(raw: unknown): 'stream' | 'pty' | null | undefined {
@@ -406,7 +398,7 @@ export function createAutomationsRouter(options: AutomationsRouterOptions = {}):
       res.status(400).json({ error: 'instruction is required' })
       return
     }
-    const parsedAgentType = parseOptionalAgentType(req.body?.agentType)
+    const parsedAgentType = parseOptionalAutomationAgentType(req.body?.agentType)
     if (parsedAgentType === null) {
       res.status(400).json({ error: 'agentType must be a supported provider' })
       return
@@ -501,6 +493,18 @@ export function createAutomationsRouter(options: AutomationsRouterOptions = {}):
       res.status(400).json({ error: 'model must be a string when provided' })
       return
     }
+    const sourceConversationId = parseOptionalString(req.body?.sourceConversationId)
+    if (sourceConversationId === null) {
+      res.status(400).json({ error: 'sourceConversationId must be a string when provided' })
+      return
+    }
+    const templateId = req.body?.templateId === null
+      ? null
+      : parseOptionalString(req.body?.templateId)
+    if (templateId === null && req.body?.templateId !== null) {
+      res.status(400).json({ error: 'templateId must be a string when provided' })
+      return
+    }
     const modelValidation = validateModelForAgentType(agentType, model ?? null)
     if (!modelValidation.ok) {
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
@@ -524,6 +528,8 @@ export function createAutomationsRouter(options: AutomationsRouterOptions = {}):
       ...(model ? { model } : {}),
       ...(sessionType ? { sessionType } : {}),
       ...(skills ? { skills } : {}),
+      ...(templateId !== undefined ? { templateId } : {}),
+      ...(sourceConversationId ? { sourceConversationId } : {}),
       ...(observations ? { observations } : {}),
       ...(typeof req.body?.seedMemory === 'string' ? { seedMemory: req.body.seedMemory } : {}),
       ...(maxRuns ? { maxRuns } : {}),
@@ -543,6 +549,45 @@ export function createAutomationsRouter(options: AutomationsRouterOptions = {}):
         return
       }
       res.status(500).json({ error: 'Failed to create automation' })
+    }
+  })
+
+  router.get('/:id/runs/:key', requireReadAccess, async (req, res) => {
+    const automationId = parseAutomationId(req.params.id)
+    if (!automationId) {
+      res.status(400).json({ error: 'Invalid automation id' })
+      return
+    }
+    const runKey = parseRunKey(req.params.key)
+    if (!runKey) {
+      res.status(400).json({ error: 'Invalid run key' })
+      return
+    }
+    try {
+      await initialized
+      const automation = await scheduler.getAutomation(automationId)
+      if (!automation) {
+        res.status(404).json({ error: 'Automation not found' })
+        return
+      }
+      const [run, report] = await Promise.all([
+        store.readRunMetadata(automationId, runKey),
+        store.readRunReport(automationId, runKey),
+      ])
+      if (!run && report === null) {
+        res.status(404).json({ error: 'Automation run not found' })
+        return
+      }
+      res.json({
+        automationId,
+        key: runKey,
+        run,
+        report: report ?? '',
+        emptyOutputReason: run?.emptyOutputReason
+          ?? (!run?.completionOutput?.trim() ? 'No completion output was recorded for this run.' : undefined),
+      })
+    } catch {
+      res.status(500).json({ error: 'Failed to load automation run' })
     }
   })
 
@@ -619,7 +664,7 @@ export function createAutomationsRouter(options: AutomationsRouterOptions = {}):
       patch.instruction = instruction
     }
     if ('agentType' in body) {
-      const agentType = parseOptionalAgentType(body.agentType)
+      const agentType = parseOptionalAutomationAgentType(body.agentType)
       if (!agentType) {
         res.status(400).json({ error: 'agentType must be a supported provider' })
         return

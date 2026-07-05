@@ -28,7 +28,8 @@ import { resolveCommanderDataDir, resolveCommanderPaths } from './paths.js'
 import {
   parseCanonicalProviderContext,
 } from '../agents/providers/provider-context-normalization.js'
-import { writeJsonFileAtomically } from '../json-file.js'
+import { quarantineJsonFile, writeJsonFileAtomically } from '../json-file.js'
+import { withJsonStoreSchema } from '../json-store-schema.js'
 
 const CONVERSATION_STATUSES = new Set<Conversation['status']>([
   'active',
@@ -65,6 +66,13 @@ const CHANNEL_REPLY_INTENT_STATUSES = new Set<ChannelReplyIntent['status']>([
   'delivered',
   'failed',
 ])
+const CHANNEL_INBOUND_TERMINAL_FATES = new Set<ChannelInboundMessageFate['fate']>([
+  'replied',
+  'turn-failed',
+  'policy-denied',
+  'ingest-failed',
+  'duplicate',
+])
 const DEFAULT_CHAT_STATUSES = new Set<Conversation['status']>([
   'active',
   'idle',
@@ -84,6 +92,7 @@ export interface Conversation {
   lastRoute?: CommanderLastRoute
   channelReplyDelivery?: ChannelReplyDelivery
   channelReplyIntents?: ChannelReplyIntent[]
+  channelInboundFates?: ChannelInboundMessageFate[]
   voiceConfig?: VoiceConfigOverride
   agentType?: AgentType | null
   model?: string | null
@@ -150,6 +159,18 @@ export interface ChannelReplyIntent {
   message?: string
   error?: string
   settledAt?: string
+}
+
+export interface ChannelInboundMessageFate {
+  id: string
+  fate: 'replied' | 'turn-failed' | 'policy-denied' | 'ingest-failed' | 'duplicate'
+  provider: CommanderChannelMeta['provider']
+  accountId: string
+  rawSourceId: string
+  at: string
+  clientSendId?: string
+  sourceHash?: string
+  error?: string
 }
 
 type ParsedConversation = Omit<Conversation, 'name'> & {
@@ -329,6 +350,46 @@ function parseChannelReplyIntents(raw: unknown): ChannelReplyIntent[] | undefine
   return intents.length > 0 ? intents : undefined
 }
 
+function parseChannelInboundMessageFate(raw: unknown): ChannelInboundMessageFate | null {
+  if (!isObject(raw)) {
+    return null
+  }
+
+  const id = asOptionalString(raw.id)
+  const fate = typeof raw.fate === 'string' && CHANNEL_INBOUND_TERMINAL_FATES.has(raw.fate as ChannelInboundMessageFate['fate'])
+    ? raw.fate as ChannelInboundMessageFate['fate']
+    : null
+  const provider = parseChannelReplyProvider(raw.provider)
+  const accountId = asOptionalString(raw.accountId)
+  const rawSourceId = asOptionalString(raw.rawSourceId)
+  const at = asOptionalString(raw.at)
+  if (!id || !fate || !provider || !accountId || !rawSourceId || !at) {
+    return null
+  }
+
+  return {
+    id,
+    fate,
+    provider,
+    accountId,
+    rawSourceId,
+    at,
+    ...(asOptionalString(raw.clientSendId) ? { clientSendId: asOptionalString(raw.clientSendId) } : {}),
+    ...(asOptionalString(raw.sourceHash) ? { sourceHash: asOptionalString(raw.sourceHash) } : {}),
+    ...(asOptionalString(raw.error) ? { error: asOptionalString(raw.error) } : {}),
+  }
+}
+
+function parseChannelInboundMessageFates(raw: unknown): ChannelInboundMessageFate[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined
+  }
+  const fates = raw
+    .map(parseChannelInboundMessageFate)
+    .filter((fate): fate is ChannelInboundMessageFate => Boolean(fate))
+  return fates.length > 0 ? fates : undefined
+}
+
 function parseProviderContext(
   raw: Record<string, unknown>,
 ): ProviderSessionContext | undefined {
@@ -352,6 +413,9 @@ function cloneConversation(conversation: Conversation): Conversation {
         ...intent,
         lastRoute: { ...intent.lastRoute },
       }))
+      : undefined,
+    channelInboundFates: conversation.channelInboundFates
+      ? conversation.channelInboundFates.map((fate) => ({ ...fate }))
       : undefined,
     voiceConfig: conversation.voiceConfig
       ? {
@@ -414,6 +478,7 @@ function parseConversation(raw: unknown): ParsedConversation | null {
     lastRoute: parseCommanderLastRoute(raw.lastRoute),
     channelReplyDelivery: parseChannelReplyDelivery(raw.channelReplyDelivery),
     channelReplyIntents: parseChannelReplyIntents(raw.channelReplyIntents),
+    channelInboundFates: parseChannelInboundMessageFates(raw.channelInboundFates),
     voiceConfig: normalizeVoiceConfig(raw.voiceConfig),
     agentType,
     ...(model !== undefined ? { model } : {}),
@@ -491,6 +556,9 @@ function normalizeConversation(
           lastRoute: { ...intent.lastRoute },
         })),
       }
+      : {}),
+    ...(input.channelInboundFates?.length
+      ? { channelInboundFates: input.channelInboundFates.map((fate) => ({ ...fate })) }
       : {}),
     ...(input.voiceConfig ? { voiceConfig: normalizeVoiceConfig(input.voiceConfig) } : {}),
     agentType: input.agentType ?? null,
@@ -732,11 +800,13 @@ export class ConversationStore {
         if (!file.isFile() || !file.name.endsWith('.json')) {
           continue
         }
+        const filePath = path.join(conversationsDir, file.name)
 
         try {
-          const raw = await readFile(path.join(conversationsDir, file.name), 'utf8')
+          const raw = await readFile(filePath, 'utf8')
           const parsedJson = JSON.parse(raw) as unknown
           if (!isObject(parsedJson)) {
+            await this.quarantineUnreadableConversation(filePath)
             continue
           }
 
@@ -744,9 +814,11 @@ export class ConversationStore {
           if (parsed) {
             const normalized = this.normalizePersistedConversation(parsed, namesByCommander)
             conversationsById.set(normalized.id, normalized)
+          } else {
+            await this.quarantineUnreadableConversation(filePath)
           }
         } catch {
-          // Skip malformed conversation files; the API should remain readable.
+          await this.quarantineUnreadableConversation(filePath)
         }
       }
     }
@@ -754,10 +826,18 @@ export class ConversationStore {
     return [...conversationsById.values()]
   }
 
+  private async quarantineUnreadableConversation(filePath: string): Promise<void> {
+    try {
+      await quarantineJsonFile(filePath)
+    } catch {
+      // Keep the API readable even if the operator must clean up the file by hand.
+    }
+  }
+
   private async writeConversation(conversation: Conversation): Promise<void> {
     const filePath = toConversationFilePath(this.dataDir, conversation.commanderId, conversation.id)
     await mkdir(path.dirname(filePath), { recursive: true })
-    await writeJsonFileAtomically(filePath, normalizeConversation(conversation))
+    await writeJsonFileAtomically(filePath, withJsonStoreSchema({ ...normalizeConversation(conversation) }))
   }
 
   private async deleteConversationFile(conversation: Conversation): Promise<void> {

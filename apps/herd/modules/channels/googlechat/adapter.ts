@@ -174,6 +174,7 @@ export class GoogleChatChannelAdapter implements ChannelAdapter<GoogleChatChanne
     typingIndicators: false,
     presence: false,
     reactions: false,
+    supportsMessageEdit: false,
     markdownDialect: 'plain' as const,
   }
 

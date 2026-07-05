@@ -11,6 +11,7 @@ import type {
   Automation,
   AutomationHistoryEntry,
   AutomationQuestTrigger,
+  AutomationRunMetadata,
   AutomationStatus,
   AutomationTrigger,
 } from '../types'
@@ -18,6 +19,8 @@ import type {
 const AUTOMATIONS_QUERY_KEY = (scopeKey: string) => ['automations', 'list', scopeKey] as const
 const AUTOMATION_HISTORY_QUERY_KEY = (automationId: string | null) =>
   ['automations', 'history', automationId ?? 'none'] as const
+const AUTOMATION_RUN_DETAIL_QUERY_KEY = (automationId: string | null, runKey: string | null) =>
+  ['automations', 'run-detail', automationId ?? 'none', runKey ?? 'none'] as const
 const SKILL_OPTIONS_QUERY_KEY = ['automations', 'skill-options'] as const
 
 export type AutomationTriggerFilter = 'all' | AutomationTrigger
@@ -51,6 +54,14 @@ interface AutomationHistoryResponse {
   entries?: AutomationHistoryEntry[]
 }
 
+export interface AutomationRunDetail {
+  automationId: string
+  key: string
+  run: AutomationRunMetadata | null
+  report: string
+  emptyOutputReason?: string
+}
+
 interface TriggerAutomationResult {
   automation: AutomationListItem
   historyEntry: AutomationHistoryEntry
@@ -63,9 +74,10 @@ interface AutomationCreatePayload {
   schedule?: string
   questTrigger?: AutomationQuestTrigger
   instruction: string
-  agentType: AgentType
+  agentType?: AgentType
   permissionMode?: 'default'
   status?: AutomationStatus
+  templateId?: string | null
   description?: string
   timezone?: string
   machine?: string
@@ -84,13 +96,29 @@ export interface CreateAutomationTaskInput {
   timezone?: string
   machine: string
   workDir: string
-  agentType: AutomationCreatePayload['agentType']
+  agentType: AgentType
   instruction: string
   model?: string
   enabled: boolean
   permissionMode?: 'default'
   sessionType?: 'stream' | 'pty'
   description?: string
+}
+
+export interface CreateAutomationPresetInput {
+  name: string
+  trigger: AutomationTrigger
+  schedule?: string
+  questTrigger?: AutomationQuestTrigger
+  instruction: string
+  templateId: string
+  status?: AutomationStatus
+  description?: string
+  timezone?: string
+  skills?: string[]
+  observations?: string[]
+  seedMemory?: string
+  maxRuns?: number
 }
 
 interface AutomationUpdatePayload {
@@ -148,6 +176,12 @@ async function fetchAutomationHistory(automationId: string): Promise<AutomationH
     `/api/automations/${encodeURIComponent(automationId)}/history?limit=50`,
   )
   return Array.isArray(payload.entries) ? payload.entries : []
+}
+
+async function fetchAutomationRunDetail(automationId: string, runKey: string): Promise<AutomationRunDetail> {
+  return fetchJson<AutomationRunDetail>(
+    `/api/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runKey)}`,
+  )
 }
 
 async function fetchSkillOptions(): Promise<SkillOption[]> {
@@ -283,6 +317,29 @@ function mapCreateSentinelInput(
   }
 }
 
+function mapCreatePresetInput(
+  scope: AutomationScope,
+  input: CreateAutomationPresetInput,
+): AutomationCreatePayload {
+  return {
+    name: input.name.trim(),
+    parentCommanderId: scope.kind === 'commander' ? scope.commanderId : null,
+    trigger: input.trigger,
+    ...(input.schedule?.trim() ? { schedule: input.schedule.trim() } : {}),
+    ...(input.questTrigger ? { questTrigger: input.questTrigger } : {}),
+    instruction: input.instruction.trim(),
+    templateId: input.templateId,
+    status: input.status ?? 'active',
+    permissionMode: 'default',
+    ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+    ...(input.timezone?.trim() ? { timezone: input.timezone.trim() } : {}),
+    ...(input.skills?.length ? { skills: input.skills } : {}),
+    ...(input.observations?.length ? { observations: input.observations } : {}),
+    ...(input.seedMemory?.trim() ? { seedMemory: input.seedMemory } : {}),
+    ...(input.maxRuns ? { maxRuns: input.maxRuns } : {}),
+  }
+}
+
 function mapUpdateSentinelPatch(
   patch: UpdateSentinelInput,
   validProviderIds: ReadonlySet<AgentType>,
@@ -318,6 +375,20 @@ export function useAutomationHistory(automationId: string | null) {
     history: historyQuery.data ?? [],
     historyLoading: historyQuery.isLoading,
     historyError: toErrorMessage(historyQuery.error),
+  }
+}
+
+export function useAutomationRunDetail(automationId: string | null, runKey: string | null) {
+  const runDetailQuery = useQuery({
+    queryKey: AUTOMATION_RUN_DETAIL_QUERY_KEY(automationId, runKey),
+    queryFn: () => fetchAutomationRunDetail(automationId!, runKey!),
+    enabled: Boolean(automationId && runKey),
+  })
+
+  return {
+    runDetail: runDetailQuery.data ?? null,
+    runDetailLoading: runDetailQuery.isLoading,
+    runDetailError: toErrorMessage(runDetailQuery.error),
   }
 }
 
@@ -365,6 +436,18 @@ export function useAutomations(scope: AutomationScope) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(mapCreateSentinelInput(scope, input)),
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['automations'] })
+    },
+  })
+
+  const createPresetMutation = useMutation({
+    mutationFn: (input: CreateAutomationPresetInput) =>
+      fetchJson<AutomationListItem>('/api/automations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(mapCreatePresetInput(scope, input)),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['automations'] })
@@ -485,6 +568,13 @@ export function useAutomations(scope: AutomationScope) {
     [createSentinelMutation],
   )
 
+  const createPreset = useCallback(
+    async (input: CreateAutomationPresetInput) => {
+      await createPresetMutation.mutateAsync(input)
+    },
+    [createPresetMutation],
+  )
+
   const updateSentinel = useCallback(
     async (automationId: string, patch: UpdateSentinelInput) => {
       await updateAutomationMutation.mutateAsync({
@@ -555,6 +645,7 @@ export function useAutomations(scope: AutomationScope) {
   const actionError =
     toErrorMessage(createTaskMutation.error)
     ?? toErrorMessage(createSentinelMutation.error)
+    ?? toErrorMessage(createPresetMutation.error)
     ?? toErrorMessage(updateAutomationMutation.error)
     ?? toErrorMessage(deleteAutomationMutation.error)
     ?? toErrorMessage(triggerAutomationMutation.error)
@@ -583,7 +674,9 @@ export function useAutomations(scope: AutomationScope) {
     updateSentinel,
     deleteSentinel,
     triggerSentinel,
+    createPreset,
     createSentinelPending: createSentinelMutation.isPending,
+    createPresetPending: createPresetMutation.isPending,
     updateSentinelPending: updateAutomationMutation.isPending,
     deleteSentinelPending: deleteAutomationMutation.isPending,
     triggerSentinelPending: triggerAutomationMutation.isPending,

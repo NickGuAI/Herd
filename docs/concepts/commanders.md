@@ -26,8 +26,8 @@ time instead of a disposable chat session.
 - Keep quests concrete. A quest should have an outcome, acceptance criteria,
   and drift detection.
 
-Source references:
+Related docs:
 
-- [Commanders feature guide](../features/commanders.md)
-- [Commanders architecture](../architecture/commanders.md)
-- [Commander package guide](../guides/commander-packages.md)
+- [Organization](org.md)
+- [Workers](workers.md)
+- [Command Room](command-room.md)

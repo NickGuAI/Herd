@@ -32,6 +32,7 @@ const DEFAULT_COMMAND_ROOM_STALE_SESSION_TTL_MINUTES = 30
 const DEFAULT_COMMAND_ROOM_POLL_INTERVAL_MS = 5_000
 const APPROVAL_BRIDGE_SIGNING_SECRET_BYTES = 32
 const APPROVAL_BRIDGE_SIGNING_SECRET_FILE = 'approval-bridge-signing-secret'
+const MACHINE_ENROLLMENT_SIGNING_SECRET_FILE = 'machine-enrollment-signing-secret'
 
 function parsePositiveInteger(value: string | undefined): number | null {
   if (!value) {
@@ -86,6 +87,30 @@ export function resolveApprovalBridgeSigningSecret(env: NodeJS.ProcessEnv = proc
   return generated
 }
 
+export function resolveMachineEnrollmentSigningSecret(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.HERD_MACHINE_ENROLLMENT_SIGNING_SECRET?.trim()
+  if (configured) {
+    return configured
+  }
+
+  const dataRoot = env.HERD_DATA_DIR?.trim()
+    ? path.resolve(env.HERD_DATA_DIR.trim())
+    : path.join(homedir(), '.herd')
+  const dataDir = path.join(dataRoot, 'agents')
+  const secretPath = path.join(dataDir, MACHINE_ENROLLMENT_SIGNING_SECRET_FILE)
+  if (existsSync(secretPath)) {
+    const existing = readFileSync(secretPath, 'utf8').trim()
+    if (existing) {
+      return existing
+    }
+  }
+
+  const generated = randomBytes(APPROVAL_BRIDGE_SIGNING_SECRET_BYTES).toString('hex')
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+  writeFileSync(secretPath, `${generated}\n`, { mode: 0o600 })
+  return generated
+}
+
 export function createModules(options: ModuleRegistryOptions = {}): ModuleRegistryResult {
   const moduleGraph = loadHerdModules()
   const capabilities = createHerdCapabilityContainer<HerdRuntimeCapabilities>()
@@ -95,6 +120,7 @@ export function createModules(options: ModuleRegistryOptions = {}): ModuleRegist
     capabilities,
     internalToken: randomBytes(32).toString('hex'),
     approvalBridgeSigningSecret: resolveApprovalBridgeSigningSecret(),
+    machineEnrollmentSigningSecret: resolveMachineEnrollmentSigningSecret(),
     commandRoomMonitorOptions: resolveCommandRoomMonitorOptions(),
   })
 

@@ -18,6 +18,7 @@ import { useComposerSkillSlots } from '@/hooks/use-composer-skill-slots'
 import type { AgentType, SessionQueueSnapshot } from '@/types'
 import { cn } from '@/lib/utils'
 import { getQueuePendingCount } from '../queue-state'
+import { AddToChatSheet } from './AddToChatSheet'
 import { SkillsPicker } from './SkillsPicker'
 import { QueuePanel } from './QueuePanel'
 import { useSessionDraft } from '../page-shell/use-session-draft'
@@ -70,7 +71,6 @@ interface SessionComposerProps {
   onClearContextFilePaths?: () => void
   onRestoreContextAttachments?: (context: SessionComposerContextAttachments) => void
   onOpenWorkspace?: () => void
-  onOpenAddToChat?: () => void
   showWorkspaceShortcut?: boolean
   queueSnapshot?: SessionQueueSnapshot
   queueError?: string | null
@@ -126,7 +126,6 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   onClearContextFilePaths,
   onRestoreContextAttachments,
   onOpenWorkspace,
-  onOpenAddToChat,
   showWorkspaceShortcut = false,
   queueSnapshot,
   queueError,
@@ -153,6 +152,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   const [isSendSubmitPending, setIsSendSubmitPending] = useState(false)
   const [skillsPickerMode, setSkillsPickerMode] = useState<SkillsPickerMode | null>(null)
   const [showQueuePanel, setShowQueuePanel] = useState(false)
+  const [showAddToChatSheet, setShowAddToChatSheet] = useState(false)
   const [selectedAbilityIds, setSelectedAbilityIds] = useState<string[]>([])
   const [showCustomAbilityForm, setShowCustomAbilityForm] = useState(false)
   const [customAbilityLabel, setCustomAbilityLabel] = useState('')
@@ -207,7 +207,6 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   const queueMaxSize = typeof queueSnapshot?.maxSize === 'number' ? queueSnapshot.maxSize : 0
   const canOpenQueuePanel = !disabled && queueMaxSize > 0
   const showMobileQueueButton = isMobileVariant && canOpenQueuePanel
-  const showMobileQueueDraftButton = isMobileVariant && canOpenQueuePanel && queueDraftsSupported
   const isQueueDraftBlocked = isQueueSubmitPending || isQueueMutating || isSendSubmitPending
   const queueButtonLabel = queueMaxSize > 0
     ? `Queue ${totalQueuedCount}/${queueMaxSize}`
@@ -245,6 +244,9 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   const selectedAbilities = composerAbilities.filter((ability) => selectedAbilityIds.includes(ability.id))
   const showSkills = skillsPickerMode !== null
   const composerSettingsLoadError = composerAbilitiesLoadError ?? composerSkillSlotsLoadError
+  const effectivePlaceholder = isMobileVariant && disabled && disabledMessage
+    ? disabledMessage
+    : placeholder
 
   useImperativeHandle(ref, () => ({
     seedText(nextText: string) {
@@ -742,7 +744,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
         ref={textareaRef}
         className="input-field"
         rows={1}
-        placeholder={placeholder}
+        placeholder={effectivePlaceholder}
         value={inputText}
         onChange={handleTextareaInput}
         onKeyDown={handleKeyDown}
@@ -856,7 +858,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
             </button>
           </div>
         )}
-        {customAbilitiesEnabled && showCustomAbilityForm && (
+        {!isMobileVariant && customAbilitiesEnabled && showCustomAbilityForm && (
           <form className="composer-custom-ability-form" onSubmit={handleCustomAbilitySubmit}>
             <input
               value={customAbilityLabel}
@@ -920,13 +922,16 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
               <div className="composer-mobile-utility-actions">
                 <button
                   type="button"
-                  className="composer-add-btn"
-                  onClick={onOpenAddToChat}
+                  className={cn(
+                    'composer-add-btn',
+                    showAddToChatSheet && 'composer-add-btn--active',
+                  )}
+                  onClick={() => setShowAddToChatSheet(true)}
                   aria-label="Add to chat"
                   title="Add to chat"
                   disabled={disabled}
                 >
-                  <Plus size={18} />
+                  <Plus size={19} />
                 </button>
 
                 <button
@@ -947,33 +952,23 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
                 {showMobileQueueButton && (
                   <button
                     type="button"
-                    className="composer-queue-btn composer-queue-btn--mobile"
+                    className="composer-queue-keycap"
                     onClick={() => setShowQueuePanel(true)}
                     aria-label="Open queue"
                     title={queueButtonLabel}
                   >
-                    <ListChecks size={16} />
-                    <span>{totalQueuedCount}/{queueMaxSize}</span>
+                    <span className="composer-queue-keycap-cap" aria-hidden="true">Q</span>
+                    {totalQueuedCount > 0 && (
+                      <span
+                        className="composer-queue-keycap-badge"
+                        data-testid="composer-queue-count-badge"
+                        aria-hidden="true"
+                      >
+                        {totalQueuedCount}
+                      </span>
+                    )}
                   </button>
                 )}
-
-                {showMobileQueueDraftButton && (
-                  <button
-                    type="button"
-                    className="composer-queue-message-btn"
-                    onClick={() => {
-                      void handleQueueDraft()
-                    }}
-                    disabled={!canQueueDraft}
-                    aria-label="Queue message"
-                    title={canQueueDraft ? 'Queue message' : 'Type a message to queue'}
-                  >
-                    <ListPlus size={18} />
-                  </button>
-                )}
-
-                {renderQuickSkillSlot()}
-                {renderAbilityActions()}
               </div>
 
               <div className="composer-mobile-primary-actions">
@@ -1083,12 +1078,13 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
           </>
         )}
 
+        {!isMobileVariant && (
         <div className="composer-footer flex items-center justify-between px-3 pb-1 pt-0.5">
           <span className="font-mono text-[10px] text-[var(--msg-text-muted)]">
             {showDraftSaved ? 'Draft saved · ' : ''}
             {footerHint}
           </span>
-          {!isMobileVariant && showWorkspaceShortcut && onOpenWorkspace && (
+          {showWorkspaceShortcut && onOpenWorkspace && (
             <button
               type="button"
               className="font-mono text-[10px] text-[var(--msg-text-muted)] transition-colors hover:text-[var(--msg-text-secondary)]"
@@ -1098,6 +1094,7 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
             </button>
           )}
         </div>
+        )}
       </div>
 
       <SkillsPicker
@@ -1113,7 +1110,43 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
           return true
         }}
         onClose={() => setSkillsPickerMode(null)}
+        quickSlot={isMobileVariant ? {
+          skillName: primarySkillName?.trim() || null,
+          configuring: skillsPickerMode === 'quick-slot',
+          isSaving: isSavingSkillSlot,
+          onApply: () => {
+            const configuredSkill = primarySkillName?.trim()
+            if (configuredSkill) {
+              applySkillCommand(skillCommand(configuredSkill))
+            }
+            setSkillsPickerMode(null)
+          },
+          onClear: () => clearPrimarySkillName(),
+          onEnterConfigure: () => setSkillsPickerMode('quick-slot'),
+          onExitConfigure: () => setSkillsPickerMode('insert'),
+        } : undefined}
       />
+
+      {isMobileVariant && (
+        <AddToChatSheet
+          open={showAddToChatSheet}
+          theme={theme}
+          onClose={() => setShowAddToChatSheet(false)}
+          onPickImage={() => fileInputRef.current?.click()}
+          onPickSkill={() => setSkillsPickerMode('insert')}
+          onPickFile={() => onOpenWorkspace?.()}
+          abilities={{
+            items: composerAbilities,
+            selectedIds: selectedAbilityIds,
+            onToggle: toggleAbility,
+            customAbilitiesEnabled,
+            onRemoveCustom: handleRemoveCustomAbility,
+            onAddCustom: addCustomAbility,
+            isSaving: isSavingComposerAbility,
+            disabled,
+          }}
+        />
+      )}
 
       <QueuePanel
         open={showQueuePanel}

@@ -58,6 +58,7 @@ export interface ModuleRuntimeContext {
   readonly capabilities: HerdCapabilityContainer<HerdRuntimeCapabilities>
   readonly internalToken: string
   readonly approvalBridgeSigningSecret: string
+  readonly machineEnrollmentSigningSecret: string
   readonly commandRoomMonitorOptions: AgentSessionMonitorOptions
 }
 

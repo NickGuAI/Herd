@@ -100,6 +100,7 @@ export interface ChannelCapabilities {
   typingIndicators: boolean
   presence: boolean
   reactions: boolean
+  supportsMessageEdit: boolean
   markdownDialect: ChannelMarkdownDialect
 }
 
@@ -140,11 +141,33 @@ export interface ChannelInboundEvent {
   rawSourceId: string
 }
 
+export const CHANNEL_MESSAGE_JSON_BODY_LIMIT_MB = 32
+export const CHANNEL_MESSAGE_JSON_BODY_LIMIT = `${CHANNEL_MESSAGE_JSON_BODY_LIMIT_MB}mb`
+
 export interface ChannelOutboundPayload {
   text?: string
   audio?: ChannelAudioOutbound
   media?: ChannelMediaPayload[]
   asReplyTo?: string
+}
+
+export interface ChannelOutboundMessageRef {
+  provider: ChannelProvider
+  accountId: string
+  peerId: string
+  threadId?: string
+  rawResponse?: unknown
+  slack?: {
+    channel: string
+    ts: string
+  }
+  telegram?: {
+    chatId: string | number
+    messageId: number
+  }
+  whatsapp?: {
+    key: unknown
+  }
 }
 
 export interface ChannelPairingChallenge {
@@ -197,7 +220,7 @@ export interface ChannelRuntime<TConfig = unknown> {
 }
 
 export type ChannelSendResult =
-  | { success: true; rawResponse?: unknown }
+  | { success: true; rawResponse?: unknown; messageRef?: ChannelOutboundMessageRef }
   | { success: false; error: string; rawResponse?: unknown }
 
 export type ChannelInboundDecision =
@@ -205,10 +228,12 @@ export type ChannelInboundDecision =
   | { allowed: false; reason?: string }
 
 export interface ChannelLastDrop {
+  fate?: 'policy-denied' | 'ingest-failed'
   reason: string
   at: string
   chatType?: string
   sourceHash?: string
+  detail?: string
 }
 
 export interface ChannelAdapterStatus {
@@ -221,6 +246,8 @@ export interface ChannelAdapterStatus {
   lastError?: string
   lastEventAt?: string
   lastDrop?: ChannelLastDrop
+  dropCount?: number
+  recentDrops?: ChannelLastDrop[]
   qrCode?: string
   qrDataUrl?: string
   metadata?: Record<string, unknown>
@@ -241,6 +268,12 @@ export interface ChannelAdapter<TConfig = unknown> {
   send(
     runtime: ChannelRuntime<TConfig>,
     conversation: Conversation,
+    payload: ChannelOutboundPayload,
+  ): Promise<ChannelSendResult>
+  editMessage?(
+    runtime: ChannelRuntime<TConfig>,
+    conversation: Conversation,
+    messageRef: ChannelOutboundMessageRef,
     payload: ChannelOutboundPayload,
   ): Promise<ChannelSendResult>
   checkInboundAllowed(

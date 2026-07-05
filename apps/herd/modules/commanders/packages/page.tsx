@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
+import { Upload } from 'lucide-react'
 import { fetchJson } from '@/lib/api'
 import { buildCommandRoomLaunchTarget } from '@modules/command-room/route-metadata'
 
@@ -62,6 +63,29 @@ async function installCommanderPackage(packageId: string): Promise<unknown> {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({}),
+  })
+}
+
+function readFileText(file: File): Promise<string> {
+  if (typeof file.text === 'function') {
+    return file.text()
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read commander bundle file.'))
+    reader.readAsText(file)
+  })
+}
+
+export async function installCommanderBundleFromFile(file: File): Promise<{ displayName?: string }> {
+  const raw = await readFileText(file)
+  const payload = JSON.parse(raw) as unknown
+  return fetchJson<{ displayName?: string }>('/api/commanders/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
   })
 }
 
@@ -186,6 +210,8 @@ function PackageCard({
 
 export default function CommanderPackagesPage() {
   const queryClient = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [fileImportMessage, setFileImportMessage] = useState<string | null>(null)
   const packagesQuery = useQuery({
     queryKey: PACKAGES_QUERY_KEY,
     queryFn: listCommanderPackages,
@@ -197,6 +223,19 @@ export default function CommanderPackagesPage() {
         queryClient.invalidateQueries({ queryKey: PACKAGES_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: ['commanders'] }),
       ])
+    },
+  })
+  const fileImportMutation = useMutation({
+    mutationFn: installCommanderBundleFromFile,
+    onSuccess: async (result) => {
+      setFileImportMessage(result.displayName ? `Installed ${result.displayName}.` : 'Installed commander bundle.')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: PACKAGES_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: ['commanders'] }),
+      ])
+    },
+    onError: (error) => {
+      setFileImportMessage(error instanceof Error ? error.message : 'Failed to install commander bundle.')
     },
   })
 
@@ -250,6 +289,21 @@ export default function CommanderPackagesPage() {
           background: var(--hv-bg);
           border-radius: var(--hv-radius-carved);
           box-shadow: var(--hv-shadow-block);
+          padding: 10px 14px;
+          color: var(--hv-fg-muted);
+        }
+        .hv-marketplace-header-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: var(--hv-space-3);
+          flex-wrap: wrap;
+        }
+        .hv-marketplace-import-message {
+          border: 1px solid var(--hv-border-soft);
+          background: var(--hv-bg);
+          border-radius: var(--hv-radius-carved);
+          margin-bottom: var(--hv-space-4);
           padding: 10px 14px;
           color: var(--hv-fg-muted);
         }
@@ -388,6 +442,10 @@ export default function CommanderPackagesPage() {
           line-height: var(--hv-leading-normal);
         }
         .hv-marketplace-button {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
           min-height: 42px;
           border-radius: var(--hv-radius-carved);
           border: 1px solid var(--hv-border-firm);
@@ -425,6 +483,9 @@ export default function CommanderPackagesPage() {
             align-items: stretch;
             flex-direction: column;
           }
+          .hv-marketplace-header-actions {
+            justify-content: flex-start;
+          }
         }
         @media (max-width: 767px) {
           .hv-marketplace-page {
@@ -450,10 +511,48 @@ export default function CommanderPackagesPage() {
             <p className="hv-marketplace-eyebrow">Herd / Commander Marketplace</p>
             <h1>Hire a bundled commander</h1>
           </div>
-          <div className="hv-marketplace-status" data-testid="commander-marketplace-status">
-            {installedCount} of {packages.length} installed
+          <div className="hv-marketplace-header-actions">
+            <div className="hv-marketplace-status" data-testid="commander-marketplace-status">
+              {installedCount} of {packages.length} installed
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              data-testid="commander-bundle-file-input"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0]
+                event.currentTarget.value = ''
+                if (!file) {
+                  return
+                }
+                setFileImportMessage(null)
+                fileImportMutation.mutate(file)
+              }}
+            />
+            <button
+              type="button"
+              className="hv-marketplace-button hv-marketplace-button-ghost"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={fileImportMutation.isPending}
+              data-testid="install-commander-bundle-file"
+            >
+              <Upload size={16} aria-hidden="true" />
+              {fileImportMutation.isPending ? 'Installing...' : 'Install from file'}
+            </button>
           </div>
         </header>
+
+        {fileImportMessage ? (
+          <div
+            className="hv-marketplace-import-message"
+            role={fileImportMutation.isError ? 'alert' : 'status'}
+            data-testid="commander-bundle-file-message"
+          >
+            {fileImportMessage}
+          </div>
+        ) : null}
 
         {packagesQuery.isLoading ? (
           <div className="hv-marketplace-empty">Loading commander packages...</div>

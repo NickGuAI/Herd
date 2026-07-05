@@ -9,6 +9,7 @@ import type {
   ChannelInboundDecision,
   ChannelInboundEvent,
   ChannelLastDrop,
+  ChannelOutboundMessageRef,
   ChannelOutboundPayload,
   ChannelRuntime,
   CommanderChannelBinding,
@@ -104,6 +105,12 @@ interface SlackApiResponse<T = unknown> {
   [key: string]: unknown
 }
 
+interface SlackPostMessageResponse {
+  channel?: string
+  ts?: string
+  [key: string]: unknown
+}
+
 function resolveApiBaseUrl(env: NodeJS.ProcessEnv): string {
   const explicit = env.HERD_API_BASE_URL?.trim()
   if (explicit) {
@@ -165,6 +172,7 @@ export class SlackChannelAdapter implements ChannelAdapter<SlackChannelConfig> {
     typingIndicators: false,
     presence: false,
     reactions: false,
+    supportsMessageEdit: true,
     markdownDialect: 'slack' as const,
   }
 
@@ -285,19 +293,90 @@ export class SlackChannelAdapter implements ChannelAdapter<SlackChannelConfig> {
       if (chunks.length === 0) {
         return { success: false as const, error: 'Slack outbound text is empty' }
       }
-      const responses: unknown[] = []
+      const responses: SlackPostMessageResponse[] = []
       for (const text of chunks) {
-        responses.push(await this.callSlackApi(botToken, 'chat.postMessage', {
+        responses.push(await this.callSlackApi<SlackPostMessageResponse>(botToken, 'chat.postMessage', {
           channel,
           text,
           ...(conversation.lastRoute?.threadId ? { thread_ts: conversation.lastRoute.threadId } : {}),
         }))
       }
-      return { success: true as const, rawResponse: responses.length === 1 ? responses[0] : responses }
+      const firstResponse = responses[0]
+      const messageRef = responses.length === 1 && firstResponse?.channel && firstResponse.ts
+        ? {
+            provider: 'slack',
+            accountId: binding.accountId,
+            peerId: channel,
+            ...(conversation.lastRoute?.threadId ? { threadId: conversation.lastRoute.threadId } : {}),
+            rawResponse: firstResponse,
+            slack: {
+              channel: firstResponse.channel,
+              ts: firstResponse.ts,
+            },
+          } satisfies ChannelOutboundMessageRef
+        : undefined
+      return {
+        success: true as const,
+        rawResponse: responses.length === 1 ? responses[0] : responses,
+        ...(messageRef ? { messageRef } : {}),
+      }
     } catch (error) {
       return {
         success: false as const,
         error: error instanceof Error ? error.message : 'Failed to send Slack message',
+      }
+    }
+  }
+
+  async editMessage(
+    runtime: ChannelRuntime<SlackChannelConfig>,
+    conversation: Conversation,
+    messageRef: ChannelOutboundMessageRef,
+    payload: ChannelOutboundPayload,
+  ) {
+    try {
+      const binding = await this.resolveBinding(runtime, conversation)
+      const config = parseSlackChannelConfig(binding.config, binding.accountId)
+      if (!config.botTokenRef) {
+        return { success: false as const, error: 'Slack bot token is not configured' }
+      }
+      const botToken = await this.secretsStore.getSecret(binding.commanderId, config.botTokenRef)
+      if (!botToken) {
+        return { success: false as const, error: 'Slack bot token is missing from the encrypted vault' }
+      }
+      const channel = messageRef.slack?.channel ?? messageRef.peerId
+      const ts = messageRef.slack?.ts
+      const text = payload.text?.trim() ?? ''
+      if (!channel || !ts) {
+        return { success: false as const, error: 'Slack message reference is missing channel or timestamp' }
+      }
+      if (!text) {
+        return { success: false as const, error: 'Slack outbound text is empty' }
+      }
+      if (text.length > config.maxMessageLength) {
+        return { success: false as const, error: `Slack edited text exceeds ${config.maxMessageLength} characters` }
+      }
+      const response = await this.callSlackApi<SlackPostMessageResponse>(botToken, 'chat.update', {
+        channel,
+        ts,
+        text,
+      })
+      return {
+        success: true as const,
+        rawResponse: response,
+        messageRef: {
+          ...messageRef,
+          rawResponse: response,
+          slack: {
+            channel: response.channel ?? channel,
+            ts: response.ts ?? ts,
+          },
+        },
+      }
+    } catch (error) {
+      return {
+        success: false as const,
+        error: error instanceof Error ? error.message : 'Failed to edit Slack message',
       }
     }
   }

@@ -3,7 +3,7 @@ import {
   isDaemonMachine,
   LOCAL_MACHINE_ID,
 } from '../machines.js'
-import type { MachineDaemonRegistry } from '../daemon/registry.js'
+import { isDaemonPairingTokenExpired, type MachineDaemonRegistry } from '../daemon/registry.js'
 import type { AgentType, MachineConfig } from '../types.js'
 
 interface MachineLaunchRuntimeDeps {
@@ -55,6 +55,16 @@ export function createMachineLaunchRuntime(
   ): { ok: true } | { ok: false; status: number; error: string } {
     if (!isDaemonMachine(machine)) {
       return { ok: true }
+    }
+    // A daemon whose pairing token expired must not accept new sessions, even
+    // while its WebSocket from before the expiry is still connected. This
+    // keeps the launch gate in agreement with resolveMachineTransportStatus.
+    if (isDaemonPairingTokenExpired(machine.daemon?.expiresAt)) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Daemon machine "${machine.id}" pairing token expired; rotate pairing or mint a new enrollment token`,
+      }
     }
     const connection = deps.daemonRegistry.getConnection(machine.id)
     if (!connection) {

@@ -5,11 +5,13 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useState,
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/api'
 
-export type AppTheme = 'light' | 'dark'
+export type AppTheme = 'light' | 'dark' | 'system'
+export type ResolvedAppTheme = 'light' | 'dark'
 
 export interface AppSettings {
   theme: AppTheme
@@ -23,6 +25,8 @@ interface AppSettingsResponse {
 
 interface ThemeContextValue {
   theme: AppTheme
+  /** `theme` with `system` resolved against `prefers-color-scheme`. */
+  resolvedTheme: ResolvedAppTheme
   setTheme: (theme: AppTheme) => void
   toggleTheme: () => void
   isLoading: boolean
@@ -30,10 +34,41 @@ interface ThemeContextValue {
 }
 
 const SETTINGS_QUERY_KEY = ['settings'] as const
+const SYSTEM_THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)'
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 function normalizeTheme(value: unknown): AppTheme {
-  return value === 'dark' ? 'dark' : 'light'
+  return value === 'dark' || value === 'system' ? value : 'light'
+}
+
+function systemPrefersDark(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(SYSTEM_THEME_MEDIA_QUERY).matches
+}
+
+function resolveTheme(theme: AppTheme): ResolvedAppTheme {
+  if (theme === 'system') {
+    return systemPrefersDark() ? 'dark' : 'light'
+  }
+  return theme
+}
+
+function subscribeToSystemTheme(onChange: () => void): (() => void) | undefined {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return undefined
+  }
+  const media = window.matchMedia(SYSTEM_THEME_MEDIA_QUERY)
+  if (typeof media.addEventListener === 'function') {
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }
+  // Older WebKit only exposes the deprecated listener API.
+  if (typeof media.addListener === 'function') {
+    media.addListener(onChange)
+    return () => media.removeListener(onChange)
+  }
+  return undefined
 }
 
 function normalizeSettings(payload: unknown): AppSettings {
@@ -56,11 +91,9 @@ function readDocumentTheme(): AppTheme {
   if (typeof document === 'undefined') {
     return 'light'
   }
-  if (document.documentElement.dataset.theme === 'dark') {
-    return 'dark'
-  }
-  if (document.documentElement.dataset.theme === 'light') {
-    return 'light'
+  const datasetTheme = document.documentElement.dataset.theme
+  if (datasetTheme === 'dark' || datasetTheme === 'light' || datasetTheme === 'system') {
+    return datasetTheme
   }
   return document.documentElement.classList.contains('hv-dark') ? 'dark' : 'light'
 }
@@ -74,7 +107,7 @@ export function getHervaldThemeClassName(theme: AppTheme): 'hv-light' | 'hv-dark
       return 'hv-light'
     }
   }
-  return theme === 'dark' ? 'hv-dark' : 'hv-light'
+  return resolveTheme(theme) === 'dark' ? 'hv-dark' : 'hv-light'
 }
 
 function applyDocumentTheme(theme: AppTheme): void {
@@ -83,7 +116,7 @@ function applyDocumentTheme(theme: AppTheme): void {
   }
 
   document.documentElement.classList.remove('hv-light', 'hv-dark')
-  document.documentElement.classList.add(theme === 'dark' ? 'hv-dark' : 'hv-light')
+  document.documentElement.classList.add(resolveTheme(theme) === 'dark' ? 'hv-dark' : 'hv-light')
   document.documentElement.dataset.theme = theme
 }
 
@@ -104,12 +137,16 @@ async function patchTheme(theme: AppTheme): Promise<AppSettings> {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const fallbackTheme = readDocumentTheme()
+  const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const settingsQuery = useQuery({
     queryKey: SETTINGS_QUERY_KEY,
     queryFn: fetchSettings,
     staleTime: 30_000,
   })
   const theme = settingsQuery.data?.theme ?? fallbackTheme
+  const resolvedTheme: ResolvedAppTheme = theme === 'system'
+    ? (systemDark ? 'dark' : 'light')
+    : theme
 
   const themeMutation = useMutation({
     mutationFn: patchTheme,
@@ -142,25 +179,35 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     },
   })
 
+  // Track the OS preference so a persisted `system` theme follows
+  // prefers-color-scheme live, without a reload.
+  useEffect(() => {
+    return subscribeToSystemTheme(() => {
+      setSystemDark(systemPrefersDark())
+    })
+  }, [])
+
   useEffect(() => {
     applyDocumentTheme(theme)
-  }, [theme])
+  }, [theme, resolvedTheme])
 
   const setTheme = useCallback((nextTheme: AppTheme) => {
     themeMutation.mutate(normalizeTheme(nextTheme))
   }, [themeMutation])
 
   const toggleTheme = useCallback(() => {
-    setTheme(theme === 'dark' ? 'light' : 'dark')
-  }, [setTheme, theme])
+    setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
+  }, [resolvedTheme, setTheme])
 
   const value = useMemo<ThemeContextValue>(() => ({
     theme,
+    resolvedTheme,
     setTheme,
     toggleTheme,
     isLoading: settingsQuery.isLoading,
     isSaving: themeMutation.isPending,
   }), [
+    resolvedTheme,
     setTheme,
     settingsQuery.isLoading,
     theme,
@@ -182,10 +229,12 @@ export function useTheme(): ThemeContextValue {
   }
 
   const theme = readDocumentTheme()
+  const resolvedTheme = resolveTheme(theme)
   return {
     theme,
+    resolvedTheme,
     setTheme: applyDocumentTheme,
-    toggleTheme: () => applyDocumentTheme(theme === 'dark' ? 'light' : 'dark'),
+    toggleTheme: () => applyDocumentTheme(resolvedTheme === 'dark' ? 'light' : 'dark'),
     isLoading: false,
     isSaving: false,
   }

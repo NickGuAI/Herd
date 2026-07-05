@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANIFEST_NAME=".gehirn-manifest"
 
 PLATFORM="claude"
 TARGET_ROOT=""
@@ -73,6 +74,70 @@ discover_source_dirs() {
   done
 }
 
+manifest_contains() {
+  local needle="$1"
+  shift
+  local item=""
+
+  for item in "$@"; do
+    if [[ "$item" == "$needle" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+is_safe_manifest_skill_name() {
+  local skill_name="$1"
+
+  [[ -n "$skill_name" ]] && [[ "$skill_name" != .* ]] && [[ "$skill_name" != */* ]]
+}
+
+prune_retired_skills() {
+  local skills_dest="$1"
+  shift
+  local manifest_path="$skills_dest/$MANIFEST_NAME"
+  local skill_name=""
+  local skill_path=""
+
+  [[ -f "$manifest_path" ]] || return 0
+
+  while IFS= read -r skill_name || [[ -n "$skill_name" ]]; do
+    [[ -n "$skill_name" ]] || continue
+
+    if manifest_contains "$skill_name" "$@"; then
+      continue
+    fi
+
+    if ! is_safe_manifest_skill_name "$skill_name"; then
+      echo "Skipping unsafe manifest entry: $skill_name" >&2
+      continue
+    fi
+
+    skill_path="$skills_dest/$skill_name"
+    if [[ -e "$skill_path" || -L "$skill_path" ]]; then
+      rm -rf -- "$skill_path"
+      printf '%s\n' "$skill_name"
+    fi
+  done < "$manifest_path"
+}
+
+write_skill_manifest() {
+  local skills_dest="$1"
+  shift
+  local manifest_path="$skills_dest/$MANIFEST_NAME"
+  local tmp_path="$manifest_path.tmp"
+  local skill_name=""
+
+  {
+    for skill_name in "$@"; do
+      printf '%s\n' "$skill_name"
+    done
+  } | LC_ALL=C sort -u > "$tmp_path"
+  mv "$tmp_path" "$manifest_path"
+}
+
 install_platform() {
   local platform="$1"
   local target_root="$2"
@@ -91,6 +156,7 @@ install_platform() {
   local -a installed_templates=()
   local -a installed_agents=()
   local -a duplicate_skills=()
+  local -a pruned_skills=()
 
   # bash 3 compatible seen-skills tracking (no associative arrays)
   local -a seen_skill_names=()
@@ -156,6 +222,11 @@ install_platform() {
     fi
   done
 
+  while IFS= read -r skill_name; do
+    pruned_skills+=("$skill_name")
+  done < <(prune_retired_skills "$skills_dest" "${installed_skills[@]}")
+  write_skill_manifest "$skills_dest" "${installed_skills[@]}"
+
   find "$skills_dest" -type f -name "*.sh" -exec chmod +x {} +
 
   echo "Platform: $platform"
@@ -165,6 +236,14 @@ install_platform() {
   for skill_name in "${installed_skills[@]}"; do
     echo "  - $skill_name"
   done
+  echo "Skill manifest: $skills_dest/$MANIFEST_NAME"
+
+  if [[ ${#pruned_skills[@]} -gt 0 ]]; then
+    echo "Pruned ${#pruned_skills[@]} retired repo-managed skill(s):"
+    for skill_name in "${pruned_skills[@]}"; do
+      echo "  - $skill_name"
+    done
+  fi
 
   if [[ ${#installed_templates[@]} -gt 0 ]]; then
     echo "Installed templates to: $templates_dest"

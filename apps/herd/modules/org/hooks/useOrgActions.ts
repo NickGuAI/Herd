@@ -40,7 +40,7 @@ export interface OrgMutationResult {
 }
 
 export interface CommanderTemplatePackage {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   exportedAt: string
   sourceCommanderId?: string
   commander: {
@@ -51,6 +51,22 @@ export interface CommanderTemplatePackage {
       portraitStyleId?: CommanderPortraitStyleId
     } | null
   }
+  skills?: Array<{
+    id: string
+    label: string
+    required: boolean
+    purpose: string
+  }>
+  automations?: Array<{
+    id: string
+    label: string
+    purpose: string
+    trigger: 'schedule' | 'quest' | 'manual'
+    schedule?: string
+    instruction: string
+    status: 'active' | 'paused' | 'completed' | 'cancelled'
+    skills: string[]
+  }>
   commanderMd: string | null
   memorySnapshot: {
     memoryMd: string
@@ -59,6 +75,14 @@ export interface CommanderTemplatePackage {
   skillBindings: Array<{
     skillId: string
     version?: string
+    source?: 'commander-local' | 'installed-skill' | 'reference'
+    bundle?: {
+      dirName: string
+      files: Array<{
+        path: string
+        contentBase64: string
+      }>
+    }
   }>
 }
 

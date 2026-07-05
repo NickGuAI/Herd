@@ -1,7 +1,7 @@
 import type { ComposerAbilitySettings } from './composer-abilities.js'
 import type { ComposerSkillSlotSettings } from './composer-skill-slots.js'
 
-export type AppTheme = 'light' | 'dark'
+export type AppTheme = 'light' | 'dark' | 'system'
 
 export interface AppSettings {
   theme: AppTheme

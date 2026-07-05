@@ -40,22 +40,35 @@ export interface AutomationHistoryEntry {
   result: string
   costUsd: number
   durationSec: number
+  runKey?: string
   sessionId?: string
+  transcriptRef?: AutomationRunTranscriptRef
   runFile?: string
+  completionOutput?: string
+  emptyOutputReason?: string
   memoryUpdated?: boolean
   source?: AutomationExecutionSource
+}
+
+export interface AutomationRunTranscriptRef {
+  sessionId: string
 }
 
 export interface AutomationRunMetadata {
   automationId: string
   automationName: string
   runNumber: number
+  runKey: string
+  startedAt: string
   timestamp: string
   action: string
   result: string
   costUsd: number
   durationSec: number
   sessionId: string
+  transcriptRef?: AutomationRunTranscriptRef
+  completionOutput: string
+  emptyOutputReason?: string
   memoryUpdated: boolean
   status: 'complete' | 'failed' | 'timeout'
   source: AutomationExecutionSource
@@ -79,6 +92,8 @@ export interface Automation {
   /** Workspace `.config/` skill names (no per-automation skill binding). */
   skills: string[]
   templateId?: string | null
+  /** Conversation that created this automation, when provisioned through Gaia/Command Room. */
+  sourceConversationId?: string
   status: AutomationStatus
   description?: string
   timezone?: string

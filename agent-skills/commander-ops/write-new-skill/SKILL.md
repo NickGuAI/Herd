@@ -81,11 +81,11 @@ Write the skill into the **agent-skills source tree** at
 copies skills from the source tree into the runtime directories.
 
 Choose the package by purpose:
-- `gehirn-devpkg` — developer workflow tools (breakdown, debrief, preflight, etc.)
-- `gehirn-legionpkg` — Legion orchestration skills
-- `gehirn-salespkg` — sales and outreach skills
-- `general-skills` — cross-project general-purpose skills
-- `pkos` — KaizenOS / personal-productivity skills
+- `engineering` — code loop skills for investigation, implementation, review, bug scrubbing, and architecture.
+- `commander-ops` — Herd, session craft, debriefing, preflight, and skill-authoring operations.
+- `growth-content` — growth audits, campaigns, publishing, and writing/content review.
+- `integrations` — external tool/API surfaces such as Google Workspace, Notion, PDFs, and wide research.
+- `pkos` — personal knowledge, daily ops, family/coaching, and personal-productivity systems.
 
 After writing, run `cd ~/App/agent-skills && make install` to deploy.
 

@@ -15,13 +15,14 @@ import type { ProviderSessionContext } from '../../agents/providers/provider-ses
 import type { ActionPolicyGate } from '../../policies/action-policy-gate.js'
 import type { WorkspaceResolverCapability } from '../../workspace/capability.js'
 import type { ChannelMessageIdempotencyLedger } from '../channel-idempotency-ledger.js'
+import type { ChannelReplyStreamDispatch } from '../channel-dispatchers.js'
 import type {
   CommanderHeartbeatManager,
   CommanderHeartbeatConfig,
 } from '../heartbeat.js'
 import type { HeartbeatLog } from '../heartbeat-log.js'
 import type { CommanderSubagentLifecycleEvent, CommanderManager } from '../manager.js'
-import type { Conversation, ConversationStore } from '../conversation-store.js'
+import type { ChannelReplyDelivery, Conversation, ConversationStore } from '../conversation-store.js'
 import type { QuestStore } from '../quest-store.js'
 import type {
   CommanderChannelMeta,
@@ -153,6 +154,11 @@ export interface ChannelReplyForwarder {
   activeClientSendId: string | null
   activeTurnId: string | null
   turnEvents: StreamJsonEvent[]
+  streamDispatch: {
+    delivery: ChannelReplyDelivery
+    controller: ChannelReplyStreamDispatch
+  } | null
+  streamDispatchPromise: Promise<ChannelReplyForwarder['streamDispatch']> | null
   skippedTurnIds: Set<string>
   skippedCompletedTurns: number
 }
@@ -205,6 +211,7 @@ export interface CommanderRoutesContext {
   contextPressureInputTokenThreshold: number
   fetchImpl: typeof fetch
   providerSecretsStore: ProviderSecretsStoreLike
+  apiKeyStore?: ApiKeyStoreLike
   generateGeminiImage: (
     options: GeminiImageGenerationOptions,
   ) => Promise<Buffer>

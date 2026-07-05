@@ -51,11 +51,11 @@ function TreeBranch({
 
         return (
           <div key={node.path}>
-            <div className="flex w-full items-center gap-1">
+            <div className="flex w-full min-w-0 items-center gap-1">
               <button
                 type="button"
                 className={cn(
-                  'flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+                  'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
                   dark
                     ? 'hover:bg-white/[0.06]'
                     : 'hover:bg-[var(--hv-surface-hover)]',
@@ -85,18 +85,18 @@ function TreeBranch({
                       )}
                     />
                     {isExpanded ? (
-                      <FolderOpen size={13} className={dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]'} />
+                      <FolderOpen size={13} className={cn('shrink-0', dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]')} />
                     ) : (
-                      <Folder size={13} className={dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]'} />
+                      <Folder size={13} className={cn('shrink-0', dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]')} />
                     )}
                   </>
                 ) : (
                   <>
                     <span className="w-3 shrink-0" />
-                    <FileText size={13} className={dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]'} />
+                    <FileText size={13} className={cn('shrink-0', dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-subtle)]')} />
                   </>
                 )}
-                <span className={cn('font-mono truncate', dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-muted)]')}>
+                <span className={cn('min-w-0 flex-1 truncate font-mono', dark ? 'text-[color:var(--hv-fg)]' : 'text-[color:var(--hv-fg-muted)]')}>
                   {node.name}
                 </span>
               </button>
@@ -105,7 +105,7 @@ function TreeBranch({
                 <button
                   type="button"
                   className={cn(
-                    'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
+                    'inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-[10px] font-medium transition-colors',
                     isAdded
                       ? 'text-[color:var(--hv-accent-success)] bg-[var(--hv-accent-success-wash)] hover:bg-[var(--hv-accent-success-wash)]'
                       : 'text-[color:var(--hv-fg-subtle)] hover:bg-[var(--hv-surface-hover)]',
@@ -117,7 +117,7 @@ function TreeBranch({
                   aria-label={isAdded ? `Added ${node.path}` : `Add ${node.path} to context`}
                 >
                   {isAdded ? <Check size={11} /> : <Plus size={11} />}
-                  {isAdded ? 'Added' : 'Add'}
+                  <span className="hidden min-[360px]:inline">{isAdded ? 'Added' : 'Add'}</span>
                 </button>
               )}
 
@@ -125,7 +125,7 @@ function TreeBranch({
                 <button
                   type="button"
                   className={cn(
-                    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[color:var(--hv-fg-subtle)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-40',
+                    'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[color:var(--hv-fg-subtle)] transition-colors hover:bg-[var(--hv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-40',
                     isDownloading && 'text-[color:var(--hv-fg)]',
                   )}
                   onClick={(event) => {

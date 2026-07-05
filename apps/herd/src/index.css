@@ -1,5 +1,5 @@
-@import './styles/herd/tokens.css';
-@import './styles/herd/animations.css';
+@import './styles/hervald/tokens.css';
+@import './styles/hervald/animations.css';
 
 @tailwind base;
 @tailwind components;
@@ -451,6 +451,159 @@
     color: var(--hv-fg-faint);
   }
 
+  /* Ability toggle rows under the tiles (Claude "+" sheet pattern, issue 1879) */
+  .add-to-chat-sheet-toggles {
+    margin-top: 14px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved, 2px 14px 2px 14px);
+    background: var(--hv-bg-raised);
+    overflow: hidden;
+  }
+  .add-to-chat-sheet-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 52px;
+    padding: 0 8px 0 14px;
+  }
+  .add-to-chat-sheet-toggle-row + .add-to-chat-sheet-toggle-row {
+    border-top: 1px solid var(--hv-border-hair);
+  }
+  .add-to-chat-sheet-toggle-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+    color: var(--hv-fg-muted);
+  }
+  .add-to-chat-sheet-toggle {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 52px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 2px 0 8px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+  }
+  .add-to-chat-sheet-toggle:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .add-to-chat-sheet-toggle-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    color: var(--hv-fg);
+  }
+  .add-to-chat-sheet-toggle--action .add-to-chat-sheet-toggle-label {
+    color: var(--hv-fg-muted);
+  }
+  .add-to-chat-sheet-switch {
+    position: relative;
+    width: 40px;
+    height: 24px;
+    border-radius: 999px;
+    background: var(--hv-ink-wash-02);
+    flex-shrink: 0;
+    transition: background 0.2s ease;
+  }
+  .add-to-chat-sheet-switch::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: var(--hv-surface-card);
+    box-shadow: var(--hv-shadow-whisper);
+    transition: transform 0.2s var(--hv-ease-gentle, ease);
+  }
+  .add-to-chat-sheet-switch--on {
+    background: var(--hv-fg);
+  }
+  .add-to-chat-sheet-switch--on::after {
+    transform: translateX(16px);
+  }
+  .add-to-chat-sheet-toggle-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    border: 0;
+    background: transparent;
+    color: var(--hv-fg-faint);
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  .add-to-chat-sheet-toggle-remove:hover:not(:disabled) {
+    background: var(--hv-ink-wash-01);
+    color: var(--hv-fg);
+  }
+  .add-to-chat-sheet-toggle-remove:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Custom-ability sheet flow (replaces the inline composer form on mobile) */
+  .add-to-chat-sheet-custom-form {
+    display: grid;
+    gap: 10px;
+    padding: 2px 0 6px;
+  }
+  .add-to-chat-sheet-custom-form input,
+  .add-to-chat-sheet-custom-form textarea {
+    width: 100%;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved-sm, 8px);
+    background: var(--hv-bg-raised);
+    color: var(--hv-fg);
+    font-size: 16px;
+    padding: 10px 12px;
+    outline: none;
+  }
+  .add-to-chat-sheet-custom-form input:focus,
+  .add-to-chat-sheet-custom-form textarea:focus {
+    border-color: var(--hv-border-soft);
+  }
+  .add-to-chat-sheet-custom-form textarea {
+    resize: vertical;
+  }
+  .add-to-chat-sheet-custom-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .add-to-chat-sheet-custom-actions button {
+    min-height: 40px;
+    padding: 0 18px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--hv-fg);
+    font-family: var(--hv-font-mono);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .add-to-chat-sheet-custom-actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .add-to-chat-sheet-custom-actions .add-to-chat-sheet-custom-submit {
+    border-color: var(--hv-fg);
+    background: var(--hv-fg);
+    color: var(--hv-fg-inverse);
+  }
+
   /* ── Terminal Overlay (mobile) ──────────────────── */
   .terminal-overlay {
     @apply fixed inset-0 z-40 flex flex-col;
@@ -504,6 +657,126 @@
     min-height: 0;
     width: 100%;
     flex: 1 1 auto;
+  }
+
+  .mobile-session-below-header {
+    flex-shrink: 0;
+  }
+
+  /* Slim reconnect strip under the header (issue 1879) — one hairline line, no card */
+  .mobile-stream-status-strip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 14px;
+    border-bottom: 1px solid var(--hv-border-hair);
+    color: var(--hv-fg-muted);
+    font-family: var(--hv-font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .mobile-stream-status-strip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mobile-stream-status-strip-icon {
+    flex-shrink: 0;
+    animation: mobile-stream-strip-spin 1.6s linear infinite;
+  }
+  @keyframes mobile-stream-strip-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  /* Pinned quick-skill slot row atop the mobile SkillsPicker (issue 1879) */
+  .skills-quick-slot {
+    margin-bottom: 12px;
+    padding: 9px 12px 10px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved-sm, 8px);
+    background: var(--hv-bg-raised);
+  }
+  .skills-quick-slot-eyebrow {
+    display: block;
+    margin-bottom: 6px;
+    font-family: var(--hv-font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--hv-fg-faint);
+  }
+  .skills-quick-slot-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+  }
+  .skills-quick-slot-icon {
+    flex-shrink: 0;
+    color: var(--hv-fg-faint);
+  }
+  .skills-quick-slot-hint {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--hv-fg-subtle);
+  }
+  .skills-quick-slot-skill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: var(--hv-radius-carved-sm, 8px);
+    background: var(--hv-surface-card);
+    color: var(--hv-fg);
+    font-family: var(--hv-font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+  .skills-quick-slot-skill span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .skills-quick-slot-skill:hover:not(:disabled) {
+    border-color: var(--hv-border-soft);
+  }
+  .skills-quick-slot-skill:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .skills-quick-slot-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    min-width: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--hv-fg-subtle);
+    font-family: var(--hv-font-mono);
+    font-size: 11px;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  .skills-quick-slot-action:hover:not(:disabled) {
+    background: var(--hv-surface-hover);
+    color: var(--hv-fg);
+  }
+  .skills-quick-slot-action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   /* ── Session Header ───────────────────────────── */
@@ -2185,37 +2458,41 @@
     opacity: 0.4;
     cursor: not-allowed;
   }
+  /*
+   * Mobile composer = ONE visible bubble (issue 1879). The .input-bar is the
+   * organic-corner container; the textarea sits borderless inside it and the
+   * whole control row lives inside the bubble. Everything around the bubble
+   * stays on the page background.
+   */
   .hervald-session-composer--mobile {
-    border-top: 1px solid var(--msg-border);
-    background: var(--msg-surface);
-  }
-  .hervald-session-composer--mobile .input-bar {
-    gap: 8px;
-    padding: 10px 16px calc(8px + env(safe-area-inset-bottom));
     border-top: 0;
     background: transparent;
+    padding: 4px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+  .hervald-session-composer--mobile .input-bar {
+    gap: 6px;
+    padding: 12px 14px 8px;
+    border: 1px solid var(--hv-border-hair);
+    border-radius: 8px 22px 8px 22px;
+    background: var(--hv-surface-card);
+    box-shadow: var(--hv-shadow-rest);
   }
   .hervald-session-composer--mobile .composer-row--mobile {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 0 2px;
+    padding: 2px 0 0;
   }
   .hervald-session-composer--mobile .composer-mobile-utility-actions,
   .hervald-session-composer--mobile .composer-mobile-primary-actions {
     display: flex;
     min-width: 0;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
   }
   .hervald-session-composer--mobile .composer-mobile-utility-actions {
     flex: 1;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .hervald-session-composer--mobile .composer-mobile-utility-actions::-webkit-scrollbar {
-    display: none;
   }
   .hervald-session-composer--mobile .composer-mobile-primary-actions {
     flex-shrink: 0;
@@ -2223,115 +2500,116 @@
   .hervald-session-composer--mobile .composer-field-stack {
     flex: 1;
     min-width: 0;
-    min-height: 56px;
-    padding: 8px 16px;
-    border: 1px solid var(--msg-border);
-    border-radius: 8px 22px 8px 22px;
-    background: var(--hv-bg-raised);
-    box-shadow:
-      var(--hv-shadow-lift),
-      0 2px 0 var(--hv-ink-wash-02);
+    min-height: 36px;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
   .hervald-session-composer--mobile .input-field {
-    min-height: 38px;
+    min-height: 32px;
     max-height: 148px;
-    padding: 7px 0 8px;
+    padding: 2px 0 6px;
     line-height: 1.45;
     overflow-y: auto;
   }
   .hervald-session-composer--mobile .composer-add-btn,
-  .hervald-session-composer--mobile .composer-queue-message-btn,
+  .hervald-session-composer--mobile .composer-queue-keycap,
   .hervald-session-composer--mobile .mic-btn,
-  .hervald-session-composer--mobile .send-btn,
-  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn {
+  .hervald-session-composer--mobile .send-btn {
     width: 36px;
     height: 36px;
     min-height: 36px;
     border-radius: 999px;
   }
   .hervald-session-composer--mobile .composer-add-btn,
-  .hervald-session-composer--mobile .composer-queue-message-btn,
-  .hervald-session-composer--mobile .mic-btn,
-  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn {
+  .hervald-session-composer--mobile .composer-queue-keycap,
+  .hervald-session-composer--mobile .mic-btn {
     border-color: transparent;
     background: transparent;
   }
   .hervald-session-composer--mobile .composer-add-btn:hover:not(:disabled),
-  .hervald-session-composer--mobile .composer-queue-message-btn:hover:not(:disabled),
-  .hervald-session-composer--mobile .mic-btn:hover:not(:disabled),
-  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn:hover:not(:disabled) {
+  .hervald-session-composer--mobile .composer-queue-keycap:hover:not(:disabled),
+  .hervald-session-composer--mobile .mic-btn:hover:not(:disabled) {
     background: var(--hv-ink-wash-01);
   }
   .hervald-session-composer--mobile .composer-add-btn.composer-add-btn--active,
   .hervald-session-composer--mobile .composer-add-btn[aria-pressed="true"],
-  .hervald-session-composer--mobile .mic-btn[aria-pressed="true"],
-  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn.composer-ability-btn--active,
-  .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn[aria-pressed="true"] {
+  .hervald-session-composer--mobile .mic-btn[aria-pressed="true"] {
     border-color: var(--hv-fg-muted);
     background: var(--hv-bg-raised);
     color: var(--hv-fg);
   }
   @media (hover: none) {
     .hervald-session-composer--mobile .composer-add-btn:active:not(:disabled),
-    .hervald-session-composer--mobile .composer-queue-message-btn:active:not(:disabled),
-    .hervald-session-composer--mobile .mic-btn:active:not(:disabled),
-    .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn:active:not(:disabled) {
+    .hervald-session-composer--mobile .composer-queue-keycap:active:not(:disabled),
+    .hervald-session-composer--mobile .mic-btn:active:not(:disabled) {
       background: var(--hv-ink-wash-02);
       color: var(--hv-fg);
     }
     .hervald-session-composer--mobile .composer-add-btn.composer-add-btn--active:active:not(:disabled),
     .hervald-session-composer--mobile .composer-add-btn[aria-pressed="true"]:active:not(:disabled),
-    .hervald-session-composer--mobile .mic-btn[aria-pressed="true"]:active:not(:disabled),
-    .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn.composer-ability-btn--active:active:not(:disabled),
-    .hervald-session-composer--mobile .composer-row--mobile .composer-ability-btn[aria-pressed="true"]:active:not(:disabled) {
+    .hervald-session-composer--mobile .mic-btn[aria-pressed="true"]:active:not(:disabled) {
       background: var(--hv-bg-raised);
     }
   }
-  .hervald-session-composer--mobile .composer-queue-message-btn {
+  /* Boxed keycap "Q" — opens the queue panel; badge carries the pending count */
+  .hervald-session-composer--mobile .composer-queue-keycap {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    padding: 0;
+    border: 1px solid transparent;
     color: var(--msg-text-muted);
     flex-shrink: 0;
     cursor: pointer;
     transition: color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
   }
-  .hervald-session-composer--mobile .composer-queue-message-btn:active:not(:disabled) {
+  .hervald-session-composer--mobile .composer-queue-keycap:active:not(:disabled) {
     transform: scale(0.92);
   }
-  .hervald-session-composer--mobile .composer-queue-message-btn:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
+  .hervald-session-composer--mobile .composer-queue-keycap-cap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 21px;
+    height: 21px;
+    border: 1.5px solid currentColor;
+    border-radius: 5px;
+    font-family: var(--hv-font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
   }
-  .hervald-session-composer--mobile .composer-queue-btn--mobile {
-    min-height: 36px;
-    max-width: 72px;
-    gap: 4px;
-    padding: 0 9px;
+  .hervald-session-composer--mobile .composer-queue-keycap-badge {
+    position: absolute;
+    top: 2px;
+    right: 0;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
     border-radius: 999px;
-    letter-spacing: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .hervald-session-composer--mobile .composer-queue-btn--mobile span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .hervald-session-composer--mobile .composer-footer {
-    padding: 0 18px;
+    background: var(--hv-fg);
+    color: var(--hv-fg-inverse);
+    font-family: var(--hv-font-mono);
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 14px;
+    text-align: center;
   }
   @media (max-width: 390px) {
+    .hervald-session-composer--mobile {
+      padding-left: 8px;
+      padding-right: 8px;
+    }
     .hervald-session-composer--mobile .input-bar {
-      padding-left: 10px;
-      padding-right: 10px;
+      padding-left: 12px;
+      padding-right: 12px;
     }
     .hervald-session-composer--mobile .composer-row--mobile {
       gap: 4px;
-      padding: 0;
-    }
-    .hervald-session-composer--mobile .composer-queue-btn--mobile {
-      max-width: 64px;
-      padding: 0 7px;
     }
   }
 

@@ -27,7 +27,6 @@ import { ConfirmModal } from '@modules/components/ConfirmModal'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
 import type { AgentType, ProviderModelOption, ProviderRegistryEntry, SessionQueueSnapshot } from '@/types'
 import type { PendingApproval } from '@/hooks/use-approvals'
-import { AddToChatSheet } from '@modules/agents/components/AddToChatSheet'
 import Transcript from '@modules/agents/components/Transcript'
 import ApprovalCard from '@modules/approvals/ApprovalCard'
 import {
@@ -110,6 +109,12 @@ export interface MobileSessionShellProps {
   showComposerWorkspaceShortcut?: boolean
   isStreaming?: boolean
   emptyState?: ReactNode
+  /**
+   * Rendered in place of the transcript while it has no messages, keeping the
+   * header and composer mounted (issue 1878: chat shell paints with a
+   * transcript skeleton while the conversation resolves).
+   */
+  transcriptPlaceholder?: ReactNode
   dataTestId?: string
   conversation?: ConversationRecord | null
   onStartConversation?: (conversationId: string) => void | Promise<void>
@@ -211,6 +216,7 @@ export function MobileSessionShell({
   showComposerWorkspaceShortcut = false,
   isStreaming = false,
   emptyState,
+  transcriptPlaceholder,
   dataTestId,
   conversation = null,
   onStartConversation,
@@ -225,7 +231,6 @@ export function MobileSessionShell({
   const usesOverlayChrome = rootClassName?.includes('session-view-overlay') ?? false
   const [showOverflowMenu, setShowOverflowMenu] = useState(false)
   const [showConversationProviderMenu, setShowConversationProviderMenu] = useState(false)
-  const [showAddToChatSheet, setShowAddToChatSheet] = useState(false)
   const [showLoadOlderControl, setShowLoadOlderControl] = useState(false)
   const [isKilling, setIsKilling] = useState(false)
   const [confirmKillOpen, setConfirmKillOpen] = useState(false)
@@ -433,26 +438,6 @@ export function MobileSessionShell({
       setIsKilling(false)
     }
   }, [isKilling, onKill])
-
-  const handleOpenAddToChat = useCallback(() => {
-    setShowAddToChatSheet(true)
-  }, [])
-
-  const handleCloseAddToChat = useCallback(() => {
-    setShowAddToChatSheet(false)
-  }, [])
-
-  const handlePickImage = useCallback(() => {
-    composerRef.current?.openImagePicker()
-  }, [])
-
-  const handlePickSkill = useCallback(() => {
-    composerRef.current?.openSkillsPicker()
-  }, [])
-
-  const handlePickFile = useCallback(() => {
-    onOpenWorkspace?.()
-  }, [onOpenWorkspace])
 
   const handleConversationAction = useCallback(async (
     actionId: string,
@@ -1020,7 +1005,7 @@ export function MobileSessionShell({
       </header>
 
       {belowHeader && (
-        <div className="space-y-2 px-3 py-2">
+        <div className="mobile-session-below-header">
           {belowHeader}
         </div>
       )}
@@ -1121,18 +1106,24 @@ export function MobileSessionShell({
                 </button>
               </div>
             )}
-            <Transcript
-              messages={messages}
-              sessionId={sessionName}
-              onAnswer={onAnswer}
-              dark={theme === 'dark'}
-              className={usesOverlayChrome
-                ? undefined
-                : 'h-full flex-1 px-4 py-4 hervald-chat-pane'}
-              agentAvatarUrl={agentAvatarUrl}
-              agentAccentColor={agentAccentColor}
-              onOpenWorkspaceFile={onOpenWorkspaceFile}
-            />
+            {transcriptPlaceholder && messages.length === 0 ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                {transcriptPlaceholder}
+              </div>
+            ) : (
+              <Transcript
+                messages={messages}
+                sessionId={sessionName}
+                onAnswer={onAnswer}
+                dark={theme === 'dark'}
+                className={usesOverlayChrome
+                  ? undefined
+                  : 'h-full flex-1 px-4 py-4 hervald-chat-pane'}
+                agentAvatarUrl={agentAvatarUrl}
+                agentAccentColor={agentAccentColor}
+                onOpenWorkspaceFile={onOpenWorkspaceFile}
+              />
+            )}
             {inlineApprovals.length > 0 && onApprovalDecision && (
               <div
                 className="space-y-3 px-4 pb-3"
@@ -1158,7 +1149,7 @@ export function MobileSessionShell({
               </div>
             )}
           </div>
-          <div className="bg-washi-white">
+          <div className="mobile-session-composer-dock">
             <SessionComposer
               ref={composerRef}
               sessionName={sessionName}
@@ -1181,7 +1172,6 @@ export function MobileSessionShell({
               onClearContextFilePaths={onClearContextFilePaths}
               onRestoreContextAttachments={onRestoreContextAttachments}
               onOpenWorkspace={onOpenWorkspace}
-              onOpenAddToChat={handleOpenAddToChat}
               showWorkspaceShortcut={showComposerWorkspaceShortcut}
               queueSnapshot={queueSnapshot}
               queueError={queueError}
@@ -1194,13 +1184,6 @@ export function MobileSessionShell({
         </>
       )}
 
-      <AddToChatSheet
-        open={showAddToChatSheet}
-        onClose={handleCloseAddToChat}
-        onPickImage={handlePickImage}
-        onPickSkill={handlePickSkill}
-        onPickFile={handlePickFile}
-      />
       <ConfirmModal
         open={confirmKillOpen}
         title="Kill session?"

@@ -141,7 +141,7 @@ function navOrder(module: FrontendNavItem) {
 
 export function TopBar({ modules, counts }: TopBarProps) {
   const location = useLocation()
-  const { theme, toggleTheme, isSaving } = useTheme()
+  const { resolvedTheme, toggleTheme, isSaving } = useTheme()
   const [showOverflow, setShowOverflow] = useState(false)
   const overflowRef = useRef<HTMLDivElement | null>(null)
 
@@ -299,11 +299,11 @@ export function TopBar({ modules, counts }: TopBarProps) {
           opacity: isSaving ? 0.65 : 1,
         }}
         onClick={toggleTheme}
-        aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
-        title={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
+        aria-label={resolvedTheme === 'dark' ? 'Use light theme' : 'Use dark theme'}
+        title={resolvedTheme === 'dark' ? 'Use light theme' : 'Use dark theme'}
         disabled={isSaving}
       >
-        {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+        {resolvedTheme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
       </button>
     </header>
   )

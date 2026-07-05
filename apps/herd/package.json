@@ -1,7 +1,8 @@
 {
   "name": "herd",
-  "version": "0.0.4-beta",
+  "version": "0.0.5-beta",
   "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "bin": {
     "herd": "./herd-cli.mjs"
@@ -10,6 +11,7 @@
     "generate:provider-registry": "node ./modules/agents/providers/generate-registry.mjs",
     "docs:check": "tsx tools/check-docs.ts",
     "db:ready": "tsx tools/db-ready.ts",
+    "store:ready": "tsx tools/store-ready.ts",
     "migrate:sqlite": "tsx tools/migrate-sqlite.ts",
     "migrate:provider-secrets": "tsx tools/migrate-provider-secrets.ts",
     "migrate:machine-env-files": "tsx tools/migrate-machine-env-files.ts",

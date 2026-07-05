@@ -39,6 +39,7 @@ export function AutomationsPage() {
   )
   const triggerFilter = readTriggerFilter(searchParams.get('trigger'))
   const commanderFilter = readCommanderFilter(searchParams.get('commander'), commanders)
+  const preselectedSkillName = searchParams.get('skill')
   const scopeCommander = commanders.find((commander) => commander.id === commanderFilter) ?? null
 
   function updateParams(patch: Record<string, string | null>) {
@@ -132,6 +133,8 @@ export function AutomationsPage() {
               trigger: nextFilter === 'all' ? null : nextFilter,
             })
           }}
+          preselectedSkillName={preselectedSkillName}
+          onPreselectedSkillConsumed={() => updateParams({ skill: null })}
         />
       </div>
     </section>

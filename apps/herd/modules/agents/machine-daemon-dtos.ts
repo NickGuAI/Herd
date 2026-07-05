@@ -37,8 +37,17 @@ type MachineDaemonDisplayDto = Pick<
 function hasActiveDaemonPairing(machine: Pick<MachineConfig, 'daemon'>): boolean {
   return Boolean(
     !machine.daemon?.revokedAt &&
+    !isExpiredIsoTimestamp(machine.daemon?.expiresAt) &&
     (machine.daemon?.pairedAt || machine.daemon?.pairingTokenHash),
   )
+}
+
+function isExpiredIsoTimestamp(value: string | null | undefined): boolean {
+  if (!value) {
+    return false
+  }
+  const timestamp = Date.parse(value)
+  return !Number.isFinite(timestamp) || timestamp <= Date.now()
 }
 
 export function buildMachineDaemonDisplayDto(

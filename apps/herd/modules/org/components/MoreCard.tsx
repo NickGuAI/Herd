@@ -54,7 +54,7 @@ export function MoreCard({
           </button>
           <button type="button" onClick={() => handleAction(onSaveTemplate)} className={MENU_ITEM_CLASS}>
             <Download size={14} aria-hidden="true" />
-            Save as Template
+            Export Bundle
           </button>
           <button
             type="button"

@@ -130,6 +130,27 @@ export type BaseCommanderSessionsInterface = Omit<
 
 type CreateCommanderSessionInput = Parameters<BaseCommanderSessionsInterface['createCommanderSession']>[0]
 
+function clearResumeContextOnCredentialPoolChange(
+  input: CreateCommanderSessionInput,
+  previous: AnySession | undefined,
+): CreateCommanderSessionInput {
+  if (
+    !input.resumeProviderContext ||
+    !input.credentialPoolId ||
+    !previous ||
+    previous.kind !== 'stream' ||
+    !previous.credentialPoolId ||
+    previous.credentialPoolId === input.credentialPoolId
+  ) {
+    return input
+  }
+
+  return {
+    ...input,
+    resumeProviderContext: undefined,
+  }
+}
+
 function normalizeSendPayload(payload: string | SessionSendPayload): SessionSendPayload {
   if (typeof payload === 'string') {
     return { text: payload }
@@ -185,6 +206,8 @@ export function createCommanderSessionsInterface(
     resumeProviderContext,
     credentialPoolId,
     maxTurns,
+    env,
+    gaiaOpsApiKeyExpiresAt,
   }: CreateCommanderSessionInput): Promise<StreamSession> {
     const creator = {
       kind: 'commander' as const,
@@ -214,9 +237,10 @@ export function createCommanderSessionsInterface(
       conversationId,
       resumeProviderContext,
       credentialPoolId,
+      env,
     }
 
-    return resumeSessionId
+    const session = resumeSessionId
       ? await createProviderStreamSession(
         name,
         'default',
@@ -238,12 +262,18 @@ export function createCommanderSessionsInterface(
         agentType,
         baseOptions,
       )
+    if (gaiaOpsApiKeyExpiresAt) {
+      session.gaiaOpsApiKeyExpiresAt = gaiaOpsApiKeyExpiresAt
+    }
+    return session
   }
 
   return {
     async createCommanderSession(input) {
       const { name } = input
-      const session = await buildCommanderSession(input)
+      const session = await buildCommanderSession(
+        clearResumeContextOnCredentialPoolChange(input, sessions.get(name)),
+      )
       sessions.set(name, session)
       schedulePersistedSessionsWrite()
       return session
@@ -252,7 +282,9 @@ export function createCommanderSessionsInterface(
     async replaceCommanderSession(input) {
       const { name } = input
       const previous = sessions.get(name)
-      const replacement = await buildCommanderSession(input)
+      const replacement = await buildCommanderSession(
+        clearResumeContextOnCredentialPoolChange(input, previous),
+      )
       if (previous && previous.kind === 'stream' && replacement.kind === 'stream') {
         // Mirror websocket.ts auto-rotate replacement so same-name provider
         // swaps preserve replay, usage, entry count, and auto-rotate state.

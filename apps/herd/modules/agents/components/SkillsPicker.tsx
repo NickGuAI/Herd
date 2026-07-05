@@ -4,18 +4,30 @@ import { DismissibleOverlay } from '@/components/DismissibleOverlay'
 import { useSkills } from '@/hooks/use-skills'
 import { cn } from '@/lib/utils'
 
+export interface SkillsPickerQuickSlot {
+  skillName: string | null
+  configuring: boolean
+  isSaving: boolean
+  onApply: () => void
+  onClear: () => void | Promise<unknown>
+  onEnterConfigure: () => void
+  onExitConfigure: () => void
+}
+
 export function SkillsPicker({
   visible,
   onSelectSkill,
   onClose,
   variant = 'default',
   theme = 'light',
+  quickSlot,
 }: {
   visible: boolean
   onSelectSkill: (command: string) => boolean | void | Promise<boolean | void>
   onClose: () => void
   variant?: 'default' | 'hervald'
   theme?: 'light' | 'dark'
+  quickSlot?: SkillsPickerQuickSlot
 }) {
   const { data: skills, isError, isLoading } = useSkills()
   const [query, setQuery] = useState('')
@@ -74,6 +86,69 @@ export function SkillsPicker({
               />
             </button>
           </div>
+          {quickSlot && (
+            <div className="skills-quick-slot" data-testid="skills-quick-slot">
+              <span className="skills-quick-slot-eyebrow">Quick slot</span>
+              {quickSlot.configuring ? (
+                <div className="skills-quick-slot-row">
+                  <Zap size={13} className="skills-quick-slot-icon" aria-hidden="true" />
+                  <span className="skills-quick-slot-hint">Pick a skill below to pin it</span>
+                  <button
+                    type="button"
+                    className="skills-quick-slot-action"
+                    onClick={quickSlot.onExitConfigure}
+                    aria-label="Cancel quick slot setup"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : quickSlot.skillName ? (
+                <div className="skills-quick-slot-row">
+                  <button
+                    type="button"
+                    className="skills-quick-slot-skill"
+                    onClick={quickSlot.onApply}
+                    aria-label={`Apply /${quickSlot.skillName} skill`}
+                    disabled={quickSlot.isSaving}
+                  >
+                    <Zap size={13} aria-hidden="true" />
+                    <span>/{quickSlot.skillName}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="skills-quick-slot-action"
+                    onClick={quickSlot.onEnterConfigure}
+                    aria-label="Change quick skill slot"
+                    disabled={quickSlot.isSaving}
+                  >
+                    Change
+                  </button>
+                  <button
+                    type="button"
+                    className="skills-quick-slot-action"
+                    onClick={() => void quickSlot.onClear()}
+                    aria-label={`Clear /${quickSlot.skillName} quick skill slot`}
+                    disabled={quickSlot.isSaving}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </div>
+              ) : (
+                <div className="skills-quick-slot-row">
+                  <Zap size={13} className="skills-quick-slot-icon" aria-hidden="true" />
+                  <span className="skills-quick-slot-hint">No skill pinned</span>
+                  <button
+                    type="button"
+                    className="skills-quick-slot-action"
+                    onClick={quickSlot.onEnterConfigure}
+                    aria-label="Configure quick skill slot"
+                  >
+                    Set
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}

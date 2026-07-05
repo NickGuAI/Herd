@@ -7,6 +7,7 @@ import type {
   MachineDaemonPairResponse,
   MachineDaemonRevokeResponse,
   MachineDaemonStatus,
+  MachineEnrollmentTokenResponse,
   MachineLaunchVerificationResponse,
   MachineAuthSetupInput,
   MachineAuthStatusReport,
@@ -19,6 +20,7 @@ import type {
 const AGENT_SESSIONS_REFETCH_INTERVAL_MS = 5000
 const AGENT_SESSIONS_STALE_MS = 30_000
 const PROVIDER_AUTH_SNAPSHOTS_REFETCH_INTERVAL_MS = 5000
+export const AGENT_SESSIONS_QUERY_KEY = ['agents', 'sessions'] as const
 
 export interface DirectoryListing {
   parent: string
@@ -95,6 +97,21 @@ export async function pairMachineDaemon(
   )
 }
 
+export async function mintMachineEnrollmentToken(
+  input: { label?: string; cwd?: string } = {},
+): Promise<MachineEnrollmentTokenResponse> {
+  return fetchJson<MachineEnrollmentTokenResponse>(
+    '/api/agents/machines/enrollment-token',
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    },
+  )
+}
+
 export async function revokeMachineDaemon(machineId: string): Promise<MachineDaemonRevokeResponse> {
   return fetchJson<MachineDaemonRevokeResponse>(
     `/api/agents/machines/${encodeURIComponent(machineId)}/daemon/revoke`,
@@ -130,7 +147,7 @@ export async function probeProviderAuthSnapshots(): Promise<ProviderAuthSnapshot
 
 export function useAgentSessions() {
   return useQuery({
-    queryKey: ['agents', 'sessions'],
+    queryKey: AGENT_SESSIONS_QUERY_KEY,
     queryFn: fetchSessions,
     staleTime: AGENT_SESSIONS_STALE_MS,
     refetchInterval: (query) => query.state.error ? AGENT_SESSIONS_REFETCH_INTERVAL_MS : false,

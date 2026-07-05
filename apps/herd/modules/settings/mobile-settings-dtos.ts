@@ -22,10 +22,18 @@ export type MobileSettingsSectionIcon =
   | 'eye'
   | 'info'
 
+/**
+ * Claude-style grouped IA: every section belongs to one labeled group on the
+ * settings index. Group order (account, workspace, app) and section order
+ * within a group both follow `MOBILE_SETTINGS_SECTION_DEFINITIONS` order.
+ */
+export type MobileSettingsSectionGroup = 'account' | 'workspace' | 'app'
+
 export interface MobileSettingsSectionDto {
   id: MobileSettingsSectionId
   label: string
   icon: MobileSettingsSectionIcon
+  group: MobileSettingsSectionGroup
   path: string
   fullPagePath?: string
   visible: boolean
@@ -37,39 +45,46 @@ const MOBILE_SETTINGS_SECTION_DEFINITIONS: readonly Omit<MobileSettingsSectionDt
     id: 'account',
     label: 'Account',
     icon: 'circle-user-round',
-    fullPagePath: '/api-keys',
+    group: 'account',
+    fullPagePath: '/settings',
   },
   {
     id: 'telemetry',
     label: 'Telemetry',
     icon: 'radio-tower',
+    group: 'account',
     fullPagePath: '/telemetry',
   },
   {
     id: 'notifications',
     label: 'Notifications',
     icon: 'bell',
+    group: 'account',
     fullPagePath: '/policies',
   },
   {
     id: 'machines',
     label: 'Machines',
     icon: 'monitor',
+    group: 'workspace',
   },
   {
     id: 'credential-pools',
     label: 'Credential pools',
     icon: 'key-round',
+    group: 'workspace',
   },
   {
     id: 'appearance',
     label: 'Appearance',
     icon: 'eye',
+    group: 'app',
   },
   {
     id: 'about',
     label: 'About',
     icon: 'info',
+    group: 'app',
   },
 ] as const
 

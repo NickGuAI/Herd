@@ -41,6 +41,7 @@ export interface OrgCommanderRecord {
   templateId?: string | null
   replicatedFromCommanderId?: string | null
   activeWorkers?: number
+  system?: boolean
   archived?: boolean
   archivedAt?: string
 }
@@ -133,6 +134,16 @@ function toAutomationNode(automation: Automation): OrgNode {
   }
 }
 
+function compareCommanderNodes(left: OrgNode, right: OrgNode): number {
+  if (left.system === true && right.system !== true) {
+    return -1
+  }
+  if (left.system !== true && right.system === true) {
+    return 1
+  }
+  return 0
+}
+
 export async function buildOrgTree({
   operatorStore,
   commanderSessionStore,
@@ -192,6 +203,7 @@ export async function buildOrgTree({
       },
       archived: commander.archived === true,
       archivedAt: commander.archivedAt,
+      ...(commander.system === true ? { system: true } : {}),
       templateId: commander.templateId ?? null,
       replicatedFromCommanderId: commander.replicatedFromCommanderId ?? null,
     } satisfies OrgNode
@@ -201,7 +213,7 @@ export async function buildOrgTree({
     operator,
     orgIdentity: null,
     archivedCommandersCount: 0,
-    commanders: commanderNodes,
+    commanders: commanderNodes.sort(compareCommanderNodes),
     automations: automations.map((automation) => toAutomationNode(automation)),
   }
 }

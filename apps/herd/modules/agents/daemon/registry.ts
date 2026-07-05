@@ -13,6 +13,7 @@ import {
   type DaemonStdinMessage,
   type DaemonProviderHealth,
 } from './protocol.js'
+import { MACHINE_DAEMON_PAIRING_TOKEN_TTL_MS, isMachineTokenExpired } from './enrollment-token.js'
 import type { PersistedDaemonProcess, PtyHandle } from '../types.js'
 
 export const DEFAULT_DAEMON_HEARTBEAT_INTERVAL_MS = 15_000
@@ -241,14 +242,33 @@ export function createDaemonPairingToken(): string {
   return `hmrd_${randomBytes(24).toString('base64url')}`
 }
 
+export function createDaemonPairingTokenExpiresAt(nowMs = Date.now()): string {
+  return new Date(nowMs + MACHINE_DAEMON_PAIRING_TOKEN_TTL_MS).toISOString()
+}
+
 export function hashDaemonPairingToken(token: string): string {
   return createHash('sha256').update(token.trim(), 'utf8').digest('base64url')
 }
 
-export function verifyDaemonPairingToken(token: string, expectedHash: string | undefined): boolean {
+export function isDaemonPairingTokenExpired(
+  expiresAt: string | null | undefined,
+  nowMs = Date.now(),
+): boolean {
+  return isMachineTokenExpired(expiresAt, nowMs)
+}
+
+export function verifyDaemonPairingToken(
+  token: string,
+  expectedHash: string | undefined,
+  expiresAt?: string | null,
+  nowMs = Date.now(),
+): boolean {
   const normalizedToken = token.trim()
   const normalizedHash = expectedHash?.trim()
   if (!normalizedToken || !normalizedHash) {
+    return false
+  }
+  if (isDaemonPairingTokenExpired(expiresAt, nowMs)) {
     return false
   }
 

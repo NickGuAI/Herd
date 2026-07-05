@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -6,13 +6,13 @@ import {
   ChevronRight,
   ExternalLink,
   LogOut,
-  Moon,
   Plus,
-  Sun,
   Trash2,
+  type LucideIcon,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import {
+  mintMachineEnrollmentToken,
   pairMachineDaemon,
   revokeMachineDaemon,
   useMachineDaemonStatus,
@@ -26,9 +26,9 @@ import {
 import { useFontScale } from '@/hooks/use-font-scale'
 import { useTelemetrySummary } from '@/hooks/use-telemetry'
 import { fetchJson } from '@/lib/api'
-import { useTheme } from '@/lib/theme-context'
+import { useTheme, type AppTheme } from '@/lib/theme-context'
 import { cn } from '@/lib/utils'
-import type { MachineDaemonPairCommand } from '@/types'
+import type { MachineDaemonPairCommand, MachineEnrollmentTokenResponse } from '@/types'
 import {
   buildMachineDaemonPendingDisplayDto,
 } from '@modules/agents/machine-daemon-dtos'
@@ -150,6 +150,17 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat('en-US').format(value)
 }
 
+function formatShortDateTime(value: string): string {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) {
+    return value
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(timestamp)
+}
+
 function activeSectionFromPath(
   pathname: string,
   sections: readonly MobileSettingsSection[],
@@ -174,36 +185,243 @@ function SettingsHeader({
   backTo?: string
 }) {
   return (
-    <div className="px-5 pb-3 pt-4">
+    <div className="border-b border-[color:var(--hv-border-hair)] px-4 pb-2.5 pt-3">
       {backTo ? (
         <Link
           to={backTo}
-          className="mb-2 inline-flex h-11 w-11 items-center justify-center rounded-full border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-[color:var(--hv-fg)]"
+          className="mb-1 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-[color:var(--hv-fg)]"
           aria-label="Back to settings"
         >
           <ArrowLeft size={16} />
         </Link>
       ) : (
-        <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--hv-fg-subtle)]">hervald</p>
+        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-[color:var(--hv-fg-subtle)]">Herd</p>
       )}
-      <h1 className="mt-1 font-display text-4xl text-[color:var(--hv-fg)]">{title}</h1>
+      <h1 className="mt-0.5 truncate text-[22px] font-medium leading-7 text-[color:var(--hv-fg)]">{title}</h1>
     </div>
   )
 }
 
+/**
+ * Grouped-card primitive shared by the settings index and every detail panel.
+ * Uses the sumi-e organic-corner card; `flush` drops the default padding so
+ * full-bleed rows can own their horizontal rhythm and hover washes.
+ */
 function SettingsPanel({
   children,
   className,
+  flush = false,
 }: {
   children: ReactNode
   className?: string
+  flush?: boolean
 }) {
   return (
     <div className={cn(
-      'rounded-[3px_14px_3px_14px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-4 py-4',
+      'card-sumi overflow-hidden bg-[var(--hv-surface-card)]',
+      flush ? undefined : 'px-4 py-4',
       className,
     )}>
       {children}
+    </div>
+  )
+}
+
+/**
+ * Muted uppercase group label rendered *outside* the rounded card, plus the
+ * card itself — the Claude-style grouped IA unit.
+ */
+function SettingsGroup({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <section className="mt-6">
+      <p className="section-title mb-2 px-1 text-[11px]">{label}</p>
+      <SettingsPanel flush>{children}</SettingsPanel>
+    </section>
+  )
+}
+
+/** Hairline separator; `inset` starts it past the icon column like Claude's. */
+function RowDivider({ inset = true }: { inset?: boolean }) {
+  return <div aria-hidden className={cn('divider-ink', inset ? 'ml-[50px]' : 'mx-4')} />
+}
+
+/** Single-line row: icon + title + muted right-side value + chevron. */
+function SettingsLinkRow({
+  to,
+  icon: Icon,
+  label,
+  value,
+}: {
+  to: string
+  icon: LucideIcon
+  label: string
+  value?: string
+}) {
+  return (
+    <Link
+      to={to}
+      className="flex min-h-[52px] items-center gap-3 px-4 text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
+    >
+      <span className="flex w-[22px] shrink-0 justify-center">
+        <Icon size={17} className="text-[color:var(--hv-fg-subtle)]" />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[15px]">{label}</span>
+      {value ? (
+        <span className="shrink-0 text-[12.5px] text-[color:var(--hv-fg-subtle)]">{value}</span>
+      ) : null}
+      <ChevronRight size={15} className="shrink-0 text-[color:var(--hv-fg-faint)]" />
+    </Link>
+  )
+}
+
+/** Destructive action isolated in its own card at the bottom of the sheet. */
+function SignOutCard({
+  onSignOut,
+  className,
+}: {
+  onSignOut?: (() => void) | undefined
+  className?: string
+}) {
+  if (!onSignOut) {
+    return null
+  }
+  return (
+    <SettingsPanel flush className={className}>
+      <button
+        type="button"
+        data-testid="settings-sign-out"
+        onClick={onSignOut}
+        className="flex min-h-[52px] w-full items-center gap-3 px-4 text-left text-[color:var(--hv-accent-danger)] transition-colors hover:bg-[var(--hv-accent-danger-wash)]"
+      >
+        <span className="flex w-[22px] shrink-0 justify-center">
+          <LogOut size={17} />
+        </span>
+        <span className="text-[15px]">Sign out</span>
+      </button>
+    </SettingsPanel>
+  )
+}
+
+const THEME_TILE_OPTIONS: readonly { id: AppTheme; label: string }[] = [
+  { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
+  { id: 'system', label: 'System' },
+]
+
+function ThemeTilePreview({ id }: { id: AppTheme }) {
+  // Absolute palette tokens on purpose: a theme preview must not flip with the
+  // active theme. `system` splits the swatch across both grounds.
+  const background = id === 'light'
+    ? 'var(--washi-white)'
+    : id === 'dark'
+      ? 'var(--sumi-black)'
+      : 'linear-gradient(135deg, var(--washi-white) 0%, var(--washi-white) 50%, var(--sumi-black) 50%, var(--sumi-black) 100%)'
+  const bar = id === 'light'
+    ? 'var(--ink-mist)'
+    : id === 'dark'
+      ? 'var(--carved-basalt)'
+      : 'var(--diluted-ink)'
+  return (
+    <span
+      aria-hidden
+      className="block w-full rounded-[2px_8px_2px_8px] border border-[color:var(--hv-border-soft)] p-2"
+      style={{ background }}
+    >
+      <span className="block h-[3px] w-3/5 rounded-full" style={{ background: bar }} />
+      <span className="mt-1.5 block h-[3px] w-2/5 rounded-full" style={{ background: bar }} />
+    </span>
+  )
+}
+
+/**
+ * Inline Light / Dark / System selector. `system` is a first-class persisted
+ * value that tracks `prefers-color-scheme` live via the theme context.
+ * Selection is marked with an ink border — vermillion stays reserved.
+ */
+function ThemeTiles({ className }: { className?: string }) {
+  const { theme, setTheme, isLoading, isSaving } = useTheme()
+  const disabled = isLoading || isSaving
+
+  return (
+    <div role="group" aria-label="Theme" className={cn('grid grid-cols-3 gap-3', className)}>
+      {THEME_TILE_OPTIONS.map((option) => {
+        const selected = theme === option.id
+        return (
+          <button
+            key={option.id}
+            type="button"
+            data-testid={`theme-tile-${option.id}`}
+            aria-pressed={selected}
+            disabled={disabled}
+            onClick={() => setTheme(option.id)}
+            className={cn(
+              'min-w-0 rounded-[3px_10px_3px_10px] border p-1 pb-1.5 transition-all disabled:opacity-60',
+              selected
+                ? 'border-[color:var(--hv-fg)] shadow-[0_0_0_1px_var(--hv-fg)]'
+                : 'border-transparent',
+            )}
+          >
+            <ThemeTilePreview id={option.id} />
+            <span
+              className={cn(
+                'mt-1.5 block text-center text-[11px] leading-none',
+                selected
+                  ? 'font-medium text-[color:var(--hv-fg)]'
+                  : 'text-[color:var(--hv-fg-subtle)]',
+              )}
+            >
+              {option.label}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Single-line text-size slider row (small A → large A). */
+function TextSizeRow() {
+  const {
+    fontScale,
+    setFontScale,
+    minFontScale,
+    maxFontScale,
+    fontScaleStep,
+    isLoading,
+    isSaving,
+  } = useFontScale()
+  const disabled = isLoading || isSaving
+
+  return (
+    <div className="flex min-h-[52px] items-center gap-3 px-4">
+      <span
+        aria-hidden
+        className="flex w-[22px] shrink-0 justify-center text-[13px] font-medium leading-none text-[color:var(--hv-fg-subtle)]"
+      >
+        A
+      </span>
+      <span className="shrink-0 text-[15px] text-[color:var(--hv-fg)]">Text size</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 pl-2">
+        <span aria-hidden className="text-[11px] leading-none text-[color:var(--hv-fg-subtle)]">A</span>
+        <input
+          type="range"
+          aria-label="Text size"
+          min={minFontScale}
+          max={maxFontScale}
+          step={fontScaleStep}
+          value={fontScale}
+          disabled={disabled}
+          onChange={(event) => setFontScale(Number(event.target.value))}
+          className="min-w-0 flex-1 accent-sumi-black disabled:opacity-40"
+        />
+        <span aria-hidden className="text-[16px] leading-none text-[color:var(--hv-fg-subtle)]">A</span>
+      </div>
     </div>
   )
 }
@@ -216,44 +434,33 @@ function ProfileCard({
   className?: string
 }) {
   return (
-    <SettingsPanel className={cn('mx-4', className)}>
-      <div className="flex items-center gap-3">
+    <SettingsPanel flush className={className}>
+      <div className="flex items-center gap-3 px-4 py-3.5">
         {profile.picture ? (
           <img
             src={profile.picture}
             alt={profile.displayName}
-            className="h-11 w-11 rounded-full object-cover"
+            className="h-10 w-10 rounded-full object-cover"
           />
         ) : (
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--hv-button-primary-bg)] font-display text-lg italic text-[color:var(--hv-fg-inverse)]">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--hv-button-primary-bg)] font-display text-base italic text-[color:var(--hv-fg-inverse)]">
             {initials(profile.displayName, profile.email)}
           </div>
         )}
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-[color:var(--hv-fg)]">
+          <p className="truncate text-[15px] font-medium text-[color:var(--hv-fg)]">
             {profile.displayName}
           </p>
-          <p className="mt-1 truncate font-mono text-[11px] text-[color:var(--hv-fg-subtle)]">
+          <p className="mt-0.5 truncate font-mono text-[11px] text-[color:var(--hv-fg-subtle)]">
             {profile.email}
           </p>
         </div>
 
-        <span className="text-[9.5px] font-medium uppercase tracking-[0.14em] text-moss-stone">
+        <span className="rounded-full bg-[var(--hv-surface-selected)] px-2 py-0.5 text-[10px] font-medium text-moss-stone">
           active
         </span>
       </div>
-
-      {profile.onSignOut ? (
-        <button
-          type="button"
-          onClick={profile.onSignOut}
-          className="mt-4 inline-flex items-center gap-2 text-xs uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)] transition-colors hover:text-[color:var(--hv-fg)]"
-        >
-          <LogOut size={13} />
-          Sign out
-        </button>
-      ) : null}
     </SettingsPanel>
   )
 }
@@ -266,12 +473,35 @@ function FullPageLink({ section }: { section: MobileSettingsSection }) {
   return (
     <Link
       to={section.fullPagePath}
-      className="mt-4 inline-flex items-center gap-2 text-xs uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)] transition-colors hover:text-[color:var(--hv-fg)]"
+      className="mt-3 inline-flex min-h-8 items-center gap-2 text-xs font-medium text-[color:var(--hv-fg-subtle)] transition-colors hover:text-[color:var(--hv-fg)]"
     >
       Open full page
       <ExternalLink size={13} />
     </Link>
   )
+}
+
+/**
+ * Right-side value hints for index rows. Values come only from data this page
+ * already fetches; when a value is not available yet, the row renders nothing
+ * (no skeletons, no dashes).
+ */
+function useCredentialPoolsValue(): string | undefined {
+  const claudePool = useQuery({
+    queryKey: credentialPoolQueryKey('claude'),
+    queryFn: () => fetchCredentialPool('claude'),
+  })
+  const codexPool = useQuery({
+    queryKey: credentialPoolQueryKey('codex'),
+    queryFn: () => fetchCredentialPool('codex'),
+  })
+  if (!claudePool.data || !codexPool.data) {
+    return undefined
+  }
+  const pools = [claudePool.data, codexPool.data]
+    .filter((pool) => pool.credentials.length > 0)
+    .length
+  return `${pools} pool${pools === 1 ? '' : 's'}`
 }
 
 function MobileSettingsIndex({
@@ -283,40 +513,96 @@ function MobileSettingsIndex({
   search: string
   sections: readonly MobileSettingsSection[]
 }) {
+  const telemetrySummary = useTelemetrySummary().data
+  const machines = useMachines().data
+  const credentialPoolsValue = useCredentialPoolsValue()
+
+  const accountSections = sections.filter((section) => section.group === 'account')
+  const workspaceSections = sections.filter((section) => section.group === 'workspace')
+  const appearanceSection = sections.find((section) => section.id === 'appearance') ?? null
+  const aboutSection = sections.find((section) => section.id === 'about') ?? null
+
+  function rowValue(sectionId: string): string | undefined {
+    if (sectionId === 'telemetry' && typeof telemetrySummary?.costToday === 'number') {
+      return `${formatCost(telemetrySummary.costToday)} today`
+    }
+    if (sectionId === 'machines' && machines) {
+      return formatNumber(machines.length)
+    }
+    if (sectionId === 'credential-pools') {
+      return credentialPoolsValue
+    }
+    return undefined
+  }
+
+  function renderLinkRows(groupSections: readonly MobileSettingsSection[]) {
+    return groupSections.map((section, index) => (
+      <Fragment key={section.id}>
+        {index > 0 ? <RowDivider /> : null}
+        <SettingsLinkRow
+          to={withSearch(section.path, search)}
+          icon={section.icon}
+          label={section.label}
+          value={rowValue(section.id)}
+        />
+      </Fragment>
+    ))
+  }
+
   return (
     <>
       <SettingsHeader title="Settings" />
 
-      <div className="hv-scroll flex-1 overflow-y-auto px-0 pb-5">
+      <div className="hv-scroll flex-1 overflow-y-auto bg-[var(--hv-bg)] px-4 pb-6 pt-4">
         <ProfileCard profile={profile} />
 
-        <div className="mt-4 px-3">
-          <div className="overflow-hidden rounded-[3px_14px_3px_14px] border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)]">
-            {sections.map((section, index) => {
-              const Icon = section.icon
-              return (
-                <Link
-                  key={section.id}
-                  to={withSearch(section.path, search)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
-                  style={{
-                    borderBottom: index < sections.length - 1
-                      ? '1px solid var(--hv-border-hair)'
-                      : 'none',
-                  }}
-                >
-                  <Icon size={15} className="shrink-0 text-[color:var(--hv-fg-subtle)]" />
-                  <span className="flex-1">{section.label}</span>
-                  <ChevronRight size={14} className="text-[color:var(--hv-fg-faint)]" />
-                </Link>
-              )
-            })}
-          </div>
-        </div>
+        {accountSections.length > 0 ? (
+          <SettingsGroup label="Account">
+            {renderLinkRows(accountSections)}
+          </SettingsGroup>
+        ) : null}
 
-        <div className="px-4 pt-5">
+        {workspaceSections.length > 0 ? (
+          <SettingsGroup label="Workspace">
+            {renderLinkRows(workspaceSections)}
+          </SettingsGroup>
+        ) : null}
+
+        {appearanceSection || aboutSection ? (
+          <SettingsGroup label="App">
+            {appearanceSection ? (
+              <>
+                <Link
+                  to={withSearch(appearanceSection.path, search)}
+                  className="flex min-h-[48px] items-center gap-3 px-4 text-[color:var(--hv-fg)] transition-colors hover:bg-[var(--hv-surface-hover)]"
+                >
+                  <span className="min-w-0 flex-1 truncate text-[15px]">Appearance</span>
+                  <ChevronRight size={15} className="shrink-0 text-[color:var(--hv-fg-faint)]" />
+                </Link>
+                <div className="px-4 pb-4">
+                  <ThemeTiles />
+                </div>
+                <RowDivider inset={false} />
+                <TextSizeRow />
+              </>
+            ) : null}
+            {appearanceSection && aboutSection ? <RowDivider /> : null}
+            {aboutSection ? (
+              <SettingsLinkRow
+                to={withSearch(aboutSection.path, search)}
+                icon={aboutSection.icon}
+                label={aboutSection.label}
+                value={`v${APP_VERSION}`}
+              />
+            ) : null}
+          </SettingsGroup>
+        ) : null}
+
+        <div className="mt-6">
           <TelemetryPreviewCard />
         </div>
+
+        <SignOutCard onSignOut={profile.onSignOut} className="mt-6" />
 
         <VersionFooter />
       </div>
@@ -333,7 +619,7 @@ function AccountPanel({
 }) {
   return (
     <div className="space-y-4">
-      <ProfileCard profile={profile} className="mx-0" />
+      <ProfileCard profile={profile} />
       <SettingsPanel>
         <div className="space-y-3 text-sm">
           <SettingRow label="Display name" value={profile.displayName} />
@@ -341,6 +627,7 @@ function AccountPanel({
         </div>
         <FullPageLink section={section} />
       </SettingsPanel>
+      <SignOutCard onSignOut={profile.onSignOut} />
     </div>
   )
 }
@@ -442,8 +729,17 @@ function NotificationsPanel({ section }: { section: MobileSettingsSection }) {
 }
 
 function MachinesPanel() {
+  const queryClient = useQueryClient()
   const machinesQuery = useMachines()
   const machines = machinesQuery.data ?? []
+  const [lastEnrollment, setLastEnrollment] = useState<MachineEnrollmentTokenResponse['enrollment'] | null>(null)
+  const mintEnrollment = useMutation({
+    mutationFn: () => mintMachineEnrollmentToken(),
+    onSuccess: async (response) => {
+      setLastEnrollment(response.enrollment)
+      await queryClient.invalidateQueries({ queryKey: ['agents', 'machines'] })
+    },
+  })
 
   if (machinesQuery.isLoading && machines.length === 0) {
     return <SettingsPanel>Loading machines...</SettingsPanel>
@@ -456,7 +752,41 @@ function MachinesPanel() {
   return (
     <SettingsPanel>
       <div className="space-y-3">
-        <SettingRow label="Registered" value={formatNumber(machines.length)} />
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <SettingRow label="Registered" value={formatNumber(machines.length)} />
+          </div>
+          <button
+            type="button"
+            disabled={mintEnrollment.isPending}
+            onClick={() => mintEnrollment.mutate()}
+            className="inline-flex shrink-0 items-center gap-2 rounded-[2px_8px] border border-[color:var(--hv-fg)] px-3 py-1.5 text-[11px] text-[color:var(--hv-fg)] shadow-[2px_2px_0_var(--hv-fg)] disabled:opacity-50"
+          >
+            <Plus size={13} />
+            Connect machine
+          </button>
+        </div>
+        {lastEnrollment ? (
+          <div className="space-y-2 rounded border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-2">
+            <p className="text-[10px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)]">
+              Expires {formatShortDateTime(lastEnrollment.expiresAt)}
+            </p>
+            <code className="block whitespace-pre-wrap break-words text-[10px] text-[color:var(--hv-fg-subtle)]">
+              {lastEnrollment.command.shortCommand}
+            </code>
+            <details className="text-[10px] text-[color:var(--hv-fg-subtle)]">
+              <summary className="cursor-pointer uppercase tracking-[0.08em]">
+                {lastEnrollment.command.disclosureLabel}
+              </summary>
+              <code className="mt-2 block whitespace-pre-wrap break-words">
+                {lastEnrollment.command.fullCommand}
+              </code>
+            </details>
+          </div>
+        ) : null}
+        {mintEnrollment.error ? (
+          <p className="text-sm text-[color:var(--hv-accent-danger)]">Enrollment token could not be minted.</p>
+        ) : null}
         {machines.length === 0 ? (
           <p className="text-sm text-[color:var(--hv-fg-subtle)]">No machines are registered.</p>
         ) : (
@@ -651,6 +981,7 @@ function MachineCard({
       ? {
           daemon: {
             pairedAt: machine.daemon.pairedAt ?? undefined,
+            expiresAt: machine.daemon.expiresAt ?? undefined,
             revokedAt: machine.daemon.revokedAt ?? undefined,
             lastSeenAt: machine.daemon.lastSeenAt ?? undefined,
             daemonVersion: machine.daemon.daemonVersion ?? undefined,
@@ -665,6 +996,8 @@ function MachineCard({
   const revokeAction = allowedActions.find((action) => action.id === 'revoke')
   const statusLabel = daemonStatus?.connectionLabel ?? pendingDisplay.connectionLabel
   const providerLabel = daemonStatus?.providerAuthLabel ?? pendingDisplay.providerAuthLabel
+  const expiresAt = daemonStatus?.expiresAt ?? machine.daemon?.expiresAt ?? null
+  const pairingExpired = daemonStatus?.pairingExpired ?? false
 
   return (
     <div className="rounded-md border border-[color:var(--hv-border-hair)] px-3 py-2">
@@ -691,6 +1024,11 @@ function MachineCard({
             <span>Auth: <span className="text-[color:var(--hv-fg)]">{providerLabel}</span></span>
             {daemonStatus?.daemonVersion ? (
               <span className="col-span-2">Version: {daemonStatus.daemonVersion}</span>
+            ) : null}
+            {expiresAt ? (
+              <span className="col-span-2">
+                Pairing: {pairingExpired ? 'expired ' : 'expires '}{formatShortDateTime(expiresAt)}
+              </span>
             ) : null}
           </div>
           <div className="flex gap-2">
@@ -737,98 +1075,19 @@ function MachineCard({
 }
 
 function AppearancePanel() {
-  const { theme, setTheme, isLoading, isSaving } = useTheme()
-  const {
-    fontScale,
-    setFontScale,
-    adjustFontScale,
-    minFontScale,
-    maxFontScale,
-    fontScaleStep,
-    isLoading: isFontScaleLoading,
-    isSaving: isFontScaleSaving,
-  } = useFontScale()
   const workspacePreferences = useWorkspacePreferences()
   const updateWorkspacePreferences = useUpdateWorkspacePreferences()
-  const disabled = isLoading || isSaving
-  const fontScaleDisabled = disabled || isFontScaleLoading || isFontScaleSaving
-  const canDecreaseFontScale = fontScale > minFontScale + 1e-6
-  const canIncreaseFontScale = fontScale < maxFontScale - 1e-6
 
   return (
-    <SettingsPanel>
-      <div className="grid grid-cols-2 gap-3">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => setTheme('light')}
-          className={cn(
-            'flex items-center justify-center gap-2 rounded-md border px-3 py-3 text-sm transition-colors',
-            theme === 'light'
-              ? 'border-[color:var(--hv-fg)] bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]'
-              : 'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-[color:var(--hv-fg)]',
-          )}
-        >
-          <Sun size={15} />
-          Light
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => setTheme('dark')}
-          className={cn(
-            'flex items-center justify-center gap-2 rounded-md border px-3 py-3 text-sm transition-colors',
-            theme === 'dark'
-              ? 'border-[color:var(--hv-fg)] bg-[var(--hv-button-primary-bg)] text-[color:var(--hv-fg-inverse)]'
-              : 'border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-[color:var(--hv-fg)]',
-          )}
-        >
-          <Moon size={15} />
-          Dark
-        </button>
+    <SettingsPanel flush>
+      <div className="px-4 pb-4 pt-3.5">
+        <p className="text-[15px] text-[color:var(--hv-fg)]">Theme</p>
+        <ThemeTiles className="mt-3" />
       </div>
-      <div className="mt-5 border-t border-[color:var(--hv-border-hair)] pt-4">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-xs uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)]">
-            Text size
-          </span>
-          <span className="font-mono text-xs text-[color:var(--hv-fg)]">
-            {Math.round(fontScale * 100)}%
-          </span>
-        </div>
-        <div className="mt-3 flex items-center gap-3">
-          <button
-            type="button"
-            aria-label="Decrease text size"
-            disabled={fontScaleDisabled || !canDecreaseFontScale}
-            onClick={() => adjustFontScale(-fontScaleStep)}
-            className="h-9 w-10 rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-xs text-[color:var(--hv-fg)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            A−
-          </button>
-          <input
-            type="range"
-            aria-label="Text size"
-            min={minFontScale}
-            max={maxFontScale}
-            step={fontScaleStep}
-            value={fontScale}
-            disabled={fontScaleDisabled}
-            onChange={(event) => setFontScale(Number(event.target.value))}
-            className="min-w-0 flex-1 accent-sumi-black"
-          />
-          <button
-            type="button"
-            aria-label="Increase text size"
-            disabled={fontScaleDisabled || !canIncreaseFontScale}
-            onClick={() => adjustFontScale(fontScaleStep)}
-            className="h-9 w-10 rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] text-xs text-[color:var(--hv-fg)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            A+
-          </button>
-        </div>
-      </div>
-      <div className="mt-5 border-t border-[color:var(--hv-border-hair)] pt-4">
+      <RowDivider inset={false} />
+      <TextSizeRow />
+      <RowDivider inset={false} />
+      <div className="px-4 py-3.5">
         <label className="grid gap-2 text-xs uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)]">
           <span>Workspace panel</span>
           <select
@@ -837,7 +1096,7 @@ function AppearancePanel() {
             onChange={(event) => {
               updateWorkspacePreferences.mutate(event.target.value as WorkspacePanelDefault)
             }}
-            className="rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] px-3 py-2 text-sm normal-case tracking-normal text-[color:var(--hv-fg)]"
+            className="rounded-md border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-field)] px-3 py-2 text-sm normal-case tracking-normal text-[color:var(--hv-fg)]"
           >
             <option value="open">Open by default</option>
             <option value="closed">Closed by default</option>
@@ -889,7 +1148,7 @@ function MobileSettingsDetail({
         title={section.label}
         backTo={withSearch(MOBILE_SETTINGS_BASE_PATH, search)}
       />
-      <div className="hv-scroll flex-1 overflow-y-auto px-4 pb-5">
+      <div className="hv-scroll flex-1 overflow-y-auto bg-[var(--hv-bg)] px-4 pb-6 pt-4">
         {section.id === 'account' ? <AccountPanel profile={profile} section={section} /> : null}
         {section.id === 'telemetry' ? <TelemetryPanel section={section} /> : null}
         {section.id === 'notifications' ? <NotificationsPanel section={section} /> : null}
@@ -906,7 +1165,7 @@ function MobileSettingsDetail({
 function VersionFooter() {
   return (
     <div className="px-6 pt-4 text-center text-[10px] uppercase tracking-[0.14em] text-[color:var(--hv-fg-faint)]">
-      hervald · v{APP_VERSION}{BUILD_COMMIT ? ` · build ${BUILD_COMMIT}` : ''}
+      herd · v{APP_VERSION}{BUILD_COMMIT ? ` · build ${BUILD_COMMIT}` : ''}
     </div>
   )
 }
@@ -926,7 +1185,7 @@ export function MobileSettings() {
   const section = activeSectionFromPath(location.pathname, sections)
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col" data-testid="mobile-settings">
+    <section className="flex min-h-0 flex-1 flex-col bg-[var(--hv-bg)]" data-testid="mobile-settings">
       {section ? (
         <MobileSettingsDetail
           section={section}

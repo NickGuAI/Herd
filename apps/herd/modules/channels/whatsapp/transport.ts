@@ -1,6 +1,7 @@
 import type {
   ChannelInboundEvent,
   ChannelLastDrop,
+  ChannelOutboundMessageRef,
   ChannelOutboundPayload,
 } from '../types.js'
 import type { WhatsAppChannelConfig } from './config.js'
@@ -24,6 +25,8 @@ export interface WhatsAppRuntimeStatus {
   lastError?: string
   lastEventAt?: string
   lastDrop?: ChannelLastDrop
+  dropCount?: number
+  recentDrops?: ChannelLastDrop[]
   qrCode?: string
   qrDataUrl?: string
 }
@@ -41,7 +44,16 @@ export interface WhatsAppPairingSession {
 export interface WhatsAppTransportRuntime {
   accountId: string
   status(): WhatsAppRuntimeStatus
-  send(peerId: string, payload: ChannelOutboundPayload, options?: { sendTextWithVoiceNote?: boolean }): Promise<void>
+  send(
+    peerId: string,
+    payload: ChannelOutboundPayload,
+    options?: { sendTextWithVoiceNote?: boolean },
+  ): Promise<void | { rawResponse?: unknown; messageRef?: ChannelOutboundMessageRef }>
+  edit?(
+    peerId: string,
+    messageRef: ChannelOutboundMessageRef,
+    payload: ChannelOutboundPayload,
+  ): Promise<{ rawResponse?: unknown; messageRef?: ChannelOutboundMessageRef }>
   stop(): Promise<void>
 }
 

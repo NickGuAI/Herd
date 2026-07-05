@@ -8,6 +8,18 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <title>Herd</title>
+    <script>
+      // Resolve the persisted "system" theme against prefers-color-scheme
+      // before first paint. The server injects data-theme; light/dark classes
+      // are already correct, so this is a no-op unless data-theme="system".
+      (function () {
+        var root = document.documentElement
+        if (root.getAttribute('data-theme') !== 'system') return
+        var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+        root.classList.remove('hv-light', 'hv-dark')
+        root.classList.add(dark ? 'hv-dark' : 'hv-light')
+      })()
+    </script>
   </head>
   <body class="bg-washi-white text-sumi-black font-body antialiased">
     <div id="root"></div>

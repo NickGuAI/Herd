@@ -40,8 +40,8 @@ and `channelReplyDelivery`. The same assistant text should be traceable through
 the transcript tail, `/api/conversations/:id/messages`, delivery state, and the
 provider adapter send.
 
-Source references:
+Related docs:
 
-- [Channels feature guide](../features/channels.md)
-- [Channels architecture](../architecture/channels.md)
-- [Channel integration guide](../guides/channel-integration-guide.md)
+- [Commanders](../concepts/commanders.md)
+- [Approvals](../concepts/approvals.md)
+- [Hardening](hardening.md)

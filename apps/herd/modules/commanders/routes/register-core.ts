@@ -108,7 +108,12 @@ import {
 import type { CommanderRoutesContext, CommanderRuntime, StreamEvent } from './types.js'
 import { resolveCommanderWorkflow } from '../workflow-resolution.js'
 import { COMMANDER_WORKFLOW_FILE } from '../workflow.js'
-import { getLiveConversationSession, stopConversationSession } from './conversation-runtime.js'
+import {
+  appendGaiaOpsSkillGuide,
+  buildGaiaOpsEnvWithMetadata,
+  getLiveConversationSession,
+  stopConversationSession,
+} from './conversation-runtime.js'
 import type { AgentType } from '../../agents/types.js'
 import { resolveDefaultProviderId } from '../../agents/providers/registry.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
@@ -122,14 +127,34 @@ import {
 import { enforceCommanderCostCap } from '../cost-control.js'
 import type {
   CommanderPackageDefinition,
+  CommanderPackageSkill,
   CommanderPackageResponse,
 } from '../packages/types.js'
+import {
+  COMMANDER_TEMPLATE_SCHEMA_VERSION,
+  buildImportedCommanderBundleAutomationInput,
+  collectCommanderBundleSkills,
+  installCommanderBundleSkills,
+  parseCommanderBundleAutomations,
+  parseCommanderBundleSkillBindings,
+  toCommanderBundleAutomation,
+  type CommanderBundleAutomation,
+  type CommanderTemplateSkillBinding,
+} from '../template-bundle.js'
 
 const WIZARD_SESSION_PREFIX = 'commander-wizard-'
 const WIZARD_SESSION_NAME_PATTERN = /^commander-wizard-[a-zA-Z0-9_-]+$/
 const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ARCHIVED_COMMANDER_RUNTIME_ERROR = 'Commander is archived. Restore it first via POST /:id/restore.'
 const COMMANDER_MD_IDENTITY_MESSAGE = 'Commander identity lives in COMMANDER.md; edit COMMANDER.md directly.'
+const GAIA_HOST = 'gaia'
+const GAIA_TEMPLATE_ID = 'gaia-onboarding'
+
+function isProtectedSystemCommander(session: CommanderSession): boolean {
+  return session.system === true ||
+    session.host === GAIA_HOST ||
+    session.templateId === GAIA_TEMPLATE_ID
+}
 
 class DuplicateCommanderDisplayNameError extends Error {
   constructor(displayName: string) {
@@ -152,7 +177,7 @@ function parseIdentityOperatingStyleInput(
 }
 
 interface CommanderTemplatePackage {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   exportedAt: string
   sourceCommanderId?: string
   commander: {
@@ -177,7 +202,9 @@ interface CommanderTemplatePackage {
   skillBindings: Array<{
     skillId: string
     version?: string
-  }>
+  }> | CommanderTemplateSkillBinding[]
+  skills?: CommanderPackageSkill[]
+  automations?: CommanderBundleAutomation[]
 }
 
 function parseConversationId(raw: unknown): string | null {
@@ -1320,14 +1347,20 @@ export function registerCoreRoutes(
     try {
       const displayNames = await readCommanderDisplayNames(context.commanderDataDir)
       const displayName = displayNames[commanderId]?.trim() || session.host
-      const [commanderMd, memorySnapshot] = await Promise.all([
+      const [commanderMd, memorySnapshot, automations] = await Promise.all([
         readCommanderWorkflowMarkdown(commanderId, context.commanderBasePath),
         exportRemoteMemorySnapshot(commanderId, context.commanderBasePath),
+        context.automationStore.list({ parentCommanderId: commanderId }),
       ])
       const profile = await readCommanderUiProfile(commanderId, context.commanderBasePath)
+      const bundledSkills = await collectCommanderBundleSkills({
+        commanderId,
+        commanderBasePath: context.commanderBasePath,
+        automations,
+      })
 
       const payload: CommanderTemplatePackage = {
-        schemaVersion: 1,
+        schemaVersion: COMMANDER_TEMPLATE_SCHEMA_VERSION,
         exportedAt: context.now().toISOString(),
         sourceCommanderId: session.id,
         commander: {
@@ -1346,7 +1379,9 @@ export function registerCoreRoutes(
         },
         commanderMd,
         memorySnapshot,
-        skillBindings: [],
+        skills: bundledSkills.skills,
+        automations: automations.map(toCommanderBundleAutomation),
+        skillBindings: bundledSkills.skillBindings,
       }
 
       res.json(payload)
@@ -1359,10 +1394,11 @@ export function registerCoreRoutes(
 
   router.post('/import', context.requireWriteAccess, async (req, res) => {
     const payload = req.body
-    if (!isRecord(payload) || payload.schemaVersion !== 1) {
-      res.status(400).json({ error: 'schemaVersion must be 1' })
+    if (!isRecord(payload) || (payload.schemaVersion !== 1 && payload.schemaVersion !== COMMANDER_TEMPLATE_SCHEMA_VERSION)) {
+      res.status(400).json({ error: `schemaVersion must be 1 or ${COMMANDER_TEMPLATE_SCHEMA_VERSION}` })
       return
     }
+    const isV2Bundle = payload.schemaVersion === COMMANDER_TEMPLATE_SCHEMA_VERSION
 
     const commander = isRecord(payload.commander) ? payload.commander : null
     if (!commander) {
@@ -1469,6 +1505,20 @@ export function registerCoreRoutes(
       res.status(400).json({ error: importedModelValidation.error, validIds: importedModelValidation.validIds })
       return
     }
+    const parsedSkillBindings = isV2Bundle
+      ? parseCommanderBundleSkillBindings(payload.skillBindings)
+      : { ok: true as const, value: [] }
+    if (!parsedSkillBindings.ok) {
+      res.status(400).json({ error: parsedSkillBindings.error })
+      return
+    }
+    const parsedAutomations = isV2Bundle
+      ? parseCommanderBundleAutomations(payload.automations)
+      : { ok: true as const, value: [] }
+    if (!parsedAutomations.ok) {
+      res.status(400).json({ error: parsedAutomations.error })
+      return
+    }
 
     const session: CommanderSession = {
       id: randomUUID(),
@@ -1485,6 +1535,8 @@ export function registerCoreRoutes(
       taskSource,
       ...(sourceCommanderId ? { templateId: sourceCommanderId } : {}),
     }
+
+    const createdAutomationIds: string[] = []
 
     try {
       const created = await persistCreatedCommander(session, displayName, {
@@ -1522,12 +1574,36 @@ export function registerCoreRoutes(
         }
       }
 
+      await installCommanderBundleSkills(session.id, context.commanderBasePath, parsedSkillBindings.value)
+      if (parsedAutomations.value.length > 0) {
+        await context.automationSchedulerInitialized
+      }
+      for (const automation of parsedAutomations.value) {
+        const input = buildImportedCommanderBundleAutomationInput({
+          sourceCommanderId,
+          commanderId: session.id,
+          defaultAgentType: importedAgentType,
+          automation,
+        })
+        const createdAutomation = context.automationScheduler
+          ? await context.automationScheduler.createAutomation(input)
+          : await context.automationStore.create(input)
+        createdAutomationIds.push(createdAutomation.id)
+      }
+
       res.status(201).json({
         ...created,
         displayName,
         url: buildCommandRoomLaunchTarget({ commanderId: session.id }).path,
       })
     } catch (error) {
+      for (const automationId of createdAutomationIds) {
+        if (context.automationScheduler) {
+          await context.automationScheduler.deleteAutomation(automationId).catch(() => {})
+        } else {
+          await context.automationStore.delete(automationId, { removeFiles: true }).catch(() => {})
+        }
+      }
       await context.sessionStore.delete(session.id).catch(() => {})
       await deleteCommanderDisplayName(context.commanderDataDir, session.id).catch(() => {})
       const { commanderRoot } = resolveCommanderPaths(session.id, context.commanderBasePath)
@@ -1953,9 +2029,17 @@ export function registerCoreRoutes(
         },
         workflow,
       )
-      const systemPrompt = selectedAgentType === 'claude'
+      const baseSystemPrompt = selectedAgentType === 'claude'
         ? appendClaudeReasoningPolicy(built.systemPrompt)
         : built.systemPrompt
+      const gaiaOpsEnv = await buildGaiaOpsEnvWithMetadata(
+        context,
+        started,
+        activeConversation ?? defaultConversation,
+      )
+      const systemPrompt = gaiaOpsEnv
+        ? appendGaiaOpsSkillGuide(baseSystemPrompt)
+        : baseSystemPrompt
 
       if (!context.sessionsInterface) {
         throw new Error('sessionsInterface not configured — agents router bridge missing')
@@ -1974,6 +2058,10 @@ export function registerCoreRoutes(
           : undefined,
         cwd: started.cwd ?? undefined,
         maxTurns: built.maxTurns,
+        ...(gaiaOpsEnv ? {
+          env: gaiaOpsEnv.env,
+          gaiaOpsApiKeyExpiresAt: gaiaOpsEnv.apiKeyExpiresAt,
+        } : {}),
       })
 
       const initialStreamSession = context.sessionsInterface.getSession(sessionName)
@@ -2207,6 +2295,11 @@ export function registerCoreRoutes(
       return
     }
 
+    if (isProtectedSystemCommander(session)) {
+      res.status(403).json({ error: `Commander "${commanderId}" is a system commander and cannot be archived.` })
+      return
+    }
+
     if (session.state === 'running') {
       res.status(409).json({
         error: `Commander "${commanderId}" is running. Stop it before archiving.`,
@@ -2280,6 +2373,11 @@ export function registerCoreRoutes(
     const session = await context.sessionStore.get(commanderId)
     if (!session) {
       res.status(404).json({ error: `Commander "${commanderId}" not found` })
+      return
+    }
+
+    if (isProtectedSystemCommander(session)) {
+      res.status(403).json({ error: `Commander "${commanderId}" is a system commander and cannot be deleted.` })
       return
     }
 

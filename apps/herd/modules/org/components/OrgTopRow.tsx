@@ -2,7 +2,10 @@ import type { OrgIdentity } from '../../org-identity/types'
 import type { Operator } from '../../operators/types'
 
 const cardClass =
-  'flex min-h-32 min-w-0 items-center justify-center rounded-[8px] border-2 border-[color:var(--hv-fg)] bg-[var(--hv-surface-card)] px-5 py-6 text-center'
+  'card-sumi flex min-h-32 min-w-0 items-center justify-center px-5 py-6 text-center'
+
+const cardButtonClass =
+  `${cardClass} appearance-none transition-colors hover:bg-[var(--hv-surface-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--hv-border-firm)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--hv-bg)]`
 
 const textClass =
   'max-w-full break-words text-center font-display text-2xl leading-tight text-[color:var(--hv-fg)] [overflow-wrap:anywhere] sm:text-3xl'
@@ -36,7 +39,7 @@ export function OrgTopRow({
           type="button"
           data-testid="commander-hire-button"
           onClick={onHire}
-          className={`${cardClass} h-full w-full transition-colors hover:bg-[var(--hv-surface-hover)]`}
+          className={`${cardButtonClass} h-full w-full`}
         >
           <span className={textClass}>Recruit</span>
         </button>

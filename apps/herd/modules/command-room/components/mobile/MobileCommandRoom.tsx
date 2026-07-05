@@ -70,6 +70,13 @@ function resolveMobileTab(pathname: string, metadata: CommandRoomRouteMetadata):
 export interface MobileCommandRoomProps {
   commanders: Commander[]
   commanderSessions: CommanderSession[]
+  /**
+   * Per issue 1878: true while the client is still resolving commander/
+   * conversation knowledge for the commander in the URL (cold caches). The
+   * chat shell then mounts keyed on the URL param with a transcript skeleton
+   * instead of waiting for the commanders query — never a blank section.
+   */
+  conversationResolutionPending?: boolean
   workers: Worker[]
   automationSessions?: ChatSession[]
   pendingApprovals: PendingApproval[]
@@ -138,6 +145,7 @@ export interface MobileCommandRoomProps {
 export function MobileCommandRoom({
   commanders,
   commanderSessions,
+  conversationResolutionPending = false,
   workers,
   automationSessions = [],
   pendingApprovals,
@@ -266,6 +274,15 @@ export function MobileCommandRoom({
   const selectedCommander = commanders.find((commander) => commander.id === selectedCommanderId) ?? commanders[0] ?? null
   const activeCommanderId = commanderId ?? selectedCommander?.id ?? null
   const activeCommander = commanders.find((commander) => commander.id === activeCommanderId) ?? selectedCommander
+  // Per issue 1878: the chat shell mounts keyed on the commander URL param.
+  // While the shared commanders cache is still resolving (cold arrival), a
+  // minimal identity built from the URL param keeps the shell painting in the
+  // same frame; the cached identity takes over once the list hydrates.
+  const chatCommander: Commander | null = activeCommander ?? (
+    inChat && commanderId && conversationResolutionPending
+      ? { id: commanderId, name: '', status: 'unknown' }
+      : null
+  )
   const activeCommanderConversationIds = useMemo(
     () => new Set((conversations ?? [])
       .filter((conversation) => conversation.commanderId === activeCommander?.id)
@@ -410,9 +427,10 @@ export function MobileCommandRoom({
       data-testid="mobile-command-room"
     >
       <div className="flex min-h-0 flex-1 flex-col">
-        {tab === 'sessions' && inChat && activeCommander ? (
+        {tab === 'sessions' && inChat && chatCommander ? (
           <MobileChatView
-            commander={activeCommander}
+            commander={chatCommander}
+            conversationResolutionPending={conversationResolutionPending}
             workers={activeCommanderWorkers}
             transcript={transcript}
             hasOlderMessages={hasOlderMessages}
@@ -440,12 +458,12 @@ export function MobileCommandRoom({
             onOpenWorkspace={() => setSheet('workspace')}
             onOpenWorkspaceFile={handleOpenWorkspaceFileFromChat}
             onSelectConversationId={handleSelectConversationId}
-            onCreateConversation={activeCommander
+            onCreateConversation={onCreateConversation
               ? (agentType, model, reasoningConfig) =>
-                  onCreateConversation?.(activeCommander.id, agentType, model, reasoningConfig) ?? null
+                  onCreateConversation(chatCommander.id, agentType, model, reasoningConfig) ?? null
               : undefined}
             onRequestCreateConversation={onCreateChatForCommander
-              ? () => onCreateChatForCommander(activeCommander.id)
+              ? () => onCreateChatForCommander(chatCommander.id)
               : undefined}
             onStartConversation={onStartConversation}
             onStopConversation={onStopConversation}
@@ -454,7 +472,7 @@ export function MobileCommandRoom({
             onArchiveConversation={onArchiveConversation}
             onRemoveConversation={onRemoveConversation}
             onStopCommander={selectedCommanderRunning ? onStopCommander : undefined}
-            showCreateConversationPanel={requestedNewChatCommanderId === activeCommander.id}
+            showCreateConversationPanel={requestedNewChatCommanderId === chatCommander.id}
             onAnswer={onAnswer}
             onApproveApproval={async (approval) => {
               await approvalDecision.mutateAsync({ approval, decision: 'approve' })

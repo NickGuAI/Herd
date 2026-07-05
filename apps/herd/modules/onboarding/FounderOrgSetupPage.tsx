@@ -61,6 +61,16 @@ function stateGlyph(state: OnboardingReadinessState | 'complete' | 'current' | '
   return '○'
 }
 
+function formatTimeToFirstReply(minutes: number | null | undefined): string | null {
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes)) {
+    return null
+  }
+  if (minutes < 1) {
+    return '<1 min'
+  }
+  return `${minutes.toFixed(minutes >= 10 ? 0 : 1)} min`
+}
+
 function ProviderCard({ provider }: { provider: ProviderOnboardingReadiness }) {
   return (
     <article className="hv-onboarding-provider" data-testid={`provider-card-${provider.id}`}>
@@ -956,6 +966,7 @@ export function FounderOrgSetupPage() {
                   ['Commander', status?.receipt.commander],
                   ['Machine', status?.receipt.machine],
                   ['Providers', status?.receipt.providerSummary],
+                  ['Time to first reply', formatTimeToFirstReply(status?.timeToFirstReply.elapsedMinutes)],
                 ].map(([label, value]) => (
                   <div className="hv-onboarding-receipt-row" key={label}>
                     <span>{label}</span>

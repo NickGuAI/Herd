@@ -20,6 +20,13 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
+if [[ -z "${HERD_INSTALL_STARTED_AT_ISO:-}" ]]; then
+  export HERD_INSTALL_STARTED_AT_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+fi
+if [[ -z "${HERD_INSTALL_STARTED_AT_MS:-}" ]]; then
+  export HERD_INSTALL_STARTED_AT_MS="$(( $(date -u '+%s') * 1000 ))"
+fi
+
 PRODUCT_NAME="Herd"
 NODE_VERSION="${HERD_NODE_VERSION:-${HERVALD_NODE_VERSION:-22.16.0}}"
 PNPM_VERSION="${HERD_PNPM_VERSION:-${HERVALD_PNPM_VERSION:-10.23.0}}"
@@ -261,6 +268,18 @@ directory_is_empty() {
   [[ -d "$1" ]] && [[ -z "$(find "$1" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
 }
 
+resolve_in_tree_installer() {
+  local root="$1"
+  local candidate
+  for candidate in "$root/apps/herd/install.sh" "$root/apps/herd/install.sh"; do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 replace_checkout_with_archive() {
   local archive_url="$1"
   local tmp_dir archive extract_dir archive_root first_root
@@ -277,7 +296,7 @@ replace_checkout_with_archive() {
   curl -fsSL "$archive_url" -o "$archive"
   tar -xzf "$archive" -C "$extract_dir"
 
-  if [ -f "$extract_dir/apps/herd/install.sh" ]; then
+  if resolve_in_tree_installer "$extract_dir" >/dev/null; then
     archive_root="$extract_dir"
   else
     first_root="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)"
@@ -285,7 +304,8 @@ replace_checkout_with_archive() {
     archive_root="$first_root"
   fi
 
-  [ -f "$archive_root/apps/herd/install.sh" ] || fail "Downloaded archive is missing apps/herd/install.sh"
+  resolve_in_tree_installer "$archive_root" >/dev/null \
+    || fail "Downloaded archive is missing apps/herd/install.sh or apps/herd/install.sh"
 
   if [ -e "$CHECKOUT_DIR" ]; then
     rm -rf "$CHECKOUT_DIR"
@@ -299,13 +319,14 @@ replace_checkout_with_archive() {
 
 clone_and_exec_installer() {
   local default_checkout checkout_override
+  local installer_path
   default_checkout="$HOME/Herd"
   if [[ -z "${HERD_CHECKOUT_DIR:-${HERVALD_CHECKOUT_DIR:-}}" && ! -e "$default_checkout" && -d "$HOME/Herd/.git" ]]; then
     default_checkout="$HOME/Herd"
   fi
 
   REPO_URL="${HERD_REPO_URL:-${HERVALD_REPO_URL:-https://github.com/NickGuAI/Herd.git}}"
-  REPO_REF="${HERD_REPO_REF:-v0.0.4-beta}"
+  REPO_REF="${HERD_REPO_REF:-${HERVALD_REPO_REF:-v0.0.5-beta}}"
   checkout_override="${HERD_CHECKOUT_DIR:-${HERVALD_CHECKOUT_DIR:-}}"
   CHECKOUT_DIR="${checkout_override:-$default_checkout}"
   ARCHIVE_URL="$(repo_archive_url "$REPO_URL" "$REPO_REF" || true)"
@@ -319,8 +340,8 @@ clone_and_exec_installer() {
       git -C "$CHECKOUT_DIR" remote add origin "$REPO_URL"
     fi
     git -C "$CHECKOUT_DIR" fetch --quiet origin "$REPO_REF"
-    git -C "$CHECKOUT_DIR" checkout --quiet "$REPO_REF"
-    git -C "$CHECKOUT_DIR" reset --quiet --hard "origin/$REPO_REF"
+    git -C "$CHECKOUT_DIR" checkout --quiet --detach FETCH_HEAD
+    git -C "$CHECKOUT_DIR" reset --quiet --hard FETCH_HEAD
   elif [ -n "$ARCHIVE_URL" ]; then
     if [ -e "$CHECKOUT_DIR" ] && ! directory_is_empty "$CHECKOUT_DIR" && [ ! -f "$CHECKOUT_DIR/$INSTALLER_MARKER" ] && [ ! -f "$CHECKOUT_DIR/$LEGACY_INSTALLER_MARKER" ]; then
       warn "$CHECKOUT_DIR already exists and is not a Herd git checkout."
@@ -335,7 +356,9 @@ clone_and_exec_installer() {
     git clone --quiet --branch "$REPO_REF" --single-branch "$REPO_URL" "$CHECKOUT_DIR"
   fi
 
-  exec bash "$CHECKOUT_DIR/apps/herd/install.sh" "$@"
+  installer_path="$(resolve_in_tree_installer "$CHECKOUT_DIR")" \
+    || fail "Checkout is missing apps/herd/install.sh or apps/herd/install.sh"
+  exec bash "$installer_path" "$@"
 }
 
 # Piped mode: when invoked via `curl ... | bash`, BASH_SOURCE[0] is empty
@@ -347,8 +370,8 @@ if [ -z "$SCRIPT_PATH" ] || [ ! -f "$SCRIPT_PATH" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-if [ -f "$SCRIPT_DIR/apps/herd/install.sh" ]; then
-  exec bash "$SCRIPT_DIR/apps/herd/install.sh" "$@"
+if installer_path="$(resolve_in_tree_installer "$SCRIPT_DIR")"; then
+  exec bash "$installer_path" "$@"
 fi
 
 if [ ! -f "$SCRIPT_DIR/package.json" ] \
@@ -367,6 +390,7 @@ PROVIDER_TOOLS_HOME="${HERD_PROVIDER_TOOLS_DIR:-$TOOLCHAIN_DIR/provider-tools}"
 PROVIDER_BIN_DIR="$PROVIDER_TOOLS_HOME/bin"
 APP_PATH_FILE="$DATA_DIR/app-path"
 BOOTSTRAP_KEY_FILE="$DATA_DIR/bootstrap-key.txt"
+INSTALL_STARTED_AT_FILE="$DATA_DIR/install-started-at.json"
 BOOTSTRAP_LOG_DIR="$DATA_DIR/logs"
 BOOTSTRAP_LOG_FILE="$BOOTSTRAP_LOG_DIR/first-boot.log"
 MACHINES_FILE="$DATA_DIR/machines.json"
@@ -378,6 +402,9 @@ HEALTHCHECK_TIMEOUT_SECONDS="${HERD_INSTALL_TIMEOUT_SECONDS:-120}"
 LAUNCH_AGENT_DIR="$HOME/Library/LaunchAgents"
 LAUNCH_AGENT_PATH="$LAUNCH_AGENT_DIR/io.gehirn.hervald.plist"
 LAUNCH_LOG_DIR="$HOME/Library/Logs/hervald"
+SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+SYSTEMD_USER_UNIT_NAME="io.gehirn.hervald.service"
+SYSTEMD_USER_UNIT_PATH="$SYSTEMD_USER_DIR/$SYSTEMD_USER_UNIT_NAME"
 SKILLS_INSTALLER="$REPO_ROOT/agent-skills/install.sh"
 CLAUDE_RUNTIME_ROOT="$HOME/.claude"
 CODEX_RUNTIME_ROOT="$HOME/.codex"
@@ -541,6 +568,15 @@ ensure_sqlite_control_plane() {
   fi
 }
 
+ensure_json_stores_control_plane() {
+  step "Checking JSON data stores"
+  if ! env \
+    HERD_DATA_DIR="$DATA_DIR" \
+    "$PNPM_BIN" --dir "$REPO_ROOT" --filter herd run store:ready -- --source-root "$DATA_DIR"; then
+    fail "JSON data stores are not ready. Resolve the store:ready error above, then rerun install.sh."
+  fi
+}
+
 ensure_default_master_key_env() {
   local env_file="$APP_DIR/.env"
 
@@ -571,12 +607,17 @@ const path = require('path')
 const dataDir = process.env.HERD_DATA_DIR
 const machinesFile = path.join(dataDir, 'machines.json')
 const envFile = process.env.HERD_LOCAL_MACHINE_ENV_FILE
-let payload = { machines: [] }
+let payload = { schemaVersion: 1, machines: [] }
 
 if (fs.existsSync(machinesFile)) {
   payload = JSON.parse(fs.readFileSync(machinesFile, 'utf8'))
   if (!payload || !Array.isArray(payload.machines)) {
     throw new Error(`Invalid machines config at ${machinesFile}`)
+  }
+  if (payload.schemaVersion === undefined || payload.schemaVersion === null) {
+    payload.schemaVersion = 1
+  } else if (payload.schemaVersion !== 1) {
+    throw new Error(`Unsupported machines config schemaVersion ${payload.schemaVersion} at ${machinesFile}`)
   }
 }
 
@@ -970,14 +1011,19 @@ install_default_skills() {
 }
 
 install_launch_agent_if_needed() {
-  if [[ "$(uname -s)" != "Darwin" ]]; then
-    INSTALL_AUTOSTART_STATUS="not supported on $(uname -s)"
+  if [[ "${HERD_INSTALL_AUTOSTART:-1}" == "0" ]]; then
+    warn "Skipping autostart because HERD_INSTALL_AUTOSTART=0"
+    INSTALL_AUTOSTART_STATUS="disabled"
     return 0
   fi
 
-  if [[ "${HERD_INSTALL_AUTOSTART:-1}" == "0" ]]; then
-    warn "Skipping launchd autostart because HERD_INSTALL_AUTOSTART=0"
-    INSTALL_AUTOSTART_STATUS="disabled"
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    install_systemd_user_unit_if_needed
+    return 0
+  fi
+
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    INSTALL_AUTOSTART_STATUS="not supported on $(uname -s)"
     return 0
   fi
 
@@ -1029,6 +1075,54 @@ EOF
   launchctl load -w "$LAUNCH_AGENT_PATH"
   INSTALL_AUTOSTART_STATUS="installed: $LAUNCH_AGENT_PATH"
   ok "installed $LAUNCH_AGENT_PATH"
+}
+
+install_systemd_user_unit_if_needed() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "Skipping systemd autostart because systemctl is not available"
+    INSTALL_AUTOSTART_STATUS="systemd unavailable"
+    return 0
+  fi
+
+  step "Installing systemd user service"
+  mkdir -p "$SYSTEMD_USER_DIR"
+
+  cat > "$SYSTEMD_USER_UNIT_PATH" <<EOF
+[Unit]
+Description=Herd local server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$HOME
+Environment=HOME=$HOME
+Environment=HERD_DATA_DIR=$DATA_DIR
+Environment=PATH=$BIN_DIR:$PROVIDER_BIN_DIR:$PNPM_HOME/bin:$NODE_HOME/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=$SHIM_PATH up
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+  if command -v loginctl >/dev/null 2>&1; then
+    loginctl enable-linger "$(id -un)" >/dev/null 2>&1 \
+      || warn "Could not enable linger automatically; run: loginctl enable-linger $(id -un)"
+  fi
+  if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  fi
+
+  if systemctl --user daemon-reload && systemctl --user enable --now "$SYSTEMD_USER_UNIT_NAME"; then
+    INSTALL_AUTOSTART_STATUS="installed: $SYSTEMD_USER_UNIT_PATH"
+    ok "installed $SYSTEMD_USER_UNIT_PATH"
+    return 0
+  fi
+
+  warn "systemd user service was written but not started. Run: systemctl --user enable --now $SYSTEMD_USER_UNIT_NAME"
+  INSTALL_AUTOSTART_STATUS="manual start required: $SYSTEMD_USER_UNIT_PATH"
 }
 
 read_configured_port() {
@@ -1193,6 +1287,7 @@ print_install_receipt() {
   print_receipt_line "Doctor" "herd doctor"
   print_receipt_line "App directory" "$APP_DIR"
   print_receipt_line "Data directory" "$DATA_DIR"
+  print_receipt_line "Install started" "$HERD_INSTALL_STARTED_AT_ISO"
   print_receipt_line "Autostart" "$INSTALL_AUTOSTART_STATUS"
   print_receipt_line "Log" "$INSTALL_LOG_FILE"
 
@@ -1251,6 +1346,10 @@ build_herd
 step "Recording app path"
 mkdir -p "$DATA_DIR"
 printf "%s\n" "$APP_DIR" > "$APP_PATH_FILE"
+printf '{\n  "startedAt": "%s",\n  "startedAtMs": %s,\n  "source": "install.sh"\n}\n' \
+  "$HERD_INSTALL_STARTED_AT_ISO" \
+  "$HERD_INSTALL_STARTED_AT_MS" \
+  > "$INSTALL_STARTED_AT_FILE"
 ok "wrote $APP_PATH_FILE"
 
 step "Installing herd CLI shim"
@@ -1266,6 +1365,7 @@ ok "installed $SHIM_PATH"
 
 install_default_skills
 configure_providers "$INSTALL_SETUP_PATH"
+ensure_json_stores_control_plane
 ensure_sqlite_control_plane
 
 case ":$PATH:" in
@@ -1287,12 +1387,18 @@ print_configuration_saved_summary
 print_install_receipt
 
 printf "\n${GREEN}Next:${NC}\n"
-if [[ "$(uname -s)" == "Darwin" && "${HERD_INSTALL_AUTOSTART:-1}" != "0" ]]; then
+if [[ "$INSTALL_AUTOSTART_STATUS" == installed:* ]]; then
   printf "  1. Sign in with the bootstrap key shown above.\n"
   printf "  2. Complete browser onboarding within 24 hours, then create a permanent API key in Settings and rotate or revoke the expiring bootstrap key.\n"
-  printf "  3. Herd now auto-starts at login via launchd.\n"
-  printf "     Reload after config changes with:\n"
-  printf "       ${CYAN}launchctl kickstart -k gui/%s/io.gehirn.hervald${NC}\n" "$(id -u)"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    printf "  3. Herd now auto-starts at login via launchd.\n"
+    printf "     Reload after config changes with:\n"
+    printf "       ${CYAN}launchctl kickstart -k gui/%s/io.gehirn.hervald${NC}\n" "$(id -u)"
+  else
+    printf "  3. Herd now auto-starts via systemd user service.\n"
+    printf "     Reload after config changes with:\n"
+    printf "       ${CYAN}systemctl --user restart %s${NC}\n" "$SYSTEMD_USER_UNIT_NAME"
+  fi
   printf "  4. Run ${CYAN}herd doctor${NC} after provider authentication if you want a readiness report.\n"
 else
   printf "  1. Sign in with the bootstrap key shown above.\n"

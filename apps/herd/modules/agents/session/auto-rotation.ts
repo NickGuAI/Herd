@@ -161,6 +161,7 @@ export function createSessionAutoRotationRuntime(
         currentSkillInvocation: session.currentSkillInvocation,
         systemPrompt: promptOptions.systemPrompt,
         maxTurns: promptOptions.maxTurns,
+        ...(credentialRecovery?.clearResumeProviderContext ? { resumeProviderContext: undefined } : {}),
         ...(credentialRecovery?.credentialPoolId ? { credentialPoolId: credentialRecovery.credentialPoolId } : {}),
       },
     )

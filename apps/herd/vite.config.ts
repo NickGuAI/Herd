@@ -21,7 +21,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     // Expose real version + build commit to the client so mobile Settings
-    // footer renders `hervald · v{version} · build {sha}` instead of stubs.
+    // footer renders `herd · v{version} · build {sha}` instead of stubs.
     define: {
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
       'import.meta.env.VITE_BUILD_COMMIT': JSON.stringify(buildCommit),

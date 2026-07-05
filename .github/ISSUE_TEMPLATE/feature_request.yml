@@ -1,0 +1,65 @@
+name: Feature request
+description: Propose a scoped Herd feature. For open-ended roadmap discussion, use Pioneering Minds AI.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for scoped feature requests. For roadmap discussion or support, use https://pioneeringminds.ai.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should Herd do differently?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install or upgrade
+        - Command Room
+        - Commanders
+        - Workers and machines
+        - Provider auth
+        - CLI
+        - Docs
+        - Security
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Nice to have
+        - Important
+        - Blocking adoption
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or alternate designs have you considered?
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and pull requests.
+          required: true
+        - label: This is a scoped feature request, not an open-ended support thread.
+          required: true

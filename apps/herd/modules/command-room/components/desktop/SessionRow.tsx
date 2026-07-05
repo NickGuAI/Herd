@@ -10,7 +10,7 @@
  *  - Active state: full strength; inactive state: dimmed
  */
 import type { SessionCreator } from '@/types'
-import { AgentAvatar, Icon, STATE_COLOR } from '@modules/components/herd'
+import { AgentAvatar, Icon, STATE_COLOR } from '@modules/components/hervald'
 
 const ACTIVE_STATES = new Set(['active', 'connected', 'running'])
 

@@ -60,7 +60,7 @@ export function createSettingsRouter(options: SettingsRouterOptions = {}): Route
     if (hasTheme) {
       const theme = normalizeAppTheme(body.theme)
       if (!theme) {
-        res.status(400).json({ error: 'theme must be "light" or "dark"' })
+        res.status(400).json({ error: 'theme must be "light", "dark", or "system"' })
         return
       }
       patch.theme = theme

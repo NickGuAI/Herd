@@ -9,11 +9,19 @@ file browsing, previews, raw file access, git state, and context insertion.
 - Confirm the workspace target path.
 - Use file preview before attaching file context.
 - Use git state to distinguish pending changes from committed history.
+- Keep the service data directory durable across redeploys; workspace target
+  selections persist under that data root.
 - If a file opens from chat but not from the workspace panel, verify the target
   id and path are the same.
 
-Source references:
+## Deploy Notes
 
-- [Workspace feature guide](../features/workspace.md)
-- [Workspace architecture](../architecture/workspace.md)
-- [Routes and APIs](../architecture/routes-and-apis.md)
+The workspace target store must survive checkout replacement, systemd unit
+refreshes, and service restarts. On EC2, install with `--data-dir <path>` when
+the durable data root differs from the checkout path; the systemd unit should
+keep pointing at that same data root after each redeploy.
+
+Related docs:
+
+- [Command Room](../concepts/command-room.md)
+- [Workers](../concepts/workers.md)

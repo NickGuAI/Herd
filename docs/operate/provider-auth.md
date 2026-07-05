@@ -11,6 +11,10 @@ provider tool.
 - Gemini CLI
 - OpenCode
 
+Credential pools are available for Codex and Claude Code. See
+[credential pools](credential-pools.md) for the bring-your-own-accounts
+failover workflow.
+
 ## Authentication Contract
 
 - Authenticate on the host that will run the provider.
@@ -40,12 +44,8 @@ native Codex CLI login. Use native Codex login on the machine that will run
 Codex, or reuse a valid Codex `auth.json`; do not treat the OpenAI authorize
 error as a missing subscription by itself.
 
-See the
-[provider subscription auth comparison](../diagrams/features/providers/provider-subscription-auth-comparison.svg)
-for the Herd, Happy, and Paperclip flow comparison.
+Related docs:
 
-Source references:
-
-- [Providers feature guide](../features/providers.md)
-- [Agents architecture](../architecture/agents.md)
+- [Credential pools](credential-pools.md)
+- [Hardening](hardening.md)
 - [API reference](../reference/api.md)

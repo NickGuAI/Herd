@@ -1,17 +1,33 @@
-import { useMemo, useState } from 'react'
-import { CalendarClock, ChevronDown, Clock3, Play, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  CalendarClock,
+  ChevronDown,
+  Clock3,
+  FileText,
+  MessageSquarePlus,
+  Newspaper,
+  Play,
+  Plus,
+  Trash2,
+  TrendingUp,
+} from 'lucide-react'
 import { cn, formatCost, timeAgo } from '@/lib/utils'
 import { useMachines } from '@/hooks/use-agents'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import type { AgentType, ProviderModelOption, ProviderRegistryEntry } from '@/types'
 import { ModalFormContainer } from '../../components/ModalFormContainer'
+import { buildGaiaCreateAutomationPrompt } from '@modules/command-room/gaia-entry-prompts'
+import { openGaiaConversationWithDraft } from '@modules/command-room/gaia-launch'
 import {
   useAutomationHistory,
+  useAutomationRunDetail,
   useAutomations,
+  type CreateAutomationPresetInput,
   type AutomationListItem,
   type AutomationScope,
   type AutomationTriggerFilter,
 } from '../../automations/hooks/useAutomations'
+import type { AutomationHistoryEntry } from '../../automations/types'
 import { SentinelCreateForm } from '../../automations/components/SentinelCreateForm'
 import { CreateAutomationTaskForm } from './CreateAutomationTaskForm'
 
@@ -25,6 +41,8 @@ export type AutomationPanelScope =
       kind: 'commander'
       commander: {
         id: string
+        displayName?: string | null
+        host?: string | null
       }
     }
 
@@ -32,6 +50,8 @@ interface AutomationPanelProps {
   scope: AutomationPanelScope
   filter?: AutomationTriggerFilter
   onFilterChange?: (filter: AutomationTriggerFilter) => void
+  preselectedSkillName?: string | null
+  onPreselectedSkillConsumed?: () => void
 }
 
 const FILTER_OPTIONS: Array<{ value: AutomationTriggerFilter; label: string }> = [
@@ -39,6 +59,75 @@ const FILTER_OPTIONS: Array<{ value: AutomationTriggerFilter; label: string }> =
   { value: 'schedule', label: 'Schedule' },
   { value: 'quest', label: 'Quest' },
   { value: 'manual', label: 'Manual' },
+]
+
+const AUTOMATION_PRESETS: Array<{
+  id: string
+  label: string
+  description: string
+  icon: typeof FileText
+  seed: CreateAutomationPresetInput
+}> = [
+  {
+    id: 'research-report',
+    label: 'Research Report',
+    description: 'Weekly research brief with findings, sources, and recommended next steps.',
+    icon: FileText,
+    seed: {
+      templateId: 'automation-catalog:research-report',
+      name: 'Weekly research report',
+      trigger: 'schedule',
+      schedule: '0 9 * * 1',
+      timezone: 'America/New_York',
+      description: 'Generate a weekly research report with source-backed findings.',
+      instruction: [
+        'Create a concise weekly research report for the configured topic.',
+        'Search current sources, summarize the most important findings, cite source URLs, and write the markdown report to the run report path.',
+        'End with the required JSON summary block.',
+      ].join('\n'),
+      seedMemory: 'Topic: replace this with the research area to monitor.\nAudience: operator.',
+    },
+  },
+  {
+    id: 'journal-pubmed-watch',
+    label: 'Journal / PubMed Watch',
+    description: 'Daily literature watch that tracks new papers and summarizes relevance.',
+    icon: Newspaper,
+    seed: {
+      templateId: 'automation-catalog:journal-pubmed-watch',
+      name: 'Journal and PubMed watch',
+      trigger: 'schedule',
+      schedule: '0 8 * * *',
+      timezone: 'America/New_York',
+      description: 'Watch PubMed and journal feeds for new relevant papers.',
+      instruction: [
+        'Check PubMed and relevant journal feeds for new papers matching the configured query.',
+        'Summarize new papers, explain why each matters, note methods or limitations, and write the markdown report to the run report path.',
+        'End with the required JSON summary block.',
+      ].join('\n'),
+      seedMemory: 'PubMed query: artificial intelligence OR machine learning.\nJournals: Nature, Science, NEJM, arXiv cs.AI.',
+    },
+  },
+  {
+    id: 'portfolio-tracking',
+    label: 'Portfolio Tracking',
+    description: 'Weekday market close snapshot with notable moves and risks.',
+    icon: TrendingUp,
+    seed: {
+      templateId: 'automation-catalog:portfolio-tracking',
+      name: 'Portfolio tracking',
+      trigger: 'schedule',
+      schedule: '0 16 * * 1-5',
+      timezone: 'America/New_York',
+      description: 'Track portfolio and market movement after each weekday close.',
+      instruction: [
+        'Review market movement for the configured tickers and major benchmarks.',
+        'Summarize notable moves, relevant news, risk flags, and suggested follow-up checks, then write the markdown report to the run report path.',
+        'End with the required JSON summary block.',
+      ].join('\n'),
+      seedMemory: 'Tickers: SPY, QQQ, BTC-USD, ETH-USD.\nBenchmarks: S&P 500, Nasdaq 100, 10Y Treasury.',
+    },
+  },
 ]
 
 interface AutomationProviderOption {
@@ -151,6 +240,22 @@ function filterItems(items: AutomationListItem[], filter: AutomationTriggerFilte
   return items.filter((item) => item.trigger === filter)
 }
 
+function resolveHistoryRunKey(entry: AutomationHistoryEntry): string | null {
+  if (entry.runKey?.trim()) {
+    return entry.runKey.trim()
+  }
+  if (entry.runFile?.trim()) {
+    const fileName = entry.runFile.trim().split(/[\\/]/).pop()
+    const runKey = fileName?.replace(/\.(md|json)$/i, '').trim()
+    return runKey || null
+  }
+  return entry.timestamp.trim() ? entry.timestamp.replace(/[:.]/g, '-') : null
+}
+
+function isEmptyOutputFallback(entry: AutomationHistoryEntry): boolean {
+  return entry.action === 'Run completed without final output' || entry.action === 'No summary generated'
+}
+
 function resolveDefaultModel(provider: AutomationProviderOption | null | undefined): string | null {
   return provider?.defaults.model
     ?? provider?.availableModels.find((model) => model.default)?.id
@@ -212,8 +317,10 @@ function AutomationCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [newObservation, setNewObservation] = useState('')
+  const [selectedRunKey, setSelectedRunKey] = useState<string | null>(null)
   const { data: providers = [] } = useProviderRegistry()
   const historyState = useAutomationHistory(expanded ? automation.id : null)
+  const runDetailState = useAutomationRunDetail(expanded ? automation.id : null, selectedRunKey)
   const observations = automation.observations ?? []
   const category = classifyAutomation(automation)
   const providerOptions = useMemo(
@@ -222,6 +329,23 @@ function AutomationCard({
   )
   const currentProvider = providerOptions.find((provider) => provider.id === automation.agentType) ?? null
   const modelOptions = currentProvider?.availableModels ?? []
+  const selectedHistoryEntry = selectedRunKey
+    ? historyState.history.find((entry) => resolveHistoryRunKey(entry) === selectedRunKey) ?? null
+    : null
+  const selectedRun = runDetailState.runDetail?.run ?? null
+  const selectedCompletionOutput = (selectedRun?.completionOutput ?? selectedHistoryEntry?.completionOutput ?? '').trim()
+  const selectedEmptyOutputReason =
+    runDetailState.runDetail?.emptyOutputReason
+    ?? selectedRun?.emptyOutputReason
+    ?? selectedHistoryEntry?.emptyOutputReason
+    ?? (selectedHistoryEntry && isEmptyOutputFallback(selectedHistoryEntry) ? selectedHistoryEntry.result : null)
+  const selectedReport = runDetailState.runDetail?.report.trim() ?? ''
+  const selectedTranscriptSessionId =
+    selectedRun?.transcriptRef?.sessionId
+    ?? selectedHistoryEntry?.transcriptRef?.sessionId
+    ?? selectedHistoryEntry?.sessionId
+    ?? selectedRun?.sessionId
+    ?? null
   const actionsDisabled =
     (automationState.updateAutomationPending && automationState.updateAutomationId === automation.id)
     || (automationState.deleteAutomationPending && automationState.deleteAutomationId === automation.id)
@@ -425,8 +549,23 @@ function AutomationCard({
               {!historyState.historyLoading && historyState.history.length === 0 ? (
                 <p className="text-whisper text-sumi-diluted">No runs yet.</p>
               ) : null}
-              {historyState.history.map((entry, index) => (
-                <div key={`${entry.timestamp}-${index}`} className="rounded border border-ink-border bg-washi-white px-2.5 py-2">
+              {historyState.historyError ? (
+                <p className="text-whisper text-accent-vermillion">{historyState.historyError}</p>
+              ) : null}
+              {historyState.history.map((entry, index) => {
+                const runKey = resolveHistoryRunKey(entry)
+                const selected = Boolean(runKey && runKey === selectedRunKey)
+                return (
+                  <button
+                    key={`${entry.timestamp}-${index}`}
+                    type="button"
+                    onClick={() => setSelectedRunKey(runKey)}
+                    disabled={!runKey}
+                    className={cn(
+                      'w-full rounded border bg-washi-white px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                      selected ? 'border-sumi-black' : 'border-ink-border hover:border-ink-border-hover',
+                    )}
+                  >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-mono text-sumi-diluted">{timeAgo(entry.timestamp)}</p>
                     <span className="text-xs text-sumi-diluted">{formatCost(entry.costUsd)}</span>
@@ -436,10 +575,64 @@ function AutomationCard({
                   <p className="mt-1 text-whisper text-sumi-mist">
                     duration {entry.durationSec}s
                     {entry.source ? ` • ${entry.source}` : ''}
+                    {runKey ? ' • View detail' : ''}
                   </p>
-                </div>
-              ))}
+                  </button>
+                )
+              })}
             </div>
+
+            {selectedRunKey ? (
+              <div className="mt-3 rounded border border-ink-border bg-washi-white px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="section-title">Run Detail</p>
+                  <span className="text-whisper font-mono text-sumi-mist">{selectedRunKey}</span>
+                </div>
+
+                {runDetailState.runDetailLoading ? (
+                  <p className="mt-2 text-whisper text-sumi-mist">Loading run detail...</p>
+                ) : null}
+                {runDetailState.runDetailError ? (
+                  <p className="mt-2 text-whisper text-accent-vermillion">{runDetailState.runDetailError}</p>
+                ) : null}
+
+                {!runDetailState.runDetailLoading && !runDetailState.runDetailError ? (
+                  <div className="mt-2 space-y-3">
+                    <div>
+                      <p className="text-whisper uppercase tracking-wide text-sumi-diluted">Completion Output</p>
+                      {selectedCompletionOutput ? (
+                        <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded border border-ink-border bg-washi-aged/30 p-2 text-xs text-sumi-gray">
+                          {selectedCompletionOutput}
+                        </pre>
+                      ) : (
+                        <p className="mt-1 text-sm text-sumi-gray">
+                          {selectedEmptyOutputReason ?? 'No completion output was recorded for this run.'}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <p className="text-whisper uppercase tracking-wide text-sumi-diluted">Run Report</p>
+                      {selectedReport ? (
+                        <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap rounded border border-ink-border bg-washi-aged/30 p-2 text-xs text-sumi-gray">
+                          {selectedReport}
+                        </pre>
+                      ) : (
+                        <p className="mt-1 text-sm text-sumi-gray">No markdown run report was written for this run.</p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-whisper text-sumi-diluted">
+                      {selectedRun?.status ? <span>{selectedRun.status}</span> : null}
+                      {selectedHistoryEntry?.source ? <span>{selectedHistoryEntry.source}</span> : null}
+                      {selectedHistoryEntry ? <span>{selectedHistoryEntry.durationSec}s</span> : null}
+                      {selectedHistoryEntry?.memoryUpdated ? <span>memory updated</span> : null}
+                      {selectedTranscriptSessionId ? <span>transcript {selectedTranscriptSessionId}</span> : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -495,9 +688,14 @@ export function AutomationPanel({
   scope,
   filter,
   onFilterChange,
+  preselectedSkillName = null,
+  onPreselectedSkillConsumed,
 }: AutomationPanelProps) {
   const [internalFilter, setInternalFilter] = useState<AutomationTriggerFilter>('all')
   const [createMode, setCreateMode] = useState<CreateMode>(null)
+  const [skillSeed, setSkillSeed] = useState<string | null>(null)
+  const [isOpeningWithGaia, setIsOpeningWithGaia] = useState(false)
+  const [gaiaError, setGaiaError] = useState<string | null>(null)
   const automationState = useAutomations(toAutomationScope(scope))
   const { data: machines } = useMachines()
 
@@ -508,6 +706,23 @@ export function AutomationPanel({
     [automationState.items, currentFilter],
   )
 
+  useEffect(() => {
+    const normalizedSkillName = preselectedSkillName?.trim()
+    if (!normalizedSkillName) {
+      return
+    }
+
+    setSkillSeed(normalizedSkillName)
+    setGaiaError(null)
+    setCreateMode('monitor')
+    onPreselectedSkillConsumed?.()
+  }, [onPreselectedSkillConsumed, preselectedSkillName])
+
+  function closeCreateMode() {
+    setCreateMode(null)
+    setSkillSeed(null)
+  }
+
   function handleFilterChange(nextFilter: AutomationTriggerFilter) {
     if (onFilterChange) {
       onFilterChange(nextFilter)
@@ -515,6 +730,18 @@ export function AutomationPanel({
     }
 
     setInternalFilter(nextFilter)
+  }
+
+  async function handleOpenCreateAutomationWithGaia(): Promise<void> {
+    setIsOpeningWithGaia(true)
+    setGaiaError(null)
+    try {
+      await openGaiaConversationWithDraft(buildGaiaCreateAutomationPrompt(scope))
+    } catch (error) {
+      setGaiaError(error instanceof Error ? error.message : 'Failed to open Gaia.')
+    } finally {
+      setIsOpeningWithGaia(false)
+    }
   }
 
   return (
@@ -531,7 +758,11 @@ export function AutomationPanel({
 
         <button
           type="button"
-          onClick={() => setCreateMode('chooser')}
+          onClick={() => {
+            setGaiaError(null)
+            setSkillSeed(null)
+            setCreateMode('chooser')
+          }}
           className="btn-ghost !px-3 !py-1.5 text-xs inline-flex items-center gap-1.5 shrink-0"
         >
           <Plus size={12} />
@@ -568,24 +799,78 @@ export function AutomationPanel({
       <ModalFormContainer
         open={createMode !== null}
         title={createMode === 'chooser' ? 'New Automation' : 'Create Automation'}
-        onClose={() => setCreateMode(null)}
+        onClose={closeCreateMode}
       >
         {createMode === 'chooser' ? (
           <div className="space-y-3">
             <button
               type="button"
-              onClick={() => setCreateMode('task')}
+              onClick={() => void handleOpenCreateAutomationWithGaia()}
+              disabled={isOpeningWithGaia}
+              className="w-full rounded-lg border border-ink-border bg-washi-aged/50 px-4 py-3 text-left hover:border-ink-border-hover transition-colors disabled:opacity-60"
+            >
+              <p className="font-mono text-sm text-sumi-black">
+                <MessageSquarePlus size={15} className="mr-2 inline" />
+                {isOpeningWithGaia ? 'Opening Gaia...' : 'Do it with Gaia'}
+              </p>
+              <p className="mt-1 text-sm text-sumi-gray">
+                Opens Gaia with this automation scope and a setup prompt already drafted.
+              </p>
+            </button>
+
+            {gaiaError ? <p className="text-sm text-accent-vermillion">{gaiaError}</p> : null}
+
+            <div>
+              <p className="section-title">Preset Catalog</p>
+              <div className="mt-2 space-y-2">
+                {AUTOMATION_PRESETS.map((preset) => {
+                  const Icon = preset.icon
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      disabled={automationState.createPresetPending}
+                      onClick={() => {
+                        setGaiaError(null)
+                        void automationState.createPreset(preset.seed)
+                          .then(() => setCreateMode(null))
+                          .catch(() => undefined)
+                      }}
+                      className="w-full rounded-lg border border-ink-border bg-washi-aged/50 px-4 py-3 text-left hover:border-ink-border-hover transition-colors disabled:opacity-60"
+                    >
+                      <p className="font-mono text-sm text-sumi-black">
+                        <Icon size={15} className="mr-2 inline" />
+                        {automationState.createPresetPending ? 'Creating preset...' : preset.label}
+                      </p>
+                      <p className="mt-1 text-sm text-sumi-gray">{preset.description}</p>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setGaiaError(null)
+                setSkillSeed(null)
+                setCreateMode('task')
+              }}
               className="w-full rounded-lg border border-ink-border bg-washi-aged/50 px-4 py-3 text-left hover:border-ink-border-hover transition-colors"
             >
               <p className="font-mono text-sm text-sumi-black">Instruction Run</p>
               <p className="mt-1 text-sm text-sumi-gray">
-                Runs a scheduled instruction in a workspace on a machine you choose.
+                Runs a scheduled instruction in a workspace on a machine you choose. Use Persistent Automation for scheduled runs that persist skills.
               </p>
             </button>
 
             <button
               type="button"
-              onClick={() => setCreateMode('monitor')}
+              onClick={() => {
+                setGaiaError(null)
+                setSkillSeed(null)
+                setCreateMode('monitor')
+              }}
               className="w-full rounded-lg border border-ink-border bg-washi-aged/50 px-4 py-3 text-left hover:border-ink-border-hover transition-colors"
             >
               <p className="font-mono text-sm text-sumi-black">Persistent Automation</p>
@@ -600,9 +885,9 @@ export function AutomationPanel({
           <CreateAutomationTaskForm
             onCreate={async (input) => {
               await automationState.createTask(input)
-              setCreateMode(null)
+              closeCreateMode()
             }}
-            onClose={() => setCreateMode(null)}
+            onClose={closeCreateMode}
             machines={machineList}
             createPending={automationState.createTaskPending}
           />
@@ -614,7 +899,8 @@ export function AutomationPanel({
             isSubmitting={automationState.createSentinelPending}
             error={automationState.actionError}
             onSubmit={automationState.createSentinel}
-            onCancel={() => setCreateMode(null)}
+            onCancel={closeCreateMode}
+            initialSkill={skillSeed}
             submitLabel="Create Automation"
             seedMemoryPlaceholder="Context this automation should remember across runs."
           />

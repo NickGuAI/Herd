@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Plus } from 'lucide-react'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import type { AgentType } from '@/types'
@@ -14,6 +14,7 @@ interface SentinelCreateFormProps {
   error: string | null
   onSubmit: (input: SentinelCreateFormInput) => Promise<unknown>
   onCancel: () => void
+  initialSkill?: string | null
   submitLabel?: string
   seedMemoryPlaceholder?: string
 }
@@ -24,13 +25,17 @@ export function SentinelCreateForm({
   error,
   onSubmit,
   onCancel,
+  initialSkill = null,
   submitLabel = 'Create Automation',
   seedMemoryPlaceholder = 'Context this automation should remember across runs.',
 }: SentinelCreateFormProps) {
   const [name, setName] = useState('')
   const [schedule, setSchedule] = useState('')
   const [instruction, setInstruction] = useState('')
-  const [skills, setSkills] = useState<string[]>([])
+  const [skills, setSkills] = useState<string[]>(() => {
+    const normalizedSkill = initialSkill?.trim()
+    return normalizedSkill ? [normalizedSkill] : []
+  })
   const [seedMemory, setSeedMemory] = useState('')
   const [maxRuns, setMaxRuns] = useState('')
   const [agentType, setAgentType] = useState<AgentType>('codex')
@@ -42,6 +47,11 @@ export function SentinelCreateForm({
     () => [...skillOptions].sort((left, right) => left.label.localeCompare(right.label)),
     [skillOptions],
   )
+
+  useEffect(() => {
+    const normalizedSkill = initialSkill?.trim()
+    setSkills(normalizedSkill ? [normalizedSkill] : [])
+  }, [initialSkill])
 
   const handleSkillSelection = (next: HTMLSelectElement): void => {
     const values = Array.from(next.selectedOptions)

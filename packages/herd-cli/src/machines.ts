@@ -82,6 +82,8 @@ interface MachineDaemonStatusPayload {
   launchUnsupportedReason: string | null
   daemonVersion: string | null
   pairedAt: string | null
+  expiresAt: string | null
+  pairingExpired: boolean
   revokedAt: string | null
   connectedAt: string | null
   lastSeenAt: string | null
@@ -104,6 +106,7 @@ interface MachineDaemonPairPayload {
     token: string
     websocketPath: string
     pairedAt: string
+    expiresAt: string | null
   }
   status: MachineDaemonStatusPayload
 }
@@ -483,6 +486,9 @@ function printDaemonStatus(stdout: Writable, status: MachineDaemonStatusPayload)
   stdout.write('\n')
   if (status.pairedAt) {
     stdout.write(`Paired at: ${status.pairedAt}\n`)
+  }
+  if (status.expiresAt) {
+    stdout.write(`Pairing expires: ${status.expiresAt}${status.pairingExpired ? ' (expired)' : ''}\n`)
   }
   if (status.revokedAt) {
     stdout.write(`Revoked at: ${status.revokedAt}\n`)
@@ -1258,6 +1264,8 @@ function parseMachineDaemonStatus(payload: unknown): MachineDaemonStatusPayload 
       ? payload.daemonVersion.trim()
       : null,
     pairedAt: typeof payload.pairedAt === 'string' && payload.pairedAt.trim() ? payload.pairedAt.trim() : null,
+    expiresAt: typeof payload.expiresAt === 'string' && payload.expiresAt.trim() ? payload.expiresAt.trim() : null,
+    pairingExpired: payload.pairingExpired === true,
     revokedAt: typeof payload.revokedAt === 'string' && payload.revokedAt.trim() ? payload.revokedAt.trim() : null,
     connectedAt: typeof payload.connectedAt === 'string' && payload.connectedAt.trim() ? payload.connectedAt.trim() : null,
     lastSeenAt: typeof payload.lastSeenAt === 'string' && payload.lastSeenAt.trim() ? payload.lastSeenAt.trim() : null,
@@ -1274,6 +1282,7 @@ function parseMachineDaemonPairPayload(payload: unknown): MachineDaemonPairPaylo
   const token = typeof payload.pairing.token === 'string' ? payload.pairing.token.trim() : ''
   const websocketPath = typeof payload.pairing.websocketPath === 'string' ? payload.pairing.websocketPath.trim() : ''
   const pairedAt = typeof payload.pairing.pairedAt === 'string' ? payload.pairing.pairedAt.trim() : ''
+  const expiresAt = typeof payload.pairing.expiresAt === 'string' ? payload.pairing.expiresAt.trim() : ''
   const status = parseMachineDaemonStatus(payload.status)
   if (!machineId || !token || !websocketPath || !pairedAt || !status) {
     return null
@@ -1285,6 +1294,7 @@ function parseMachineDaemonPairPayload(payload: unknown): MachineDaemonPairPaylo
       token,
       websocketPath,
       pairedAt,
+      expiresAt: expiresAt || null,
     },
     status,
   }

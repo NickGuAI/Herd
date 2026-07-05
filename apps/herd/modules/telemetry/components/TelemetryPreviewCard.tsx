@@ -24,14 +24,11 @@ export default function TelemetryPreviewCard({
   ]
 
   return (
-    <section className={cn('space-y-2.5', className)}>
-      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-sumi-diluted">
+    <section className={cn('space-y-2', className)}>
+      <div className="section-title px-1 text-[11px]">
         telemetry · last {metricWindow}
       </div>
-      <div
-        className="border border-ink-border/70 bg-washi-white px-4 py-3"
-        style={{ borderRadius: '3px 14px 3px 14px' }}
-      >
+      <div className="card-sumi overflow-hidden bg-washi-card px-4 py-1.5">
         {rows.map((row, index) => (
           <div
             key={row.label}

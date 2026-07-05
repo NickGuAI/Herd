@@ -12,6 +12,41 @@ interface MobileBottomTabsProps {
   pendingCount: number
 }
 
+function compareMobileTabOrder(left: FrontendNavItem, right: FrontendNavItem): number {
+  return (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER)
+}
+
+function toMobileTabModule(module: FrontendNavItem): FrontendNavItem {
+  if (module.routeId !== 'command-room.ui') {
+    return module
+  }
+
+  return {
+    ...module,
+    label: 'Sessions',
+    surfaces: module.surfaces.includes('mobile')
+      ? module.surfaces
+      : [...module.surfaces, 'mobile'],
+    order: 15,
+  }
+}
+
+/**
+ * Pure tab-set selection for the mobile bar: Command Room remap, mobile-primary
+ * filter, canonical order. Exported so the IA can be pinned against the real
+ * module manifest in tests.
+ */
+export function selectMobileTabModules(modules: FrontendNavItem[]): FrontendNavItem[] {
+  return modules
+    .map(toMobileTabModule)
+    .filter((module) => (
+      !module.hideFromNav
+      && (module.navGroup ?? 'primary') === 'primary'
+      && module.surfaces.includes('mobile')
+    ))
+    .sort(compareMobileTabOrder)
+}
+
 /**
  * Canonical Herd mobile bottom tab bar.
  *
@@ -34,12 +69,7 @@ export function MobileBottomTabs({ modules, pendingCount }: MobileBottomTabsProp
   const surfaceSearch = searchParams.get(surfaceParam)
 
   const mobileModules = useMemo(
-    () => modules
-      .filter((module) => (
-        !module.hideFromNav
-        && (module.navGroup ?? 'primary') === 'primary'
-        && module.surfaces.includes('mobile')
-      ))
+    () => selectMobileTabModules(modules)
       .map((module) => ({
         ...module,
         path: withSurfaceQuery(module.path, surfaceParam, surfaceSearch),

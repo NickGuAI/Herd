@@ -67,6 +67,14 @@ const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 50
 const MAX_CONVERSATION_MESSAGES_LIMIT = 100
 const CONVERSATION_BOOTSTRAP_FAST_PATH_MS = 25
 
+export interface CommanderConversationBootstrapProjection {
+  commanderId: string
+  conversations: ConversationSummaryDTO[]
+  activeConversation: ConversationSummaryDTO | null
+  selectedConversation: ConversationSummaryDTO | null
+  selectedConversationId: string | null
+}
+
 function parseConversationId(raw: unknown): string | null {
   return typeof raw === 'string' && CONVERSATION_ID_PATTERN.test(raw.trim())
     ? raw.trim()
@@ -432,6 +440,42 @@ function sendConversationListSerializationFailure(res: Response, error: unknown)
   })
 }
 
+async function buildCommanderConversationBootstrapProjection(
+  context: CommanderRoutesContext,
+  commanderId: string,
+  selectedConversationId: string | null,
+): Promise<CommanderConversationBootstrapProjection> {
+  const [conversations, activeChat] = await Promise.all([
+    context.conversationStore.listByCommander(commanderId),
+    context.conversationStore.getActiveChatForCommander(commanderId),
+  ])
+  const selectedId = selectedConversationId ?? activeChat?.id ?? null
+  const selectedConversation = selectedId
+    ? conversations.find((conversation) => conversation.id === selectedId) ?? null
+    : null
+  if (selectedId && !selectedConversation) {
+    throw new Error(`Conversation "${selectedId}" does not belong to commander "${commanderId}"`)
+  }
+
+  const canonicalOrder = buildConversationCanonicalOrder(conversations)
+  const summaries = await Promise.all(conversations.map((conversation) => (
+    conversation.id === selectedId
+      ? withInitialMessagePage(context, conversation, canonicalOrder.get(conversation.id) ?? 0)
+      : Promise.resolve(withLiveSession(context, conversation, canonicalOrder.get(conversation.id) ?? 0))
+  )))
+  return {
+    commanderId,
+    conversations: summaries,
+    activeConversation: activeChat
+      ? summaries.find((conversation) => conversation.id === activeChat.id) ?? null
+      : null,
+    selectedConversation: selectedId
+      ? summaries.find((conversation) => conversation.id === selectedId) ?? null
+      : null,
+    selectedConversationId: selectedId,
+  }
+}
+
 async function archiveConversation(
   context: CommanderRoutesContext,
   conversation: Conversation,
@@ -507,6 +551,42 @@ export function registerConversationRoutes(
   conversationRouter: import('express').Router,
   context: CommanderRoutesContext,
 ): void {
+  commanderRouter.get('/:id/conversations/bootstrap', context.requireReadAccess, async (req, res) => {
+    const commanderId = parseSessionId(req.params.id)
+    if (!commanderId) {
+      res.status(400).json({ error: 'Invalid commander id' })
+      return
+    }
+
+    if (!(await context.sessionStore.get(commanderId))) {
+      res.status(404).json({ error: `Commander "${commanderId}" not found` })
+      return
+    }
+
+    const selectedConversationId = req.query.conversationId === undefined
+      ? null
+      : parseConversationId(req.query.conversationId)
+    if (req.query.conversationId !== undefined && !selectedConversationId) {
+      res.status(400).json({ error: 'conversationId must be a conversation id' })
+      return
+    }
+
+    try {
+      res.json(await buildCommanderConversationBootstrapProjection(
+        context,
+        commanderId,
+        selectedConversationId,
+      ))
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      if (selectedConversationId && detail.includes(`Conversation "${selectedConversationId}"`)) {
+        res.status(404).json({ error: detail })
+        return
+      }
+      sendConversationListSerializationFailure(res, error)
+    }
+  })
+
   commanderRouter.get('/:id/conversations/active', context.requireReadAccess, async (req, res) => {
     const commanderId = parseSessionId(req.params.id)
     if (!commanderId) {

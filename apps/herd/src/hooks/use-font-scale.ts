@@ -7,7 +7,7 @@ export const FONT_SCALE_MAX = 1.6
 export const FONT_SCALE_STEP = 0.1
 export const DEFAULT_FONT_SCALE = 1
 
-type AppTheme = 'light' | 'dark'
+type AppTheme = 'light' | 'dark' | 'system'
 
 export interface AppSettings {
   theme: AppTheme
@@ -25,8 +25,10 @@ interface UseFontScaleOptions {
 
 const SETTINGS_QUERY_KEY = ['settings'] as const
 
+// Shares the `['settings']` cache with ThemeProvider — must pass through every
+// persisted theme value or a font-scale save would clobber `system`.
 function normalizeTheme(value: unknown): AppTheme {
-  return value === 'dark' ? 'dark' : 'light'
+  return value === 'dark' || value === 'system' ? value : 'light'
 }
 
 export function normalizeFontScale(value: unknown): number {

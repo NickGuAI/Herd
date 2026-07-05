@@ -58,6 +58,33 @@ function compareNavOrder(left: FrontendNavItem, right: FrontendNavItem): number 
   return (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER)
 }
 
+function normalizeRoutePath(path: string): string {
+  const trimmed = path.trim().replace(/\/+$/u, '')
+  return trimmed || '/'
+}
+
+function navPathBelongsToAcceptedRoute(
+  navPath: string,
+  acceptedRoutePaths: ReadonlySet<string>,
+): boolean {
+  const normalizedNavPath = normalizeRoutePath(navPath)
+
+  for (const routePath of acceptedRoutePaths) {
+    const normalizedRoutePath = normalizeRoutePath(routePath)
+    if (normalizedRoutePath === '/') {
+      continue
+    }
+    if (
+      normalizedNavPath === normalizedRoutePath
+      || normalizedNavPath.startsWith(`${normalizedRoutePath}/`)
+    ) {
+      return true
+    }
+  }
+
+  return false
+}
+
 function bindRouteModules(
   bindings: readonly FrontendModuleBinding[],
   graph: HerdModuleGraphResponse,
@@ -91,9 +118,13 @@ function bindRouteModules(
 function bindNavItems(
   graph: HerdModuleGraphResponse,
   acceptedRouteIds: ReadonlySet<string>,
+  acceptedRoutePaths: ReadonlySet<string>,
 ): FrontendNavItem[] {
   return [...graph.nav]
-    .filter((item) => acceptedRouteIds.has(item.routeId))
+    .filter((item) => (
+      acceptedRouteIds.has(item.routeId)
+      || navPathBelongsToAcceptedRoute(item.path, acceptedRoutePaths)
+    ))
     .map((item) => ({
       name: item.moduleId,
       routeId: item.routeId,
@@ -151,10 +182,11 @@ export function bindFrontendGraphToStaticBindings(
 ): BoundFrontendGraph {
   const routes = bindRouteModules(bindings, graph)
   const acceptedRouteIds = new Set(routes.map((route) => route.routeId))
+  const acceptedRoutePaths = new Set(routes.map((route) => route.path))
 
   return {
     routes,
-    nav: bindNavItems(graph, acceptedRouteIds),
+    nav: bindNavItems(graph, acceptedRouteIds, acceptedRoutePaths),
     redirects: bindRedirects(graph),
   }
 }

@@ -40,6 +40,7 @@ export interface CommanderPackageAutomation {
   model?: string
   sessionType?: AutomationSessionType
   seedMemory?: string
+  sourceConversationId?: string
   maxRuns?: number
 }
 

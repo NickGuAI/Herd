@@ -30,6 +30,7 @@ import {
   type CommanderRuntimeConfig,
 } from './runtime-config.shared.js'
 import { writeJsonFileAtomically } from '../json-file.js'
+import { withJsonStoreSchema } from '../json-store-schema.js'
 import {
   parseCanonicalProviderContext,
 } from '../agents/providers/provider-context-normalization.js'
@@ -113,6 +114,7 @@ export interface CommanderSession {
   operatorId?: string
   templateId?: string | null
   replicatedFromCommanderId?: string | null
+  system?: boolean
   archived?: boolean
   archivedAt?: string
   remoteOrigin?: CommanderRemoteOrigin
@@ -391,6 +393,7 @@ function parseCommanderSession(
   const replicatedFromCommanderId = raw.replicatedFromCommanderId === null
     ? null
     : parseOptionalNonEmptyString(raw.replicatedFromCommanderId)
+  const system = raw.system === true
   const archived = raw.archived === true
   const archivedAt = archived ? parseOptionalNonEmptyString(raw.archivedAt) : undefined
   const remoteOrigin = parseRemoteOrigin(raw.remoteOrigin)
@@ -427,6 +430,7 @@ function parseCommanderSession(
     ...(operatorId ? { operatorId } : {}),
     ...(templateId !== undefined ? { templateId } : {}),
     ...(replicatedFromCommanderId !== undefined ? { replicatedFromCommanderId } : {}),
+    ...(system ? { system: true } : {}),
     ...(archived ? { archived: true } : {}),
     ...(archivedAt ? { archivedAt } : {}),
     ...(remoteOrigin ? { remoteOrigin } : {}),
@@ -477,6 +481,19 @@ function serializeSession(session: CommanderSession): SerializedCommanderSession
   }
 }
 
+function compareCommanderSessionsForList(
+  left: Pick<CommanderSession, 'created' | 'system'>,
+  right: Pick<CommanderSession, 'created' | 'system'>,
+): number {
+  if (left.system === true && right.system !== true) {
+    return -1
+  }
+  if (left.system !== true && right.system === true) {
+    return 1
+  }
+  return left.created.localeCompare(right.created)
+}
+
 export function defaultCommanderSessionStorePath(): string {
   return resolveCommanderSessionStorePath()
 }
@@ -504,7 +521,7 @@ export class CommanderSessionStore {
     await this.ensureLoaded()
     return [...this.sessions().values()]
       .map((session) => cloneSession(session))
-      .sort((left, right) => left.created.localeCompare(right.created))
+      .sort(compareCommanderSessionsForList)
   }
 
   async get(id: string): Promise<CommanderSession | null> {
@@ -619,12 +636,12 @@ export class CommanderSessionStore {
   private async writeToDisk(options: { backup?: boolean } = {}): Promise<void> {
     const sessions = [...this.sessions().values()]
       .map((session) => serializeSession(session))
-      .sort((left, right) => left.created.localeCompare(right.created))
+      .sort(compareCommanderSessionsForList)
 
     await mkdir(path.dirname(this.filePath), { recursive: true })
     await writeJsonFileAtomically(
       this.filePath,
-      { sessions },
+      withJsonStoreSchema({ sessions }),
       { backup: options.backup },
     )
   }

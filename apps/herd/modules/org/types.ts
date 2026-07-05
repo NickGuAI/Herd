@@ -9,7 +9,6 @@
 
 import type { Operator } from '../operators/types.js'
 import type { AutomationTrigger } from '../automations/types.js'
-import type { CommandRoomLaunchTarget } from '../command-room/route-metadata.js'
 import type { OrgIdentity } from '../org-identity/types.js'
 
 export type OrgNodeKind = 'operator' | 'commander' | 'automation'
@@ -65,6 +64,8 @@ export interface OrgNode {
   /** Commander only — archived commanders are hidden unless requested. */
   archived?: boolean
   archivedAt?: string
+  /** Commander only — protected system commander. */
+  system?: boolean
   templateId?: string | null
   /** Automation only — persisted trigger discriminator for explicit UI rendering. */
   trigger?: AutomationTrigger
@@ -77,8 +78,4 @@ export interface OrgTree {
   archivedCommandersCount: number
   commanders: OrgNode[]
   automations: OrgNode[]
-}
-
-export interface OrgCheckOnTargetResponse {
-  target: CommandRoomLaunchTarget
 }

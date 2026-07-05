@@ -641,6 +641,17 @@ export function createProviderSessionRuntime(
       sessionOptions.resumeProviderContext,
       sessionOptions.credentialPoolId,
     )
+    const providerSessionOptions = { ...sessionOptions }
+    delete providerSessionOptions.env
+    const mergedProviderAuth = sessionOptions.env
+      ? {
+          ...providerAuth,
+          env: {
+            ...(providerAuth.env ?? {}),
+            ...sessionOptions.env,
+          },
+        }
+      : providerAuth
 
     return await provider.create({
       sessionName,
@@ -648,8 +659,8 @@ export function createProviderSessionRuntime(
       task,
       cwd,
       machine,
-      ...sessionOptions,
-      providerAuth,
+      ...providerSessionOptions,
+      providerAuth: mergedProviderAuth,
     }, getProviderSessionDeps(agentType))
   }
 

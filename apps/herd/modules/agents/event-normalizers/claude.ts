@@ -206,16 +206,19 @@ export function createClaudeProviderErrorEnvelope(
   hint?: string,
 ): TranscriptEnvelope {
   const limitDetails = extractProviderLimitDetails(message, code)
+  const normalizedCode = limitDetails.classification === 'resume_not_found'
+    ? 'resume_not_found'
+    : code
   return createClaudeSyntheticEnvelope(
     'herd/provider-error',
     {
       type: 'provider.error',
       message,
       classification: limitDetails.classification,
-      ...(code ? { code } : {}),
+      ...(normalizedCode ? { code: normalizedCode } : {}),
       ...(hint ? { hint } : {}),
       ...(limitDetails.resetAt ? { resetAt: limitDetails.resetAt } : {}),
-      retryable: limitDetails.classification === 'usage_limit',
+      retryable: limitDetails.classification === 'usage_limit' || limitDetails.classification === 'resume_not_found',
       data,
     },
     { sessionId },
@@ -993,6 +996,9 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
         const errorDetails = errorMessage
           ? extractProviderLimitDetails(errorMessage, errorCode, { referenceTime: readTimestamp(event) })
           : undefined
+        const normalizedErrorCode = errorDetails?.classification === 'resume_not_found'
+          ? 'resume_not_found'
+          : errorCode
         return [
           ...(event.usage || typeof event.total_cost_usd === 'number' || typeof event.cost_usd === 'number'
           ? [envelope(event, {
@@ -1011,9 +1017,9 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
                 type: 'provider.error',
                 message: errorMessage,
                 classification: errorDetails?.classification ?? 'other',
-                ...(errorCode ? { code: errorCode } : {}),
+                ...(normalizedErrorCode ? { code: normalizedErrorCode } : {}),
                 ...(errorDetails?.resetAt ? { resetAt: errorDetails.resetAt } : {}),
-                retryable: errorDetails?.classification === 'usage_limit',
+                retryable: errorDetails?.classification === 'usage_limit' || errorDetails?.classification === 'resume_not_found',
                 data: event,
               })]
             : []),

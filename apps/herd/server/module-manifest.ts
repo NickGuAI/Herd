@@ -1,11 +1,14 @@
 import { HERD_MODULE_GRAPH } from '../src/module-manifest.js'
 import { MESSAGE_IMAGE_JSON_BODY_LIMIT } from '../modules/agents/message-images.js'
+import { CHANNEL_MESSAGE_JSON_BODY_LIMIT } from '../modules/channels/types.js'
 import type {
   HerdLifecycleDeclaration,
   HerdModuleManifest,
   HerdModuleServerMetadata,
   HerdStorageOwnership,
 } from '../src/types/module-manifest.js'
+
+const COMMANDER_BUNDLE_JSON_BODY_LIMIT = '5mb'
 
 function noLifecycle(): HerdLifecycleDeclaration {
   return {
@@ -47,7 +50,7 @@ export const HERD_MODULE_SERVER_METADATA = [
         auth: 'api-key-or-auth0',
         ownerModuleId: 'agents',
         parserIds: ['agents.image-json', 'agents.upload-multipart'],
-        notes: 'Mounted through the manifest-backed runtime registration.',
+        notes: 'Mounted through the manifest-backed runtime registration. Most routes use API key/Auth0; POST /machines/enroll accepts signed hmre_ enrollment tokens.',
       },
       {
         id: 'agents.providers-api',
@@ -90,7 +93,7 @@ export const HERD_MODULE_SERVER_METADATA = [
         match: 'exact',
         auth: 'pairing-token',
         ownerModuleId: 'agents',
-        notes: 'Outbound machine daemon channel authenticated by one-time pairing token hash stored on the machine record.',
+        notes: 'Outbound machine daemon channel authenticated by unexpired pairing token hash stored on the machine record.',
       },
     ],
     lifecycle: {
@@ -105,10 +108,10 @@ export const HERD_MODULE_SERVER_METADATA = [
         },
       ],
     },
-    storage: storage('agents', 'owned', 'Agent runtime session state is persisted in SQLite; machine config and transcripts stay under the Herd data root.', {
+    storage: storage('agents', 'owned', 'Agent runtime session state is persisted in SQLite; machine config, enrollment signing secret, and transcripts stay under the Herd data root.', {
       keys: ['agent_runtime_sessions', 'agents.machines', 'agents.transcripts'],
       roots: ['${HERD_DATA_DIR}/herd.sqlite', '${HERD_DATA_DIR}/agents', '${HERD_DATA_DIR}'],
-      files: ['herd.sqlite', 'machines.json'],
+      files: ['herd.sqlite', 'machines.json', 'agents/machine-enrollment-signing-secret'],
     }),
     dependencies: HERD_MODULE_GRAPH[0].dependencies,
     capabilities: HERD_MODULE_GRAPH[0].capabilities,
@@ -297,7 +300,7 @@ export const HERD_MODULE_SERVER_METADATA = [
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
         auth: 'api-key-or-auth0',
         ownerModuleId: 'commanders',
-        parserIds: ['commanders.avatar-multipart'],
+        parserIds: ['commanders.channel-message-json', 'commanders.bundle-import-json', 'commanders.avatar-multipart'],
       },
       {
         id: 'commanders.packages-api',
@@ -318,6 +321,22 @@ export const HERD_MODULE_SERVER_METADATA = [
       },
     ],
     parsers: [
+      {
+        id: 'commanders.channel-message-json',
+        kind: 'json',
+        mount: '/api/commanders/channel-message',
+        ownerModuleId: 'commanders',
+        limit: CHANNEL_MESSAGE_JSON_BODY_LIMIT,
+        notes: 'Large JSON parser for external channel ingest payloads, including WhatsApp audio base64.',
+      },
+      {
+        id: 'commanders.bundle-import-json',
+        kind: 'json',
+        mount: '/api/commanders/import',
+        ownerModuleId: 'commanders',
+        limit: COMMANDER_BUNDLE_JSON_BODY_LIMIT,
+        notes: 'Large JSON parser for portable commander bundle imports with embedded skill files.',
+      },
       {
         id: 'commanders.avatar-multipart',
         kind: 'multipart-memory',

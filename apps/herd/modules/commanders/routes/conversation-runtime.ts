@@ -17,14 +17,21 @@ import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import { STARTUP_PROMPT } from './context.js'
 import type { CommanderSession } from '../store.js'
 import { resolveCommanderWorkflow } from '../workflow-resolution.js'
-import type { ChannelReplyDelivery, ChannelReplyIntent, Conversation } from '../conversation-store.js'
+import type {
+  ChannelInboundMessageFate,
+  ChannelReplyDelivery,
+  ChannelReplyIntent,
+  Conversation,
+} from '../conversation-store.js'
 import type { ChannelReplyForwarder, CommanderRoutesContext } from './types.js'
+import { createChannelReplyStreamDispatch } from '../channel-dispatchers.js'
 import { sanitizeProviderContextForPersistence } from '../../agents/providers/provider-context-normalization.js'
 import { asClaudeProviderContext } from '../../agents/providers/provider-session-context.js'
 import { getProvider, resolveDefaultProviderId } from '../../agents/providers/registry.js'
 import { resolveProviderDefaults } from '../../agents/providers/provider-adapter.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
 import { hasNativeProviderResumeIdentifier } from '../../agents/providers/native-resume.js'
+import { isResumeNotFoundProviderError } from '../../agents/provider-errors.js'
 import {
   appendCommanderCostRecord,
   computeLiveSessionMonthlySpendUsd,
@@ -52,11 +59,21 @@ const CHANNEL_REPLY_INTENT_HISTORY_LIMIT = 100
 const CHANNEL_REPLY_RECONCILIATION_DELAYS_MS = [0, 1000, 5000] as const
 const DEFAULT_CHANNEL_REPLY_RECONCILIATION_RETRY_MS = 5000
 const CHANNEL_REPLY_UNDELIVERABLE_MESSAGE = 'No automatic channel reply was available to send.'
+const CHANNEL_FAILURE_NOTICE_MESSAGE = 'I received your message, but the assistant turn failed before I could produce a reply. An operator can inspect this conversation in Command Room.'
+const CHANNEL_INBOUND_FATE_HISTORY_LIMIT = 100
 const DEEP_THINKING_RESEARCH_ROLES = ['context-research', 'risk-research'] as const
 const DEEP_THINKING_THINKING_ROLES = ['inversion-thinking', 'synthesis-thinking', 'operational-thinking'] as const
 const DEFAULT_DEEP_THINKING_WORKER_WAIT_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_DEEP_THINKING_WORKER_POLL_MS = 1000
 const DEFAULT_DEEP_THINKING_OPERATION_SCHEDULE_DELAY_MS = 0
+const GAIA_HOST = 'gaia'
+const GAIA_TEMPLATE_ID = 'gaia-onboarding'
+const GAIA_OPS_API_KEY_SCOPES = [
+  'commanders:write',
+  'agents:write',
+  'org:write',
+] as const
+const GAIA_OPS_API_KEY_TTL_MS = 24 * 60 * 60 * 1000
 /**
  * Worker findings are capped before being injected into follow-up worker and
  * synthesis prompts. The character budget is documented here because token
@@ -115,7 +132,12 @@ export function resetChannelReplyReconciliationStateForTest(): void {
     clearTimeout(timer)
   }
   channelReplyReconciliationRetryTimers.clear()
+  inFlightChannelReplyDeliveryIds.clear()
   configureChannelReplyReconciliationForTest({})
+}
+
+export function getInFlightChannelReplyDeliveryIdsForTest(): string[] {
+  return Array.from(inFlightChannelReplyDeliveryIds)
 }
 
 function stripDeepThinkingTriggers(message: string): string {
@@ -213,6 +235,210 @@ function sliceMessagesFromNewest(input: {
   }
 }
 
+function channelSourceHash(provider: string, accountId: string, rawSourceId: string): string {
+  return createHash('sha256')
+    .update([provider, accountId, rawSourceId].join('\0'))
+    .digest('hex')
+    .slice(0, 16)
+}
+
+function parseChannelIdentityFromClientSendId(
+  clientSendId: string | undefined,
+  conversation: Pick<Conversation, 'channelMeta' | 'lastRoute'>,
+): {
+  provider: string
+  accountId: string
+  rawSourceId: string
+} | null {
+  const normalized = normalizeClientSendId(clientSendId)
+  if (!normalized) {
+    return null
+  }
+  const parts = normalized.split(':')
+  if (parts.length >= 4 && parts[0] === 'channel') {
+    return {
+      provider: parts[1] ?? conversation.channelMeta?.provider ?? 'unknown',
+      accountId: parts[2] ?? conversation.channelMeta?.accountId ?? conversation.lastRoute?.accountId ?? 'unknown',
+      rawSourceId: parts.slice(3).join(':'),
+    }
+  }
+  if (!conversation.channelMeta) {
+    return null
+  }
+  return {
+    provider: conversation.channelMeta.provider,
+    accountId: conversation.channelMeta.accountId,
+    rawSourceId: normalized,
+  }
+}
+
+function channelInboundFateId(input: {
+  provider: string
+  accountId: string
+  rawSourceId: string
+  clientSendId?: string
+  fate: ChannelInboundMessageFate['fate']
+  at: string
+}): string {
+  const stableKey = [
+    input.provider,
+    input.accountId,
+    input.rawSourceId,
+    input.clientSendId ?? '',
+    input.fate === 'duplicate' ? input.at : input.fate,
+  ].join('\0')
+  return `channel-inbound-fate-${createHash('sha256').update(stableKey).digest('hex').slice(0, 24)}`
+}
+
+function pruneChannelInboundFates(fates: ChannelInboundMessageFate[]): ChannelInboundMessageFate[] {
+  if (fates.length <= CHANNEL_INBOUND_FATE_HISTORY_LIMIT) {
+    return fates
+  }
+  return fates.slice(-CHANNEL_INBOUND_FATE_HISTORY_LIMIT)
+}
+
+export async function recordChannelInboundFate(
+  context: CommanderRoutesContext,
+  conversationId: string,
+  input: {
+    fate: ChannelInboundMessageFate['fate']
+    provider: string
+    accountId: string
+    rawSourceId: string
+    clientSendId?: string
+    error?: string
+  },
+): Promise<void> {
+  const at = context.now().toISOString()
+  const provider = input.provider.trim().toLowerCase() as ChannelInboundMessageFate['provider']
+  const accountId = input.accountId.trim()
+  const rawSourceId = input.rawSourceId.trim()
+  if (!provider || !accountId || !rawSourceId) {
+    return
+  }
+  const clientSendId = normalizeClientSendId(input.clientSendId) ?? undefined
+  const nextFate: ChannelInboundMessageFate = {
+    id: channelInboundFateId({
+      provider,
+      accountId,
+      rawSourceId,
+      clientSendId,
+      fate: input.fate,
+      at,
+    }),
+    fate: input.fate,
+    provider,
+    accountId,
+    rawSourceId,
+    at,
+    ...(clientSendId ? { clientSendId } : {}),
+    sourceHash: channelSourceHash(provider, accountId, rawSourceId),
+    ...(input.error?.trim() ? { error: input.error.trim().slice(0, 500) } : {}),
+  }
+
+  await context.conversationStore.update(conversationId, (current) => {
+    const fates = current.channelInboundFates ?? []
+    const existingIndex = input.fate === 'duplicate'
+      ? -1
+      : fates.findIndex((candidate) => (
+          (clientSendId && candidate.clientSendId === clientSendId) ||
+          (
+            candidate.provider === provider &&
+            candidate.accountId === accountId &&
+            candidate.rawSourceId === rawSourceId &&
+            candidate.fate !== 'duplicate'
+          )
+        ))
+    const nextFates = existingIndex >= 0
+      ? fates.map((candidate, index) => index === existingIndex ? nextFate : candidate)
+      : [...fates, nextFate]
+    return {
+      ...current,
+      channelInboundFates: pruneChannelInboundFates(nextFates),
+      lastMessageAt: at,
+    }
+  })
+}
+
+async function recordChannelInboundFateForClientSendId(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string | undefined,
+  fate: ChannelInboundMessageFate['fate'],
+  error?: string,
+): Promise<void> {
+  const identity = parseChannelIdentityFromClientSendId(clientSendId, conversation)
+  if (!identity) {
+    return
+  }
+  await recordChannelInboundFate(context, conversation.id, {
+    ...identity,
+    clientSendId,
+    fate,
+    ...(error ? { error } : {}),
+  })
+}
+
+function attachChannelInboundFates(
+  conversation: Conversation,
+  messages: MsgItem[],
+): MsgItem[] {
+  const fates = conversation.channelInboundFates ?? []
+  if (fates.length === 0) {
+    return messages
+  }
+
+  const latestByClientSendId = new Map<string, ChannelInboundMessageFate>()
+  const unmatchedFates: ChannelInboundMessageFate[] = []
+  for (const fate of fates) {
+    if (fate.clientSendId && fate.fate !== 'duplicate') {
+      latestByClientSendId.set(fate.clientSendId, fate)
+    } else {
+      unmatchedFates.push(fate)
+    }
+  }
+
+  const matchedClientSendIds = new Set<string>()
+  const decoratedMessages = messages.map((message) => {
+    if (message.kind !== 'user' || !message.clientSendId) {
+      return message
+    }
+    const fate = latestByClientSendId.get(message.clientSendId)
+    if (!fate) {
+      return message
+    }
+    matchedClientSendIds.add(message.clientSendId)
+    return {
+      ...message,
+      channelFate: {
+        fate: fate.fate,
+        at: fate.at,
+        ...(fate.sourceHash ? { sourceHash: fate.sourceHash } : {}),
+        ...(fate.error ? { error: fate.error } : {}),
+      },
+    }
+  })
+
+  const systemFates = [
+    ...unmatchedFates,
+    ...fates.filter((fate) =>
+      fate.clientSendId &&
+      fate.fate !== 'duplicate' &&
+      !matchedClientSendIds.has(fate.clientSendId)),
+  ].map((fate) => {
+    const error = fate.error ? `: ${fate.error}` : ''
+    const source = fate.sourceHash ? ` source ${fate.sourceHash}` : ''
+    return {
+      id: `channel-inbound-fate-${fate.id}`,
+      kind: 'system' as const,
+      text: `Inbound channel message fate: ${fate.fate}${source}${error}`,
+      timestamp: fate.at,
+    }
+  })
+
+  return [...decoratedMessages, ...systemFates]
+}
+
 function appendChannelReplyDeliveryMessage(
   conversation: Conversation,
   messages: MsgItem[],
@@ -288,7 +514,10 @@ export async function getConversationMessagesPage(
   const liveEvents = getLiveConversationSession(context, conversation)?.events ?? []
   const targetMessages = skipNewest + limit
   const transcriptWindow = await readTranscriptEventsWindow(sessionName, targetMessages, liveEvents)
-  const transcriptMessages = appendChannelReplyDeliveryMessage(conversation, transcriptWindow.messages)
+  const transcriptMessages = appendChannelReplyDeliveryMessage(
+    conversation,
+    attachChannelInboundFates(conversation, transcriptWindow.messages),
+  )
   const transcriptPage = sliceMessagesFromNewest({
     messages: transcriptMessages,
     limit,
@@ -340,8 +569,179 @@ interface PreparedConversationSession {
     resumeProviderContext?: Conversation['providerContext']
     credentialPoolId?: string
     maxTurns?: number
+    env?: NodeJS.ProcessEnv
+    gaiaOpsApiKeyExpiresAt?: string
   }
+  gaiaOpsEnvRequired: boolean
   credentialRecoveryApplied?: boolean
+  resumeNotFoundRecoveryApplied?: boolean
+}
+
+function resolveGaiaApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.HERD_API_BASE_URL?.trim() || env.API_BASE_URL?.trim()
+  if (explicit) {
+    return explicit.replace(/\/+$/u, '')
+  }
+  const port = env.PORT?.trim() || '20001'
+  return `http://127.0.0.1:${port}`
+}
+
+function isGaiaSystemCommander(commander: CommanderSession): boolean {
+  return commander.system === true
+    && (
+      commander.host === GAIA_HOST ||
+      commander.templateId === GAIA_TEMPLATE_ID
+    )
+}
+
+export function appendGaiaOpsSkillGuide(systemPrompt: string): string {
+  return [
+    systemPrompt,
+    '',
+    '# Gaia Operations Skills',
+    '',
+    'You can perform founder-requested operations through Herd APIs using the scoped API key in HERD_API_KEY. Never print, log, or store that key.',
+    '',
+    '- create-commander: use the existing commander-create-wizard flow when a user asks Gaia to create or configure a commander.',
+    '- add-machine: for a new daemon machine, POST to `${API_BASE_URL}/api/agents/machines/enrollment-token` (optional `label`, `cwd`) and return the `enrollment.command` one-liner for the user to run on that box; the token expires in 24 hours. For SSH-transport machines, POST the machine payload to `${API_BASE_URL}/api/agents/machines`.',
+    '- re-pair-machine: to rotate or renew daemon credentials for an existing machine, POST to `${API_BASE_URL}/api/agents/machines/:id/daemon/pair` and return the daemon pairing command from the response.',
+    '- create-automation: POST to `${API_BASE_URL}/api/automations`; include `sourceConversationId: process.env.HERD_SOURCE_CONVERSATION_ID` when the value is present.',
+    '',
+    'Use the `x-herd-api-key` header with HERD_API_KEY for these API calls.',
+  ].join('\n')
+}
+
+export interface GaiaOpsEnvResult {
+  env: NodeJS.ProcessEnv
+  apiKeyExpiresAt: string
+}
+
+export async function buildGaiaOpsEnvWithMetadata(
+  context: CommanderRoutesContext,
+  commander: CommanderSession,
+  conversation: Conversation,
+): Promise<GaiaOpsEnvResult | undefined> {
+  if (!isGaiaSystemCommander(commander)) {
+    return undefined
+  }
+
+  const now = context.now()
+  const expiresAt = new Date(now.getTime() + GAIA_OPS_API_KEY_TTL_MS)
+  if (!context.apiKeyStore?.createKey) {
+    return {
+      apiKeyExpiresAt: expiresAt.toISOString(),
+      env: {
+        API_BASE_URL: resolveGaiaApiBaseUrl(),
+        HERD_SOURCE_CONVERSATION_ID: conversation.id,
+      },
+    }
+  }
+
+  const created = await context.apiKeyStore.createKey({
+    name: `Gaia ops ${conversation.id}`,
+    scopes: GAIA_OPS_API_KEY_SCOPES,
+    createdBy: `gaia:${commander.id}`,
+    now,
+    expiresAt,
+  })
+
+  return {
+    apiKeyExpiresAt: expiresAt.toISOString(),
+    env: {
+      API_BASE_URL: resolveGaiaApiBaseUrl(),
+      HERD_API_KEY: created.key,
+      HERD_API_KEY_HEADER: 'x-herd-api-key',
+      HERD_SOURCE_CONVERSATION_ID: conversation.id,
+    },
+  }
+}
+
+export async function buildGaiaOpsEnv(
+  context: CommanderRoutesContext,
+  commander: CommanderSession,
+  conversation: Conversation,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  return (await buildGaiaOpsEnvWithMetadata(context, commander, conversation))?.env
+}
+
+function readProviderErrorText(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim()
+  }
+  if (!isObjectRecord(value)) {
+    return undefined
+  }
+  return readProviderErrorText(value.message)
+    ?? readProviderErrorText(value.error)
+    ?? readProviderErrorText(value.reason)
+    ?? readProviderErrorText(value.detail)
+}
+
+function readProviderErrorCode(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim()
+  }
+  if (!isObjectRecord(value)) {
+    return undefined
+  }
+  return readProviderErrorCode(value.code)
+    ?? readProviderErrorCode(value.error_code)
+    ?? readProviderErrorCode(value.errorCode)
+    ?? readProviderErrorCode(value.codexErrorInfo)
+    ?? readProviderErrorCode(value.classification)
+}
+
+function isResumeNotFoundEvent(event: StreamJsonEvent): boolean {
+  if (!isTranscriptEnvelope(event)) {
+    return false
+  }
+  if (event.ev.type === 'provider.error') {
+    return event.ev.classification === 'resume_not_found' ||
+      event.ev.code === 'resume_not_found' ||
+      isResumeNotFoundProviderError(event.ev.message, event.ev.code)
+  }
+  if (event.ev.type !== 'turn.end' || isSuccessfulTurnEndStatus(event.ev.status)) {
+    return false
+  }
+  const payload = event.ev.error ?? event.ev.result
+  return isResumeNotFoundProviderError(
+    readProviderErrorText(payload),
+    readProviderErrorCode(payload),
+  )
+}
+
+function isResumeNotFoundError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return isResumeNotFoundProviderError(error.message)
+  }
+  return isResumeNotFoundProviderError(readProviderErrorText(error), readProviderErrorCode(error))
+}
+
+async function hasRecentResumeNotFoundFailure(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  sessionName: string,
+  liveEvents: readonly StreamJsonEvent[],
+): Promise<boolean> {
+  const transcriptWindow = await readTranscriptEventsWindow(sessionName, 1, liveEvents)
+  return transcriptWindow.events.slice(-50).some(isResumeNotFoundEvent)
+}
+
+async function clearConversationProviderContextForResumeRecovery(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+): Promise<Conversation> {
+  const updated = await context.conversationStore.update(conversation.id, (current) => ({
+    ...current,
+    providerContext: undefined,
+  }))
+  return updated ?? {
+    ...conversation,
+    providerContext: undefined,
+  }
 }
 
 async function hasConversationTranscriptMessages(
@@ -413,15 +813,15 @@ async function prepareConversationSession(
   const credentialPoolId = spawnOptions?.credentialPoolId
     ?? credentialRecovery?.credentialPoolId
     ?? (activeCredentialStale ? activeCredentialPoolId : undefined)
-  const clearResumeProviderContext = Boolean(
+  let clearResumeProviderContext = Boolean(
     spawnOptions?.clearResumeProviderContext
       || credentialRecovery?.clearResumeProviderContext
       || activeCredentialStale,
   )
-  const resumeProviderContext = clearResumeProviderContext
+  let resumeProviderContext = clearResumeProviderContext
     ? undefined
     : conversation.providerContext
-  const hasNativeResumeIdentifier = provider
+  let hasNativeResumeIdentifier = provider
     ? hasNativeProviderResumeIdentifier({
       provider,
       agentType,
@@ -430,6 +830,21 @@ async function prepareConversationSession(
       cwd: cwd ?? process.env.HOME ?? '/tmp',
     })
     : false
+  const resumeNotFoundRecoveryApplied = Boolean(
+    hasNativeResumeIdentifier
+      && !clearResumeProviderContext
+      && await hasRecentResumeNotFoundFailure(
+        context,
+        conversation,
+        sessionName,
+        liveSession?.events ?? [],
+      ),
+  )
+  if (resumeNotFoundRecoveryApplied) {
+    clearResumeProviderContext = true
+    resumeProviderContext = undefined
+    hasNativeResumeIdentifier = false
+  }
   const conversationClaudeContext = conversation.agentType === agentType
     ? asClaudeProviderContext(resumeProviderContext)
     : null
@@ -491,9 +906,13 @@ async function prepareConversationSession(
     },
     workflow,
   )
-  const systemPrompt = agentType === 'claude'
+  const baseSystemPrompt = agentType === 'claude'
     ? appendClaudeReasoningPolicy(built.systemPrompt)
     : built.systemPrompt
+  const gaiaOpsEnvRequired = isGaiaSystemCommander(commander)
+  const systemPrompt = gaiaOpsEnvRequired
+    ? appendGaiaOpsSkillGuide(baseSystemPrompt)
+    : baseSystemPrompt
 
   return {
     commander,
@@ -514,7 +933,9 @@ async function prepareConversationSession(
       credentialPoolId,
       maxTurns: built.maxTurns,
     },
+    gaiaOpsEnvRequired,
     credentialRecoveryApplied: Boolean(credentialRecovery || activeCredentialStale),
+    resumeNotFoundRecoveryApplied,
   }
 }
 
@@ -551,9 +972,22 @@ function sanitizeConversationProviderContext(
   }) ?? undefined
 }
 
+function hasFreshGaiaOpsApiKey(liveSession: StreamSession, now: Date): boolean {
+  const expiresAt = liveSession.gaiaOpsApiKeyExpiresAt
+  if (!expiresAt) {
+    return false
+  }
+  const expiresAtMs = Date.parse(expiresAt)
+  return Number.isFinite(expiresAtMs) && expiresAtMs > now.getTime()
+}
+
 function isCompatibleLiveConversationSession(
   liveSession: StreamSession | undefined,
   createSessionInput: PreparedConversationSession['createSessionInput'],
+  options?: {
+    gaiaOpsEnvRequired?: boolean
+    now?: Date
+  },
 ): liveSession is StreamSession {
   if (!liveSession) {
     return false
@@ -565,6 +999,9 @@ function isCompatibleLiveConversationSession(
     createSessionInput.credentialPoolId
     && liveSession.credentialPoolId !== createSessionInput.credentialPoolId
   ) {
+    return false
+  }
+  if (options?.gaiaOpsEnvRequired && !hasFreshGaiaOpsApiKey(liveSession, options.now ?? new Date())) {
     return false
   }
 
@@ -629,6 +1066,7 @@ export async function startConversationSession(
   dispatchChannelReplies = false,
   channelReplySkipCompletedTurns = 0,
   lifecycleCallbacks?: ConversationStartLifecycleCallbacks,
+  resumeRecoveryAttempted = false,
 ): Promise<{ conversation: Conversation; sent: boolean }> {
   const prepared = await prepareConversationSession(
     context,
@@ -640,38 +1078,95 @@ export async function startConversationSession(
   if (!sessionsInterface) {
     throw new Error('sessionsInterface not configured')
   }
-  const { sessionName, createSessionInput } = prepared
+  const { sessionName } = prepared
+  let createSessionInput = prepared.createSessionInput
+  const recoveryAlreadyAttempted = resumeRecoveryAttempted || prepared.resumeNotFoundRecoveryApplied === true
+  const conversationForStart = prepared.resumeNotFoundRecoveryApplied
+    ? await clearConversationProviderContextForResumeRecovery(context, conversation)
+    : conversation
   const existingSession = sessionsInterface.getSession(sessionName)
-  const reusingLiveSession = isCompatibleLiveConversationSession(existingSession, createSessionInput)
+  const reusingLiveSession = isCompatibleLiveConversationSession(existingSession, createSessionInput, {
+    gaiaOpsEnvRequired: prepared.gaiaOpsEnvRequired,
+    now: context.now(),
+  })
   const replacingForCredentialRecovery = Boolean(
     existingSession && !reusingLiveSession && prepared.credentialRecoveryApplied,
   )
+  const replacingForGaiaOpsEnvRefresh = Boolean(
+    existingSession && !reusingLiveSession && prepared.gaiaOpsEnvRequired && sessionsInterface.replaceCommanderSession,
+  )
   if (reusingLiveSession) {
     refreshLiveConversationSessionPrompt(existingSession, createSessionInput)
-  } else if (!replacingForCredentialRecovery) {
-    removeChannelReplyForwarder(context, sessionName)
+  } else if (!replacingForCredentialRecovery && !replacingForGaiaOpsEnvRefresh) {
+    removeChannelReplyForwarder(context, sessionName, conversationForStart)
     sessionsInterface.deleteSession(sessionName)
   }
 
-  let liveSession: StreamSession
-  if (reusingLiveSession) {
-    liveSession = existingSession
-  } else if (replacingForCredentialRecovery && sessionsInterface.replaceCommanderSession) {
-    liveSession = await sessionsInterface.replaceCommanderSession(createSessionInput)
-    sessionsInterface.clearCredentialRecoveryRequest?.(sessionName)
-  } else {
-    liveSession = await sessionsInterface.createCommanderSession(createSessionInput)
-    if (prepared.credentialRecoveryApplied) {
-      sessionsInterface.clearCredentialRecoveryRequest?.(sessionName)
+  if (!reusingLiveSession && prepared.gaiaOpsEnvRequired) {
+    const gaiaOpsEnv = await buildGaiaOpsEnvWithMetadata(context, prepared.commander, conversationForStart)
+    if (gaiaOpsEnv) {
+      createSessionInput = {
+        ...createSessionInput,
+        env: gaiaOpsEnv.env,
+        gaiaOpsApiKeyExpiresAt: gaiaOpsEnv.apiKeyExpiresAt,
+      }
     }
   }
 
-  const updated = await context.conversationStore.update(conversation.id, (current) => ({
+  let liveSession: StreamSession
+  try {
+    if (reusingLiveSession) {
+      liveSession = existingSession
+    } else if (
+      (replacingForCredentialRecovery || replacingForGaiaOpsEnvRefresh)
+      && sessionsInterface.replaceCommanderSession
+    ) {
+      liveSession = await sessionsInterface.replaceCommanderSession(createSessionInput)
+      if (prepared.credentialRecoveryApplied) {
+        sessionsInterface.clearCredentialRecoveryRequest?.(sessionName)
+      }
+    } else {
+      liveSession = await sessionsInterface.createCommanderSession(createSessionInput)
+      if (prepared.credentialRecoveryApplied) {
+        sessionsInterface.clearCredentialRecoveryRequest?.(sessionName)
+      }
+    }
+    if (!reusingLiveSession && createSessionInput.gaiaOpsApiKeyExpiresAt) {
+      liveSession.gaiaOpsApiKeyExpiresAt = createSessionInput.gaiaOpsApiKeyExpiresAt
+    }
+  } catch (error) {
+    if (
+      !recoveryAlreadyAttempted &&
+      createSessionInput.resumeProviderContext &&
+      isResumeNotFoundError(error)
+    ) {
+      sessionsInterface.deleteSession(sessionName)
+      const recoveredConversation = await clearConversationProviderContextForResumeRecovery(context, conversationForStart)
+      return startConversationSession(
+        context,
+        commanderId,
+        recoveredConversation,
+        initialMessage,
+        {
+          ...spawnOptions,
+          clearResumeProviderContext: true,
+        },
+        sendOptions,
+        dispatchChannelReplies,
+        channelReplySkipCompletedTurns,
+        lifecycleCallbacks,
+        true,
+      )
+    }
+    throw error
+  }
+
+  const updated = await context.conversationStore.update(conversationForStart.id, (current) => ({
     ...applyLiveSessionState(current, liveSession, createSessionInput.agentType, 'active'),
   }))
-  lifecycleCallbacks?.onConversationActivated?.(updated ?? conversation)
+  lifecycleCallbacks?.onConversationActivated?.(updated ?? conversationForStart)
   await updateCommanderDerivedState(context, commanderId)
-  const heartbeatConversation = updated ?? conversation
+  const heartbeatConversation = updated ?? conversationForStart
   context.heartbeatManager.start(
     heartbeatConversation.id,
     commanderId,
@@ -679,7 +1174,7 @@ export async function startConversationSession(
   )
   const isBackendStartupPrompt = initialMessage == null
     && !reusingLiveSession
-    && !conversation.providerContext
+    && !conversationForStart.providerContext
   if (dispatchChannelReplies) {
     ensureChannelReplyForwarder(context, heartbeatConversation, {
       skipCompletedTurns: isBackendStartupPrompt
@@ -699,22 +1194,55 @@ export async function startConversationSession(
     )
     : true
   if (!sent) {
+    const failedSession = sessionsInterface.getSession(sessionName) ?? liveSession
+    const resumeNotFoundFailure = !recoveryAlreadyAttempted &&
+      createSessionInput.resumeProviderContext &&
+      (
+        failedSession.events.some(isResumeNotFoundEvent) ||
+        await hasRecentResumeNotFoundFailure(context, conversationForStart, sessionName, failedSession.events)
+      )
+    if (resumeNotFoundFailure) {
+      context.heartbeatManager.stop(heartbeatConversation.id)
+      removeChannelReplyForwarder(context, sessionName, heartbeatConversation)
+      sessionsInterface.deleteSession(sessionName)
+      await context.conversationStore.update(conversationForStart.id, (current) => ({
+        ...current,
+        status: 'idle',
+      }))
+      await updateCommanderDerivedState(context, commanderId)
+      const recoveredConversation = await clearConversationProviderContextForResumeRecovery(context, conversationForStart)
+      return startConversationSession(
+        context,
+        commanderId,
+        recoveredConversation,
+        initialMessage,
+        {
+          ...spawnOptions,
+          clearResumeProviderContext: true,
+        },
+        sendOptions,
+        dispatchChannelReplies,
+        channelReplySkipCompletedTurns,
+        lifecycleCallbacks,
+        true,
+      )
+    }
     context.heartbeatManager.stop(heartbeatConversation.id)
-    removeChannelReplyForwarder(context, sessionName)
+    removeChannelReplyForwarder(context, sessionName, heartbeatConversation)
     sessionsInterface.deleteSession(sessionName)
-    await context.conversationStore.update(conversation.id, (current) => ({
+    await context.conversationStore.update(conversationForStart.id, (current) => ({
       ...current,
       status: 'idle',
     }))
     await updateCommanderDerivedState(context, commanderId)
     return {
-      conversation: updated ?? conversation,
+      conversation: updated ?? conversationForStart,
       sent: false,
     }
   }
 
   return {
-    conversation: updated ?? conversation,
+    conversation: updated ?? conversationForStart,
     sent: true,
   }
 }
@@ -1605,13 +2133,32 @@ function conversationDeliveryDedupeKey(conversation: Conversation, clientSendId:
 function removeChannelReplyForwarder(
   context: CommanderRoutesContext,
   sessionName: string,
+  conversation?: Conversation,
 ): void {
   const forwarder = context.channelReplyForwarders.get(sessionName)
   if (!forwarder) {
     return
   }
+  const streamDispatch = forwarder.streamDispatch
+  const streamDispatchPromise = forwarder.streamDispatchPromise
+  const activeClientSendId = forwarder.activeClientSendId
+  forwarder.activeClientSendId = null
+  forwarder.activeTurnId = null
+  forwarder.turnEvents = []
+  forwarder.streamDispatch = null
+  forwarder.streamDispatchPromise = null
   forwarder.unsubscribe()
   context.channelReplyForwarders.delete(sessionName)
+
+  if (conversation && (streamDispatch || streamDispatchPromise || activeClientSendId)) {
+    void settleRemovedChannelReplyForwarder(
+      context,
+      conversation,
+      streamDispatch,
+      streamDispatchPromise,
+      activeClientSendId,
+    )
+  }
 }
 
 interface ChannelReplyForwarderOptions {
@@ -1631,6 +2178,39 @@ function isTopLevelSuccessfulTurnEnd(event: StreamJsonEvent): boolean {
     && event.ev.type === 'turn.end'
     && !event.subagentId
     && isSuccessfulTurnEndStatus(event.ev.status)
+}
+
+function extractTurnFailureError(event: StreamJsonEvent): string {
+  if (!isTranscriptEnvelope(event) || event.ev.type !== 'turn.end') {
+    return 'Assistant turn did not complete successfully'
+  }
+  const error = event.ev.error
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim()
+  }
+  if (error && typeof error === 'object' && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>
+    for (const key of ['message', 'error', 'detail', 'reason', 'code']) {
+      const value = record[key]
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim()
+      }
+    }
+    const nested = record.error
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const nestedRecord = nested as Record<string, unknown>
+      for (const key of ['message', 'error', 'detail', 'reason', 'code']) {
+        const value = nestedRecord[key]
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim()
+        }
+      }
+    }
+  }
+  const status = typeof event.ev.status === 'string' && event.ev.status.trim()
+    ? event.ev.status.trim()
+    : 'failed'
+  return `Assistant turn ended with status ${status}`
 }
 
 function isTopLevelTurnEnd(event: StreamJsonEvent): boolean {
@@ -1961,11 +2541,13 @@ async function recordChannelReplyDeliveryFailed(
   },
 ): Promise<void> {
   const timestamp = context.now().toISOString()
-  await context.conversationStore.update(input.conversationId, (current) => {
+  let matchedDelivery = false
+  const updated = await context.conversationStore.update(input.conversationId, (current) => {
     const delivery = current.channelReplyDelivery
     if (!delivery || delivery.id !== input.deliveryId) {
       return current
     }
+    matchedDelivery = true
     return {
       ...current,
       channelReplyDelivery: {
@@ -1989,6 +2571,15 @@ async function recordChannelReplyDeliveryFailed(
       lastMessageAt: timestamp,
     }
   })
+  if (updated && matchedDelivery) {
+    await recordChannelInboundFateForClientSendId(
+      context,
+      updated,
+      updated.channelReplyDelivery?.clientSendId,
+      'turn-failed',
+      input.error,
+    )
+  }
 }
 
 export async function recordChannelReplyDeliveryDelivered(
@@ -2003,7 +2594,8 @@ export async function recordChannelReplyDeliveryDelivered(
   },
 ): Promise<void> {
   const timestamp = context.now().toISOString()
-  await context.conversationStore.update(input.conversationId, (current) => {
+  let matchedDelivery = false
+  const updated = await context.conversationStore.update(input.conversationId, (current) => {
     const delivery = current.channelReplyDelivery
     if (!delivery) {
       return current
@@ -2014,11 +2606,13 @@ export async function recordChannelReplyDeliveryDelivered(
     if (!input.deliveryId && input.message && delivery.message !== input.message) {
       return current
     }
+    matchedDelivery = true
     return {
       ...current,
       channelReplyDelivery: {
         ...delivery,
         status: 'delivered',
+        message: input.message ?? delivery.message,
         provider: input.provider ?? delivery.provider,
         sessionKey: input.sessionKey ?? delivery.sessionKey,
         lastRoute: input.lastRoute ? { ...input.lastRoute } : delivery.lastRoute,
@@ -2038,6 +2632,14 @@ export async function recordChannelReplyDeliveryDelivered(
       lastMessageAt: timestamp,
     }
   })
+  if (updated && matchedDelivery) {
+    await recordChannelInboundFateForClientSendId(
+      context,
+      updated,
+      updated.channelReplyDelivery?.clientSendId,
+      'replied',
+    )
+  }
 }
 
 async function recordChannelReplyIntentFailed(
@@ -2053,7 +2655,7 @@ async function recordChannelReplyIntentFailed(
 
   const now = context.now()
   const timestamp = now.toISOString()
-  await context.conversationStore.update(conversation.id, (current) => {
+  const updated = await context.conversationStore.update(conversation.id, (current) => {
     if (!current.channelMeta || !current.lastRoute) {
       return current
     }
@@ -2113,6 +2715,13 @@ async function recordChannelReplyIntentFailed(
       lastMessageAt: timestamp,
     }
   })
+  await recordChannelInboundFateForClientSendId(
+    context,
+    updated ?? conversation,
+    normalizedClientSendId,
+    'turn-failed',
+    error,
+  )
 }
 
 async function dispatchAutomaticChannelReply(
@@ -2185,6 +2794,218 @@ async function dispatchAutomaticChannelReply(
   }
 }
 
+async function beginAutomaticChannelReplyStream(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  message: string,
+  clientSendId: string,
+): Promise<ChannelReplyForwarder['streamDispatch']> {
+  const controller = await createChannelReplyStreamDispatch({
+    conversation,
+    message,
+    surfaceBindingStore: context.surfaceBindingStore,
+    logger: console,
+  })
+  if (!controller) {
+    return null
+  }
+
+  const delivery = await claimChannelReplyIntentForDelivery(context, conversation, clientSendId, message)
+  if (!delivery) {
+    scheduleAutomaticChannelReplyReconciliationRetry(context, conversation)
+    return null
+  }
+
+  inFlightChannelReplyDeliveryIds.add(delivery.id)
+  return {
+    delivery,
+    controller,
+  }
+}
+
+async function updateAutomaticChannelReplyStream(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  forwarder: ChannelReplyForwarder,
+  message: string,
+  clientSendId: string,
+): Promise<void> {
+  try {
+    if (!forwarder.streamDispatch && !forwarder.streamDispatchPromise) {
+      forwarder.streamDispatchPromise = beginAutomaticChannelReplyStream(
+        context,
+        conversation,
+        message,
+        clientSendId,
+      ).then((streamDispatch) => {
+        forwarder.streamDispatch = streamDispatch
+        forwarder.streamDispatchPromise = null
+        return streamDispatch
+      }, (error) => {
+        forwarder.streamDispatchPromise = null
+        throw error
+      })
+    }
+    const streamDispatch = forwarder.streamDispatch ?? await forwarder.streamDispatchPromise
+    await streamDispatch?.controller.update(message)
+  } catch (error) {
+    const streamDispatch = forwarder.streamDispatch
+    forwarder.streamDispatch = null
+    forwarder.streamDispatchPromise = null
+    if (streamDispatch) {
+      try {
+        await recordChannelReplyDeliveryFailed(context, {
+          conversationId: conversation.id,
+          deliveryId: streamDispatch.delivery.id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      } finally {
+        inFlightChannelReplyDeliveryIds.delete(streamDispatch.delivery.id)
+      }
+    }
+    console.warn(
+      `[channels] Failed to stream assistant reply for conversation "${conversation.id}":`,
+      error,
+    )
+  }
+}
+
+async function finalizeAutomaticChannelReplyStream(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  streamDispatch: NonNullable<ChannelReplyForwarder['streamDispatch']>,
+  message: string,
+): Promise<void> {
+  try {
+    const result = await streamDispatch.controller.finalize(message)
+    await recordChannelReplyDeliveryDelivered(context, {
+      conversationId: conversation.id,
+      deliveryId: streamDispatch.delivery.id,
+      message,
+      provider: result.binding.provider,
+      sessionKey: conversation.channelMeta?.sessionKey ?? streamDispatch.delivery.sessionKey,
+      lastRoute: {
+        ...(conversation.lastRoute ?? streamDispatch.delivery.lastRoute),
+        channel: result.binding.provider,
+      },
+    })
+  } catch (error) {
+    await recordChannelReplyDeliveryFailed(context, {
+      conversationId: conversation.id,
+      deliveryId: streamDispatch.delivery.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    console.warn(
+      `[channels] Failed to finalize streamed assistant reply for conversation "${conversation.id}":`,
+      error,
+    )
+  } finally {
+    inFlightChannelReplyDeliveryIds.delete(streamDispatch.delivery.id)
+  }
+}
+
+async function failAutomaticChannelReplyStream(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  streamDispatch: NonNullable<ChannelReplyForwarder['streamDispatch']> | null,
+  error: string,
+): Promise<boolean> {
+  if (!streamDispatch) {
+    return false
+  }
+  let replacedDraft = false
+  try {
+    try {
+      replacedDraft = await streamDispatch.controller.fail(CHANNEL_FAILURE_NOTICE_MESSAGE)
+    } catch (editError) {
+      console.warn(
+        `[channels] Failed to replace streamed assistant draft for conversation "${conversation.id}" after ${error}:`,
+        editError,
+      )
+    }
+    await recordChannelReplyDeliveryFailed(context, {
+      conversationId: conversation.id,
+      deliveryId: streamDispatch.delivery.id,
+      error,
+    })
+  } finally {
+    inFlightChannelReplyDeliveryIds.delete(streamDispatch.delivery.id)
+  }
+  return replacedDraft
+}
+
+async function failAutomaticChannelReplyTurn(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  clientSendId: string,
+  streamDispatch: ChannelReplyForwarder['streamDispatch'],
+  streamDispatchPromise: ChannelReplyForwarder['streamDispatchPromise'],
+  error: string,
+): Promise<void> {
+  const resolvedStreamDispatch = streamDispatch ?? await streamDispatchPromise?.catch(() => null) ?? null
+  const failureNoticeReplacedDraft = await failAutomaticChannelReplyStream(
+    context,
+    conversation,
+    resolvedStreamDispatch,
+    error,
+  )
+  await recordChannelReplyIntentFailed(
+    context,
+    conversation,
+    clientSendId,
+    error,
+  )
+  if (!failureNoticeReplacedDraft) {
+    await dispatchChannelFailureNotice(context, conversation, error)
+  }
+}
+
+async function settleRemovedChannelReplyForwarder(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  streamDispatch: ChannelReplyForwarder['streamDispatch'],
+  streamDispatchPromise: ChannelReplyForwarder['streamDispatchPromise'],
+  clientSendId: string | null,
+): Promise<void> {
+  const error = 'Channel reply delivery was interrupted before terminal settlement; operator retry required.'
+  const resolvedStreamDispatch = streamDispatch ?? await streamDispatchPromise?.catch((settleError) => {
+    console.warn(
+      `[channels] Failed to settle removed channel reply stream for conversation "${conversation.id}":`,
+      settleError,
+    )
+    return null
+  }) ?? null
+  await failAutomaticChannelReplyStream(context, conversation, resolvedStreamDispatch, error)
+  if (clientSendId) {
+    await recordChannelReplyIntentFailed(context, conversation, clientSendId, error)
+  }
+}
+
+async function dispatchChannelFailureNotice(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  error: string,
+): Promise<void> {
+  try {
+    const result = await context.dispatchCommanderChannelReply({
+      commanderId: conversation.commanderId,
+      conversationId: conversation.id,
+      message: CHANNEL_FAILURE_NOTICE_MESSAGE,
+    })
+    if (!result?.ok) {
+      const noticeError = result?.error ?? 'unknown dispatch failure'
+      console.warn(
+        `[channels] Failed to send channel turn-failure notice for conversation "${conversation.id}" after ${error}: ${noticeError}`,
+      )
+    }
+  } catch (noticeError) {
+    console.warn(
+      `[channels] Failed to send channel turn-failure notice for conversation "${conversation.id}":`,
+      noticeError,
+    )
+  }
+}
+
 type ReconciledChannelReplyTurn =
   | { status: 'completed'; message: string }
   | { status: 'failed'; error: string }
@@ -2231,7 +3052,7 @@ function findChannelReplyTurnForClientSendId(
     }
 
     if (!isTopLevelSuccessfulTurnEnd(event)) {
-      return { status: 'failed', error: 'Assistant turn did not complete successfully' }
+      return { status: 'failed', error: extractTurnFailureError(event) }
     }
 
     const replyText = extractTopLevelAssistantReplyText(turnEvents)
@@ -2331,6 +3152,7 @@ export async function reconcileAutomaticChannelReplies(
         `[channels] Completed channel assistant turn for conversation "${current.id}" had no deliverable reply for clientSendId "${intent.clientSendId}": ${turn.error}`,
       )
       await recordChannelReplyIntentFailed(context, current, intent.clientSendId, turn.error)
+      await dispatchChannelFailureNotice(context, current, turn.error)
       continue
     }
     await dispatchAutomaticChannelReply(context, current, turn.message, intent.clientSendId)
@@ -2415,6 +3237,8 @@ function ensureChannelReplyForwarder(
     activeClientSendId: null,
     activeTurnId: null,
     turnEvents: [],
+    streamDispatch: null,
+    streamDispatchPromise: null,
     skippedTurnIds: new Set<string>(),
     skippedCompletedTurns: Math.max(0, Math.floor(options.skipCompletedTurns ?? 0)),
   }
@@ -2471,22 +3295,40 @@ function ensureChannelReplyForwarder(
       forwarder.turnEvents.push(event)
     }
 
+    const currentReplyText = extractTopLevelAssistantReplyText(forwarder.turnEvents)
+    if (currentReplyText && !isTopLevelTurnEnd(event)) {
+      void updateAutomaticChannelReplyStream(
+        context,
+        conversation,
+        forwarder,
+        currentReplyText,
+        forwarder.activeClientSendId,
+      )
+    }
+
     if (!isTopLevelTurnEnd(event)) {
       return
     }
 
     const completedClientSendId = forwarder.activeClientSendId
+    const streamDispatch = forwarder.streamDispatch
+    const streamDispatchPromise = forwarder.streamDispatchPromise
     forwarder.activeClientSendId = null
     forwarder.activeTurnId = null
+    forwarder.streamDispatch = null
+    forwarder.streamDispatchPromise = null
     forwarder.pendingClientSendIds.delete(completedClientSendId)
 
     if (!isTopLevelSuccessfulTurnEnd(event)) {
       forwarder.turnEvents = []
-      void recordChannelReplyIntentFailed(
+      const error = extractTurnFailureError(event)
+      void failAutomaticChannelReplyTurn(
         context,
         conversation,
         completedClientSendId,
-        'Assistant turn did not complete successfully',
+        streamDispatch,
+        streamDispatchPromise,
+        error,
       )
       return
     }
@@ -2494,16 +3336,32 @@ function ensureChannelReplyForwarder(
     const replyText = extractTopLevelAssistantReplyText(forwarder.turnEvents)
     forwarder.turnEvents = []
     if (!replyText) {
-      void recordChannelReplyIntentFailed(
+      const error = 'Assistant turn completed without final assistant text'
+      void failAutomaticChannelReplyTurn(
         context,
         conversation,
         completedClientSendId,
-        'Assistant turn completed without final assistant text',
+        streamDispatch,
+        streamDispatchPromise,
+        error,
       )
       return
     }
 
-    void dispatchAutomaticChannelReply(context, conversation, replyText, completedClientSendId)
+    void (async () => {
+      const resolvedStreamDispatch = streamDispatch ?? await streamDispatchPromise?.catch((error) => {
+        console.warn(
+          `[channels] Failed to prepare streamed assistant reply for conversation "${conversation.id}":`,
+          error,
+        )
+        return null
+      }) ?? null
+      if (resolvedStreamDispatch) {
+        await finalizeAutomaticChannelReplyStream(context, conversation, resolvedStreamDispatch, replyText)
+        return
+      }
+      await dispatchAutomaticChannelReply(context, conversation, replyText, completedClientSendId)
+    })()
   })
 
   context.channelReplyForwarders.set(sessionName, forwarder)
@@ -2619,7 +3477,7 @@ export async function stopConversationSession(
 ): Promise<Conversation | null> {
   cancelDeepThinkingOperation(conversation.id, 'conversation session stopped')
   const sessionName = buildConversationSessionName(conversation)
-  removeChannelReplyForwarder(context, sessionName)
+  removeChannelReplyForwarder(context, sessionName, conversation)
   const updated = await persistConversationRuntimeSnapshot(context, conversation, nextStatus)
   context.heartbeatManager.stop(conversation.id)
   context.sessionsInterface?.deleteSession(sessionName)

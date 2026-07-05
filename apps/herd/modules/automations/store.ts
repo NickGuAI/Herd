@@ -4,12 +4,16 @@ import path from 'node:path'
 import { parseProviderId } from '../agents/providers/registry.js'
 import type { AgentType } from '../agents/types.js'
 import { resolveAutomationsDataDir } from '../data-dir.js'
+import { quarantineJsonFile } from '../json-file.js'
+import { withJsonStoreSchema } from '../json-store-schema.js'
 import { resolveFounderOperatorId } from './resolve-founder-operator.js'
 import type {
   Automation,
   AutomationExecutionSource,
   AutomationHistoryEntry,
   AutomationQuestTrigger,
+  AutomationRunMetadata,
+  AutomationRunTranscriptRef,
   AutomationSessionType,
   AutomationStatus,
   AutomationTrigger,
@@ -29,6 +33,7 @@ export interface CreateAutomationInput {
   permissionMode?: 'default'
   skills?: string[]
   templateId?: string | null
+  sourceConversationId?: string
   status?: AutomationStatus
   description?: string
   timezone?: string
@@ -53,6 +58,7 @@ export interface UpdateAutomationInput {
   permissionMode?: 'default'
   skills?: string[]
   templateId?: string | null
+  sourceConversationId?: string | null
   status?: AutomationStatus
   description?: string
   timezone?: string
@@ -135,6 +141,14 @@ function parseQuestTrigger(value: unknown): AutomationQuestTrigger | null {
   }
 }
 
+function parseTranscriptRef(value: unknown): AutomationRunTranscriptRef | undefined {
+  if (!isObject(value)) {
+    return undefined
+  }
+  const sessionId = asTrimmedString(value.sessionId)
+  return sessionId ? { sessionId } : undefined
+}
+
 function parseHistoryEntry(entry: unknown): AutomationHistoryEntry | null {
   if (!isObject(entry)) {
     return null
@@ -158,8 +172,12 @@ function parseHistoryEntry(entry: unknown): AutomationHistoryEntry | null {
     result,
     costUsd,
     durationSec,
+    runKey: asTrimmedString(entry.runKey) ?? undefined,
     sessionId: asTrimmedString(entry.sessionId) ?? undefined,
+    transcriptRef: parseTranscriptRef(entry.transcriptRef),
     runFile: asTrimmedString(entry.runFile) ?? undefined,
+    completionOutput: typeof entry.completionOutput === 'string' ? entry.completionOutput : undefined,
+    emptyOutputReason: asTrimmedString(entry.emptyOutputReason) ?? undefined,
     memoryUpdated: entry.memoryUpdated === true,
     source,
   }
@@ -192,7 +210,10 @@ function cloneAutomation(automation: Automation): Automation {
   return {
     ...automation,
     skills: [...automation.skills],
-    history: (automation.history ?? []).map((entry) => ({ ...entry })),
+    history: (automation.history ?? []).map((entry) => ({
+      ...entry,
+      transcriptRef: entry.transcriptRef ? { ...entry.transcriptRef } : undefined,
+    })),
     observations: automation.observations ? [...automation.observations] : undefined,
     questTrigger: automation.questTrigger ? { ...automation.questTrigger } : undefined,
   }
@@ -247,6 +268,7 @@ function normalizeAutomation(raw: unknown): Automation | null {
     permissionMode: permissionMode ?? 'default',
     skills,
     templateId: raw.templateId === null ? null : (asTrimmedString(raw.templateId) ?? undefined),
+    sourceConversationId: asOptionalString(raw.sourceConversationId),
     status,
     description: asOptionalString(raw.description),
     timezone: asOptionalString(raw.timezone),
@@ -352,6 +374,7 @@ export class AutomationStore {
         permissionMode: input.permissionMode ?? 'default',
         skills: (input.skills ?? []).filter((entry) => entry.trim().length > 0),
         templateId: input.templateId ?? undefined,
+        sourceConversationId: input.sourceConversationId,
         status: input.status ?? 'active',
         description: input.description,
         timezone: input.timezone,
@@ -414,6 +437,9 @@ export class AutomationStore {
       if (Array.isArray(update.skills)) next.skills = [...update.skills]
       if (Object.prototype.hasOwnProperty.call(update, 'templateId')) {
         next.templateId = update.templateId ?? undefined
+      }
+      if (Object.prototype.hasOwnProperty.call(update, 'sourceConversationId')) {
+        next.sourceConversationId = update.sourceConversationId ?? undefined
       }
       if (update.status) next.status = update.status
       if (Object.prototype.hasOwnProperty.call(update, 'description')) {
@@ -560,6 +586,25 @@ export class AutomationStore {
     }
   }
 
+  async readRunMetadata(automationId: string, timestampKey: string): Promise<AutomationRunMetadata | null> {
+    const automation = await this.get(automationId)
+    if (!automation) {
+      return null
+    }
+    try {
+      const parsed = JSON.parse(await readFile(this.resolveRunJsonPath(automation, timestampKey), 'utf8')) as unknown
+      return isObject(parsed) ? parsed as unknown as AutomationRunMetadata : null
+    } catch (error) {
+      if (isObject(error) && 'code' in error && error.code === 'ENOENT') {
+        return null
+      }
+      if (error instanceof SyntaxError) {
+        return null
+      }
+      throw error
+    }
+  }
+
   resolveRunJsonPath(automation: Pick<Automation, 'id' | 'outputDir'>, timestampKey: string): string {
     const outputDir = automation.outputDir ?? path.join(this.dirPath, automation.id)
     return path.join(outputDir, 'runs', `${timestampKey}.json`)
@@ -601,11 +646,16 @@ export class AutomationStore {
       }
     }
     for (const entry of entries) {
-      if (!entry.endsWith('.json')) {
+      if (!entry.endsWith('.json') || entry === 'manifest.json') {
         continue
       }
-      const parsed = normalizeAutomation(await this.readAutomationFile(path.join(this.dirPath, entry)))
+      const filePath = path.join(this.dirPath, entry)
+      const raw = await this.readAutomationFile(filePath)
+      const parsed = normalizeAutomation(raw)
       if (!parsed) {
+        if (raw !== null) {
+          await this.quarantineUnreadableAutomation(filePath)
+        }
         continue
       }
       automations.set(parsed.id, parsed)
@@ -621,9 +671,18 @@ export class AutomationStore {
         return null
       }
       if (error instanceof SyntaxError) {
+        await this.quarantineUnreadableAutomation(filePath)
         return null
       }
       throw error
+    }
+  }
+
+  private async quarantineUnreadableAutomation(filePath: string): Promise<void> {
+    try {
+      await quarantineJsonFile(filePath)
+    } catch {
+      // Keep the automation list readable even if the operator must clean up the file by hand.
     }
   }
 
@@ -631,7 +690,7 @@ export class AutomationStore {
     await mkdir(this.dirPath, { recursive: true })
     await writeFile(
       this.resolveAutomationFilePath(automation.id),
-      `${JSON.stringify(automation, null, 2)}\n`,
+      `${JSON.stringify(withJsonStoreSchema({ ...automation }), null, 2)}\n`,
       'utf8',
     )
   }

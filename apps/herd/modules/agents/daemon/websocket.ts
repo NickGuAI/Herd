@@ -43,7 +43,7 @@ function findPairableMachine(
   if (!machine?.daemon || machine.daemon.revokedAt) {
     return null
   }
-  return verifyDaemonPairingToken(pairingToken, machine.daemon.pairingTokenHash)
+  return verifyDaemonPairingToken(pairingToken, machine.daemon.pairingTokenHash, machine.daemon.expiresAt)
     ? machine
     : null
 }
