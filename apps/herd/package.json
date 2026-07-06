@@ -73,7 +73,7 @@
     "react-router-dom": "^7.1.0",
     "recharts": "^2.15.0",
     "remark-gfm": "^4.0.1",
-    "ws": "^8.19.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.1.0",
