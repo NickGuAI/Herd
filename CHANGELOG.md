@@ -8,6 +8,15 @@ continues to be the GitHub release body; this file ships in the public artifact.
 
 - Nothing yet.
 
+## v0.0.7-beta — 2026-07-06
+
+- Republished the Herd public artifact from source snapshot `2c4cfb6f2`
+  so the release tag and installer default point at the latest available
+  `main` state.
+- Added explicit release-history traceability through the public release commit
+  and changelog so operators can verify which source snapshot produced the
+  pinned artifact.
+
 ## v0.0.6-beta — 2026-07-06
 
 - Added first-run runtime defaults for global rules and shared commander

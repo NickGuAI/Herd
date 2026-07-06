@@ -1,6 +1,6 @@
 {
   "name": "herd",
-  "version": "0.0.6-beta",
+  "version": "0.0.7-beta",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
