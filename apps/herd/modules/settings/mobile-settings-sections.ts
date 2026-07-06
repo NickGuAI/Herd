@@ -8,6 +8,7 @@ import {
   KeyRound,
   Monitor,
   RadioTower,
+  ShieldCheck,
 } from 'lucide-react'
 import {
   MOBILE_SETTINGS_BASE_PATH,
@@ -37,6 +38,7 @@ const MOBILE_SETTINGS_ICON_COMPONENTS = {
   'circle-user-round': CircleUserRound,
   'radio-tower': RadioTower,
   bell: Bell,
+  'shield-check': ShieldCheck,
   monitor: Monitor,
   'key-round': KeyRound,
   eye: Eye,

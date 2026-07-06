@@ -33,10 +33,11 @@ function failClosed(reason) {
 
 function defaultBaseUrl() {
   const explicit = process.env.HERD_APPROVAL_BASE_URL?.trim()
+    || process.env.HERD_PRIVATE_API_BASE_URL?.trim()
   if (explicit) {
     return explicit.replace(/\/+$/, '')
   }
-  const port = process.env.HERD_PORT?.trim() || '20001'
+  const port = process.env.PORT?.trim() || process.env.HERD_PORT?.trim() || '20001'
   return `http://127.0.0.1:${port}`
 }
 
@@ -87,8 +88,7 @@ async function fetchApprovalPayload(url, init, failureContext) {
     } catch {
       errorText = ''
     }
-    const detail = errorText ? `: ${errorText}` : ''
-    failClosed(`approval service returned HTTP ${response.status}${detail}`)
+    failClosed(formatApprovalHttpError(response.status, errorText))
     return null
   }
 
@@ -96,9 +96,26 @@ async function fetchApprovalPayload(url, init, failureContext) {
     return await response.json()
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    failClosed(`approval response was not valid JSON (${message})`)
+    failClosed(`approval response was not valid JSON (${message}); check HERD_APPROVAL_BASE_URL points at the private Herd API root`)
     return null
   }
+}
+
+function formatApprovalHttpError(status, errorText) {
+  let detail = errorText
+  try {
+    const parsed = JSON.parse(errorText)
+    if (parsed && typeof parsed === 'object') {
+      detail = [parsed.code, parsed.reason, parsed.error, parsed.hint]
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .join(' | ')
+    }
+  } catch {
+    // Keep the raw response text when it is not JSON.
+  }
+  return detail
+    ? `approval service returned HTTP ${status}: ${detail}`
+    : `approval service returned HTTP ${status}`
 }
 
 async function pollForTerminalDecision(requestId, retryAfterMs, headers) {

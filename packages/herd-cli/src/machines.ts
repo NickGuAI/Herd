@@ -42,6 +42,7 @@ interface MachineHealthPayload {
     paired?: boolean
     connected?: boolean
     providerAuthReady?: boolean
+    providerAuthMode?: MachineDaemonProviderAuthMode
     launchable?: boolean
     launchUnsupportedReason?: string | null
     daemonVersion?: string | null
@@ -78,6 +79,7 @@ interface MachineDaemonStatusPayload {
   connected: boolean
   selectedTransport: 'local' | 'ssh' | 'daemon'
   providerAuthReady: boolean
+  providerAuthMode: MachineDaemonProviderAuthMode
   launchable: boolean
   launchUnsupportedReason: string | null
   daemonVersion: string | null
@@ -94,11 +96,16 @@ interface MachineDaemonProviderHealth {
   provider: string
   installed: boolean
   authenticated: boolean
+  authMode?: 'native' | 'host-managed' | 'missing'
+  nativeAuthenticated?: boolean
+  hostManagedAuthenticated?: boolean
   version: string | null
   authMethod: string | null
   detail: string | null
   checkedAt: string | null
 }
+
+type MachineDaemonProviderAuthMode = 'native' | 'host-managed' | 'mixed' | 'missing' | 'not-checked'
 
 interface MachineDaemonPairPayload {
   pairing: {
@@ -340,6 +347,8 @@ function parseDaemonHealth(value: unknown): MachineHealthPayload['daemon'] {
     paired: value.paired === true,
     connected: value.connected === true,
     providerAuthReady: value.providerAuthReady === true,
+    providerAuthMode: parseDaemonProviderAuthMode(value.providerAuthMode)
+      ?? (value.providerAuthReady === true ? 'native' : 'missing'),
     launchable: value.launchable === true,
     launchUnsupportedReason: typeof value.launchUnsupportedReason === 'string' && value.launchUnsupportedReason.trim()
       ? value.launchUnsupportedReason.trim()
@@ -351,6 +360,16 @@ function parseDaemonHealth(value: unknown): MachineHealthPayload['daemon'] {
       ? value.lastSeenAt.trim()
       : null,
   }
+}
+
+function parseDaemonProviderAuthMode(value: unknown): MachineDaemonProviderAuthMode | null {
+  return value === 'native'
+    || value === 'host-managed'
+    || value === 'mixed'
+    || value === 'missing'
+    || value === 'not-checked'
+    ? value
+    : null
 }
 
 function parseToolStatus(value: unknown): MachineToolStatus {
@@ -419,7 +438,7 @@ function printHealth(
       stdout.write(` (${health.daemon.daemonVersion})`)
     }
     stdout.write('\n')
-    stdout.write(`Provider auth: ${health.daemon.providerAuthReady ? 'ready' : 'not ready'}\n`)
+    stdout.write(`Provider auth: ${formatDaemonProviderAuth(health.daemon.providerAuthReady === true, health.daemon.providerAuthMode)}\n`)
     stdout.write(`Launchable: ${health.daemon.launchable ? 'yes' : 'no'}`)
     if (health.daemon.launchUnsupportedReason) {
       stdout.write(` (${health.daemon.launchUnsupportedReason})`)
@@ -469,6 +488,19 @@ function printAuthStatus(
   }
 }
 
+function formatDaemonProviderAuth(ready: boolean, mode?: MachineDaemonProviderAuthMode): string {
+  const state = ready ? 'ready' : 'not ready'
+  return mode ? `${state} (${mode})` : state
+}
+
+function formatProviderAuthenticated(provider: MachineDaemonProviderHealth): string {
+  if (provider.authMode === 'host-managed') {
+    return 'host-managed'
+  }
+  const state = provider.authenticated ? 'authenticated' : 'not authenticated'
+  return provider.authMode ? `${state} (${provider.authMode})` : state
+}
+
 function printDaemonStatus(stdout: Writable, status: MachineDaemonStatusPayload): void {
   stdout.write(`Machine: ${status.machineId}\n`)
   stdout.write(`Transport: ${status.selectedTransport}\n`)
@@ -478,7 +510,7 @@ function printDaemonStatus(stdout: Writable, status: MachineDaemonStatusPayload)
     stdout.write(` (${status.daemonVersion})`)
   }
   stdout.write('\n')
-  stdout.write(`Provider auth: ${status.providerAuthReady ? 'ready' : 'not ready'}\n`)
+  stdout.write(`Provider auth: ${formatDaemonProviderAuth(status.providerAuthReady, status.providerAuthMode)}\n`)
   stdout.write(`Launchable: ${status.launchable ? 'yes' : 'no'}`)
   if (status.launchUnsupportedReason) {
     stdout.write(` (${status.launchUnsupportedReason})`)
@@ -508,7 +540,7 @@ function printDaemonStatus(stdout: Writable, status: MachineDaemonStatusPayload)
 
   stdout.write('Providers:\n')
   for (const provider of providers) {
-    stdout.write(`- ${provider.provider}: ${provider.installed ? 'installed' : 'missing'}, ${provider.authenticated ? 'authenticated' : 'not authenticated'}`)
+    stdout.write(`- ${provider.provider}: ${provider.installed ? 'installed' : 'missing'}, ${formatProviderAuthenticated(provider)}`)
     if (provider.version) {
       stdout.write(` · ${provider.version}`)
     }
@@ -1208,11 +1240,18 @@ function parseDaemonProviderHealth(
   const provider = typeof value.provider === 'string' && value.provider.trim()
     ? value.provider.trim()
     : fallbackProvider
+  const authMode = parseDaemonProviderAuthMode(value.authMode)
+  const providerAuthMode = authMode === 'native' || authMode === 'host-managed' || authMode === 'missing'
+    ? authMode
+    : undefined
 
   return {
     provider,
     installed: value.installed === true,
     authenticated: value.authenticated === true,
+    authMode: providerAuthMode,
+    nativeAuthenticated: typeof value.nativeAuthenticated === 'boolean' ? value.nativeAuthenticated : undefined,
+    hostManagedAuthenticated: typeof value.hostManagedAuthenticated === 'boolean' ? value.hostManagedAuthenticated : undefined,
     version: typeof value.version === 'string' && value.version.trim() ? value.version.trim() : null,
     authMethod: typeof value.authMethod === 'string' && value.authMethod.trim() ? value.authMethod.trim() : null,
     detail: typeof value.detail === 'string' && value.detail.trim() ? value.detail.trim() : null,
@@ -1256,6 +1295,8 @@ function parseMachineDaemonStatus(payload: unknown): MachineDaemonStatusPayload 
     connected: payload.connected === true,
     selectedTransport,
     providerAuthReady: payload.providerAuthReady === true,
+    providerAuthMode: parseDaemonProviderAuthMode(payload.providerAuthMode)
+      ?? (payload.providerAuthReady === true ? 'native' : 'missing'),
     launchable: payload.launchable === true,
     launchUnsupportedReason: typeof payload.launchUnsupportedReason === 'string' && payload.launchUnsupportedReason.trim()
       ? payload.launchUnsupportedReason.trim()

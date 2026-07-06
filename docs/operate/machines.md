@@ -45,12 +45,20 @@ command.
 
 1. Verify ordinary SSH to the host.
 2. Confirm the host has the provider CLIs needed for the work.
-3. Register the host in Herd.
-4. Bootstrap the host.
-5. Dispatch a small worker and verify the log shows the expected host.
+3. Configure remote sshd to accept the Herd machine-env wildcard shown by the
+   machine setup flow.
+4. Register the host in Herd.
+5. Bootstrap the host.
+6. Dispatch a small worker and verify the log shows the expected host.
 
 Use the Machines view to add the host, confirm the SSH settings, and run the
 bootstrap flow.
+
+Herd sends encrypted machine env entries and remote provider-pool credentials to
+SSH targets through `SendEnv`. The remote bootstrap checks that the expected
+transport keys arrived before decoding them. If sshd rejects the keys, launch
+fails with an environment-receipt error and asks the operator to add the Herd
+machine-env wildcard to sshd `AcceptEnv`.
 
 ## Credential Hygiene
 

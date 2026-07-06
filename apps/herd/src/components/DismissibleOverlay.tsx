@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom'
 import { getHervaldThemeClassName, useTheme } from '@/lib/theme-context'
 import { cn } from '@/lib/utils'
 
-type OverlayPosition = 'modal' | 'bottom-sheet' | 'top-sheet'
+type OverlayPosition = 'modal' | 'bottom-sheet' | 'top-sheet' | 'left-drawer'
 
 type OverlayContentProps = Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -62,6 +62,7 @@ const POSITION_CLASS_NAME: Record<OverlayPosition, string> = {
   modal: 'items-end justify-center p-0 md:items-center md:p-5',
   'bottom-sheet': 'items-end justify-center md:items-center md:p-5',
   'top-sheet': 'items-start justify-center md:items-center md:p-5',
+  'left-drawer': 'items-stretch justify-start p-0',
 }
 
 export function DismissibleOverlay({
@@ -96,7 +97,10 @@ export function DismissibleOverlay({
     const content = contentRef.current
     if (content) {
       const focusableElements = getFocusableElements(content)
-      ;(focusableElements[0] ?? content).focus()
+      const focusTarget = position === 'left-drawer'
+        ? content
+        : (focusableElements[0] ?? content)
+      focusTarget.focus()
     }
 
     function handleKeyDown(event: KeyboardEvent): void {
@@ -116,12 +120,23 @@ export function DismissibleOverlay({
       const elements = activeContent ? getFocusableElements(activeContent) : []
       if (elements.length === 0) {
         event.preventDefault()
+        activeContent?.focus()
         return
       }
 
       const first = elements[0]
       const last = elements[elements.length - 1]
       if (!first || !last) {
+        return
+      }
+
+      if (document.activeElement === activeContent) {
+        event.preventDefault()
+        if (event.shiftKey) {
+          last.focus()
+          return
+        }
+        first.focus()
         return
       }
 
@@ -142,7 +157,7 @@ export function DismissibleOverlay({
       document.removeEventListener('keydown', handleKeyDown)
       previousActiveElement?.focus()
     }
-  }, [dismissible, open])
+  }, [dismissible, open, position])
 
   if (!open) {
     return null

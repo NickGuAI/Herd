@@ -8,6 +8,7 @@ export type MobileSettingsSectionId =
   | 'account'
   | 'telemetry'
   | 'notifications'
+  | 'permissions'
   | 'machines'
   | 'credential-pools'
   | 'appearance'
@@ -17,6 +18,7 @@ export type MobileSettingsSectionIcon =
   | 'circle-user-round'
   | 'radio-tower'
   | 'bell'
+  | 'shield-check'
   | 'monitor'
   | 'key-round'
   | 'eye'
@@ -40,7 +42,10 @@ export interface MobileSettingsSectionDto {
   surfaces: readonly MobileSettingsSurface[]
 }
 
-const MOBILE_SETTINGS_SECTION_DEFINITIONS: readonly Omit<MobileSettingsSectionDto, 'path' | 'visible' | 'surfaces'>[] = [
+const MOBILE_SETTINGS_SECTION_DEFINITIONS: readonly (
+  Omit<MobileSettingsSectionDto, 'path' | 'visible' | 'surfaces'>
+  & { path?: string }
+)[] = [
   {
     id: 'account',
     label: 'Account',
@@ -60,6 +65,14 @@ const MOBILE_SETTINGS_SECTION_DEFINITIONS: readonly Omit<MobileSettingsSectionDt
     label: 'Notifications',
     icon: 'bell',
     group: 'account',
+    fullPagePath: '/policies',
+  },
+  {
+    id: 'permissions',
+    label: 'Permissions',
+    icon: 'shield-check',
+    group: 'account',
+    path: '/policies',
     fullPagePath: '/policies',
   },
   {
@@ -107,7 +120,7 @@ export function getMobileSettingsPath(
 export function listMobileSettingsSections(): readonly MobileSettingsSectionDto[] {
   return MOBILE_SETTINGS_SECTION_DEFINITIONS.map((section) => ({
     ...section,
-    path: getMobileSettingsPath(section.id),
+    path: section.path ?? getMobileSettingsPath(section.id),
     visible: true,
     surfaces: MOBILE_SETTINGS_SURFACES,
   }))

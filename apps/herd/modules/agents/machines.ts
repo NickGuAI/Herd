@@ -18,7 +18,7 @@ import {
 import type { WorkspaceCommandRunner } from '../workspace/index.js'
 import { APPROVAL_BRIDGE_TOKEN_ENV } from '../policies/approval-bridge-token.js'
 import { WORKSPACE_EXEC_MAX_BUFFER_BYTES } from './constants.js'
-import { prepareMachineLaunchEnvironment } from './machine-credentials.js'
+import { HERD_MACHINE_ENV_PREFIX, prepareMachineLaunchEnvironment } from './machine-credentials.js'
 import { listMachineProviders } from './providers/machine-provider-adapter.js'
 import type {
   CapturedCommandResult,
@@ -397,7 +397,11 @@ export function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, '\'\\\'\'')}'`
 }
 
-export function buildLoginShellBootstrap(envFile?: string): string {
+export function countMachineEnvSendKeys(sendEnvKeys: readonly string[]): number {
+  return sendEnvKeys.filter((key) => key.startsWith(HERD_MACHINE_ENV_PREFIX)).length
+}
+
+export function buildLoginShellBootstrap(envFile?: string, expectedMachineEnvCount = 0): string {
   const commands = [
     '. "$HOME/.bashrc" >/dev/null 2>&1 || true',
     '. "$HOME/.zshrc" >/dev/null 2>&1 || true',
@@ -405,12 +409,23 @@ export function buildLoginShellBootstrap(envFile?: string): string {
   if (envFile) {
     commands.push(`. ${shellEscape(envFile)} >/dev/null 2>&1 || true`)
   }
+  const expectedCount = Number.isFinite(expectedMachineEnvCount) && expectedMachineEnvCount > 0
+    ? Math.floor(expectedMachineEnvCount)
+    : 0
+  if (expectedCount > 0) {
+    commands.push(`__hm_env_seen=$(env | awk -F= '/^${HERD_MACHINE_ENV_PREFIX}[0-9]+=/{count++} END{print count+0}'); if [ "$__hm_env_seen" -lt ${expectedCount} ]; then printf '%s\\n' 'HERD_REMOTE_ENV_MISSING: expected ${expectedCount} ${HERD_MACHINE_ENV_PREFIX}* entries from SSH SendEnv; configure sshd AcceptEnv ${HERD_MACHINE_ENV_PREFIX}* on the remote host' >&2; exit 97; fi`)
+  }
   commands.push('for __hm_env_key in $(env | awk -F= \'/^HERD_MACHINE_ENV_[0-9]+=/{print $1}\' | sort); do __hm_env_entry=$(printenv "$__hm_env_key" || true); [ -n "$__hm_env_entry" ] || continue; __hm_env_name=${__hm_env_entry%%=*}; __hm_env_value=${__hm_env_entry#*=}; export "$__hm_env_name=$__hm_env_value"; unset "$__hm_env_key"; done')
   return commands.join('; ')
 }
 
-export function buildRemoteLoginShellExec(flags: '-l' | '-lc', script?: string, envFile?: string): string {
-  const bootstrap = buildLoginShellBootstrap(envFile)
+export function buildRemoteLoginShellExec(
+  flags: '-l' | '-lc',
+  script?: string,
+  envFile?: string,
+  expectedMachineEnvCount = 0,
+): string {
+  const bootstrap = buildLoginShellBootstrap(envFile, expectedMachineEnvCount)
   if (script && script.trim().length > 0) {
     return `exec "\${SHELL:-/bin/bash}" ${flags} ${shellEscape(`${bootstrap}; ${script}`)}`
   }
@@ -420,19 +435,30 @@ export function buildRemoteLoginShellExec(flags: '-l' | '-lc', script?: string, 
   return `exec "\${SHELL:-/bin/bash}" ${flags} ${shellEscape(bootstrap)}`
 }
 
-export function buildLoginShellCommand(script: string, cwd?: string, envFile?: string): string {
+export function buildLoginShellCommand(
+  script: string,
+  cwd?: string,
+  envFile?: string,
+  expectedMachineEnvCount = 0,
+): string {
   const normalizedScript = cwd
     ? `cd ${shellEscape(cwd)} && ${script}`
     : script
-  return buildRemoteLoginShellExec('-lc', normalizedScript, envFile)
+  return buildRemoteLoginShellExec('-lc', normalizedScript, envFile, expectedMachineEnvCount)
 }
 
-export function buildRemoteCommand(command: string, args: string[], cwd?: string, envFile?: string): string {
+export function buildRemoteCommand(
+  command: string,
+  args: string[],
+  cwd?: string,
+  envFile?: string,
+  expectedMachineEnvCount = 0,
+): string {
   const escapedArgs = [command, ...args.map((arg) => shellEscape(arg))].join(' ')
   const normalizedScript = cwd
     ? `cd ${shellEscape(cwd)} && ${escapedArgs}`
     : escapedArgs
-  return buildRemoteLoginShellExec('-lc', normalizedScript, envFile)
+  return buildRemoteLoginShellExec('-lc', normalizedScript, envFile, expectedMachineEnvCount)
 }
 
 export function buildClaudeSpawnEnv(
@@ -456,18 +482,46 @@ export function buildClaudeShellInvocation(
   return `${envPrefix} claude ${args.map((arg) => shellEscape(arg)).join(' ')}`
 }
 
-function buildCodexManagedAuthBootstrap(): string {
+export function buildCodexManagedAuthBootstrap(): string {
   return [
     'if [ -n "${HERD_CODEX_AUTH_JSON_B64:-}" ]; then',
+    'if [ -n "${HERD_CODEX_REMOTE_HOME_KEY:-}" ]; then',
+    '__hm_codex_key="$(printf "%s" "$HERD_CODEX_REMOTE_HOME_KEY" | tr -c "A-Za-z0-9._-" "_")"',
+    '[ -n "$__hm_codex_key" ] || __hm_codex_key="default"',
+    '__hm_codex_home="${XDG_STATE_HOME:-$HOME/.local/state}/herd/codex-pools/$__hm_codex_key"',
+    '__hm_codex_cleanup="auth-file"',
+    'else',
     '__hm_codex_home="$(mktemp -d "${TMPDIR:-/tmp}/herd-codex.XXXXXX")"',
-    'mkdir -p "$__hm_codex_home"',
-    '(printf "%s" "$HERD_CODEX_AUTH_JSON_B64" | base64 -d 2>/dev/null || printf "%s" "$HERD_CODEX_AUTH_JSON_B64" | base64 -D) > "$__hm_codex_home/auth.json"',
-    'chmod 600 "$__hm_codex_home/auth.json"',
-    'export CODEX_HOME="$__hm_codex_home"',
-    'unset HERD_CODEX_AUTH_JSON_B64',
-    'trap \'rm -rf "$__hm_codex_home"\' EXIT',
+    '__hm_codex_cleanup="home"',
     'fi',
-  ].join('; ')
+    'mkdir -p "$__hm_codex_home"',
+    'chmod 700 "$__hm_codex_home"',
+    'if [ "$__hm_codex_cleanup" = "auth-file" ]; then',
+    '__hm_codex_lock_dir="$__hm_codex_home/.herd-auth.lockdir"',
+    '__hm_codex_lock_pid_file="$__hm_codex_lock_dir/pid"',
+    '__hm_codex_lock_attempt=0',
+    'until mkdir "$__hm_codex_lock_dir" 2>/dev/null; do __hm_codex_lock_attempt=$((__hm_codex_lock_attempt + 1)); if [ "$__hm_codex_lock_attempt" -ge 500 ]; then echo "HERD_CODEX_AUTH_LOCK_TIMEOUT $__hm_codex_lock_dir" >&2; exit 97; fi; if [ -f "$__hm_codex_lock_pid_file" ]; then __hm_codex_lock_pid="$(cat "$__hm_codex_lock_pid_file" 2>/dev/null || true)"; case "$__hm_codex_lock_pid" in ""|*[!0-9]*) ;; *) kill -0 "$__hm_codex_lock_pid" 2>/dev/null || rm -rf "$__hm_codex_lock_dir" ;; esac; fi; sleep 0.02; done',
+    'printf "%s\\n" "$$" > "$__hm_codex_lock_pid_file" || { rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    '__hm_codex_marker_dir="$__hm_codex_home/.herd-auth-sessions"',
+    'mkdir -p "$__hm_codex_marker_dir" || { rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    'chmod 700 "$__hm_codex_marker_dir" || { rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    '__hm_codex_marker="$__hm_codex_marker_dir/$$-$(date +%s)-${RANDOM:-0}"',
+    ': > "$__hm_codex_marker" || { rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    'chmod 600 "$__hm_codex_marker" || { rm -f "$__hm_codex_marker"; rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    '__hm_codex_auth_tmp="$__hm_codex_home/auth.json.$$-${RANDOM:-0}.tmp"',
+    '(printf "%s" "$HERD_CODEX_AUTH_JSON_B64" | base64 -d 2>/dev/null || printf "%s" "$HERD_CODEX_AUTH_JSON_B64" | base64 -D) > "$__hm_codex_auth_tmp" || { rm -f "$__hm_codex_auth_tmp" "$__hm_codex_marker"; rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    'chmod 600 "$__hm_codex_auth_tmp" || { rm -f "$__hm_codex_auth_tmp" "$__hm_codex_marker"; rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    'mv -f "$__hm_codex_auth_tmp" "$__hm_codex_home/auth.json" || { rm -f "$__hm_codex_auth_tmp" "$__hm_codex_marker"; rm -rf "$__hm_codex_lock_dir"; exit 97; }',
+    'rm -rf "$__hm_codex_lock_dir"',
+    'else',
+    '(printf "%s" "$HERD_CODEX_AUTH_JSON_B64" | base64 -d 2>/dev/null || printf "%s" "$HERD_CODEX_AUTH_JSON_B64" | base64 -D) > "$__hm_codex_home/auth.json" || exit 97',
+    'chmod 600 "$__hm_codex_home/auth.json" || exit 97',
+    'fi',
+    'export CODEX_HOME="$__hm_codex_home"',
+    'unset HERD_CODEX_AUTH_JSON_B64 HERD_CODEX_REMOTE_HOME_KEY',
+    'if [ "$__hm_codex_cleanup" = "home" ]; then trap \'rm -rf "$__hm_codex_home"\' EXIT; else trap \'__hm_codex_lock_attempt=0; until mkdir "$__hm_codex_lock_dir" 2>/dev/null; do __hm_codex_lock_attempt=$((__hm_codex_lock_attempt + 1)); if [ "$__hm_codex_lock_attempt" -ge 500 ]; then break; fi; if [ -f "$__hm_codex_lock_pid_file" ]; then __hm_codex_lock_pid="$(cat "$__hm_codex_lock_pid_file" 2>/dev/null || true)"; case "$__hm_codex_lock_pid" in ""|*[!0-9]*) ;; *) kill -0 "$__hm_codex_lock_pid" 2>/dev/null || rm -rf "$__hm_codex_lock_dir" ;; esac; fi; sleep 0.02; done; printf "%s\\n" "$$" > "$__hm_codex_lock_pid_file" 2>/dev/null || true; rm -f "$__hm_codex_marker"; find "$__hm_codex_marker_dir" -type f -print 2>/dev/null | while IFS= read -r __hm_codex_other_marker; do __hm_codex_marker_name=${__hm_codex_other_marker##*/}; __hm_codex_marker_pid=${__hm_codex_marker_name%%-*}; case "$__hm_codex_marker_pid" in ""|*[!0-9]*) continue ;; esac; kill -0 "$__hm_codex_marker_pid" 2>/dev/null || rm -f "$__hm_codex_other_marker"; done; rmdir "$__hm_codex_marker_dir" 2>/dev/null && rm -f "$__hm_codex_home/auth.json"; rm -rf "$__hm_codex_lock_dir"\' EXIT; fi',
+    'fi',
+  ].join('\n')
 }
 
 export function buildCodexAppServerInvocation(listenUrl = 'stdio://'): string {
@@ -533,13 +587,19 @@ export function buildSshDestination(machine: MachineConfig & { host: string }): 
  *      Propagates the token over SSH's environment channel. The token value
  *      stays in the client process env, not in argv or the bootstrap script.
  *
- * The hook script's `127.0.0.1:<port>` default already works once the
- * tunnel is in place — no hook code changes needed. See
- * `apps/herd/modules/agents/adapters/claude/helpers.ts:166-178`.
+ *   -o SendEnv=HERD_APPROVAL_BASE_URL
+ *   -o SendEnv=HERD_PORT
+ *      Propagates the non-secret private approval endpoint metadata so remote
+ *      hooks use the reverse tunnel's private listener instead of assuming
+ *      the public shell's default port.
+ *
+ * The hook script prefers HERD_APPROVAL_BASE_URL and keeps
+ * HERD_PORT as a tunnel-friendly fallback.
  */
 export interface ApprovalBridge {
   port: number | string
   approvalBridgeToken?: string
+  baseUrl?: string
 }
 
 function buildApprovalBridgeOptions(bridge: ApprovalBridge): string[] {
@@ -552,6 +612,11 @@ function buildApprovalBridgeOptions(bridge: ApprovalBridge): string[] {
   if (token) {
     args.push('-o', `SendEnv=${APPROVAL_BRIDGE_TOKEN_ENV}`)
   }
+  const baseUrl = bridge.baseUrl?.trim()
+  if (baseUrl) {
+    args.push('-o', 'SendEnv=HERD_APPROVAL_BASE_URL')
+  }
+  args.push('-o', 'SendEnv=HERD_PORT')
   return args
 }
 
@@ -603,6 +668,7 @@ export function createWorkspaceSshCommandRunner(
         args,
         options?.cwd ?? machine.cwd,
         preparedLaunch.sourcedEnvFile,
+        countMachineEnvSendKeys(preparedLaunch.sshSendEnvKeys),
       )
       const result = await execFileAsync(
         'ssh',

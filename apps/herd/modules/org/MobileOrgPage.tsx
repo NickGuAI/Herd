@@ -208,7 +208,7 @@ export function MobileOrgPage({
     <>
       <div
         data-testid="mobile-org-page"
-        className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 overflow-y-auto bg-[var(--hv-bg)] px-3 pb-[calc(3.75rem+env(safe-area-inset-bottom,0px))] pt-3"
+        className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 overflow-y-auto bg-[var(--hv-bg)] px-3 pb-3 pt-3"
       >
         <header className="flex items-center justify-between gap-3 px-1">
           <div className="min-w-0">

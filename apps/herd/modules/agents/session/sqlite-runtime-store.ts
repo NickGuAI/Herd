@@ -61,6 +61,12 @@ type RuntimeStatePayload = Partial<Pick<
   | 'events'
 >>
 
+const RUNTIME_EVENTS_JSON_FRAGMENT = ',"events":'
+const RUNTIME_EVENTS_JSON_ONLY_PREFIX = '{"events":'
+const LEGACY_RUNTIME_EVENTS_STRIP_THRESHOLD_BYTES = 2 * 1024 * 1024
+const MAX_RUNTIME_STATE_EMBEDDED_EVENTS = 100
+const MAX_RUNTIME_STATE_EMBEDDED_EVENTS_BYTES = 512 * 1024
+
 function isSessionType(value: string): value is SessionType {
   return value === 'commander'
     || value === 'worker'
@@ -140,6 +146,50 @@ function parseRuntimeStateJson(value: string): RuntimeStatePayload {
     return {}
   }
   return {}
+}
+
+function serializedJsonLength(value: unknown): number | null {
+  try {
+    const serialized = JSON.stringify(value)
+    return typeof serialized === 'string' ? serialized.length : null
+  } catch {
+    return null
+  }
+}
+
+function compactRuntimeStateEvents(
+  events: PersistedStreamSession['events'],
+): StreamJsonEvent[] | undefined {
+  if (!events || events.length === 0) {
+    return undefined
+  }
+
+  const selected: StreamJsonEvent[] = []
+  let totalLength = 2
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (selected.length >= MAX_RUNTIME_STATE_EMBEDDED_EVENTS) {
+      break
+    }
+
+    const event = events[index]
+    const eventLength = serializedJsonLength(event)
+    if (eventLength === null) {
+      continue
+    }
+
+    const nextLength = totalLength + eventLength + (selected.length > 0 ? 1 : 0)
+    if (nextLength > MAX_RUNTIME_STATE_EMBEDDED_EVENTS_BYTES) {
+      if (selected.length > 0) {
+        break
+      }
+      continue
+    }
+
+    selected.unshift(event)
+    totalLength = nextLength
+  }
+
+  return selected.length > 0 ? selected : undefined
 }
 
 function parseSpawnedWorkers(value: unknown): string[] {
@@ -254,6 +304,7 @@ function readClaudeRuntimeOptions(
 }
 
 function buildRuntimeStatePayload(entry: PersistedStreamSession): RuntimeStatePayload {
+  const events = compactRuntimeStateEvents(entry.events)
   return {
     mode: entry.mode,
     ...(entry.model ? { model: entry.model } : {}),
@@ -271,7 +322,7 @@ function buildRuntimeStatePayload(entry: PersistedStreamSession): RuntimeStatePa
     ...(entry.pendingDirectSendMessages && entry.pendingDirectSendMessages.length > 0
       ? { pendingDirectSendMessages: entry.pendingDirectSendMessages }
       : {}),
-    ...(entry.events && entry.events.length > 0 ? { events: entry.events } : {}),
+    ...(events ? { events } : {}),
   }
 }
 
@@ -382,7 +433,15 @@ export function readSqlitePersistedSessionsState(db: DatabaseSync): PersistedSes
        state,
        provider,
        provider_resume_json,
-       runtime_state_json,
+       CASE
+         WHEN length(runtime_state_json) > ?
+          AND instr(runtime_state_json, ?) > 0
+         THEN substr(runtime_state_json, 1, instr(runtime_state_json, ?) - 1) || '}'
+         WHEN length(runtime_state_json) > ?
+          AND instr(runtime_state_json, ?) = 1
+         THEN '{}'
+         ELSE runtime_state_json
+       END AS runtime_state_json,
        cwd,
        created_at,
        updated_at,
@@ -390,7 +449,13 @@ export function readSqlitePersistedSessionsState(db: DatabaseSync): PersistedSes
      FROM agent_runtime_sessions
      WHERE state <> 'archived'
      ORDER BY name ASC`,
-  ).all() as RuntimeRow[]
+  ).all(
+    LEGACY_RUNTIME_EVENTS_STRIP_THRESHOLD_BYTES,
+    RUNTIME_EVENTS_JSON_FRAGMENT,
+    RUNTIME_EVENTS_JSON_FRAGMENT,
+    LEGACY_RUNTIME_EVENTS_STRIP_THRESHOLD_BYTES,
+    RUNTIME_EVENTS_JSON_ONLY_PREFIX,
+  ) as RuntimeRow[]
 
   return {
     sessions: rows

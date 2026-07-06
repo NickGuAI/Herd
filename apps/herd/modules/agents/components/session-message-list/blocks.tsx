@@ -11,6 +11,8 @@ import {
   Copy,
   FileText,
   Loader2,
+  RefreshCw,
+  Terminal,
 } from 'lucide-react'
 import { fetchJson } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -129,6 +131,7 @@ function escapeStandaloneMarkdownMarkers(text: string): string {
 }
 
 interface CredentialPoolRegisterResponse {
+  credential: CredentialPoolCredentialDto
   pool: CredentialPoolDto
   instructions: {
     commands: string[]
@@ -154,6 +157,75 @@ function isCredentialPoolProvider(value: string): value is CredentialPoolProvide
 
 function fetchCredentialPool(provider: CredentialPoolProvider): Promise<CredentialPoolDto> {
   return fetchJson<CredentialPoolDto>(`/api/agents/provider-auth/pool/${provider}`)
+}
+
+type CredentialLoginFlowStatus = 'starting' | 'running' | 'ready_local' | 'ready_remote' | 'exited' | 'failed'
+type RemoteTokenMintStatus = 'not_required' | 'waiting_for_login' | 'minting' | 'stored' | 'failed'
+
+interface CredentialLoginFlowDto {
+  id: string
+  provider: CredentialPoolProvider
+  credentialId: string
+  command: string
+  status: CredentialLoginFlowStatus
+  transcript: string
+  readiness: {
+    remote?: 'ready' | 'auth_required' | 'not_required'
+    readyLocal: boolean
+    readyRemote: boolean
+  }
+  remoteToken: {
+    status: RemoteTokenMintStatus
+    tokenLength?: number
+    error?: string
+  }
+}
+
+function startCredentialLoginFlow(
+  provider: CredentialPoolProvider,
+  credentialId: string,
+): Promise<CredentialLoginFlowDto> {
+  return fetchJson<CredentialLoginFlowDto>(
+    `/api/agents/provider-auth/pool/credentials/${provider}/${encodeURIComponent(credentialId)}/login-flow`,
+    { method: 'POST' },
+  )
+}
+
+function fetchCredentialLoginFlow(flow: CredentialLoginFlowDto): Promise<CredentialLoginFlowDto> {
+  return fetchJson<CredentialLoginFlowDto>(
+    `/api/agents/provider-auth/pool/credentials/${flow.provider}/${encodeURIComponent(flow.credentialId)}/login-flow/${encodeURIComponent(flow.id)}`,
+  )
+}
+
+function finalizeCredentialLoginFlow(flow: CredentialLoginFlowDto): Promise<CredentialLoginFlowDto> {
+  return fetchJson<CredentialLoginFlowDto>(
+    `/api/agents/provider-auth/pool/credentials/${flow.provider}/${encodeURIComponent(flow.credentialId)}/login-flow/${encodeURIComponent(flow.id)}/finalize`,
+    { method: 'POST' },
+  )
+}
+
+function remoteTokenFlowLabel(flow: CredentialLoginFlowDto): string {
+  if (flow.remoteToken.status === 'stored') {
+    return flow.remoteToken.tokenLength ? `stored · length ${flow.remoteToken.tokenLength}` : 'stored'
+  }
+  if (flow.remoteToken.status === 'not_required') {
+    return 'not required'
+  }
+  return flow.remoteToken.status.replace(/_/gu, ' ')
+}
+
+function remoteReadinessFlowLabel(flow: CredentialLoginFlowDto): string {
+  if (flow.remoteToken.status === 'not_required' || flow.readiness.remote === 'not_required') {
+    return 'remote not required'
+  }
+  return flow.readiness.readyRemote ? 'ready-remote' : 'remote pending'
+}
+
+function credentialLoginFlowStatusLabel(flow: CredentialLoginFlowDto): string {
+  if (flow.status === 'ready_remote' && (flow.remoteToken.status === 'not_required' || flow.readiness.remote === 'not_required')) {
+    return 'remote-not-required'
+  }
+  return flow.status.replace('_', '-')
 }
 
 function textFromReactNode(node: ReactNode): string {
@@ -663,7 +735,9 @@ export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; session
   const [poolError, setPoolError] = useState<string | null>(null)
   const [poolActionMessage, setPoolActionMessage] = useState<string | null>(null)
   const [poolInstructions, setPoolInstructions] = useState<string[] | null>(null)
-  const [poolAction, setPoolAction] = useState<'switch' | 'add' | null>(null)
+  const [poolGuidedFlow, setPoolGuidedFlow] = useState<CredentialLoginFlowDto | null>(null)
+  const [poolGuidedFlowError, setPoolGuidedFlowError] = useState<string | null>(null)
+  const [poolAction, setPoolAction] = useState<'switch' | 'add' | 'flow' | null>(null)
 
   useEffect(() => {
     if (!shouldLoadPool || !poolProvider) {
@@ -688,6 +762,34 @@ export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; session
       cancelled = true
     }
   }, [poolProvider, shouldLoadPool])
+
+  useEffect(() => {
+    if (!poolGuidedFlow || poolGuidedFlow.status === 'ready_remote') {
+      return undefined
+    }
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const nextFlow = await fetchCredentialLoginFlow(poolGuidedFlow)
+        if (!cancelled) {
+          setPoolGuidedFlow(nextFlow)
+          setPoolGuidedFlowError(null)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPoolGuidedFlowError(error instanceof Error ? error.message : 'Credential login flow is unavailable.')
+        }
+      }
+    }
+    const timer = window.setInterval(() => {
+      void poll()
+    }, 1500)
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [poolGuidedFlow])
 
   async function handleSwitchCredential() {
     if (!poolProvider) {
@@ -747,9 +849,33 @@ export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; session
       })
       setPool(response.pool)
       setPoolInstructions(response.instructions.commands)
-      setPoolActionMessage('Credential directory created.')
+      try {
+        const flow = await startCredentialLoginFlow(poolProvider, response.credential.id)
+        setPoolGuidedFlow(flow)
+        setPoolGuidedFlowError(null)
+        setPoolActionMessage('Credential directory created. Login flow started.')
+      } catch (flowError) {
+        setPoolGuidedFlowError(flowError instanceof Error ? flowError.message : 'Credential login flow could not start.')
+        setPoolActionMessage('Credential directory created. Use the fallback command below.')
+      }
     } catch (error) {
       setPoolActionMessage(error instanceof Error ? error.message : 'Credential registration failed.')
+    } finally {
+      setPoolAction(null)
+    }
+  }
+
+  async function handleCheckCredentialFlow() {
+    if (!poolGuidedFlow) {
+      return
+    }
+    setPoolAction('flow')
+    try {
+      const nextFlow = await finalizeCredentialLoginFlow(poolGuidedFlow)
+      setPoolGuidedFlow(nextFlow)
+      setPoolGuidedFlowError(null)
+    } catch (error) {
+      setPoolGuidedFlowError(error instanceof Error ? error.message : 'Credential login flow could not refresh.')
     } finally {
       setPoolAction(null)
     }
@@ -812,10 +938,62 @@ export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; session
               {poolActionMessage ? (
                 <p className="mt-2 text-xs text-[color:var(--hv-fg-muted)]">{poolActionMessage}</p>
               ) : null}
+              {poolGuidedFlow ? (
+                <div className="mt-2 rounded border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-raised)] p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-[color:var(--hv-fg)]">
+                      <Terminal size={13} />
+                      <span className="truncate">Guided login</span>
+                    </p>
+                    <span className="shrink-0 rounded-full border border-[color:var(--hv-border-soft)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-muted)]">
+                      {credentialLoginFlowStatusLabel(poolGuidedFlow)}
+                    </span>
+                  </div>
+                  <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg)] p-2 font-mono text-[10px] leading-relaxed text-[color:var(--hv-fg-muted)]">
+                    {poolGuidedFlow.transcript || `$ ${poolGuidedFlow.command}`}
+                  </pre>
+                  <div className="mt-2 grid gap-1 text-[10px] text-[color:var(--hv-fg-muted)] sm:grid-cols-3">
+                    <span>{poolGuidedFlow.readiness.readyLocal ? 'ready-local' : 'waiting for login'}</span>
+                    <span>{remoteReadinessFlowLabel(poolGuidedFlow)}</span>
+                    <span>remote token: {remoteTokenFlowLabel(poolGuidedFlow)}</span>
+                  </div>
+                  {poolGuidedFlow.remoteToken.error ? (
+                    <p className="mt-2 text-[10px] text-[color:var(--hv-accent-danger)]">{poolGuidedFlow.remoteToken.error}</p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={poolAction === 'flow'}
+                      onClick={handleCheckCredentialFlow}
+                      className="inline-flex items-center gap-1.5 rounded-[2px_8px] border border-[color:var(--hv-border-soft)] px-2.5 py-1 text-[10px] text-[color:var(--hv-fg)] transition hover:bg-[var(--hv-bg-sunken)] disabled:opacity-50"
+                    >
+                      <RefreshCw size={11} />
+                      Check readiness
+                    </button>
+                    {poolGuidedFlow.status === 'ready_remote' ? (
+                      <button
+                        type="button"
+                        onClick={() => setPoolGuidedFlow(null)}
+                        className="inline-flex items-center rounded-[2px_8px] border border-[color:var(--hv-accent-success)] px-2.5 py-1 text-[10px] text-[color:var(--hv-accent-success)]"
+                      >
+                        Done
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {poolGuidedFlowError ? (
+                <p className="mt-2 text-xs text-[color:var(--hv-accent-danger)]">{poolGuidedFlowError}</p>
+              ) : null}
               {poolInstructions ? (
-                <code className="mt-2 block whitespace-pre-wrap break-words rounded border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-raised)] p-2 font-mono text-[10px] text-[color:var(--hv-fg-muted)]">
-                  {poolInstructions.join('\n')}
-                </code>
+                <div className="mt-2">
+                  <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.12em] text-[color:var(--hv-fg-muted)]">
+                    Copy-command fallback
+                  </p>
+                  <code className="block whitespace-pre-wrap break-words rounded border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-raised)] p-2 font-mono text-[10px] text-[color:var(--hv-fg-muted)]">
+                    {poolInstructions.join('\n')}
+                  </code>
+                </div>
               ) : null}
             </div>
           ) : null}

@@ -11,7 +11,11 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { AlertTriangle, ArrowUp, BrainCircuit, ListChecks, ListPlus, Mic, Paperclip, Plus, X, Zap } from 'lucide-react'
-import { useOpenAITranscription, useOpenAITranscriptionConfig } from '@/hooks/use-openai-transcription'
+import {
+  preloadOpenAITranscriptionWorklet,
+  useOpenAITranscription,
+  useOpenAITranscriptionConfig,
+} from '@/hooks/use-openai-transcription'
 import { useSpeechRecognition } from '@/hooks/use-speech-recognition'
 import { useComposerAbilities } from '@/hooks/use-composer-abilities'
 import { useComposerSkillSlots } from '@/hooks/use-composer-skill-slots'
@@ -193,6 +197,9 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     realtimeTranscriptionConfig?.openaiConfigured && openAITranscription.isSupported
       ? openAITranscription
       : speechRecognition
+  const isMicConnecting = activeTranscription === openAITranscription
+    ? openAITranscription.isConnecting
+    : false
   const {
     isListening: isMicListening,
     transcript: speechTranscript,
@@ -200,6 +207,14 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
     stopListening,
     isSupported: isMicSupported,
   } = activeTranscription
+
+  useEffect(() => {
+    if (!realtimeTranscriptionConfig?.openaiConfigured || !openAITranscription.isSupported) {
+      return
+    }
+
+    void preloadOpenAITranscriptionWorklet()
+  }, [openAITranscription.isSupported, realtimeTranscriptionConfig?.openaiConfigured])
 
   const isMobileVariant = variant === 'mobile'
   const queueDraftsSupported = !disabled && typeof onQueue === 'function'
@@ -532,12 +547,23 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
   }
 
   function handleMicToggle() {
-    if (isMicListening) {
+    if (isMicListening || isMicConnecting) {
       stopListening()
       return
     }
     startListening()
   }
+
+  const micButtonLabel = isMicListening || isMicConnecting
+    ? 'Stop voice input'
+    : 'Start voice input'
+  const micButtonTitle = isMicListening && isMicConnecting
+    ? 'Capturing voice input; connecting transcription'
+    : isMicConnecting
+      ? 'Starting voice input'
+      : isMicListening
+        ? 'Stop listening'
+        : 'Start voice input'
 
   function toggleAbility(abilityId: string) {
     setSelectedAbilityIds((current) => (
@@ -975,11 +1001,11 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
                 {isMicSupported && (
                   <button
                     type="button"
-                    className={cn('mic-btn', isMicListening && 'recording')}
+                    className={cn('mic-btn', isMicListening && 'recording', isMicConnecting && 'connecting')}
                     onClick={handleMicToggle}
-                    aria-label={isMicListening ? 'Stop voice input' : 'Start voice input'}
+                    aria-label={micButtonLabel}
                     aria-pressed={isMicListening}
-                    title={isMicListening ? 'Stop listening' : 'Start voice input'}
+                    title={micButtonTitle}
                     disabled={disabled}
                   >
                     <Mic size={18} />
@@ -1039,11 +1065,11 @@ export const SessionComposer = forwardRef<SessionComposerHandle, SessionComposer
                 {isMicSupported && (
                   <button
                     type="button"
-                    className={cn('mic-btn', isMicListening && 'recording')}
+                    className={cn('mic-btn', isMicListening && 'recording', isMicConnecting && 'connecting')}
                     onClick={handleMicToggle}
-                    aria-label={isMicListening ? 'Stop voice input' : 'Start voice input'}
+                    aria-label={micButtonLabel}
                     aria-pressed={isMicListening}
-                    title={isMicListening ? 'Stop listening' : 'Start voice input'}
+                    title={micButtonTitle}
                     disabled={disabled}
                   >
                     <Mic size={18} />

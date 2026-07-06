@@ -28,7 +28,7 @@ export interface OnboardingRouterOptions {
   internalToken?: string
   operatorStore: Pick<OperatorStore, 'getFounder'>
   orgIdentityStore?: OrgIdentityStore
-  sessionStore: Pick<CommanderSessionStore, 'list' | 'create' | 'delete'>
+  sessionStore: Pick<CommanderSessionStore, 'list' | 'create' | 'update' | 'delete'>
   conversationStore?: Pick<ConversationStore, 'listByCommander' | 'getActiveChatForCommander' | 'ensureDefaultConversation' | 'delete'>
   automationStore?: Pick<AutomationStore, 'create' | 'delete'>
   automationScheduler?: Pick<AutomationScheduler, 'createAutomation' | 'deleteAutomation'>

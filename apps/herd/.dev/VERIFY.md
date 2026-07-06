@@ -25,6 +25,7 @@ pnpm --filter herd exec vitest run \
   server/__tests__/sqlite-readiness.test.ts \
   server/__tests__/sqlite-migration.test.ts \
   server/__tests__/launch-state-reset.test.ts \
+  modules/agents/session/__tests__/sqlite-runtime-store.test.ts \
   modules/agents/session/__tests__/persistence.test.ts \
   modules/agents/__tests__/session/state.test.ts \
   modules/agents/__tests__/routes-session-control.test.ts \
@@ -41,6 +42,14 @@ pnpm --filter herd run db:ready -- --source-root ~/.herd --db ~/.herd/herd.sqlit
 Evidence done: tests pass, `db:ready` reports ready or prints an explicit
 remediation command, and API DTOs expose backend `state`/actions without UI
 inference.
+
+For restore-latency fixes, also prove the persisted-session reader against a
+representative large `runtime_state_json` row and run a production relaunch
+check. Evidence should include `operations/scripts/launch_herd.sh`,
+`https://herd.gehirn.ai/api/health` reporting the expected commit,
+`operations/logs/server/herd/latest/launch.log`, and a quick protected
+agents route probe such as `/api/agents/sessions` returning auth failure quickly
+instead of hanging.
 
 ## Command Room
 

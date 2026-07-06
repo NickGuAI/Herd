@@ -1,6 +1,6 @@
 import { getFullUrl } from './api-base'
 
-const DEFAULT_SIGN_IN_PATH = '/org'
+const DEFAULT_SIGN_IN_PATH = '/command-room'
 const HEALTH_ENDPOINT = '/api/health'
 const CACHE_BYPASS_PARAM = '__herd_auth_reload'
 

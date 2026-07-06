@@ -93,6 +93,36 @@ export interface ClaudeApprovalEnvOptions {
   baseUrl?: string
 }
 
+function normalizeApprovalBaseUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed) {
+    return undefined
+  }
+  return trimmed.replace(/\/+$/u, '')
+}
+
+function readLocalUrlPort(value: string | undefined): string | undefined {
+  const normalized = normalizeApprovalBaseUrl(value)
+  if (!normalized) {
+    return undefined
+  }
+  try {
+    const url = new URL(normalized)
+    if (
+      url.protocol !== 'http:'
+      && url.protocol !== 'https:'
+    ) {
+      return undefined
+    }
+    if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
+      return undefined
+    }
+    return url.port || (url.protocol === 'https:' ? '443' : '80')
+  } catch {
+    return undefined
+  }
+}
+
 export function resolveClaudeApprovalPort(
   env: NodeJS.ProcessEnv,
   override?: number | string,
@@ -100,15 +130,31 @@ export function resolveClaudeApprovalPort(
   if (override !== undefined && override !== null && String(override).trim().length > 0) {
     return String(override).trim()
   }
-  const fromHerd = env.HERD_PORT?.trim()
-  if (fromHerd) {
-    return fromHerd
+  const fromApprovalBaseUrl = readLocalUrlPort(env.HERD_APPROVAL_BASE_URL)
+    ?? readLocalUrlPort(env.HERD_PRIVATE_API_BASE_URL)
+  if (fromApprovalBaseUrl) {
+    return fromApprovalBaseUrl
   }
   const fromPort = env.PORT?.trim()
   if (fromPort) {
     return fromPort
   }
+  const fromHerd = env.HERD_PORT?.trim()
+  if (fromHerd) {
+    return fromHerd
+  }
   return '20001'
+}
+
+export function resolveClaudeApprovalBaseUrl(
+  env: NodeJS.ProcessEnv,
+  override?: string,
+  portOverride?: number | string,
+): string {
+  return normalizeApprovalBaseUrl(override)
+    ?? normalizeApprovalBaseUrl(env.HERD_APPROVAL_BASE_URL)
+    ?? normalizeApprovalBaseUrl(env.HERD_PRIVATE_API_BASE_URL)
+    ?? `http://127.0.0.1:${resolveClaudeApprovalPort(env, portOverride)}`
 }
 
 /**
@@ -169,7 +215,7 @@ export function buildClaudeSpawnEnv(
   approval: ClaudeApprovalEnvOptions = {},
 ): NodeJS.ProcessEnv {
   const port = resolveClaudeApprovalPort(env, approval.port)
-  const baseUrl = approval.baseUrl?.trim() || env.HERD_APPROVAL_BASE_URL?.trim() || `http://127.0.0.1:${port}`
+  const baseUrl = resolveClaudeApprovalBaseUrl(env, approval.baseUrl, port)
   const approvalBridgeToken = approval.approvalBridgeToken?.trim() || env[APPROVAL_BRIDGE_TOKEN_ENV]?.trim()
 
   const spawnEnv: NodeJS.ProcessEnv = {
@@ -232,11 +278,12 @@ const DEFAULT_APPROVAL_DEADLINE_MS=60*60*1000;
 function emitPreToolUseDecision(decision,reason){const hookSpecificOutput={hookEventName:"PreToolUse",permissionDecision:decision};if(typeof reason==="string"&&reason.trim().length>0){hookSpecificOutput.permissionDecisionReason=reason.trim();}process.stdout.write(JSON.stringify({hookSpecificOutput})+"\\n");process.exit(0);}
 function failOpenEnabled(){return process.env.HERD_APPROVAL_FAIL_OPEN?.trim()==="1";}
 function failClosed(reason){if(failOpenEnabled()){process.stderr.write(reason+"\\n");emitPreToolUseDecision("allow",reason);return;}process.stderr.write(reason+"\\n");process.exit(2);}
-function defaultBaseUrl(){const explicit=process.env.HERD_APPROVAL_BASE_URL?.trim();if(explicit){return explicit.replace(/\\/+$/,"");}const port=process.env.HERD_PORT?.trim()||"20001";return "http://127.0.0.1:"+port;}
+function defaultBaseUrl(){const explicit=process.env.HERD_APPROVAL_BASE_URL?.trim()||process.env.HERD_PRIVATE_API_BASE_URL?.trim();if(explicit){return explicit.replace(/\\/+$/,"");}const port=process.env.PORT?.trim()||process.env.HERD_PORT?.trim()||"20001";return "http://127.0.0.1:"+port;}
 function normalizeRetryAfterMs(value){const parsed=typeof value==="number"?value:typeof value==="string"?Number.parseInt(value,10):NaN;if(!Number.isFinite(parsed)||parsed<=0){return DEFAULT_REVIEW_RETRY_AFTER_MS;}return Math.max(50,Math.min(Math.floor(parsed),60000));}
 function resolveApprovalDeadlineMs(){const raw=process.env.HERD_APPROVAL_DEADLINE_MS?.trim();if(!raw){return DEFAULT_APPROVAL_DEADLINE_MS;}const parsed=Number.parseInt(raw,10);if(!Number.isFinite(parsed)||parsed<=0){return DEFAULT_APPROVAL_DEADLINE_MS;}return parsed;}
 function sleep(ms){return new Promise((resolve)=>{setTimeout(resolve,ms);});}
-async function fetchApprovalPayload(url,init,failureContext){let response;try{response=await fetch(url,init);}catch(error){const message=error instanceof Error?error.message:String(error);failClosed(\`\${failureContext} (\${message})\`);return null;}if(!response.ok){let errorText="";try{errorText=(await response.text()).trim();}catch{}const detail=errorText?\`: \${errorText}\`:"";failClosed(\`approval service returned HTTP \${response.status}\${detail}\`);return null;}try{return await response.json();}catch(error){const message=error instanceof Error?error.message:String(error);failClosed(\`approval response was not valid JSON (\${message})\`);return null;}}
+function formatApprovalHttpError(status,errorText){let detail=errorText;try{const parsed=JSON.parse(errorText);if(parsed&&typeof parsed==="object"){detail=[parsed.code,parsed.reason,parsed.error,parsed.hint].filter((value)=>typeof value==="string"&&value.trim().length>0).join(" | ");}}catch{}return detail?\`approval service returned HTTP \${status}: \${detail}\`:\`approval service returned HTTP \${status}\`;}
+async function fetchApprovalPayload(url,init,failureContext){let response;try{response=await fetch(url,init);}catch(error){const message=error instanceof Error?error.message:String(error);failClosed(\`\${failureContext} (\${message})\`);return null;}if(!response.ok){let errorText="";try{errorText=(await response.text()).trim();}catch{}failClosed(formatApprovalHttpError(response.status,errorText));return null;}try{return await response.json();}catch(error){const message=error instanceof Error?error.message:String(error);failClosed(\`approval response was not valid JSON (\${message}); check HERD_APPROVAL_BASE_URL points at the private Herd API root\`);return null;}}
 async function pollForTerminalDecision(requestId,retryAfterMs,headers){const deadlineMs=resolveApprovalDeadlineMs();const deadlineAt=Date.now()+deadlineMs;let nextDelayMs=normalizeRetryAfterMs(retryAfterMs);while(true){const remainingMs=deadlineAt-Date.now();if(remainingMs<=0){failClosed(\`approval review deadline exceeded after \${deadlineMs}ms (request \${requestId})\`);return null;}await sleep(Math.min(nextDelayMs,remainingMs));const payload=await fetchApprovalPayload(\`\${defaultBaseUrl()}/api/approval/check/\${encodeURIComponent(requestId)}\`,{method:"GET",headers},\`approval polling failed for request \${requestId}\`);if(!payload){return null;}if(payload?.decision!=="pending"){return payload;}nextDelayMs=normalizeRetryAfterMs(payload?.retry_after_ms);}}
 async function readStdin(){const chunks=[];for await(const chunk of process.stdin){chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(String(chunk)));}return Buffer.concat(chunks).toString("utf8");}
 (async()=>{const raw=await readStdin();if(!raw.trim()){process.exit(0);}let payload;try{payload=JSON.parse(raw);}catch{payload=raw;}if(payload&&typeof payload==="object"&&!Array.isArray(payload)&&process.env.HERD_SESSION_NAME&&typeof payload.herd_session_name!=="string"){payload.herd_session_name=process.env.HERD_SESSION_NAME;}const headers={"content-type":"application/json"};const bridgeToken=process.env.${APPROVAL_BRIDGE_TOKEN_ENV}?.trim();if(bridgeToken){headers["${APPROVAL_BRIDGE_TOKEN_HEADER}"]=bridgeToken;}let responsePayload=await fetchApprovalPayload(\`\${defaultBaseUrl()}/api/approval/check\`,{method:"POST",headers,body:typeof payload==="string"?payload:JSON.stringify(payload)},"approval service unreachable");if(!responsePayload){return;}if(responsePayload?.decision==="pending"){const requestId=typeof responsePayload.request_id==="string"?responsePayload.request_id.trim():"";if(!requestId){failClosed("approval service returned pending without request_id");return;}responsePayload=await pollForTerminalDecision(requestId,responsePayload?.retry_after_ms,headers);if(!responsePayload){return;}}const reason=typeof responsePayload?.reason==="string"&&responsePayload.reason.trim().length>0?responsePayload.reason.trim():undefined;if(responsePayload?.decision==="allow"){emitPreToolUseDecision("allow",reason);return;}process.stderr.write((reason??"Action rejected by Herd policy.")+"\\n");process.exit(2);})().catch((error)=>{const message=error instanceof Error?error.message:String(error);failClosed(\`hook crashed (\${message})\`);});

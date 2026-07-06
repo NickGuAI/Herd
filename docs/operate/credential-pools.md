@@ -58,6 +58,34 @@ Recovery behavior:
 Remove a credential from Settings when the account is no longer owned by the
 operator, no longer needed, or suspected to be exposed.
 
+## macOS Daemon Policy
+
+Mac daemon machines must use one of two Claude Code auth lanes:
+
+```text
+╔════════════════════╗      ╔════════════════════╗      ╔════════════════════╗
+║ Herd host pool     ║  →   ║ WS spawn env       ║  →   ║ macOS daemon proc  ║
+║ remote token ready ║      ║ CLAUDE_CODE_...    ║      ║ no file persisted  ║
+╚════════════════════╝      ╚════════════════════╝      ╚════════════════════╝
+
+Alternative: per-Mac native Claude Code login on the daemon machine.
+```
+
+- Use the env-token lane for host-managed Mac daemon sessions. Herd sends the
+  ready pool credential as `CLAUDE_CODE_OAUTH_TOKEN` in the daemon spawn env for
+  that process only.
+- Keep per-Mac native login available as the fallback lane. In that mode the
+  daemon reports native provider health and Herd does not send pool credential
+  material.
+- Do not materialize Claude credential files onto Macs for pool propagation.
+  macOS Claude Code storage is Keychain-primary with a plaintext fallback; once
+  Keychain migration succeeds, `.credentials.json` can be deleted and refreshed
+  credential lineage moves into a machine-local, config-dir-hashed Keychain
+  service. That strands the pool away from the Herd host and is not supported.
+- Tokens from `claude setup-token` can lack the `user:profile` scope. This is
+  relevant only when org-UUID enforcement is enabled; current Herd deployments
+  do not enforce org UUIDs for this lane.
+
 Related docs:
 
 - [Provider auth](provider-auth.md)

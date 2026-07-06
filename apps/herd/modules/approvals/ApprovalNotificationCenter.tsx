@@ -8,6 +8,10 @@ import {
 import { cn, timeAgo } from '@/lib/utils'
 import { MOBILE_SHELL_FLOATING_BOTTOM_OFFSET_CLASS } from '@/styles/mobile-shell'
 
+interface ApprovalNotificationCenterProps {
+  bottomOffsetClassName?: string
+}
+
 function approvalActorLabel(approval: {
   commanderName: string | null
   sessionName: string | null
@@ -16,7 +20,9 @@ function approvalActorLabel(approval: {
   return approval.commanderName ?? approval.sessionName ?? approval.source
 }
 
-export function ApprovalNotificationCenter() {
+export function ApprovalNotificationCenter({
+  bottomOffsetClassName = MOBILE_SHELL_FLOATING_BOTTOM_OFFSET_CLASS,
+}: ApprovalNotificationCenterProps = {}) {
   const globallySuppressed = useApprovalNotificationsSuppressed()
   const {
     visibleNotifications,
@@ -37,7 +43,7 @@ export function ApprovalNotificationCenter() {
     <div
       className={cn(
         'pointer-events-none fixed left-3 right-3 z-50 flex flex-col gap-2 md:bottom-auto md:left-auto md:right-4 md:top-16 md:w-96',
-        MOBILE_SHELL_FLOATING_BOTTOM_OFFSET_CLASS,
+        bottomOffsetClassName,
       )}
       aria-live="polite"
       aria-label="Approval notifications"

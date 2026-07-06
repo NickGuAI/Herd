@@ -4,10 +4,10 @@ import { homedir } from 'node:os'
 /**
  * Resolve the root Herd data directory.
  *
- * Priority: HERD_DATA_DIR env var > ~/.herd/
+ * Priority: HERD_DATA_DIR env var > HERD_DATA_DIR env var > ~/.herd/
  */
 export function resolveHerdDataDir(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env.HERD_DATA_DIR?.trim()
+  const configured = env.HERD_DATA_DIR?.trim() || env.HERD_DATA_DIR?.trim()
   if (configured && configured.length > 0) {
     return path.resolve(configured)
   }

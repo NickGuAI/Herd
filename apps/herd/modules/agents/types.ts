@@ -63,6 +63,12 @@ export type AgentSessionTurnState = 'idle' | 'running' | 'blocked' | 'stale' | '
 export type AgentSessionConnectionState = 'connected' | 'disconnected' | 'not_applicable'
 export type AgentSessionResumeState = 'available' | 'unavailable'
 
+export interface AgentSessionCredentialPoolAttribution {
+  provider: 'claude' | 'codex'
+  id: string
+  label: string
+}
+
 export interface AgentSession {
   name: string
   label?: string
@@ -84,6 +90,7 @@ export interface AgentSession {
   cwd?: string
   host?: string
   creator?: SessionCreator
+  conversationId?: string
   spawnedBy?: string
   spawnedWorkers?: string[]
   workerSummary?: WorkerSummary
@@ -97,6 +104,8 @@ export interface AgentSession {
   status?: 'active' | 'idle' | 'stale' | 'completed' | 'exited'
   resumeAvailable?: boolean
   queuedMessageCount?: number
+  credentialPoolId?: string
+  credentialPool?: AgentSessionCredentialPoolAttribution
 }
 
 export type WorldAgentStatus = 'active' | 'idle' | 'stale' | 'completed'
@@ -639,6 +648,12 @@ export interface ApprovalSessionsInterface {
   findSessionContextByClaudeSessionId(sessionId: string): ApprovalSessionContext | null
   getLiveSession(name: string): StreamSession | null
   findLiveSessionByClaudeSessionId(sessionId: string): StreamSession | null
+  inspectApprovalBridgeCredential?(sessionName: string, nonce: string): {
+    ok: true
+  } | {
+    ok: false
+    reason: 'session_not_live' | 'nonce_mismatch'
+  }
   validateApprovalBridgeCredential(sessionName: string, nonce: string): boolean
   listPendingCodexApprovals(): PendingCodexApprovalView[]
   resolvePendingCodexApproval(
@@ -768,6 +783,9 @@ export interface MachineDaemonProviderHealth {
   authMethod: string | null
   detail: string | null
   checkedAt: string | null
+  authMode?: 'native' | 'host-managed' | 'missing'
+  nativeAuthenticated?: boolean
+  hostManagedAuthenticated?: boolean
 }
 
 export type MachineDaemonConnectionState =
@@ -778,6 +796,7 @@ export type MachineDaemonConnectionState =
   | 'connected'
 
 export type MachineDaemonProviderAuthState = 'ready' | 'missing' | 'not-checked'
+export type MachineDaemonProviderAuthMode = 'native' | 'host-managed' | 'mixed' | 'missing' | 'not-checked'
 
 export type MachineDaemonActionId = 'pair' | 'rotate' | 'revoke'
 
@@ -801,6 +820,7 @@ export interface MachineDaemonStatus {
   connectionLabel: string
   selectedTransport: MachineTransportType
   providerAuthReady: boolean
+  providerAuthMode: MachineDaemonProviderAuthMode
   providerAuthState: MachineDaemonProviderAuthState
   providerAuthLabel: string
   launchable: boolean

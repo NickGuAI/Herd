@@ -285,6 +285,12 @@ export function createCommanderSessionsInterface(
       const replacement = await buildCommanderSession(
         clearResumeContextOnCredentialPoolChange(input, previous),
       )
+      if (previous && previous.kind === 'stream') {
+        // Keep the old provider alive until the replacement is ready. If
+        // provider auth or remote launch fails above, callers still have the
+        // existing runtime instead of a torn-down session slot.
+        await teardownProviderSession(previous, `Provider swap on session "${name}"`)
+      }
       if (previous && previous.kind === 'stream' && replacement.kind === 'stream') {
         // Mirror websocket.ts auto-rotate replacement so same-name provider
         // swaps preserve replay, usage, entry count, and auto-rotate state.
@@ -332,9 +338,6 @@ export function createCommanderSessionsInterface(
         (replacement.pendingDirectSendMessages.length > 0 || replacement.messageQueue.size > 0)
       ) {
         scheduleQueuedMessageDrain(replacement, { force: true })
-      }
-      if (previous && previous.kind === 'stream') {
-        await teardownProviderSession(previous, `Provider swap on session "${name}"`)
       }
       return replacement
     },

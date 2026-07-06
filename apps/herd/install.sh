@@ -384,10 +384,11 @@ APP_DIR="$SCRIPT_DIR"
 REPO_ROOT="$(cd "$APP_DIR/../.." && pwd)"
 CLI_PKG_DIR="$REPO_ROOT/packages/herd-cli"
 CLI_BIN_REL="bin/herd.mjs"
-DATA_DIR="${HERD_DATA_DIR:-$HOME/.herd}"
+DATA_DIR="${HERD_DATA_DIR:-${HERD_DATA_DIR:-$HOME/.herd}}"
 TOOLCHAIN_DIR="${HERD_TOOLCHAIN_DIR:-$DATA_DIR/toolchain}"
 PROVIDER_TOOLS_HOME="${HERD_PROVIDER_TOOLS_DIR:-$TOOLCHAIN_DIR/provider-tools}"
 PROVIDER_BIN_DIR="$PROVIDER_TOOLS_HOME/bin"
+RUNTIME_DEFAULTS_DIR="$APP_DIR/runtime/defaults"
 APP_PATH_FILE="$DATA_DIR/app-path"
 BOOTSTRAP_KEY_FILE="$DATA_DIR/bootstrap-key.txt"
 INSTALL_STARTED_AT_FILE="$DATA_DIR/install-started-at.json"
@@ -588,6 +589,30 @@ ensure_default_master_key_env() {
 
   printf '\nHERD_ALLOW_DEFAULT_MASTER_KEY=1\n' >> "$env_file"
   ok "enabled bootstrap API-key sign-in in $env_file"
+}
+
+seed_runtime_defaults() {
+  [[ -d "$RUNTIME_DEFAULTS_DIR" ]] || fail "Runtime defaults missing at $RUNTIME_DEFAULTS_DIR"
+
+  step "Seeding runtime defaults"
+  local source_file relative_path target_file created_count existing_count
+  created_count=0
+  existing_count=0
+
+  while IFS= read -r source_file; do
+    [[ -f "$source_file" ]] || continue
+    relative_path="${source_file#$RUNTIME_DEFAULTS_DIR/}"
+    target_file="$DATA_DIR/$relative_path"
+    mkdir -p "$(dirname "$target_file")"
+    if [[ -e "$target_file" ]]; then
+      existing_count=$((existing_count + 1))
+      continue
+    fi
+    cp "$source_file" "$target_file"
+    created_count=$((created_count + 1))
+  done < <(find "$RUNTIME_DEFAULTS_DIR" -type f | sort)
+
+  ok "seeded runtime defaults ($created_count created, $existing_count existing)"
 }
 
 single_quote() {
@@ -1092,6 +1117,7 @@ install_systemd_user_unit_if_needed() {
 Description=Herd local server
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -1107,21 +1133,47 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
+  local systemd_user_name systemd_user_id linger_enable_command autostart_remediation linger_verified
+  systemd_user_name="$(id -un)"
+  systemd_user_id="$(id -u)"
+  linger_verified="0"
+  if [[ "$systemd_user_id" == "0" ]]; then
+    linger_enable_command="loginctl enable-linger $systemd_user_name"
+  else
+    linger_enable_command="sudo loginctl enable-linger $systemd_user_name"
+  fi
+  autostart_remediation="$linger_enable_command && systemctl --user enable --now $SYSTEMD_USER_UNIT_NAME"
+
   if command -v loginctl >/dev/null 2>&1; then
-    loginctl enable-linger "$(id -un)" >/dev/null 2>&1 \
-      || warn "Could not enable linger automatically; run: loginctl enable-linger $(id -un)"
+    if [[ "$systemd_user_id" == "0" ]]; then
+      loginctl enable-linger "$systemd_user_name" >/dev/null 2>&1 || true
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo -n loginctl enable-linger "$systemd_user_name" >/dev/null 2>&1 || true
+    fi
+    if loginctl show-user "$systemd_user_name" -p Linger 2>/dev/null | grep -qx 'Linger=yes'; then
+      linger_verified="1"
+    fi
   fi
   if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]]; then
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
   fi
 
   if systemctl --user daemon-reload && systemctl --user enable --now "$SYSTEMD_USER_UNIT_NAME"; then
+    if [[ "$linger_verified" != "1" ]]; then
+      warn "systemd user service was enabled, but boot autostart is not verified because loginctl did not report Linger=yes. Run: $autostart_remediation"
+      INSTALL_AUTOSTART_STATUS="manual linger required: $SYSTEMD_USER_UNIT_PATH"
+      return 0
+    fi
     INSTALL_AUTOSTART_STATUS="installed: $SYSTEMD_USER_UNIT_PATH"
     ok "installed $SYSTEMD_USER_UNIT_PATH"
     return 0
   fi
 
-  warn "systemd user service was written but not started. Run: systemctl --user enable --now $SYSTEMD_USER_UNIT_NAME"
+  if [[ "$linger_verified" != "1" ]]; then
+    warn "systemd user service was written but boot autostart is not verified because loginctl did not report Linger=yes. Run: $autostart_remediation"
+  else
+    warn "systemd user service was written but not started. Run: systemctl --user enable --now $SYSTEMD_USER_UNIT_NAME"
+  fi
   INSTALL_AUTOSTART_STATUS="manual start required: $SYSTEMD_USER_UNIT_PATH"
 }
 
@@ -1345,6 +1397,7 @@ build_herd
 
 step "Recording app path"
 mkdir -p "$DATA_DIR"
+seed_runtime_defaults
 printf "%s\n" "$APP_DIR" > "$APP_PATH_FILE"
 printf '{\n  "startedAt": "%s",\n  "startedAtMs": %s,\n  "source": "install.sh"\n}\n' \
   "$HERD_INSTALL_STARTED_AT_ISO" \

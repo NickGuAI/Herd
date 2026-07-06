@@ -3,6 +3,7 @@ import {
   type CommandRoomRouteMetadata,
 } from '@modules/command-room/route-metadata'
 export {
+  MOBILE_CHAT_FLOATING_BOTTOM_OFFSET_CLASS,
   MOBILE_SHELL_BOTTOM_PADDING_CLASS,
   MOBILE_SHELL_FLOATING_BOTTOM_OFFSET_CLASS,
 } from '@/styles/mobile-shell'

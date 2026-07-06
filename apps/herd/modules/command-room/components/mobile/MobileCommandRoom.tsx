@@ -518,9 +518,9 @@ export function MobileCommandRoom({
       </div>
 
       {/*
-        The canonical mobile bottom tab bar is owned by the viewport shell
-        so every mobile route in the app receives the same IA. The tab bar self-hides on
-        the immersive chat route via the `?commander=` query param.
+        Canonical mobile navigation chrome is owned by the viewport shell so
+        every mobile route in the app receives the same IA. The shell chrome
+        hides on immersive chat routes via the `?commander=` query param.
       */}
 
       <MobileTeamSheet

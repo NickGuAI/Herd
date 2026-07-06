@@ -11,30 +11,10 @@ import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.
 import type { ClaudeEffortLevel } from '../../claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type { CreateAutomationTaskInput } from '../../automations/hooks/useAutomations'
+import { detectBrowserTimezone, TIMEZONE_OPTIONS } from '../../automations/timezones'
 import { NewSessionForm } from '../../agents/components/NewSessionForm'
 import { ProviderModelSelect, resolveProviderModelOptions } from './ProviderModelSelect'
 
-function detectBrowserTimezone(): string {
-  const resolved = Intl.DateTimeFormat().resolvedOptions().timeZone
-  return resolved && resolved.trim().length > 0 ? resolved : 'UTC'
-}
-
-function listIanaTimezones(): string[] {
-  const supportedValuesOf = (
-    Intl as typeof Intl & { supportedValuesOf?: (key: string) => string[] }
-  ).supportedValuesOf
-  if (typeof supportedValuesOf !== 'function') {
-    return []
-  }
-
-  try {
-    return supportedValuesOf('timeZone')
-  } catch {
-    return []
-  }
-}
-
-const TIMEZONE_OPTIONS = listIanaTimezones()
 function prependSkillInvocation(instruction: string, skillName: string): string {
   const command = `/${skillName}`
   const trimmed = instruction.trim()

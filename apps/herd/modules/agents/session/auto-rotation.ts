@@ -2,7 +2,10 @@ import { getProvider } from '../providers/registry.js'
 import { SessionMessageQueue, type QueuedMessage } from '../message-queue.js'
 import { getNextStreamEventSeq } from '../messages/canonical-timeline.js'
 import type { ProviderCreateOptions, ProviderTeardownOptions } from '../providers/provider-adapter.js'
-import type { ProviderAuthStore } from '../provider-auth.js'
+import {
+  isReadyPoolCredentialForHost,
+  type ProviderAuthStore,
+} from '../provider-auth.js'
 import type {
   AnySession,
   ClaudePermissionMode,
@@ -200,15 +203,12 @@ export function createSessionAutoRotationRuntime(
       return
     }
 
-    const pool = await deps.providerAuthStore.listPoolCredentials(session.agentType)
+    const pool = await deps.providerAuthStore.listPoolCredentialsForSpawn(session.agentType)
+    const host = session.host ?? 'local'
     const ready = pool.credentials.find((credential) => (
       credential.id === pool.active
-      && !credential.exhausted
-      && credential.status !== 'auth_required'
-    )) ?? pool.credentials.find((credential) => (
-      !credential.exhausted
-      && credential.status !== 'auth_required'
-    ))
+      && isReadyPoolCredentialForHost(pool.provider, credential, host)
+    )) ?? pool.credentials.find((credential) => isReadyPoolCredentialForHost(pool.provider, credential, host))
 
     if (!ready) {
       const blockedUntil = pool.earliestExhaustedUntil

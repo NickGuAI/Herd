@@ -372,7 +372,7 @@ export const HERD_MODULE_GRAPH = [
             icon: 'Sparkles',
             group: 'primary',
             // Route stays mobile-reachable; the tab bar is capped at the
-            // canonical five-tab IA (Org · Sessions · Automations · Inbox · Settings).
+            // canonical four-tab IA (Org · Automations · Inbox · Settings).
             surfaces: ['desktop'],
             order: 30,
           },
@@ -531,6 +531,8 @@ export const HERD_MODULE_GRAPH = [
     dependencies: {
       modules: ['automations', 'commanders', 'operators', 'org-identity'],
       capabilities: [
+        'automations.scheduler',
+        'automations.scheduler-initialized',
         'automations.store',
         'commanders.data-dir',
         'commanders.store',
@@ -543,6 +545,8 @@ export const HERD_MODULE_GRAPH = [
     capabilities: {
       provides: ['org.read-model', 'org.setup'],
       consumes: [
+        'automations.scheduler',
+        'automations.scheduler-initialized',
         'automations.store',
         'commanders.data-dir',
         'commanders.store',

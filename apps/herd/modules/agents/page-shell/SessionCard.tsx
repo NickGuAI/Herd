@@ -77,6 +77,7 @@ export function SessionCard({
     : 0
   const sessionLabel = session.label ?? session.name
   const rowHostLabel = machine?.label ?? machine?.host ?? session.host ?? null
+  const credentialLabel = session.credentialPool?.label ?? session.credentialPoolId ?? null
   const sessionStatus = session.status
     ?? (!processAlive ? (session.hadResult ? 'completed' : 'exited') : null)
     ?? (workerOrchestrationComplete && !isCommander ? 'completed' : null)
@@ -84,6 +85,7 @@ export function SessionCard({
   const rowMeta = [
     agentLabel,
     rowHostLabel,
+    credentialLabel ? `credential ${credentialLabel}` : null,
     sessionStatus,
   ].filter((value): value is string => Boolean(value))
   const supportsEffort = currentProvider?.uiCapabilities.supportsEffort ?? (rawAgentType === 'claude')
@@ -388,6 +390,11 @@ export function SessionCard({
             {isRemote && (
               <span className="badge-sumi bg-ink-wash text-sumi-gray text-[10px]">
                 {machine ? `${machine.label} · ${machine.host}` : session.host}
+              </span>
+            )}
+            {credentialLabel && (
+              <span className="badge-sumi bg-ink-wash text-sumi-gray text-[10px]">
+                credential {credentialLabel}
               </span>
             )}
             {workerOrchestrationComplete && !isCommander && (

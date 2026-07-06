@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import {
   CalendarClock,
   ChevronDown,
@@ -18,6 +18,7 @@ import type { AgentType, ProviderModelOption, ProviderRegistryEntry } from '@/ty
 import { ModalFormContainer } from '../../components/ModalFormContainer'
 import { buildGaiaCreateAutomationPrompt } from '@modules/command-room/gaia-entry-prompts'
 import { openGaiaConversationWithDraft } from '@modules/command-room/gaia-launch'
+import { describeAutomationSchedule } from './automation-schedule'
 import {
   useAutomationHistory,
   useAutomationRunDetail,
@@ -52,6 +53,8 @@ interface AutomationPanelProps {
   onFilterChange?: (filter: AutomationTriggerFilter) => void
   preselectedSkillName?: string | null
   onPreselectedSkillConsumed?: () => void
+  presentation?: 'default' | 'mobile-list'
+  mobileControls?: ReactNode
 }
 
 const FILTER_OPTIONS: Array<{ value: AutomationTriggerFilter; label: string }> = [
@@ -192,6 +195,81 @@ function describeTrigger(automation: AutomationListItem): string {
   return 'Manual trigger only'
 }
 
+function describeScheduleForList(automation: AutomationListItem): string {
+  if (automation.trigger === 'quest') {
+    return 'On quest completion'
+  }
+  if (automation.trigger === 'manual') {
+    return 'Manual'
+  }
+
+  const expression = automation.schedule?.trim().replace(/\s+/g, ' ')
+  if (!expression) {
+    return 'No schedule configured'
+  }
+
+  return describeAutomationSchedule(expression)
+}
+
+function statusListLabel(status: AutomationListItem['status']): string | null {
+  if (status === 'paused') {
+    return 'Paused'
+  }
+  if (status === 'completed') {
+    return 'Completed'
+  }
+  if (status === 'cancelled') {
+    return 'Cancelled'
+  }
+  return null
+}
+
+function nextRunListLabel(automation: AutomationListItem): string | null {
+  const statusLabel = statusListLabel(automation.status)
+  if (statusLabel) {
+    return statusLabel
+  }
+  if (!automation.nextRun) {
+    if (automation.trigger !== 'schedule') {
+      return null
+    }
+    return 'No next run scheduled'
+  }
+
+  const nextRunMs = new Date(automation.nextRun).getTime()
+  if (!Number.isFinite(nextRunMs)) {
+    return automation.trigger === 'schedule' ? 'No next run scheduled' : null
+  }
+
+  const diffMs = nextRunMs - Date.now()
+  if (diffMs <= 0) {
+    return 'Next run due'
+  }
+
+  const minutes = Math.max(1, Math.round(diffMs / 60_000))
+  if (minutes < 60) {
+    return `Next run in ${minutes}m`
+  }
+
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) {
+    return `Next run in ${hours}h`
+  }
+
+  const days = Math.round(hours / 24)
+  return `Next run in ${days}d`
+}
+
+function mobileToggleAriaLabel(automation: AutomationListItem): string {
+  if (automation.status === 'active') {
+    return `Pause ${automation.name}`
+  }
+  if (automation.status === 'paused') {
+    return `Resume ${automation.name}`
+  }
+  return `${statusListLabel(automation.status) ?? automation.status} ${automation.name}`
+}
+
 function classifyAutomation(automation: AutomationListItem): 'run' | 'monitor' {
   if (automation.trigger !== 'schedule') {
     return 'monitor'
@@ -308,12 +386,48 @@ function emptyMessage(scope: AutomationPanelScope, filter: AutomationTriggerFilt
   return 'No automations configured for this commander yet.'
 }
 
+type AutomationState = ReturnType<typeof useAutomations>
+
+function MobileAutomationDetailSummary({
+  automation,
+  category,
+}: {
+  automation: AutomationListItem
+  category: 'run' | 'monitor'
+}) {
+  return (
+    <div
+      className="rounded-lg border border-ink-border bg-washi-white px-3 py-2.5"
+      data-testid="mobile-automation-detail-summary"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={cn('badge-sumi shrink-0', statusBadgeClass(automation.status))}>
+          {statusSymbol(automation.status)} {automation.status}
+        </span>
+        <span className="badge-sumi badge-completed shrink-0">{automation.trigger}</span>
+        <span className="badge-sumi badge-idle shrink-0">{category}</span>
+      </div>
+      <div className="mt-3 space-y-1 text-xs text-sumi-diluted">
+        <p>{describeTrigger(automation)}</p>
+        <p>
+          {runsLabel(automation)}
+          {' · '}
+          {formatCost(automation.totalCostUsd ?? 0)} total
+        </p>
+        <p className="text-sumi-gray">{lastRunSummary(automation)}</p>
+      </div>
+    </div>
+  )
+}
+
 function AutomationCard({
   automation,
   automationState,
+  presentation = 'default',
 }: {
   automation: AutomationListItem
-  automationState: ReturnType<typeof useAutomations>
+  automationState: AutomationState
+  presentation?: AutomationPanelProps['presentation']
 }) {
   const [expanded, setExpanded] = useState(false)
   const [newObservation, setNewObservation] = useState('')
@@ -384,43 +498,24 @@ function AutomationCard({
     })
   }
 
-  return (
-    <div className="card-sumi p-4">
-      <button
-        type="button"
-        onClick={() => setExpanded((current) => !current)}
-        className="w-full text-left"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-mono text-sm text-sumi-black truncate">{automation.name}</p>
-              <span className={cn('badge-sumi shrink-0', statusBadgeClass(automation.status))}>
-                {statusSymbol(automation.status)} {automation.status}
-              </span>
-              <span className="badge-sumi badge-completed shrink-0">{automation.trigger}</span>
-              <span className="badge-sumi badge-idle shrink-0">{category}</span>
-            </div>
-            <p className="mt-2 text-xs text-sumi-diluted">{describeTrigger(automation)}</p>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-sumi-diluted">
-              <span>{runsLabel(automation)}</span>
-              {(automation.totalCostUsd ?? 0) > 0 && (
-                <span>{formatCost(automation.totalCostUsd ?? 0)} total</span>
-              )}
-              {automation.nextRun ? <span>Next: {timeAgo(automation.nextRun)}</span> : null}
-            </div>
-            <p className="mt-1.5 text-xs text-sumi-gray truncate">{lastRunSummary(automation)}</p>
-          </div>
+  async function handleMobileStatusToggle(event: MouseEvent<HTMLButtonElement>): Promise<void> {
+    event.preventDefault()
+    event.stopPropagation()
 
-          <ChevronDown
-            size={14}
-            className={cn('mt-1 shrink-0 text-sumi-diluted transition-transform', expanded && 'rotate-180')}
-          />
-        </div>
-      </button>
+    if (automation.status === 'active') {
+      await automationState.pauseAutomation(automation.id)
+      return
+    }
+    if (automation.status === 'paused') {
+      await automationState.resumeAutomation(automation.id)
+    }
+  }
 
-      {expanded ? (
+  const expandedDetails = expanded ? (
         <div className="mt-2 rounded-lg border border-ink-border bg-washi-aged/30 p-3 space-y-3">
+          {presentation === 'mobile-list' ? (
+            <MobileAutomationDetailSummary automation={automation} category={category} />
+          ) : null}
           {automation.description ? (
             <div>
               <p className="section-title">Description</p>
@@ -679,7 +774,90 @@ function AutomationCard({
             </button>
           </div>
         </div>
-      ) : null}
+      ) : null
+
+  if (presentation === 'mobile-list') {
+    const isActive = automation.status === 'active'
+    const isToggleable = automation.status === 'active' || automation.status === 'paused'
+    const nextRunLabel = nextRunListLabel(automation)
+
+    return (
+      <div className="card-sumi p-4" data-testid="mobile-automation-card">
+        <div className="flex items-start justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            aria-expanded={expanded}
+            className="min-w-0 flex-1 text-left"
+          >
+            <p className="truncate font-mono text-base text-sumi-black">{automation.name}</p>
+            <p className="mt-2 text-sm text-sumi-diluted">{describeScheduleForList(automation)}</p>
+            {nextRunLabel ? <p className="mt-1 text-sm text-sumi-gray">{nextRunLabel}</p> : null}
+          </button>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={isActive}
+            aria-label={mobileToggleAriaLabel(automation)}
+            disabled={actionsDisabled || !isToggleable}
+            onClick={(event) => void handleMobileStatusToggle(event)}
+            className={cn(
+              "relative mt-0.5 h-7 w-12 shrink-0 rounded-full border transition-colors before:absolute before:-inset-2 before:rounded-full before:content-[''] disabled:cursor-not-allowed disabled:opacity-60",
+              isActive
+                ? 'border-sumi-black bg-sumi-black'
+                : 'border-ink-border bg-washi-aged',
+            )}
+            data-testid={`mobile-automation-toggle-${automation.id}`}
+          >
+            <span
+              className={cn(
+                'absolute left-1 top-1 h-5 w-5 rounded-full bg-washi-white shadow-sm transition-transform',
+                isActive ? 'translate-x-5' : 'translate-x-0',
+              )}
+            />
+          </button>
+        </div>
+        {expandedDetails}
+      </div>
+    )
+  }
+
+  return (
+    <div className="card-sumi p-4">
+      <button
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        className="w-full text-left"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-mono text-sm text-sumi-black truncate">{automation.name}</p>
+              <span className={cn('badge-sumi shrink-0', statusBadgeClass(automation.status))}>
+                {statusSymbol(automation.status)} {automation.status}
+              </span>
+              <span className="badge-sumi badge-completed shrink-0">{automation.trigger}</span>
+              <span className="badge-sumi badge-idle shrink-0">{category}</span>
+            </div>
+            <p className="mt-2 text-xs text-sumi-diluted">{describeTrigger(automation)}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-sumi-diluted">
+              <span>{runsLabel(automation)}</span>
+              {(automation.totalCostUsd ?? 0) > 0 && (
+                <span>{formatCost(automation.totalCostUsd ?? 0)} total</span>
+              )}
+              {automation.nextRun ? <span>Next: {timeAgo(automation.nextRun)}</span> : null}
+            </div>
+            <p className="mt-1.5 text-xs text-sumi-gray truncate">{lastRunSummary(automation)}</p>
+          </div>
+
+          <ChevronDown
+            size={14}
+            className={cn('mt-1 shrink-0 text-sumi-diluted transition-transform', expanded && 'rotate-180')}
+          />
+        </div>
+      </button>
+      {expandedDetails}
     </div>
   )
 }
@@ -690,6 +868,8 @@ export function AutomationPanel({
   onFilterChange,
   preselectedSkillName = null,
   onPreselectedSkillConsumed,
+  presentation = 'default',
+  mobileControls,
 }: AutomationPanelProps) {
   const [internalFilter, setInternalFilter] = useState<AutomationTriggerFilter>('all')
   const [createMode, setCreateMode] = useState<CreateMode>(null)
@@ -700,11 +880,28 @@ export function AutomationPanel({
   const { data: machines } = useMachines()
 
   const machineList = machines ?? []
+  const isMobileList = presentation === 'mobile-list'
   const currentFilter = filter ?? internalFilter
   const visibleItems = useMemo(
     () => filterItems(automationState.items, currentFilter),
     [automationState.items, currentFilter],
   )
+  const triggerTypeCount = (['schedule', 'quest', 'manual'] as const)
+    .filter((trigger) => automationState.counts.triggerCounts[trigger] > 0)
+    .length
+  const hasRecoverableMobileFilter =
+    isMobileList
+    && currentFilter !== 'all'
+    && visibleItems.length === 0
+    && automationState.items.length > 0
+  const filterOptions = isMobileList
+    ? FILTER_OPTIONS.filter((option) => (
+      option.value === 'all'
+      || option.value === currentFilter
+      || automationState.counts.triggerCounts[option.value] > 0
+    ))
+    : FILTER_OPTIONS
+  const showFilterBar = !isMobileList || triggerTypeCount > 1 || hasRecoverableMobileFilter
 
   useEffect(() => {
     const normalizedSkillName = preselectedSkillName?.trim()
@@ -746,55 +943,74 @@ export function AutomationPanel({
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div className="px-4 md:px-6 py-3 border-b border-ink-border flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <span className="text-xs uppercase tracking-wide text-sumi-diluted">Automations</span>
-          <p className="text-sm text-sumi-gray mt-1">
-            {automationState.counts.active} active
-            {' · '}
-            {automationState.counts.paused} paused
-          </p>
-        </div>
+      <div
+        className={cn(
+          'border-b border-ink-border flex items-center justify-between gap-3',
+          isMobileList ? 'px-5 pb-3 pt-4' : 'px-4 md:px-6 py-3',
+        )}
+      >
+        {isMobileList ? (
+          <h1 className="min-w-0 font-display text-3xl text-sumi-black">Automations</h1>
+        ) : (
+          <div className="min-w-0">
+            <span className="text-xs uppercase tracking-wide text-sumi-diluted">Automations</span>
+            <p className="text-sm text-sumi-gray mt-1">
+              {automationState.counts.active} active
+              {' · '}
+              {automationState.counts.paused} paused
+            </p>
+          </div>
+        )}
 
         <button
           type="button"
+          aria-label={isMobileList ? 'New automation' : undefined}
           onClick={() => {
             setGaiaError(null)
             setSkillSeed(null)
             setCreateMode('chooser')
           }}
-          className="btn-ghost !px-3 !py-1.5 text-xs inline-flex items-center gap-1.5 shrink-0"
+          className={cn(
+            'inline-flex shrink-0 items-center justify-center gap-1.5',
+            isMobileList
+              ? 'h-10 w-10 rounded-full border border-ink-border bg-washi-white text-sumi-black transition-colors hover:border-ink-border-hover'
+              : 'btn-ghost !px-3 !py-1.5 text-xs',
+          )}
         >
-          <Plus size={12} />
-          New Automation
+          <Plus size={isMobileList ? 20 : 12} />
+          {isMobileList ? null : 'New Automation'}
         </button>
       </div>
 
-      <div className="border-b border-ink-border px-4 md:px-6 py-3 overflow-x-auto">
-        <div className="flex gap-2 min-w-max">
-          {FILTER_OPTIONS.map((option) => {
-            const isActive = currentFilter === option.value
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => handleFilterChange(option.value)}
-                className={cn(
-                  'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                  isActive
-                    ? 'border-sumi-black bg-sumi-black text-washi-aged'
-                    : 'border-ink-border text-sumi-gray hover:border-ink-border-hover hover:text-sumi-black',
-                )}
-              >
-                {option.label}
-                <span className="ml-1.5 text-[10px] opacity-80">
-                  {automationState.counts.triggerCounts[option.value]}
-                </span>
-              </button>
-            )
-          })}
+      {isMobileList ? mobileControls : null}
+
+      {showFilterBar ? (
+        <div className="border-b border-ink-border px-4 md:px-6 py-3 overflow-x-auto">
+          <div className="flex gap-2 min-w-max">
+            {filterOptions.map((option) => {
+              const isActive = currentFilter === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleFilterChange(option.value)}
+                  className={cn(
+                    'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                    isActive
+                      ? 'border-sumi-black bg-sumi-black text-washi-aged'
+                      : 'border-ink-border text-sumi-gray hover:border-ink-border-hover hover:text-sumi-black',
+                  )}
+                >
+                  {option.label}
+                  <span className="ml-1.5 text-[10px] opacity-80">
+                    {automationState.counts.triggerCounts[option.value]}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <ModalFormContainer
         open={createMode !== null}
@@ -907,7 +1123,7 @@ export function AutomationPanel({
         ) : null}
       </ModalFormContainer>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+      <div className={cn('flex-1 min-h-0 overflow-y-auto space-y-3', isMobileList ? 'p-5 pt-3' : 'p-4')}>
         {automationState.loading && automationState.items.length === 0 ? (
           <div className="flex items-center justify-center h-20">
             <div className="w-3 h-3 rounded-full bg-sumi-mist animate-breathe" />
@@ -928,6 +1144,7 @@ export function AutomationPanel({
             key={automation.id}
             automation={automation}
             automationState={automationState}
+            presentation={presentation}
           />
         ))}
 

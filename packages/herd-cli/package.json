@@ -1,6 +1,6 @@
 {
   "name": "@gehirn/herd-cli",
-  "version": "0.0.5-beta",
+  "version": "0.1.0",
   "private": false,
   "license": "PolyForm-Noncommercial-1.0.0",
   "description": "Herd onboarding CLI — configure agents to send telemetry.",
@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "echo \"Release source does not include tests\""
+    "test": "vitest run"
   },
   "devDependencies": {
     "@gehirn/tsconfig": "workspace:*",

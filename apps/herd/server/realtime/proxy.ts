@@ -113,11 +113,22 @@ function asFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function sendJson(ws: WebSocket, payload: Record<string, unknown>): void {
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+}
+
+function roundTimingMs(value: number): number {
+  return Math.round(value * 10) / 10
+}
+
+function sendJson(ws: WebSocket, payload: Record<string, unknown>): boolean {
   if (ws.readyState !== WebSocket.OPEN) {
-    return
+    return false
   }
   ws.send(JSON.stringify(payload))
+  return true
 }
 
 function toBinaryAudioBuffer(data: RawData): Buffer | null {
@@ -361,6 +372,47 @@ export function createRealtimeProxy(options: RealtimeProxyOptions = {}): Realtim
         terms: parseTranscriptionTerms(url),
       })
       wss.handleUpgrade(req, socket, head, (ws) => {
+        const browserConnectedAtMs = nowMs()
+        let browserStartAtMs: number | null = null
+        let upstreamStartAtMs: number | null = null
+        let upstreamOpenAtMs: number | null = null
+        let browserReadySentAtMs: number | null = null
+        let timingLogged = false
+        const logStartTiming = (status: 'ready' | 'upstream-error' | 'browser-aborted') => {
+          if (timingLogged || browserStartAtMs === null) {
+            return
+          }
+          timingLogged = true
+          const recordedAtMs = browserReadySentAtMs ?? upstreamOpenAtMs ?? nowMs()
+          console.debug('[realtime-proxy] transcription start timings', {
+            source: 'server',
+            event: 'realtime_transcription_start_timing',
+            status,
+            totalMs: roundTimingMs(recordedAtMs - browserConnectedAtMs),
+            phaseMs: {
+              'browser-connect-to-start': roundTimingMs(browserStartAtMs - browserConnectedAtMs),
+              ...(upstreamStartAtMs !== null && upstreamOpenAtMs !== null
+                ? { 'upstream-open': roundTimingMs(upstreamOpenAtMs - upstreamStartAtMs) }
+                : {}),
+              ...(upstreamOpenAtMs !== null && browserReadySentAtMs !== null
+                ? { 'browser-ready-send': roundTimingMs(browserReadySentAtMs - upstreamOpenAtMs) }
+                : {}),
+            },
+            offsetsMs: {
+              browserConnect: 0,
+              browserStart: roundTimingMs(browserStartAtMs - browserConnectedAtMs),
+              ...(upstreamStartAtMs !== null
+                ? { upstreamStart: roundTimingMs(upstreamStartAtMs - browserConnectedAtMs) }
+                : {}),
+              ...(upstreamOpenAtMs !== null
+                ? { upstreamOpen: roundTimingMs(upstreamOpenAtMs - browserConnectedAtMs) }
+                : {}),
+              ...(browserReadySentAtMs !== null
+                ? { browserReadySent: roundTimingMs(browserReadySentAtMs - browserConnectedAtMs) }
+                : {}),
+            },
+          })
+        }
         const client = createClient({
           apiKey: openaiApiKey,
           language: transcriptionContext.language,
@@ -482,13 +534,24 @@ export function createRealtimeProxy(options: RealtimeProxyOptions = {}): Realtim
           if (startPromise) {
             return
           }
+          browserStartAtMs = nowMs()
+          upstreamStartAtMs = browserStartAtMs
           startPromise = client.connect().then(
             () => {
-              sendJson(ws, {
+              upstreamOpenAtMs = nowMs()
+              const readySent = sendJson(ws, {
                 type: 'ready',
               })
+              if (readySent) {
+                browserReadySentAtMs = nowMs()
+                logStartTiming('ready')
+              } else {
+                logStartTiming('browser-aborted')
+                dispose()
+              }
             },
             (error) => {
+              logStartTiming('upstream-error')
               const message =
                 error instanceof Error ? error.message : 'Failed to initialize realtime transcription'
               sendError({ message })

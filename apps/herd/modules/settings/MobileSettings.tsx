@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -7,6 +7,8 @@ import {
   ExternalLink,
   LogOut,
   Plus,
+  RefreshCw,
+  Terminal,
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
@@ -57,6 +59,32 @@ const BUILD_COMMIT = (import.meta.env?.VITE_BUILD_COMMIT as string | undefined) 
 type WorkspacePanelDefault = 'open' | 'closed' | 'last-used'
 type CredentialPoolProvider = 'claude' | 'codex'
 type CredentialPoolCredentialStatus = 'active' | 'available' | 'exhausted' | 'auth_required'
+type CredentialPoolRemoteReadiness = 'ready' | 'auth_required' | 'not_required'
+
+interface CredentialPoolReadinessDto {
+  local: 'ready' | 'auth_required' | 'unknown'
+  remote: CredentialPoolRemoteReadiness
+  readyLocal: boolean
+  readyRemote: boolean
+  remoteTokenPresent: boolean
+  remoteTokenLength?: number
+}
+
+interface CredentialPoolLiveSessionDto {
+  name: string
+  host: string
+}
+
+interface CredentialPoolRotationEventDto {
+  type: 'recovered' | 'blocked'
+  at: string
+  provider: CredentialPoolProvider
+  sessionName: string
+  previousCredentialId?: string
+  previousCredentialLabel?: string
+  activeCredentialId?: string
+  activeCredentialLabel?: string
+}
 
 interface CredentialPoolCredentialDto {
   id: string
@@ -67,6 +95,15 @@ interface CredentialPoolCredentialDto {
   exhausted: boolean
   exhaustedUntil?: string
   status: CredentialPoolCredentialStatus
+  readiness?: CredentialPoolReadinessDto
+  readyLocal?: boolean
+  readyRemote?: boolean
+  remoteTokenPresent?: boolean
+  remoteTokenLength?: number
+  lastUsedAt?: string
+  liveSessionCount?: number
+  liveSessions?: CredentialPoolLiveSessionDto[]
+  latestRotationEvent?: CredentialPoolRotationEventDto
 }
 
 interface CredentialPoolDto {
@@ -76,6 +113,7 @@ interface CredentialPoolDto {
   nextCredential?: CredentialPoolCredentialDto
   readyCount?: number
   earliestExhaustedUntil?: string
+  latestRotationEvent?: CredentialPoolRotationEventDto
 }
 
 interface CredentialPoolRegisterResponse {
@@ -85,6 +123,30 @@ interface CredentialPoolRegisterResponse {
     directory: string
     commands: string[]
   }
+}
+
+type CredentialLoginFlowStatus = 'starting' | 'running' | 'ready_local' | 'ready_remote' | 'exited' | 'failed'
+type RemoteTokenMintStatus = 'not_required' | 'waiting_for_login' | 'minting' | 'stored' | 'failed'
+
+interface CredentialLoginFlowDto {
+  id: string
+  provider: CredentialPoolProvider
+  credentialId: string
+  command: string
+  startedAt: string
+  updatedAt: string
+  status: CredentialLoginFlowStatus
+  transcript: string
+  readiness: CredentialPoolReadinessDto
+  remoteToken: {
+    status: RemoteTokenMintStatus
+    tokenLength?: number
+    error?: string
+  }
+  pid?: number
+  exitCode?: number
+  signal?: number | string
+  error?: string
 }
 
 const CREDENTIAL_POOL_PROVIDER_IDS: readonly CredentialPoolProvider[] = ['claude', 'codex']
@@ -123,6 +185,29 @@ function useUpdateWorkspacePreferences() {
 
 function fetchCredentialPool(provider: CredentialPoolProvider): Promise<CredentialPoolDto> {
   return fetchJson<CredentialPoolDto>(`/api/agents/provider-auth/pool/${provider}`)
+}
+
+function startCredentialLoginFlow(
+  provider: CredentialPoolProvider,
+  credentialId: string,
+): Promise<CredentialLoginFlowDto> {
+  return fetchJson<CredentialLoginFlowDto>(
+    `/api/agents/provider-auth/pool/credentials/${provider}/${encodeURIComponent(credentialId)}/login-flow`,
+    { method: 'POST' },
+  )
+}
+
+function fetchCredentialLoginFlow(flow: CredentialLoginFlowDto): Promise<CredentialLoginFlowDto> {
+  return fetchJson<CredentialLoginFlowDto>(
+    `/api/agents/provider-auth/pool/credentials/${flow.provider}/${encodeURIComponent(flow.credentialId)}/login-flow/${encodeURIComponent(flow.id)}`,
+  )
+}
+
+function finalizeCredentialLoginFlow(flow: CredentialLoginFlowDto): Promise<CredentialLoginFlowDto> {
+  return fetchJson<CredentialLoginFlowDto>(
+    `/api/agents/provider-auth/pool/credentials/${flow.provider}/${encodeURIComponent(flow.credentialId)}/login-flow/${encodeURIComponent(flow.id)}/finalize`,
+    { method: 'POST' },
+  )
 }
 
 function defaultCredentialLabel(provider: CredentialPoolProvider, count: number): string {
@@ -728,6 +813,17 @@ function NotificationsPanel({ section }: { section: MobileSettingsSection }) {
   )
 }
 
+function PermissionsPanel({ section }: { section: MobileSettingsSection }) {
+  return (
+    <SettingsPanel>
+      <p className="text-sm leading-6 text-[color:var(--hv-fg-subtle)]">
+        Review and edit action policies from the dedicated policies surface.
+      </p>
+      <FullPageLink section={section} />
+    </SettingsPanel>
+  )
+}
+
 function MachinesPanel() {
   const queryClient = useQueryClient()
   const machinesQuery = useMachines()
@@ -827,15 +923,138 @@ function credentialStatusLabel(credential: CredentialPoolCredentialDto): string 
   return credential.status
 }
 
+function credentialReadinessLabel(credential: CredentialPoolCredentialDto): string {
+  const readyLocal = credential.readiness?.readyLocal ?? credential.readyLocal ?? credential.status !== 'auth_required'
+  const readyRemote = credential.readiness?.readyRemote ?? credential.readyRemote ?? readyLocal
+  if (readyLocal && credential.readiness?.remote === 'not_required') {
+    return 'ready-local · remote not required'
+  }
+  if (readyLocal && readyRemote) {
+    return 'ready-local · ready-remote'
+  }
+  if (readyLocal) {
+    return 'ready-local · remote missing'
+  }
+  return 'local auth required'
+}
+
+function formatCredentialTimestamp(value?: string): string {
+  if (!value) {
+    return 'never'
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function rotationEventLabel(event?: CredentialPoolRotationEventDto): string {
+  if (!event) {
+    return 'none'
+  }
+  const from = event.previousCredentialLabel ?? event.previousCredentialId ?? 'unknown'
+  const to = event.activeCredentialLabel ?? event.activeCredentialId
+  const action = event.type === 'blocked'
+    ? `${from} exhausted`
+    : `${from} -> ${to ?? 'next credential'}`
+  return `${action} · ${formatCredentialTimestamp(event.at)}`
+}
+
+function remoteTokenStatusLabel(flow: CredentialLoginFlowDto | null, credential?: CredentialPoolCredentialDto): string {
+  if (flow) {
+    if (flow.remoteToken.status === 'stored') {
+      return flow.remoteToken.tokenLength ? `stored · length ${flow.remoteToken.tokenLength}` : 'stored'
+    }
+    if (flow.remoteToken.status === 'minting') {
+      return 'minting'
+    }
+    if (flow.remoteToken.status === 'failed') {
+      return 'failed'
+    }
+    if (flow.remoteToken.status === 'not_required') {
+      return 'not required'
+    }
+  }
+  if (credential?.remoteTokenPresent) {
+    return credential.remoteTokenLength ? `stored · length ${credential.remoteTokenLength}` : 'stored'
+  }
+  return credential?.readiness?.remote === 'not_required' ? 'not required' : 'missing'
+}
+
+function guidedFlowRemoteReadinessLabel(flow: CredentialLoginFlowDto): string {
+  if (flow.remoteToken.status === 'not_required' || flow.readiness?.remote === 'not_required') {
+    return '✓ remote not required'
+  }
+  return flow.readiness?.readyRemote ? '✓ ready-remote' : '○ remote pending'
+}
+
+function guidedFlowStatusLabel(flow: CredentialLoginFlowDto): string {
+  if (flow.status === 'ready_remote' && (flow.remoteToken.status === 'not_required' || flow.readiness?.remote === 'not_required')) {
+    return 'remote-not-required'
+  }
+  return flow.status.replace('_', '-')
+}
+
 function CredentialPoolProviderPanel({ provider }: { provider: CredentialPoolProvider }) {
   const queryClient = useQueryClient()
   const [lastInstructions, setLastInstructions] = useState<CredentialPoolRegisterResponse['instructions'] | null>(null)
+  const [guidedFlow, setGuidedFlow] = useState<CredentialLoginFlowDto | null>(null)
+  const [guidedFlowError, setGuidedFlowError] = useState<string | null>(null)
   const poolQuery = useQuery({
     queryKey: credentialPoolQueryKey(provider),
     queryFn: () => fetchCredentialPool(provider),
   })
   const pool = poolQuery.data
   const credentials = pool?.credentials ?? []
+  const guidedCredential = credentials.find((credential) => credential.id === guidedFlow?.credentialId)
+
+  async function beginGuidedFlow(credential: CredentialPoolCredentialDto): Promise<void> {
+    setGuidedFlowError(null)
+    try {
+      const flow = await startCredentialLoginFlow(provider, credential.id)
+      setGuidedFlow(flow)
+    } catch (error) {
+      setGuidedFlowError(error instanceof Error ? error.message : 'Credential login flow could not start.')
+    }
+  }
+
+  useEffect(() => {
+    if (!guidedFlow || guidedFlow.status === 'ready_remote') {
+      return undefined
+    }
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const nextFlow = await fetchCredentialLoginFlow(guidedFlow)
+        if (cancelled) {
+          return
+        }
+        setGuidedFlow(nextFlow)
+        if (nextFlow.status === 'ready_remote') {
+          await queryClient.invalidateQueries({ queryKey: credentialPoolQueryKey(provider) })
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setGuidedFlowError(error instanceof Error ? error.message : 'Credential login flow status is unavailable.')
+        }
+      }
+    }
+    const timer = window.setInterval(() => {
+      void poll()
+    }, 1500)
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [guidedFlow, provider, queryClient])
+
   const addCredential = useMutation({
     mutationFn: () => fetchJson<CredentialPoolRegisterResponse>('/api/agents/provider-auth/pool/credentials', {
       method: 'POST',
@@ -849,6 +1068,7 @@ function CredentialPoolProviderPanel({ provider }: { provider: CredentialPoolPro
       setLastInstructions(response.instructions)
       queryClient.setQueryData(credentialPoolQueryKey(provider), response.pool)
       await queryClient.invalidateQueries({ queryKey: credentialPoolQueryKey(provider) })
+      await beginGuidedFlow(response.credential)
     },
   })
   const removeCredential = useMutation({
@@ -858,8 +1078,19 @@ function CredentialPoolProviderPanel({ provider }: { provider: CredentialPoolPro
     ),
     onSuccess: async (nextPool) => {
       setLastInstructions(null)
+      setGuidedFlow(null)
       queryClient.setQueryData(credentialPoolQueryKey(provider), nextPool)
       await queryClient.invalidateQueries({ queryKey: credentialPoolQueryKey(provider) })
+    },
+  })
+  const finalizeFlow = useMutation({
+    mutationFn: (flow: CredentialLoginFlowDto) => finalizeCredentialLoginFlow(flow),
+    onSuccess: async (flow) => {
+      setGuidedFlow(flow)
+      await queryClient.invalidateQueries({ queryKey: credentialPoolQueryKey(provider) })
+    },
+    onError: (error) => {
+      setGuidedFlowError(error instanceof Error ? error.message : 'Credential login flow could not finalize.')
     },
   })
 
@@ -893,6 +1124,66 @@ function CredentialPoolProviderPanel({ provider }: { provider: CredentialPoolPro
         <p className="mt-3 text-sm text-[color:var(--hv-fg-subtle)]">No credentials are configured.</p>
       ) : null}
 
+      {guidedFlow || guidedFlowError ? (
+        <div className="mt-3 rounded border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="flex items-center gap-2 text-sm font-medium text-[color:var(--hv-fg)]">
+                <Terminal size={14} />
+                Add {CREDENTIAL_POOL_LABELS[provider]} credential
+              </p>
+              <p className="mt-1 text-[11px] text-[color:var(--hv-fg-subtle)]">
+                {guidedCredential?.label ?? guidedFlow?.credentialId ?? 'Credential'}
+              </p>
+            </div>
+            {guidedFlow ? (
+              <span className="shrink-0 rounded-full border border-[color:var(--hv-border-soft)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-muted)]">
+                {guidedFlowStatusLabel(guidedFlow)}
+              </span>
+            ) : null}
+          </div>
+
+          {guidedFlow ? (
+            <>
+              <pre className="mt-3 max-h-44 overflow-y-auto whitespace-pre-wrap break-words rounded border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg)] p-2 font-mono text-[10px] leading-relaxed text-[color:var(--hv-fg-subtle)]">
+                {guidedFlow.transcript || `$ ${guidedFlow.command}`}
+              </pre>
+              <div className="mt-3 grid gap-2 text-[11px] text-[color:var(--hv-fg-subtle)] sm:grid-cols-3">
+                <span>{guidedFlow.readiness.readyLocal ? '✓ ready-local' : '○ waiting for login'}</span>
+                <span>{guidedFlowRemoteReadinessLabel(guidedFlow)}</span>
+                <span>remote token: {remoteTokenStatusLabel(guidedFlow, guidedCredential)}</span>
+              </div>
+              {guidedFlow.remoteToken.error ? (
+                <p className="mt-2 text-xs text-[color:var(--hv-accent-danger)]">{guidedFlow.remoteToken.error}</p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={finalizeFlow.isPending}
+                  onClick={() => finalizeFlow.mutate(guidedFlow)}
+                  className="inline-flex items-center gap-2 rounded-[2px_8px] border border-[color:var(--hv-fg)] px-3 py-1.5 text-[11px] text-[color:var(--hv-fg)] shadow-[2px_2px_0_var(--hv-fg)] disabled:opacity-50"
+                >
+                  <RefreshCw size={12} />
+                  Check readiness
+                </button>
+                {guidedFlow.status === 'ready_remote' ? (
+                  <button
+                    type="button"
+                    onClick={() => setGuidedFlow(null)}
+                    className="inline-flex items-center rounded-[2px_8px] border border-[color:var(--hv-accent-success)] px-3 py-1.5 text-[11px] text-[color:var(--hv-accent-success)]"
+                  >
+                    Done
+                  </button>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+          {guidedFlowError ? (
+            <p className="mt-2 text-xs text-[color:var(--hv-accent-danger)]">{guidedFlowError}</p>
+          ) : null}
+        </div>
+      ) : null}
+
       {credentials.length > 0 ? (
         <div className="mt-3 divide-y divide-[color:var(--hv-border-hair)] border-y border-[color:var(--hv-border-hair)]">
           {credentials.map((credential) => (
@@ -915,15 +1206,35 @@ function CredentialPoolProviderPanel({ provider }: { provider: CredentialPoolPro
                   {credentialStatusLabel(credential)}
                 </span>
               </div>
-              <button
-                type="button"
-                disabled={removeCredential.isPending}
-                onClick={() => removeCredential.mutate(credential.id)}
-                className="mt-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)] transition-colors hover:text-[color:var(--hv-accent-danger)] disabled:opacity-50"
-              >
-                <Trash2 size={12} />
-                Remove
-              </button>
+              <div className="mt-2 grid gap-1 text-[11px] text-[color:var(--hv-fg-subtle)]">
+                <p>{credentialReadinessLabel(credential)} · remote token {remoteTokenStatusLabel(null, credential)}</p>
+                <p>last used: {formatCredentialTimestamp(credential.lastUsedAt)} · live sessions: {credential.liveSessionCount ?? 0}</p>
+                {(credential.liveSessions?.length ?? 0) > 0 ? (
+                  <p className="truncate font-mono text-[10px] text-[color:var(--hv-fg-faint)]">
+                    {credential.liveSessions?.map((session) => `${session.name}@${session.host}`).join(', ')}
+                  </p>
+                ) : null}
+                <p>latest rotation: {rotationEventLabel(credential.latestRotationEvent)}</p>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={removeCredential.isPending}
+                  onClick={() => removeCredential.mutate(credential.id)}
+                  className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)] transition-colors hover:text-[color:var(--hv-accent-danger)] disabled:opacity-50"
+                >
+                  <Trash2 size={12} />
+                  Remove
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void beginGuidedFlow(credential)}
+                  className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)] transition-colors hover:text-[color:var(--hv-fg)]"
+                >
+                  <Terminal size={12} />
+                  Guide login
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -932,7 +1243,7 @@ function CredentialPoolProviderPanel({ provider }: { provider: CredentialPoolPro
       {lastInstructions ? (
         <div className="mt-3 space-y-2">
           <p className="text-[10.5px] uppercase tracking-[0.08em] text-[color:var(--hv-fg-subtle)]">
-            Login command
+            Copy-command fallback
           </p>
           <code className="block whitespace-pre-wrap break-words rounded border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] p-2 text-[10px] text-[color:var(--hv-fg-subtle)]">
             {lastInstructions.commands.join('\n')}
@@ -1152,6 +1463,7 @@ function MobileSettingsDetail({
         {section.id === 'account' ? <AccountPanel profile={profile} section={section} /> : null}
         {section.id === 'telemetry' ? <TelemetryPanel section={section} /> : null}
         {section.id === 'notifications' ? <NotificationsPanel section={section} /> : null}
+        {section.id === 'permissions' ? <PermissionsPanel section={section} /> : null}
         {section.id === 'machines' ? <MachinesPanel /> : null}
         {section.id === 'credential-pools' ? <CredentialPoolsPanel /> : null}
         {section.id === 'appearance' ? <AppearancePanel /> : null}

@@ -94,6 +94,23 @@ export function createApprovalSessionsInterface(
     }
   }
 
+  function inspectApprovalBridgeCredential(sessionName: string, nonce: string): {
+    ok: true
+  } | {
+    ok: false
+    reason: 'session_not_live' | 'nonce_mismatch'
+  } {
+    const session = sessions.get(sessionName.trim())
+    if (!session || (session.kind !== 'stream' && session.kind !== 'pty')) {
+      return { ok: false, reason: 'session_not_live' }
+    }
+    const expectedNonce = session?.approvalBridgeNonce?.trim()
+    if (!expectedNonce || expectedNonce !== nonce.trim()) {
+      return { ok: false, reason: 'nonce_mismatch' }
+    }
+    return { ok: true }
+  }
+
   return {
     getSessionContext(name) {
       const session = sessions.get(name)
@@ -145,13 +162,10 @@ export function createApprovalSessionsInterface(
       return null
     },
 
+    inspectApprovalBridgeCredential,
+
     validateApprovalBridgeCredential(sessionName, nonce) {
-      const session = sessions.get(sessionName.trim())
-      if (!session || (session.kind !== 'stream' && session.kind !== 'pty')) {
-        return false
-      }
-      const expectedNonce = session?.approvalBridgeNonce?.trim()
-      return Boolean(expectedNonce && expectedNonce === nonce.trim())
+      return inspectApprovalBridgeCredential(sessionName, nonce).ok
     },
 
     listPendingCodexApprovals() {

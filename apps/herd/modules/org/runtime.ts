@@ -15,6 +15,8 @@ export function createOrgRuntime(context: ModuleRuntimeContext): ModuleRouteRegi
     router: createOrgRouter({
       sessionStore: capabilities.consume('commanders.store', 'org'),
       automationStore: capabilities.consume('automations.store', 'org'),
+      automationScheduler: capabilities.consume('automations.scheduler', 'org'),
+      automationSchedulerInitialized: capabilities.consume('automations.scheduler-initialized', 'org'),
       conversationStore: capabilities.consume('commanders.conversations', 'org'),
       questStore: capabilities.consume('commanders.quest-store', 'org'),
       operatorStore: capabilities.consume('operators.store', 'org'),

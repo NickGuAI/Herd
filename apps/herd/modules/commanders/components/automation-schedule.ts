@@ -66,10 +66,6 @@ function parseTimeParts(value: string): { hour: string; minute: string } {
   }
 }
 
-function formatTime(hour: string, minute: string): string {
-  return `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
-}
-
 export function buildAutomationSchedule(state: AutomationScheduleState): string {
   if (state.cadence === 'every-15-minutes') {
     return '*/15 * * * *'
@@ -98,8 +94,49 @@ function lookupWeekday(dayOfWeek: string): string | null {
   return option?.label ?? null
 }
 
+function isCronNumber(value: string, max: number): boolean {
+  if (!/^\d+$/.test(value)) {
+    return false
+  }
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= max
+}
+
+function formatCronTime(hourValue: string, minuteValue: string): string | null {
+  if (!isCronNumber(hourValue, 23) || !isCronNumber(minuteValue, 59)) {
+    return null
+  }
+
+  const hour = Number(hourValue)
+  const minute = Number(minuteValue)
+  const period = hour >= 12 ? 'PM' : 'AM'
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12
+  return `${hour12}:${minute.toString().padStart(2, '0')} ${period}`
+}
+
+function describeCronDay(dayOfWeek: string): string | null {
+  if (dayOfWeek === '*') {
+    return 'Every day'
+  }
+  if (dayOfWeek === '1-5' || dayOfWeek === 'MON-FRI') {
+    return 'Every weekday'
+  }
+  const weekday = lookupWeekday(dayOfWeek)
+  if (weekday) {
+    return `Every ${weekday}`
+  }
+  if (dayOfWeek.includes(',')) {
+    const labels = dayOfWeek.split(',').map((day) => lookupWeekday(day.trim())).filter(Boolean)
+    if (labels.length === dayOfWeek.split(',').length) {
+      return `Every ${labels.join(', ')}`
+    }
+  }
+  return null
+}
+
 export function describeAutomationSchedule(expression: string): string {
-  const parts = expression.trim().split(/\s+/)
+  const normalizedExpression = expression.trim().replace(/\s+/g, ' ')
+  const parts = normalizedExpression.split(' ')
   if (parts.length !== 5) {
     return expression
   }
@@ -109,28 +146,27 @@ export function describeAutomationSchedule(expression: string): string {
     return expression
   }
 
-  const isWildcardDate = dayOfMonth === '*' && month === '*'
-
-  if (expression.trim() === '*/15 * * * *') {
-    return 'Every 15 minutes'
+  if (hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+    if (minute === '*') {
+      return 'Every minute'
+    }
+    const intervalMatch = /^\*\/(\d+)$/.exec(minute)
+    if (intervalMatch) {
+      const interval = Number(intervalMatch[1])
+      if (interval > 0) {
+        return interval === 1 ? 'Every minute' : `Every ${interval} minutes`
+      }
+    }
+    if (isCronNumber(minute, 59)) {
+      return minute === '0' ? 'Hourly' : `Hourly at :${minute.padStart(2, '0')}`
+    }
   }
 
-  if (/^\d+$/.test(minute) && hour === '*' && isWildcardDate && dayOfWeek === '*') {
-    return `Every hour at :${minute.padStart(2, '0')}`
-  }
-
-  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && isWildcardDate && dayOfWeek === '*') {
-    return `Every day at ${formatTime(hour, minute)}`
-  }
-
-  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && isWildcardDate && dayOfWeek === '1-5') {
-    return `Every weekday at ${formatTime(hour, minute)}`
-  }
-
-  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && isWildcardDate) {
-    const weekday = lookupWeekday(dayOfWeek)
-    if (weekday) {
-      return `Every ${weekday} at ${formatTime(hour, minute)}`
+  if (dayOfMonth === '*' && month === '*') {
+    const dayLabel = describeCronDay(dayOfWeek.toUpperCase())
+    const timeLabel = formatCronTime(hour, minute)
+    if (dayLabel && timeLabel) {
+      return `${dayLabel} · ${timeLabel}`
     }
   }
 

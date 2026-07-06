@@ -3,13 +3,18 @@ import type { FrontendNavItem } from '@/types'
 import { findModuleGraphUiRouteMetadata } from '@/module-graph-bindings'
 import { useModuleGraphContext } from '@/module-graph-context'
 import { normalizeCommandRoomRouteMetadata } from '@modules/command-room/route-metadata'
-import { MOBILE_SHELL_BOTTOM_PADDING_CLASS } from '@/styles/mobile-shell'
-import { MobileBottomTabs } from './MobileBottomTabs'
-import { isImmersiveMobileChatRoute } from './mobile-shell-routes'
+import {
+  isImmersiveMobileChatRoute,
+  MOBILE_CHAT_FLOATING_BOTTOM_OFFSET_CLASS,
+  MOBILE_SHELL_BOTTOM_PADDING_CLASS,
+  MOBILE_SHELL_FLOATING_BOTTOM_OFFSET_CLASS,
+} from './mobile-shell-routes'
+import { MobileNavigationDrawer } from './MobileNavigationDrawer'
 
 interface MobileShellChromeState {
   shouldRenderMobileChrome: boolean
   mainPaddingClassName: string
+  floatingBottomOffsetClassName: string
 }
 
 interface UseMobileShellChromeStateArgs {
@@ -36,13 +41,17 @@ export function useMobileShellChromeState({
     routeMetadata,
   )
 
+  const shouldRenderMobileChrome = isMobile && !inImmersiveChat
+
   return {
-    shouldRenderMobileChrome: isMobile,
-    mainPaddingClassName:
-      isMobile && !inImmersiveChat ? MOBILE_SHELL_BOTTOM_PADDING_CLASS : '',
+    shouldRenderMobileChrome,
+    mainPaddingClassName: shouldRenderMobileChrome ? MOBILE_SHELL_BOTTOM_PADDING_CLASS : '',
+    floatingBottomOffsetClassName: isMobile && inImmersiveChat
+      ? MOBILE_CHAT_FLOATING_BOTTOM_OFFSET_CLASS
+      : MOBILE_SHELL_FLOATING_BOTTOM_OFFSET_CLASS,
   }
 }
 
 export function MobileShellChrome({ modules, pendingCount }: MobileShellChromeProps) {
-  return <MobileBottomTabs modules={modules} pendingCount={pendingCount} />
+  return <MobileNavigationDrawer modules={modules} pendingCount={pendingCount} />
 }

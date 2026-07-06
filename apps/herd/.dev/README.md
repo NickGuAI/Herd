@@ -42,6 +42,7 @@ docs cited in each file.
 | `EVALUATION.md` | Evidence used to generate and check this directory. |
 | `maps/` | Source-backed subsystem maps. |
 | `playbooks/` | Change-specific runbooks. |
+| `techdebt/` | Current unresolved debt and shipped mitigations that future work must not forget. |
 
 ## High-Risk Boundaries
 
@@ -49,6 +50,14 @@ docs cited in each file.
   `apps/herd/server/db/schema.ts`,
   `apps/herd/modules/agents/session/sqlite-runtime-store.ts`,
   `apps/herd/modules/agents/session/state.ts`.
+- Agents routes wait for persisted session restore before serving
+  `/api/agents/*`:
+  `apps/herd/modules/agents/routes-core.ts`,
+  `apps/herd/modules/agents/persistence-helpers.ts`,
+  `apps/herd/modules/agents/session/persistence.ts`. Keep
+  `runtime_state_json` small enough to read at restart. Oversized replay events
+  in SQLite rows can make the first protected agents request look like UI click
+  latency even while `/api/health` stays fast.
 - Command Room composes data from agents, commanders, conversations, workspace,
   approvals, automations, and settings:
   `apps/herd/modules/command-room/components/CommandRoom.tsx`,
@@ -83,6 +92,8 @@ Update this directory when any of these change:
 
 - SQLite schema, runtime-session DTOs, migration/readiness scripts, or session
   control/query routes.
+- Persisted-session restore, transcript replay fallback, `runtime_state_json`
+  payload shape, or agents route startup gates.
 - Command Room routing, chat/composer behavior, conversation websocket behavior,
   workspace context, or queue behavior.
 - Channel provider adapters, channel bindings, surface binding resolution,
@@ -94,3 +105,5 @@ Update this directory when any of these change:
   provider context persistence.
 - Mobile/desktop split, shared hooks, or UI tests that encode responsive
   behavior.
+- New production incidents that leave mitigations or follow-up work should add
+  or update a file under `techdebt/`.

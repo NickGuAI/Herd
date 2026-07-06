@@ -139,6 +139,12 @@ export interface AgentWorkerSummary {
   done: number
 }
 
+export interface AgentSessionCredentialPoolAttribution {
+  provider: 'claude' | 'codex'
+  id: string
+  label: string
+}
+
 export type QueuedMessagePriority = 'high' | 'normal' | 'low'
 
 export interface QueuedMessage {
@@ -177,6 +183,7 @@ export interface AgentSession {
   cwd?: string
   host?: string
   creator?: SessionCreator
+  conversationId?: string
   spawnedBy?: string
   spawnedWorkers?: string[]
   workerSummary?: AgentWorkerSummary
@@ -189,6 +196,8 @@ export interface AgentSession {
   status?: AgentSessionStatus
   resumeAvailable?: boolean
   queuedMessageCount?: number
+  credentialPoolId?: string
+  credentialPool?: AgentSessionCredentialPoolAttribution
 }
 
 export type ProviderAuthStatus = 'ready' | 'auth_required' | 'unknown'
@@ -261,6 +270,9 @@ export interface MachineDaemonProviderHealth {
   provider: string
   installed: boolean
   authenticated: boolean
+  authMode?: 'native' | 'host-managed' | 'missing'
+  nativeAuthenticated?: boolean
+  hostManagedAuthenticated?: boolean
   version: string | null
   authMethod: string | null
   detail: string | null
@@ -275,6 +287,12 @@ export type MachineDaemonConnectionState =
   | 'connected'
 
 export type MachineDaemonProviderAuthState = 'ready' | 'missing' | 'not-checked'
+export type MachineDaemonProviderAuthMode =
+  | 'native'
+  | 'host-managed'
+  | 'mixed'
+  | 'missing'
+  | 'not-checked'
 
 export type MachineDaemonActionId = 'pair' | 'rotate' | 'revoke'
 
@@ -299,6 +317,7 @@ export interface MachineDaemonStatus {
   selectedTransport: 'local' | 'ssh' | 'daemon'
   providerAuthReady: boolean
   providerAuthState: MachineDaemonProviderAuthState
+  providerAuthMode: MachineDaemonProviderAuthMode
   providerAuthLabel: string
   launchable: boolean
   launchUnsupportedReason: string | null

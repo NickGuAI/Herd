@@ -17,6 +17,7 @@ import {
   findLocalCodexHomeForThread,
   ProviderAuthRequiredError,
   resolveProviderAuthScopeId,
+  isReadyPoolCredentialForHost,
   type ProviderAuthStore,
   type ProviderAuthSnapshot,
   type ProviderSpawnAuth,
@@ -386,11 +387,13 @@ function isReadyCredentialPoolRecoveryTarget(
   session: StreamSession,
   credential: Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>['activeCredential'],
 ): credential is NonNullable<Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>['activeCredential']> {
+  if (session.agentType !== 'claude' && session.agentType !== 'codex') {
+    return false
+  }
   return Boolean(
     credential
     && credential.id !== session.credentialPoolId
-    && !credential.exhausted
-    && (credential.status === 'active' || credential.status === 'available'),
+    && isReadyPoolCredentialForHost(session.agentType, credential, session.host ?? 'local'),
   )
 }
 
@@ -425,7 +428,7 @@ export async function switchCredentialAfterUsageLimit(
   const result = await deps.providerAuthStore.switchToNextPoolCredential(
     session.agentType,
     session.credentialPoolId,
-    { resetAt },
+    { resetAt, host: session.host },
   ).catch((error) => {
     console.warn(
       '[agents/provider-auth] failed to switch credential pool after usage limit',
@@ -437,7 +440,7 @@ export async function switchCredentialAfterUsageLimit(
     return
   }
 
-  const recoveryTarget = result.activeCredential
+  const recoveryTarget = result.blocked ? undefined : result.activeCredential
   if (!result.switched && isReadyCredentialPoolRecoveryTarget(session, recoveryTarget)) {
     const request = buildRecoveryRequest(session, recoveryTarget.id, {
       ...options,

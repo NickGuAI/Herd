@@ -14,6 +14,16 @@ server/db/schema.ts
 
 State owner: SQLite/backend runtime session helpers.
 
+Startup gate:
+
+- `apps/herd/modules/agents/routes-core.ts` waits on
+  `restorePersistedSessionsReady` before serving agents routes.
+- `apps/herd/modules/agents/persistence-helpers.ts` reads SQLite
+  persisted sessions before restoring provider sessions.
+- `apps/herd/modules/agents/session/sqlite-runtime-store.ts` must keep
+  `runtime_state_json` bounded because this read sits on the first
+  `/api/agents/*` request after restart.
+
 Consumers:
 
 - UI: `apps/herd/modules/command-room/components/CommandRoom.tsx`,
@@ -32,6 +42,9 @@ Consumers:
 
 Risk: if UI/CLI derives lifecycle instead of rendering backend `state`,
 `allowedActions`, and `disabledReasons`, operators can see conflicting state.
+Risk: if persisted replay events grow inside `runtime_state_json`, the agents
+route startup gate can pin heap and turn post-restart UI clicks into minutes of
+latency even though `/api/health` is already green.
 
 ## Command Room Composition
 

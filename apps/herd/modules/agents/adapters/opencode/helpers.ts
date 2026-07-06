@@ -2,7 +2,7 @@ import { buildRemoteCommand } from '../../machines.js'
 import type { ClaudePermissionMode } from '../../types.js'
 
 export function buildOpenCodeAcpInvocation(
-  options?: { model?: string; cwd?: string; envFile?: string },
+  options?: { model?: string; cwd?: string; envFile?: string; expectedMachineEnvCount?: number },
 ): string {
   return buildRemoteCommand(
     'opencode',
@@ -12,6 +12,7 @@ export function buildOpenCodeAcpInvocation(
     ],
     options?.cwd,
     options?.envFile,
+    options?.expectedMachineEnvCount,
   )
 }
 

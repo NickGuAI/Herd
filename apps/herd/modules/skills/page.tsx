@@ -8,6 +8,7 @@ import {
   openGaiaConversationWithDraft,
   type GaiaLaunchDeps,
 } from '@modules/command-room/gaia-launch'
+import { SelectedSkillScheduleDialog } from '@modules/automations/components/SelectedSkillScheduleDialog'
 
 interface SkillInfo {
   name: string
@@ -132,14 +133,6 @@ export function filterSkills(skills: SkillInfo[], query: string): SkillInfo[] {
     skill.description,
     skill.source,
   ].some((value) => value.toLowerCase().includes(trimmedQuery)))
-}
-
-export function buildSkillScheduleUrl(skill: SkillInfo): string {
-  const query = new URLSearchParams({
-    trigger: 'schedule',
-    skill: skill.dirName,
-  })
-  return `/automations?${query.toString()}`
 }
 
 function buildGaiaSkillEditPrompt(skill: SkillPackageDetail): string {
@@ -692,6 +685,7 @@ export function SkillsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SkillInfo | null>(null)
+  const [scheduleTarget, setScheduleTarget] = useState<SkillInfo | null>(null)
   const [skillsSearch, setSkillsSearch] = useState('')
   const queryClient = useQueryClient()
   const panel = (searchParams.get('panel') as Panel | null) ?? 'hub'
@@ -729,7 +723,7 @@ export function SkillsPage() {
   }
 
   function scheduleSkill(skill: SkillInfo) {
-    window.location.assign(buildSkillScheduleUrl(skill))
+    setScheduleTarget(skill)
   }
 
   function openPanel(nextPanel: Panel, skill: SkillInfo) {
@@ -770,6 +764,12 @@ export function SkillsPage() {
             isDeleting={deleteMutation.isPending}
           />
         )}
+        {scheduleTarget ? (
+          <SelectedSkillScheduleDialog
+            skill={scheduleTarget}
+            onClose={() => setScheduleTarget(null)}
+          />
+        ) : null}
       </>
     )
   }
@@ -853,6 +853,12 @@ export function SkillsPage() {
           isDeleting={deleteMutation.isPending}
         />
       )}
+      {scheduleTarget ? (
+        <SelectedSkillScheduleDialog
+          skill={scheduleTarget}
+          onClose={() => setScheduleTarget(null)}
+        />
+      ) : null}
     </section>
   )
 }

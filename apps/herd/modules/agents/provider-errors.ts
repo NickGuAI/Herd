@@ -32,6 +32,14 @@ const RESUME_NOT_FOUND_PATTERNS = [
   /\bresume\b.*\bnot found\b/iu,
 ]
 
+const APPROVAL_BRIDGE_PATTERNS = [
+  /\bherd-approval-hook\b/iu,
+  /\bapproval[-_\s]?bridge\b/iu,
+  /\bapproval_bridge_/iu,
+  /\bapi\/approval\/check\b/iu,
+  /\bHERD_APPROVAL_BASE_URL\b/u,
+]
+
 function matchesAny(value: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(value))
 }
@@ -41,6 +49,9 @@ export function classifyProviderError(
   code?: string,
 ): ProviderErrorClassification {
   const haystack = [code, message].filter(Boolean).join(' ')
+  if (matchesAny(haystack, APPROVAL_BRIDGE_PATTERNS)) {
+    return 'approval_bridge'
+  }
   if (matchesAny(haystack, RESUME_NOT_FOUND_PATTERNS)) {
     return 'resume_not_found'
   }
@@ -58,6 +69,13 @@ export function isResumeNotFoundProviderError(
   code?: string,
 ): boolean {
   return classifyProviderError(message, code) === 'resume_not_found'
+}
+
+export function isApprovalBridgeProviderError(
+  message?: string,
+  code?: string,
+): boolean {
+  return classifyProviderError(message, code) === 'approval_bridge'
 }
 
 function normalizeReferenceTime(value: Date | string | number | undefined): Date {

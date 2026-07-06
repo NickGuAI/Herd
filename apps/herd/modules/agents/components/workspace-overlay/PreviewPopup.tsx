@@ -87,6 +87,7 @@ export function PreviewPopup({
     >
       <div className="hidden w-full max-w-5xl md:flex">
         <div
+          data-testid="workspace-preview-desktop-dialog"
           role="dialog"
           aria-modal="true"
           aria-label="Workspace file preview"
@@ -110,18 +111,25 @@ export function PreviewPopup({
         </div>
       </div>
 
-      <div className="w-full max-w-full px-2 pb-2 pt-8 md:hidden">
+      <div
+        data-testid="workspace-preview-mobile-shell"
+        className="h-[100dvh] w-full max-w-full [--safe-bottom:env(safe-area-inset-bottom,0px)] [--safe-top:env(safe-area-inset-top,0px)] md:hidden"
+      >
         <div
+          data-testid="workspace-preview-mobile-dialog"
           role="dialog"
           aria-modal="true"
           aria-label="Workspace file preview"
-          className="flex max-h-[92dvh] min-h-[62dvh] max-w-full flex-col overflow-hidden rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-surface-card)] shadow-2xl"
+          className="flex h-full w-full max-w-full flex-col overflow-hidden bg-[var(--hv-surface-card)]"
         >
-          <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[color:var(--hv-border-hair)] px-3 py-2">
+          <div
+            data-testid="workspace-preview-mobile-header"
+            className="flex min-w-0 items-center justify-between gap-2 border-b border-[color:var(--hv-border-hair)] px-3 pb-2 pt-[calc(0.5rem+var(--safe-top))]"
+          >
             {renderHeader()}
           </div>
           {renderDownloadErrorBanner()}
-          <div data-testid="workspace-preview-mobile-body" className="min-h-0 min-w-0 flex-1 flex flex-col overflow-hidden p-2">
+          <div data-testid="workspace-preview-mobile-body" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pb-[var(--safe-bottom)]">
             <WorkspaceFilePreview
               selectedPath={selectedPath}
               preview={preview}

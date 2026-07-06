@@ -332,6 +332,8 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     providerAuthStore,
     questStore: options.questStore,
     readMachineRegistry,
+    readPersistedSessionsState: () => requirePersistenceHelpers().readPersistedSessionsState(),
+    getSpawner,
     sessionCreatorIdFromUser,
     appendStreamEvent,
     broadcastStreamEvent,
@@ -426,6 +428,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
 
   const machineLaunchRuntime = createMachineLaunchRuntime({
     daemonRegistry,
+    providerAuthStore,
     readMachineRegistry,
   })
 
@@ -551,6 +554,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     withMachineRegistryWriteLock,
     writeMachineRegistry,
     daemonRegistry,
+    providerAuthStore,
     machineEnrollmentSigningSecret,
   })
 
@@ -569,6 +573,7 @@ export function createAgentsRouter(options: AgentsRouterOptions): AgentsRouterRe
     router,
     requireReadAccess,
     getCommanderLabels,
+    providerAuthStore,
     readMachineRegistry,
     sessions,
     completedSessions,

@@ -4,6 +4,7 @@ import { buildOpenCodeAcpInvocation } from '../adapters/opencode/helpers.js'
 import {
   buildGeminiAcpInvocation,
   buildLoginShellCommand,
+  countMachineEnvSendKeys,
   prepareDaemonMachineLaunchEnvironment,
   prepareMachineLaunchEnvironment,
   buildSshArgs,
@@ -287,6 +288,7 @@ export class GeminiAcpRuntime implements GeminiAcpRuntimeHandle {
               buildGeminiAcpInvocation(this.model),
               undefined,
               preparedLaunch.sourcedEnvFile,
+              countMachineEnvSendKeys(preparedLaunch.sshSendEnvKeys),
             )
             return spawn(
               'ssh',
@@ -693,6 +695,7 @@ export class OpenCodeAcpRuntime implements OpenCodeAcpRuntimeHandle {
             const remoteCommand = buildOpenCodeAcpInvocation({
               model: this.model,
               envFile: preparedLaunch.sourcedEnvFile,
+              expectedMachineEnvCount: countMachineEnvSendKeys(preparedLaunch.sshSendEnvKeys),
             })
             return spawn(
               'ssh',

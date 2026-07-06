@@ -1,4 +1,4 @@
-import { Router, type Request, type RequestHandler } from 'express'
+import { Router, type Request, type RequestHandler, type Response } from 'express'
 import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
@@ -189,11 +189,61 @@ function isApprovalCheckRequest(req: Request): boolean {
 function rejectApprovalBridgeOutsideCheck(): RequestHandler {
   return (req, res, next) => {
     if (hasApprovalBridgeToken(req) && !isApprovalCheckRequest(req)) {
-      res.status(403).json({ error: 'Approval bridge token is only valid for approval checks' })
+      res.status(403).json({
+        error: 'Approval bridge token is only valid for approval checks',
+        code: 'approval_bridge_wrong_route',
+        reason: 'wrong_route',
+        hint: 'Use the bridge token only with /api/approval/check.',
+      })
       return
     }
     next()
   }
+}
+
+type ApprovalBridgeAuthFailureReason =
+  | 'malformed_token'
+  | 'invalid_signature'
+  | 'session_not_live'
+  | 'nonce_mismatch'
+
+function toApprovalBridgeFailureHint(reason: ApprovalBridgeAuthFailureReason): string {
+  switch (reason) {
+    case 'malformed_token':
+      return 'The approval bridge token is malformed; relaunch the session to mint a fresh bridge token.'
+    case 'invalid_signature':
+      return 'The approval bridge token signature is invalid for this server; relaunch the session after restart or secret rotation.'
+    case 'session_not_live':
+      return 'The approval bridge token belongs to a session that is no longer live; recover or relaunch the runtime session.'
+    case 'nonce_mismatch':
+      return 'The approval bridge token is stale for this live session; recover or relaunch the runtime session.'
+  }
+}
+
+function sendApprovalBridgeAuthFailure(
+  res: Response,
+  reason: ApprovalBridgeAuthFailureReason,
+): void {
+  res.status(401).json({
+    error: 'Invalid approval bridge token',
+    code: `approval_bridge_${reason}`,
+    reason,
+    hint: toApprovalBridgeFailureHint(reason),
+  })
+}
+
+function inspectApprovalBridgeCredential(
+  approvalSessionsInterface: PoliciesRouterOptions['approvalSessionsInterface'],
+  sessionName: string,
+  nonce: string,
+): { ok: true } | { ok: false; reason: 'session_not_live' | 'nonce_mismatch' } {
+  const inspected = approvalSessionsInterface.inspectApprovalBridgeCredential?.(sessionName, nonce)
+  if (inspected) {
+    return inspected
+  }
+  return approvalSessionsInterface.validateApprovalBridgeCredential(sessionName, nonce)
+    ? { ok: true }
+    : { ok: false, reason: 'nonce_mismatch' }
 }
 
 function createApprovalCheckAuth(
@@ -210,14 +260,21 @@ function createApprovalCheckAuth(
     const verification = verifyApprovalBridgeToken(bridgeToken, {
       signingSecret: options.approvalBridgeSigningSecret,
     })
-    if (
-      !verification.ok ||
-      !options.approvalSessionsInterface.validateApprovalBridgeCredential(
-        verification.sessionName,
-        verification.nonce,
+    if (!verification.ok) {
+      sendApprovalBridgeAuthFailure(
+        res,
+        verification.reason === 'malformed' ? 'malformed_token' : 'invalid_signature',
       )
-    ) {
-      res.status(401).json({ error: 'Invalid approval bridge token' })
+      return
+    }
+
+    const credential = inspectApprovalBridgeCredential(
+      options.approvalSessionsInterface,
+      verification.sessionName,
+      verification.nonce,
+    )
+    if (!credential.ok) {
+      sendApprovalBridgeAuthFailure(res, credential.reason)
       return
     }
 

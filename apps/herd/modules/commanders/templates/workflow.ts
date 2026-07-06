@@ -23,6 +23,7 @@ const SOURCE_TEMPLATE_PATH = path.join(
 
 export interface CommanderWorkflowTemplateInput {
   commanderId: string
+  displayName?: string
   cwd?: string
 }
 
@@ -92,8 +93,10 @@ export function renderCommanderWorkflow(
   template: string,
   input: CommanderWorkflowTemplateInput,
 ): string {
+  const commanderName = normalizeOptional(input.displayName) ?? 'Commander'
   const workspaceCwd = normalizeOptional(input.cwd) ?? '_not provided_'
-  const withCommanderId = replaceTemplateToken(template, '[COMMANDER_ID]', input.commanderId)
+  const withCommanderName = replaceTemplateToken(template, '[NAME]', commanderName)
+  const withCommanderId = replaceTemplateToken(withCommanderName, '[COMMANDER_ID]', input.commanderId)
   const withWorkspace = replaceTemplateToken(withCommanderId, '[WORKSPACE_CWD]', workspaceCwd)
   return `${withWorkspace.trimEnd()}\n`
 }
@@ -144,6 +147,7 @@ export async function scaffoldCommanderWorkflow(
     const rendered = renderCommanderWorkflow(template, {
       commanderId,
       cwd: input.cwd,
+      displayName: input.displayName,
     })
     await writeFile(workflowPath, rendered, 'utf8')
     return workflowPath
@@ -155,16 +159,25 @@ export async function mergeIdentityOperatingStyleIntoCommanderWorkflow(
   identityOperatingStyle: string | undefined,
   options: {
     cwd?: string
+    displayName?: string
     basePath?: string
   } = {},
 ): Promise<{ workflowPath: string; updated: boolean }> {
   const workflowPath = await scaffoldCommanderWorkflow(
     commanderId,
-    { cwd: options.cwd },
+    {
+      cwd: options.cwd,
+      displayName: options.displayName,
+    },
     options.basePath,
   )
   const current = await readFile(workflowPath, 'utf8')
-  const next = mergeIdentityOperatingStyleIntoCommanderWorkflowContent(current, identityOperatingStyle)
+  const rendered = renderCommanderWorkflow(current, {
+    commanderId,
+    cwd: options.cwd,
+    displayName: options.displayName,
+  })
+  const next = mergeIdentityOperatingStyleIntoCommanderWorkflowContent(rendered, identityOperatingStyle)
   if (next === current) {
     return { workflowPath, updated: false }
   }

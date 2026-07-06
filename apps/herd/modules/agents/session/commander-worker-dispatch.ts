@@ -29,7 +29,7 @@ interface CommanderWorkerDispatcherDeps {
   resolveDaemonLaunchReadiness(
     machine: MachineConfig | undefined,
     agentType: AgentType,
-  ): { ok: true } | { ok: false; status: number; error: string }
+  ): Promise<{ ok: true } | { ok: false; status: number; error: string }>
   createProviderStreamSession(
     sessionName: string,
     mode: ClaudePermissionMode,

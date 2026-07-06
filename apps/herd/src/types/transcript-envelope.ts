@@ -7,7 +7,12 @@ import type {
 
 export type TranscriptMessageRole = 'user' | 'assistant' | 'system'
 export type TranscriptMessageChannel = 'final' | 'analysis' | 'reasoning' | 'system'
-export type ProviderErrorClassification = 'usage_limit' | 'auth_required' | 'resume_not_found' | 'other'
+export type ProviderErrorClassification =
+  | 'usage_limit'
+  | 'auth_required'
+  | 'resume_not_found'
+  | 'approval_bridge'
+  | 'other'
 
 export interface TranscriptEnvelopeSource {
   provider: HerdEventProvider

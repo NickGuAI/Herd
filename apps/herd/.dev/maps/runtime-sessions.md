@@ -35,6 +35,11 @@ state/actions to UI, API, and CLI consumers.
 - `agent_runtime_sessions` table in `${HERD_DATA_DIR}/herd.sqlite`.
 - Runtime state values: `active`, `paused`, `archived`.
 - Provider resume JSON and runtime payload JSON in SQLite rows.
+- Runtime payload JSON may include a small bounded replay fallback, but full
+  transcript replay belongs in transcript storage. The current store strips
+  oversized legacy `events` payloads before JSON parsing and bounds future
+  embedded replay events in
+  `apps/herd/modules/agents/session/sqlite-runtime-store.ts`.
 - Credential-pool ids and native provider resume ids; native resume ids are
   credential-pool local and must be cleared when a replacement crosses pools.
 - Schema migrations in `schema_migrations`.
@@ -65,6 +70,32 @@ state/actions to UI, API, and CLI consumers.
 - Commanders/memory: prior-conversation bootstrap is the fallback continuity
   mechanism after pool-local native resume context is cleared.
 
+## Restart Restore Path
+
+```text
+first /api/agents/* request after restart
+        |
+        v
+routes-core restorePersistedSessionsReady gate
+        |
+        v
+persistence-helpers readSqlitePersistedSessionsState
+        |
+        v
+sqlite-runtime-store projects bounded runtime_state_json
+        |
+        v
+session/persistence resolves transcript replay tails
+        |
+        v
+provider restore / exited-session recovery
+```
+
+`/api/health` does not pass through the agents route gate, so it can be healthy
+while the first Command Room or mobile agents request waits on restore. Treat
+large SQLite `runtime_state_json` rows as a startup-latency risk, not only a
+storage-size concern.
+
 ## When Touching This, Also Inspect
 
 - `apps/herd/install.sh`
@@ -81,6 +112,7 @@ pnpm --filter herd exec vitest run \
   server/__tests__/sqlite-readiness.test.ts \
   server/__tests__/sqlite-migration.test.ts \
   server/__tests__/launch-state-reset.test.ts \
+  modules/agents/session/__tests__/sqlite-runtime-store.test.ts \
   modules/agents/session/__tests__/persistence.test.ts \
   modules/agents/__tests__/session/state.test.ts \
   modules/agents/__tests__/routes-session-control.test.ts \
@@ -102,3 +134,6 @@ pnpm --filter herd run db:ready -- --source-root ~/.herd --db ~/.herd/herd.sqlit
 - A `resume_not_found` provider error is recoverable once by clearing stored
   provider context and spawning from transcript bootstrap; it must not grow into
   a background retry scheduler.
+- The shipped restore-latency mitigation still leaves legacy oversized SQLite
+  rows physically large until they are rewritten or archived. See
+  `apps/herd/.dev/techdebt/2026-07-06-runtime-restore-latency.md`.

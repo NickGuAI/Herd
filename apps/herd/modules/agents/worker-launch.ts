@@ -126,7 +126,7 @@ export interface WorkerLaunchSessionDeps {
   resolveDaemonLaunchReadiness?(
     machine: MachineConfig | undefined,
     agentType: AgentType,
-  ): { ok: true } | { ok: false; status: number; error: string }
+  ): Promise<{ ok: true } | { ok: false; status: number; error: string }>
   resolveMachine(
     requestedHost: string | undefined,
   ): Promise<
@@ -420,7 +420,7 @@ export async function launchProviderWorkerSession(
     return { ok: false, status: resolvedMachine.status, body: { error: resolvedMachine.error } }
   }
   const machine = resolvedMachine.machine
-  const daemonReadiness = deps.resolveDaemonLaunchReadiness?.(machine, request.agentType)
+  const daemonReadiness = await deps.resolveDaemonLaunchReadiness?.(machine, request.agentType)
   if (daemonReadiness && !daemonReadiness.ok) {
     return { ok: false, status: daemonReadiness.status, body: { error: daemonReadiness.error } }
   }

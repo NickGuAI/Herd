@@ -486,6 +486,8 @@ function mapAgentSessionToChatSession(
     queuedMessageCount: typeof session.queuedMessageCount === 'number'
       ? session.queuedMessageCount
       : undefined,
+    credentialPoolId: typeof session.credentialPoolId === 'string' ? session.credentialPoolId : undefined,
+    credentialPool: session.credentialPool,
     effort: session.effort,
     adaptiveThinking: session.adaptiveThinking,
     maxThinkingTokens: session.maxThinkingTokens,

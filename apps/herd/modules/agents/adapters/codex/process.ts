@@ -22,6 +22,7 @@ import {
   buildCodexAppServerInvocation,
   buildCodexRuntimeEnv,
   buildLoginShellCommand,
+  countMachineEnvSendKeys,
   prepareDaemonMachineLaunchEnvironment,
   prepareMachineLaunchEnvironment,
   buildSshArgs,
@@ -215,6 +216,7 @@ export function spawnRemoteCodexRuntime(
     buildCodexAppServerInvocation(),
     undefined,
     preparedLaunch.sourcedEnvFile,
+    countMachineEnvSendKeys(preparedLaunch.sshSendEnvKeys),
   )
   return spawnImpl('ssh', buildSshArgs(machine, remoteCommand, false, undefined, preparedLaunch.sshSendEnvKeys), {
     stdio: ['pipe', 'pipe', 'pipe'],

@@ -104,3 +104,99 @@ Result: targeted CLI tests and build passed; SQLite readiness passed; docs guard
 
 - No browser screenshot pass was run for Command Room/mobile UI because this
   fixture does not change UI rendering.
+
+## 2026-07-06 Runtime Restore Refresh
+
+Project root: `/home/builder/App/apps/herd`
+
+Output: `/home/builder/App/apps/herd/.dev`
+
+Current source head: `f4bb405e3 (HEAD -> dev, origin/dev) Fix Herd runtime restore latency`
+
+## Files Inspected
+
+- `apps/herd/CLAUDE.md`
+- `.claude/rules/herd.md`
+- `apps/herd/docs/llms.txt`
+- `apps/herd/docs/architecture/agents.md`
+- `apps/herd/docs/architecture/module-runtime.md`
+- `apps/herd/docs/architecture/routes-and-apis.md`
+- `apps/herd/docs/troubleshoot.md`
+- `apps/herd/.dev/README.md`
+- `apps/herd/.dev/ROUTING.md`
+- `apps/herd/.dev/COUPLINGS.md`
+- `apps/herd/.dev/VERIFY.md`
+- `apps/herd/.dev/SOP_INDEX.md`
+- `apps/herd/.dev/maps/runtime-sessions.md`
+- `apps/herd/.dev/maps/channels.md`
+- `apps/herd/.dev/playbooks/sqlite-runtime-session-change.md`
+- `apps/herd/.dev/playbooks/channel-impacting-change.md`
+- `apps/herd/.dev/learnings/*.md`
+- `apps/herd/modules/agents/routes-core.ts`
+- `apps/herd/modules/agents/persistence-helpers.ts`
+- `apps/herd/modules/agents/session/persistence.ts`
+- `apps/herd/modules/agents/session/sqlite-runtime-store.ts`
+- `apps/herd/modules/agents/session/__tests__/sqlite-runtime-store.test.ts`
+- `apps/herd/server/db/schema.ts`
+- `operations/scripts/launch_herd.sh`
+- `operations/deploy/ec2/check-herd-split-shell.sh`
+- `operations/logs/server/herd/latest/launch.log`
+
+## Commands Run
+
+```bash
+git fetch origin dev
+git log -1 --oneline --decorate
+find apps/herd/.dev -maxdepth 3 -type f | sort
+find apps/herd/.dev -maxdepth 2 -type f | sort
+rg -n "restorePersistedSessionsReady|readSqlitePersistedSessionsState|runtime_state_json|compactRuntimeStateEvents|LEGACY_RUNTIME_EVENTS_STRIP|MAX_RUNTIME_STATE_EMBEDDED_EVENTS|sqlite-runtime-store.test" apps/herd/modules/agents apps/herd/server apps/herd/.dev apps/herd/docs .claude/rules/herd.md
+rg -n "Failed to restore persisted session|Unexpected end of JSON input|bubblewrap|ERROR|unhandled|uncaught|crash|restart" operations/logs/server/herd/latest/launch.log
+pnpm --filter herd run docs:check
+rg -n <deleted 2026-06-23 channel learning filename patterns> apps/herd/.dev .claude/rules/herd.md apps/herd/docs
+bash operations/deploy/ec2/check-herd-split-shell.sh --domain herd.gehirn.ai --service-port 20009 --shell-port 20001
+curl -fsS -w '\nstatus=%{http_code} total=%{time_total}\n' https://herd.gehirn.ai/api/health
+git status --short --branch
+```
+
+Result: docs guardrail passed. The superseded channel learning filenames have
+no remaining references. Split-shell topology passed. Public health returned
+`200` on version `f4bb405e3`.
+
+## Review Roles
+
+- topology/module reviewer: performed in the main thread against agents routes,
+  persistence helpers, SQLite runtime store, and runtime-session map.
+- verification/test reviewer: performed in the main thread against
+  `VERIFY.md`, the runtime-session Vitest bundle, `docs:check`, and production
+  health/split-shell probes.
+- release/install/ops reviewer: performed in the main thread against
+  `operations/scripts/launch_herd.sh`,
+  `operations/deploy/ec2/check-herd-split-shell.sh`, and the active launch log.
+- contrarian reviewer: performed in the main thread. The refresh removed
+  duplicate dated channel incident learnings only after confirming the durable
+  guidance is already consolidated in `playbooks/channel-impacting-change.md`,
+  `maps/channels.md`, and `VERIFY.md`.
+
+## Unsupported Assumptions Rejected
+
+- Rejected: `/api/health` proves agents route responsiveness. Evidence:
+  `apps/herd/modules/agents/routes-core.ts` gates agents routes on
+  `restorePersistedSessionsReady`, while health does not use that router.
+- Rejected: large `runtime_state_json` rows are only a storage-size issue.
+  Evidence: `apps/herd/modules/agents/persistence-helpers.ts` calls
+  `readSqlitePersistedSessionsState` before provider restore, and
+  `apps/herd/modules/agents/session/sqlite-runtime-store.ts` parses each
+  projected row.
+- Rejected: old per-incident channel learning files must remain because they
+  are useful. Evidence: their reusable rules are now in
+  `apps/herd/.dev/playbooks/channel-impacting-change.md`,
+  `apps/herd/.dev/maps/channels.md`, and
+  `apps/herd/.dev/VERIFY.md`; `rg` found no remaining references to the
+  deleted filenames.
+
+## Gaps For Human Review
+
+- No browser screenshot pass was run because this refresh only changed `.dev`
+  documentation and one path-scoped rule file.
+- The new techdebt note records remaining runtime restore follow-ups; it does
+  not implement the one-off SQLite compaction or restore telemetry work.

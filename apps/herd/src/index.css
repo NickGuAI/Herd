@@ -2317,6 +2317,11 @@
     transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
   }
   .hervald-session-composer .mic-btn:active { transform: scale(0.92); }
+  .hervald-session-composer .mic-btn.connecting {
+    color: var(--msg-text);
+    border-color: var(--hv-fg-muted);
+    background: var(--hv-bg-raised);
+  }
   .hervald-session-composer .mic-btn.recording {
     color: var(--msg-accent-red);
     border-color: var(--hv-accent-danger-wash);
@@ -2467,7 +2472,7 @@
   .hervald-session-composer--mobile {
     border-top: 0;
     background: transparent;
-    padding: 4px 12px calc(10px + env(safe-area-inset-bottom));
+    padding: 4px 12px calc(10px + env(safe-area-inset-bottom, 0px));
   }
   .hervald-session-composer--mobile .input-bar {
     gap: 6px;

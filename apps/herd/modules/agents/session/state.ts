@@ -1213,6 +1213,7 @@ export function liveSessionToApiPayload(
 
   if (session.sessionType) payload.sessionType = session.sessionType
   if (session.creator) payload.creator = session.creator
+  if (session.conversationId) payload.conversationId = session.conversationId
   if (session.agentType) payload.agentType = session.agentType
   if (session.mode) payload.mode = session.mode
   if (session.effort) payload.effort = session.effort
@@ -1224,6 +1225,7 @@ export function liveSessionToApiPayload(
   if (session.spawnedBy) payload.spawnedBy = session.spawnedBy
   if (Array.isArray(session.spawnedWorkers)) payload.spawnedWorkers = [...session.spawnedWorkers]
   if (session.resumedFrom) payload.resumedFrom = session.resumedFrom
+  if (session.credentialPoolId) payload.credentialPoolId = session.credentialPoolId
 
   return payload
 }

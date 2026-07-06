@@ -7,6 +7,7 @@ import type { CommanderSessionStore } from '../../commanders/store.js'
 import {
   buildMachineProbeScript,
   buildLoginShellCommand,
+  countMachineEnvSendKeys,
   isRemoteMachine,
   prepareMachineLaunchEnvironment,
   parseMachineHealthOutput,
@@ -38,12 +39,18 @@ import {
 } from '../daemon/registry.js'
 import {
   getMachineProvider,
+  listMachineProviders,
   type MachineAuthMode,
 } from '../providers/machine-provider-adapter.js'
+import {
+  resolveReadyHostManagedPoolCredential,
+  type ProviderAuthStore,
+} from '../provider-auth.js'
 import { parseSessionName } from '../session/input.js'
 import { aggregateCommanderWorldAgentSource, toCommanderWorldAgent, toWorldAgent } from '../session/state.js'
 import type { ConversationStore } from '../../commanders/conversation-store.js'
 import type {
+  AgentType,
   AnySession,
   MachineConfig,
   MachineDaemonPairCommand,
@@ -91,6 +98,7 @@ interface MachineWorldRouteDeps {
   withMachineRegistryWriteLock<T>(operation: () => Promise<T>): Promise<T>
   writeMachineRegistry(machines: readonly MachineConfig[]): Promise<MachineConfig[]>
   daemonRegistry: MachineDaemonRegistry
+  providerAuthStore: Pick<ProviderAuthStore, 'listPoolCredentials'>
   machineEnrollmentSigningSecret: string
 }
 
@@ -107,6 +115,45 @@ class MachineCreateLaunchVerificationError extends Error {
 
 export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
   const { router, requireReadAccess, requireWriteAccess } = deps
+
+  async function resolveDaemonHostManagedAuth(machine: MachineConfig) {
+    const connection = deps.daemonRegistry.getConnection(machine.id)
+    const entries = Object.entries(connection?.providerHealth ?? {})
+    if (entries.length === 0) {
+      return { connection, hostManagedAuth: undefined }
+    }
+
+    const providerAliases = new Map<string, AgentType>()
+    for (const provider of listMachineProviders()) {
+      providerAliases.set(provider.id, provider.id as AgentType)
+      providerAliases.set(provider.cliBinaryName, provider.id as AgentType)
+    }
+
+    const providerReady: Record<string, boolean> = {}
+    await Promise.all(entries.map(async ([key, status]) => {
+      const provider = providerAliases.get(status.provider) ?? providerAliases.get(key) ?? status.provider as AgentType
+      const ready = await resolveReadyHostManagedPoolCredential({
+        provider,
+        host: machine.id,
+        store: deps.providerAuthStore,
+      }).catch(() => ({ ready: false as const }))
+      if (ready.ready) {
+        providerReady[key] = true
+        providerReady[status.provider] = true
+        providerReady[provider] = true
+      }
+    }))
+
+    return {
+      connection,
+      hostManagedAuth: Object.keys(providerReady).length > 0 ? { providerReady } : undefined,
+    }
+  }
+
+  async function buildDaemonStatusForMachine(machine: MachineConfig) {
+    const { connection, hostManagedAuth } = await resolveDaemonHostManagedAuth(machine)
+    return buildMachineDaemonStatus(machine, connection, hostManagedAuth)
+  }
 
   async function pruneSessions(): Promise<void> {
     deps.pruneStaleCronSessions()
@@ -293,10 +340,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
           pairedAt,
           expiresAt,
         },
-        status: buildMachineDaemonStatus(
-          enrolledMachine,
-          deps.daemonRegistry.getConnection(enrolledMachine.id),
-        ),
+        status: await buildDaemonStatusForMachine(enrolledMachine),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to enroll daemon machine'
@@ -411,9 +455,11 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
     }
 
     if (machine.transport === 'daemon') {
+      const { connection, hostManagedAuth } = await resolveDaemonHostManagedAuth(machine)
       res.json(buildDaemonMachineHealthReport(
         machine,
-        deps.daemonRegistry.getConnection(machine.id),
+        connection,
+        hostManagedAuth,
       ))
       return
     }
@@ -432,7 +478,12 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
             'ConnectTimeout=10',
             ...deps.buildSshArgs(
               machine,
-              buildLoginShellCommand(probeScript, machine.cwd, preparedLaunch.sourcedEnvFile),
+              buildLoginShellCommand(
+                probeScript,
+                machine.cwd,
+                preparedLaunch.sourcedEnvFile,
+                countMachineEnvSendKeys(preparedLaunch.sshSendEnvKeys),
+              ),
               false,
               undefined,
               preparedLaunch.sshSendEnvKeys,
@@ -533,10 +584,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
             endpoint: resolveRequestEndpoint(req),
           }),
         },
-        status: buildMachineDaemonStatus(
-          pairedMachine,
-          deps.daemonRegistry.getConnection(machineId),
-        ),
+        status: await buildDaemonStatusForMachine(pairedMachine),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to pair daemon machine'
@@ -581,7 +629,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
       deps.daemonRegistry.disconnect(machineId, 'Daemon pairing revoked')
       res.json({
         machine: serializeMachineForResponse(revokedMachine),
-        status: buildMachineDaemonStatus(revokedMachine, null),
+        status: await buildDaemonStatusForMachine(revokedMachine),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to revoke daemon pairing'
@@ -615,10 +663,7 @@ export function registerMachineWorldRoutes(deps: MachineWorldRouteDeps): void {
       return
     }
 
-    res.json(buildMachineDaemonStatus(
-      machine,
-      deps.daemonRegistry.getConnection(machineId),
-    ))
+    res.json(await buildDaemonStatusForMachine(machine))
   })
 
   router.get('/machines/:id/auth-status', requireReadAccess, async (req, res) => {

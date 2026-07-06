@@ -86,7 +86,7 @@ export function AuthenticatedAppRouter({
     [componentBindings, graph],
   )
   const onboardingModule = boundGraph?.routes.find((module) => module.path === FOUNDER_SETUP_PATH)
-  const defaultRoutePath = boundGraph?.routes.find((module) => module.routeId === 'org.ui')?.path ?? '/org'
+  const defaultRoutePath = boundGraph?.routes.find((module) => module.routeId === 'command-room.ui')?.path ?? '/command-room'
   const shellModules = useMemo(
     () => boundGraph?.routes.filter((module) => module.path !== FOUNDER_SETUP_PATH) ?? [],
     [boundGraph],

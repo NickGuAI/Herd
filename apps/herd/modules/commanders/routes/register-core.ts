@@ -660,6 +660,7 @@ export function registerCoreRoutes(
           created.id,
           {
             cwd: created.cwd,
+            displayName,
           },
           context.commanderBasePath,
         )
@@ -670,6 +671,7 @@ export function registerCoreRoutes(
           options.identityOperatingStyle,
           {
             cwd: created.cwd,
+            displayName,
             basePath: context.commanderBasePath,
           },
         )
@@ -1557,6 +1559,7 @@ export function registerCoreRoutes(
           identityOperatingStyle,
           {
             cwd: session.cwd,
+            displayName,
             basePath: context.commanderBasePath,
           },
         )

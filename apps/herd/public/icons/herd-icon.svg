@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Herd">
+  <rect width="512" height="512" rx="112" fill="#f7f4ea"/>
+  <rect x="112" y="104" width="70" height="304" rx="20" fill="#11100d"/>
+  <rect x="330" y="104" width="70" height="304" rx="20" fill="#11100d"/>
+  <rect x="170" y="221" width="172" height="70" rx="20" fill="#11100d"/>
+  <circle cx="256" cy="256" r="42" fill="#b54a32"/>
+</svg>

@@ -103,7 +103,7 @@ export interface BuildOnboardingStatusOptions {
 }
 
 export interface SeedGaiaOptions extends BuildOnboardingStatusOptions {
-  sessionStore: Pick<CommanderSessionStore, 'list' | 'create'>
+  sessionStore: Pick<CommanderSessionStore, 'list' | 'create' | 'update'>
   conversationStore?: Pick<ConversationStore, 'listByCommander' | 'getActiveChatForCommander' | 'ensureDefaultConversation'>
 }
 
@@ -464,6 +464,43 @@ async function buildGaiaStatus(
   }
 }
 
+function resolveGaiaCommanderCwd(commander?: Pick<CommanderSession, 'cwd'> | null): string {
+  const configured = commander?.cwd?.trim()
+  return configured && configured.length > 0 ? configured : process.cwd()
+}
+
+async function ensureGaiaCommanderSeedArtifacts(
+  options: SeedGaiaOptions,
+  commander: CommanderSession,
+): Promise<void> {
+  const cwd = resolveGaiaCommanderCwd(commander)
+  const sideEffects: Array<Promise<unknown>> = [
+    options.sessionStore.update(commander.id, (current) => {
+      const existingCwd = current.cwd?.trim()
+      return existingCwd && existingCwd.length > 0
+        ? current
+        : { ...current, cwd }
+    }),
+    mergeIdentityOperatingStyleIntoCommanderWorkflow(commander.id, GAIA_IDENTITY, {
+      cwd,
+      displayName: GAIA_DISPLAY_NAME,
+      basePath: options.commanderDataDir,
+    }),
+    setCommanderDisplayName(options.commanderDataDir, commander.id, GAIA_DISPLAY_NAME),
+    writeCommanderUiProfile(commander.id, options.commanderDataDir, ensureCommanderVisualProfile({
+      avatar: GAIA_COMMANDER_AVATAR_URL,
+      speakingTone: GAIA_SPEAKING_TONE,
+    })),
+  ]
+
+  const results = await Promise.allSettled(sideEffects)
+  for (const result of results) {
+    if (result.status === 'rejected') {
+      console.warn('[onboarding] Gaia seed side effect failed:', result.reason)
+    }
+  }
+}
+
 export async function buildStarterWorkforceStatus(
   options: Pick<BuildOnboardingStatusOptions, 'sessionStore' | 'commanderDataDir'>,
 ): Promise<StarterWorkforceOnboardingStatus> {
@@ -777,9 +814,10 @@ export async function skipStarterWorkforce(
 
 export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaOnboardingStatus> {
   const providersPromise = buildProviderReadiness(options)
-  const existing = await buildGaiaStatus(options, providersPromise)
-  if (existing.exists) {
-    return existing
+  const existing = await findGaiaCommander(options)
+  if (existing) {
+    await ensureGaiaCommanderSeedArtifacts(options, existing)
+    return buildGaiaStatus(options, providersPromise)
   }
   const providers = await providersPromise
 
@@ -796,6 +834,7 @@ export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaO
     maxTurns: runtimeConfig.defaults.maxTurns,
     contextMode: 'thin',
     taskSource: null,
+    cwd: resolveGaiaCommanderCwd(),
     templateId: GAIA_TEMPLATE_ID,
     system: true,
   }
@@ -803,12 +842,7 @@ export async function seedGaiaCommander(options: SeedGaiaOptions): Promise<GaiaO
   const created = await options.sessionStore.create(session)
   let conversationId: string | null = null
   const sideEffects: Array<Promise<unknown>> = [
-    mergeIdentityOperatingStyleIntoCommanderWorkflow(created.id, GAIA_IDENTITY, { basePath: options.commanderDataDir }),
-    setCommanderDisplayName(options.commanderDataDir, created.id, GAIA_DISPLAY_NAME),
-    writeCommanderUiProfile(created.id, options.commanderDataDir, ensureCommanderVisualProfile({
-      avatar: GAIA_COMMANDER_AVATAR_URL,
-      speakingTone: GAIA_SPEAKING_TONE,
-    })),
+    ensureGaiaCommanderSeedArtifacts(options, created),
   ]
   if (typeof options.conversationStore?.ensureDefaultConversation === 'function') {
     sideEffects.push(

@@ -804,19 +804,12 @@ async function prepareConversationSession(
     : liveCredentialRecovery?.provider === agentType
       ? liveCredentialRecovery
       : undefined
-  const activeCredentialPoolId = await context.sessionsInterface.getActiveCredentialPoolId?.(agentType)
-  const activeCredentialStale = Boolean(
-    activeCredentialPoolId
-      && conversation.credentialPoolId
-      && conversation.credentialPoolId !== activeCredentialPoolId,
-  )
   const credentialPoolId = spawnOptions?.credentialPoolId
     ?? credentialRecovery?.credentialPoolId
-    ?? (activeCredentialStale ? activeCredentialPoolId : undefined)
+    ?? (conversation.agentType === agentType ? conversation.credentialPoolId : undefined)
   let clearResumeProviderContext = Boolean(
     spawnOptions?.clearResumeProviderContext
-      || credentialRecovery?.clearResumeProviderContext
-      || activeCredentialStale,
+      || credentialRecovery?.clearResumeProviderContext,
   )
   let resumeProviderContext = clearResumeProviderContext
     ? undefined
@@ -934,7 +927,7 @@ async function prepareConversationSession(
       maxTurns: built.maxTurns,
     },
     gaiaOpsEnvRequired,
-    credentialRecoveryApplied: Boolean(credentialRecovery || activeCredentialStale),
+    credentialRecoveryApplied: Boolean(credentialRecovery),
     resumeNotFoundRecoveryApplied,
   }
 }

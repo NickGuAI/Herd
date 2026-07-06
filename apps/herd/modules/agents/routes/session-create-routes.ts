@@ -1,7 +1,11 @@
 import type { Request, RequestHandler, Router } from 'express'
 import { WebSocket } from 'ws'
 import { CODEX_MODE_COMMANDS, DEFAULT_COLS, DEFAULT_ROWS } from '../constants.js'
-import { buildClaudePtyCommand, resolveClaudeApprovalPort } from '../adapters/claude/helpers.js'
+import {
+  buildClaudePtyCommand,
+  resolveClaudeApprovalBaseUrl,
+  resolveClaudeApprovalPort,
+} from '../adapters/claude/helpers.js'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   type ClaudeAdaptiveThinkingMode,
@@ -30,6 +34,7 @@ import {
 import {
   buildLoginShellCommand,
   buildSshArgs,
+  countMachineEnvSendKeys,
   isDaemonMachine,
   isRemoteMachine,
   prepareMachineLaunchEnvironment,
@@ -116,7 +121,7 @@ interface SessionCreateRouteDeps {
   resolveDaemonLaunchReadiness(
     machine: MachineConfig | undefined,
     agentType: AgentType,
-  ): { ok: true } | { ok: false; status: number; error: string }
+  ): Promise<{ ok: true } | { ok: false; status: number; error: string }>
   createProviderStreamSession(
     sessionName: string,
     mode: ClaudePermissionMode,
@@ -518,7 +523,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
       return
     }
     const machine = resolvedMachine.machine
-    const daemonReadiness = deps.resolveDaemonLaunchReadiness(machine, agentType)
+    const daemonReadiness = await deps.resolveDaemonLaunchReadiness(machine, agentType)
     if (!daemonReadiness.ok) {
       res.status(daemonReadiness.status).json({ error: daemonReadiness.error })
       return
@@ -603,15 +608,19 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
             nonce: approvalBridgeNonce,
           })
         : undefined
+      const approvalBaseUrl = resolveClaudeApprovalBaseUrl(process.env)
+      const approvalPort = resolveClaudeApprovalPort(process.env)
       const remoteShellCommand = buildLoginShellCommand(
         'exec "${SHELL:-/bin/bash}" -l',
         requestedMachineCwd,
         remoteMachine ? preparedLaunch.sourcedEnvFile : undefined,
+        remoteMachine ? countMachineEnvSendKeys(preparedLaunch.sshSendEnvKeys) : 0,
       )
       const remoteApprovalBridge = remoteMachine && requiresApprovalBridge
         ? {
-            port: resolveClaudeApprovalPort(process.env),
+            port: approvalPort,
             approvalBridgeToken,
+            baseUrl: approvalBaseUrl,
           }
         : undefined
       const ptyCommand = remoteMachine ? 'ssh' : 'bash'
@@ -628,7 +637,8 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
         ? {
             ...preparedLaunch.env,
             ...providerPtyEnv,
-            HERD_PORT: resolveClaudeApprovalPort(process.env),
+            HERD_PORT: approvalPort,
+            HERD_APPROVAL_BASE_URL: approvalBaseUrl,
             HERD_INTERNAL_TOKEN: undefined,
             HERD_SESSION_NAME: sessionName,
             ...(approvalBridgeToken ? { HERD_APPROVAL_BRIDGE_TOKEN: approvalBridgeToken } : {}),

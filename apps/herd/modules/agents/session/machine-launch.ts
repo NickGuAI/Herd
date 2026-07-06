@@ -5,11 +5,20 @@ import {
 } from '../machines.js'
 import { isDaemonPairingTokenExpired, type MachineDaemonRegistry } from '../daemon/registry.js'
 import type { AgentType, MachineConfig } from '../types.js'
+import {
+  resolveReadyHostManagedPoolCredential,
+  type ProviderAuthStore,
+} from '../provider-auth.js'
 
 interface MachineLaunchRuntimeDeps {
   daemonRegistry: MachineDaemonRegistry
+  providerAuthStore: Pick<ProviderAuthStore, 'listPoolCredentials'>
   readMachineRegistry(): Promise<MachineConfig[]>
 }
+
+type DaemonLaunchReadiness =
+  | { ok: true }
+  | { ok: false; status: number; error: string }
 
 export interface MachineLaunchRuntime {
   resolveLaunchMachine(
@@ -21,7 +30,7 @@ export interface MachineLaunchRuntime {
   resolveDaemonLaunchReadiness(
     machine: MachineConfig | undefined,
     agentType: AgentType,
-  ): { ok: true } | { ok: false; status: number; error: string }
+  ): Promise<DaemonLaunchReadiness>
 }
 
 export function createMachineLaunchRuntime(
@@ -49,10 +58,10 @@ export function createMachineLaunchRuntime(
     return { ok: true, machine }
   }
 
-  function resolveDaemonLaunchReadiness(
+  async function resolveDaemonLaunchReadiness(
     machine: MachineConfig | undefined,
     agentType: AgentType,
-  ): { ok: true } | { ok: false; status: number; error: string } {
+  ): Promise<DaemonLaunchReadiness> {
     if (!isDaemonMachine(machine)) {
       return { ok: true }
     }
@@ -79,11 +88,36 @@ export function createMachineLaunchRuntime(
       agentType,
       provider?.machineAuth?.cliBinaryName,
     ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-    const ready = providerKeys.some((key) => {
+    const installed = providerKeys.some((key) => {
+      const status = connection.providerHealth[key]
+      return status?.installed === true
+    })
+    const nativeReady = providerKeys.some((key) => {
       const status = connection.providerHealth[key]
       return status?.installed === true && status.authenticated === true
     })
-    if (!ready) {
+    if (installed && nativeReady) {
+      return { ok: true }
+    }
+
+    let hostManagedReady = false
+    if (installed) {
+      try {
+        hostManagedReady = (await resolveReadyHostManagedPoolCredential({
+          provider: agentType,
+          host: machine.id,
+          store: deps.providerAuthStore,
+        })).ready
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to read provider credential pool'
+        return {
+          ok: false,
+          status: 500,
+          error: message,
+        }
+      }
+    }
+    if (!installed || !hostManagedReady) {
       return {
         ok: false,
         status: 409,

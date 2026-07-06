@@ -1,4 +1,5 @@
 import type { RequestHandler, Router } from 'express'
+import type { ProviderAuthStore } from '../provider-auth.js'
 import { parseSessionName } from '../session/input.js'
 import {
   buildPersistedEntryFromExitedSession,
@@ -30,6 +31,7 @@ interface SessionQueryRouteDeps {
   router: Router
   requireReadAccess: RequestHandler
   getCommanderLabels?(): Promise<Record<string, string>>
+  providerAuthStore: ProviderAuthStore
   readMachineRegistry(): Promise<MachineConfig[]>
   sessions: Map<string, AnySession>
   completedSessions: Map<string, CompletedSession>
@@ -91,6 +93,52 @@ function parseBooleanQueryParam(rawValue: unknown, fallback: boolean): boolean |
     return false
   }
   return null
+}
+
+type CredentialPoolAttribution = NonNullable<AgentSession['credentialPool']>
+type CredentialPoolAttributablePayload = {
+  agentType?: AgentSession['agentType']
+  credentialPoolId?: string
+  credentialPool?: CredentialPoolAttribution
+}
+
+async function readCredentialPoolAttributions(
+  providerAuthStore: ProviderAuthStore,
+): Promise<Map<string, CredentialPoolAttribution>> {
+  const entries = new Map<string, CredentialPoolAttribution>()
+  for (const provider of ['claude', 'codex'] as const) {
+    try {
+      const pool = await providerAuthStore.listPoolCredentials(provider)
+      for (const credential of pool.credentials) {
+        entries.set(`${provider}:${credential.id}`, {
+          provider,
+          id: credential.id,
+          label: credential.label,
+        })
+      }
+    } catch {
+      // Session rows should still render when the credential store is unavailable.
+    }
+  }
+  return entries
+}
+
+function attachCredentialPoolAttribution<T extends CredentialPoolAttributablePayload>(
+  payload: T,
+  attributions: ReadonlyMap<string, CredentialPoolAttribution>,
+): T {
+  if (!payload.credentialPoolId || (payload.agentType !== 'claude' && payload.agentType !== 'codex')) {
+    return payload
+  }
+  const credentialPool = attributions.get(`${payload.agentType}:${payload.credentialPoolId}`) ?? {
+    provider: payload.agentType,
+    id: payload.credentialPoolId,
+    label: payload.credentialPoolId,
+  }
+  return {
+    ...payload,
+    credentialPool,
+  }
 }
 
 export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
@@ -235,6 +283,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
       res.status(400).json({ error: 'Invalid session name' })
       return
     }
+    const credentialPoolAttributions = await readCredentialPoolAttributions(deps.providerAuthStore)
 
     const active = deps.sessions.get(name)
     if (active) {
@@ -290,7 +339,10 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         const machine = resolveRuntimeSessionMachine(active.host, machines)
         const resumeAvailable = canResumeLiveStreamSession(active)
         res.json({
-          ...liveSessionToApiPayload(active, { resumeAvailable, machine }),
+          ...attachCredentialPoolAttribution(
+            liveSessionToApiPayload(active, { resumeAvailable, machine }),
+            credentialPoolAttributions,
+          ),
           completed: false,
           workerSummary: summarizeWorkerStates(workerStates),
           resumeAvailable,
@@ -384,7 +436,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         resumeAvailable,
         machine,
       })
-      res.json({
+      res.json(attachCredentialPoolAttribution({
         name,
         completed: false,
         status: 'exited',
@@ -401,6 +453,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         disabledReasons,
         sessionType: exited.sessionType,
         creator: exited.creator,
+        conversationId: exited.conversationId,
         transportType: 'stream',
         agentType: exited.agentType,
         model: exited.model,
@@ -412,12 +465,13 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         host: exited.host,
         spawnedBy: exited.spawnedBy,
         spawnedWorkers: [...exited.spawnedWorkers],
+        ...(exited.credentialPoolId ? { credentialPoolId: exited.credentialPoolId } : {}),
         processAlive: false,
         hadResult: exited.hadResult,
         resumedFrom: exited.resumedFrom,
         queuedMessageCount: countVisibleQueuedMessages(exited),
         resumeAvailable,
-      })
+      }, credentialPoolAttributions))
       return
     }
 
@@ -431,6 +485,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
     const nowMs = Date.now()
     const commanderLabels = await deps.getCommanderLabels?.() ?? {}
     const machines = await readRuntimeMachines()
+    const credentialPoolAttributions = await readCredentialPoolAttributions(deps.providerAuthStore)
     for (const [name, session] of deps.sessions) {
       if (
         session.kind === 'stream' &&
@@ -450,12 +505,12 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         const machine = resolveRuntimeSessionMachine(session.host, machines)
         const resumeAvailable = canResumeLiveStreamSession(session)
         const livePayload = liveSessionToApiPayload(session, { resumeAvailable, machine })
-        result.push({
+        result.push(attachCredentialPoolAttribution({
           ...livePayload,
           ...(label ? { label } : {}),
           workerSummary: summarizeWorkerStates(workerStates),
           resumeAvailable,
-        })
+        }, credentialPoolAttributions))
         continue
       }
 
@@ -514,7 +569,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         resumeAvailable,
         machine,
       })
-      result.push({
+      result.push(attachCredentialPoolAttribution({
         name,
         created: exited.createdAt,
         pid: 0,
@@ -528,6 +583,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         disabledReasons,
         sessionType: exited.sessionType,
         creator: exited.creator,
+        conversationId: exited.conversationId,
         transportType: 'stream',
         agentType: exited.agentType,
         model: exited.model,
@@ -539,13 +595,14 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         host: exited.host,
         spawnedBy: exited.spawnedBy,
         spawnedWorkers: [...exited.spawnedWorkers],
+        ...(exited.credentialPoolId ? { credentialPoolId: exited.credentialPoolId } : {}),
         processAlive: false,
         hadResult: exited.hadResult,
         resumedFrom: exited.resumedFrom,
         queuedMessageCount: countVisibleQueuedMessages(exited),
         status: 'exited',
         resumeAvailable,
-      })
+      }, credentialPoolAttributions))
     }
 
     res.json(result)

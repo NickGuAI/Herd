@@ -5,6 +5,9 @@ import type { AuthUser } from '@gehirn/auth-providers'
 import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import { combinedAuth } from '../../server/middleware/combined-auth.js'
 import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../claude-effort.js'
+import { ensureDefaultOperatorAutomations } from '../automations/defaults.js'
+import type { AutomationScheduler } from '../automations/scheduler.js'
+import type { AutomationStore } from '../automations/store.js'
 import {
   profileForApiResponse,
   GAIA_COMMANDER_AVATAR_URL,
@@ -56,6 +59,8 @@ export interface OrgRouterOptions {
   operatorStore?: BuildOrgTreeDependencies['operatorStore']
   sessionStore?: OrgSessionStore
   automationStore?: BuildOrgTreeDependencies['automationStore']
+  automationScheduler?: Pick<AutomationScheduler, 'createAutomation'>
+  automationSchedulerInitialized?: Promise<void>
   conversationStore?: OrgConversationStore
   questStore?: BuildOrgTreeDependencies['questStore']
   profileStore?: BuildOrgTreeDependencies['profileStore']
@@ -88,6 +93,8 @@ type OrgLaunchConversationRecord = OrgConversationRecord & { id?: string }
 type OrgConversationStore = {
   listByCommander(commanderId: string): Promise<ReadonlyArray<OrgLaunchConversationRecord>>
 } & Partial<Pick<ConversationStore, 'ensureDefaultConversation'>>
+type DefaultAutomationStore = BuildOrgTreeDependencies['automationStore'] &
+  Partial<Pick<AutomationStore, 'create'>>
 
 const GAIA_HOST = 'gaia'
 const GAIA_DISPLAY_NAME = 'Gaia'
@@ -197,6 +204,12 @@ function createAutomationStoreFallback(): BuildOrgTreeDependencies['automationSt
       return []
     },
   }
+}
+
+function canSeedDefaultAutomations(
+  store: BuildOrgTreeDependencies['automationStore'],
+): store is Pick<AutomationStore, 'list' | 'create'> {
+  return typeof (store as DefaultAutomationStore).create === 'function'
 }
 
 function parseFounderOrgSetupRequest(raw: unknown): FounderOrgSetupRequest {
@@ -332,6 +345,34 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
   const orgIdentityStore = options.orgIdentityStore ?? new OrgIdentityStore()
   let automationStorePromise: Promise<BuildOrgTreeDependencies['automationStore']> | null = null
   let gaiaSeedPromise: Promise<void> | null = null
+  let defaultAutomationsPromise: Promise<void> | null = null
+
+  async function loadResolvedAutomationStore(): Promise<BuildOrgTreeDependencies['automationStore']> {
+    automationStorePromise ??= options.automationStore
+      ? Promise.resolve(options.automationStore)
+      : loadAutomationStore()
+    return automationStorePromise
+  }
+
+  async function ensureDefaultAutomationsForFounder(founder: Pick<Operator, 'id'>): Promise<void> {
+    const automationStore = await loadResolvedAutomationStore()
+    if (!canSeedDefaultAutomations(automationStore)) {
+      return
+    }
+
+    defaultAutomationsPromise ??= (async () => {
+      await options.automationSchedulerInitialized
+      await ensureDefaultOperatorAutomations({
+        operatorId: founder.id,
+        store: automationStore,
+        scheduler: options.automationScheduler,
+      })
+    })().finally(() => {
+      defaultAutomationsPromise = null
+    })
+
+    await defaultAutomationsPromise
+  }
 
   async function findGaiaCommander(sessions: readonly CommanderSession[]): Promise<CommanderSession | null> {
     const displayNames = await readCommanderDisplayNames(commanderDataDir)
@@ -473,6 +514,7 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
       }),
       orgIdentityStore.updateName(payload.displayName),
     ])
+    await ensureDefaultAutomationsForFounder(operator)
 
     const response: FounderOrgSetupResponse = {
       operator,
@@ -492,10 +534,8 @@ export function createOrgRouter(options: OrgRouterOptions = {}): Router {
       return
     }
 
-    automationStorePromise ??= options.automationStore
-      ? Promise.resolve(options.automationStore)
-      : loadAutomationStore()
-    const automationStore = await automationStorePromise
+    await ensureDefaultAutomationsForFounder(founder)
+    const automationStore = await loadResolvedAutomationStore()
     const includeArchived = req.query.includeArchived === 'true'
     const sessions = await ensureGaiaCommanderSeed()
     const archivedCommandersCount = sessions.filter((session) => session.archived === true).length

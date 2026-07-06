@@ -42,20 +42,28 @@ export function Shell({ modules, counts = EMPTY_TOP_BAR_COUNTS, children }: Shel
         overflow: 'hidden',
       }}
     >
-      {/* TopBar — hidden on mobile, visible from md up */}
-      <div className="hidden md:block">
-        <TopBar modules={modules} counts={counts} />
-      </div>
+      {/* TopBar — desktop shell only; forced/coarse mobile uses drawer chrome. */}
+      {!isMobile ? (
+        <div className="hidden md:block">
+          <TopBar modules={modules} counts={counts} />
+        </div>
+      ) : null}
 
-      <ApprovalNotificationCenter />
+      <ApprovalNotificationCenter bottomOffsetClassName={mobileChrome.floatingBottomOffsetClassName} />
 
-      {/* Main content — add bottom padding on mobile for the tab bar + safe-area.
+      {/*
+        Canonical Herd mobile drawer chrome. Self-hides on immersive chat
+        routes. Rendered before <main> so header chrome stays at the top of the
+        mobile flex column, while the drawer overlay itself remains portaled.
+      */}
+      {mobileChrome.shouldRenderMobileChrome ? (
+        <MobileShellChrome modules={modules} pendingCount={counts.pending} />
+      ) : null}
+
+      {/* Main content — mobile drawer chrome is a normal shell sibling.
           overflowX:hidden contains horizontal overflow at the architectural
           boundary that owns viewport bounds (Shell). Route children do not need
-          their own viewport-frame overlay — see issue 1107.
-          Padding gate matches the MobileShell mount gate: apply only when
-          mobile chrome is visible, so immersive chat (where MobileBottomTabs
-          self-hides) does not leak a mobile-tab-height white bar — see issue 1152. */}
+          their own viewport-frame overlay — see issue 1107. */}
       <main
         style={{
           flex: 1,
@@ -75,16 +83,6 @@ export function Shell({ modules, counts = EMPTY_TOP_BAR_COUNTS, children }: Shel
       >
         {children}
       </main>
-
-      {/*
-        Canonical Herd mobile tab bar — Org · Sessions · Automations ·
-        Inbox · Settings. Self-hides on immersive chat routes. Rendered here (not
-        inside MobileCommandRoom) so every mobile route in the app —
-        including non-Command-Room pages — gets the same canonical IA.
-      */}
-      {mobileChrome.shouldRenderMobileChrome ? (
-        <MobileShellChrome modules={modules} pendingCount={counts.pending} />
-      ) : null}
     </div>
   )
 }

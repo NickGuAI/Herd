@@ -20,6 +20,7 @@ import {
 } from '../../event-normalizers/claude.js'
 import {
   buildLoginShellCommand,
+  countMachineEnvSendKeys,
   prepareDaemonMachineLaunchEnvironment,
   prepareMachineLaunchEnvironment,
   buildSshArgs,
@@ -30,6 +31,7 @@ import {
   isProviderAuthRequiredText,
   mergeProviderSpawnAuthIntoLaunch,
 } from '../../provider-auth.js'
+import { isApprovalBridgeProviderError } from '../../provider-errors.js'
 import type { PreparedMachineLaunchEnvironment } from '../../machine-credentials.js'
 import type { MachineDaemonRegistry } from '../../daemon/registry.js'
 import {
@@ -67,6 +69,7 @@ import {
   buildClaudeShellInvocation,
   buildClaudeSpawnEnv,
   buildClaudeStreamArgs,
+  resolveClaudeApprovalBaseUrl,
   resolveClaudeApprovalPort,
 } from './helpers.js'
 import {
@@ -353,6 +356,7 @@ export function createClaudeStreamSession(
     remoteClaude,
     requestedCwd,
     remote || daemon ? preparedLaunch.sourcedEnvFile : undefined,
+    remote ? countMachineEnvSendKeys(preparedLaunch.sshSendEnvKeys) : 0,
   )
   const localShellSpawn = buildClaudeLocalLoginShellSpawn(
     args,
@@ -378,10 +382,13 @@ export function createClaudeStreamSession(
         nonce: approvalBridgeNonce,
       })
     : undefined
+  const approvalBaseUrl = resolveClaudeApprovalBaseUrl(process.env)
+  const approvalPort = resolveClaudeApprovalPort(process.env)
   const remoteApprovalBridge = remote
     ? {
-        port: resolveClaudeApprovalPort(process.env),
+        port: approvalPort,
         approvalBridgeToken,
+        baseUrl: approvalBaseUrl,
       }
     : undefined
   const spawnCommand = remote ? 'ssh' : (daemon ? 'sh' : localShellSpawn.command)
@@ -400,6 +407,8 @@ export function createClaudeStreamSession(
   const spawnImpl = deps.spawnImpl ?? spawn
   const spawnEnv = buildClaudeSpawnEnv(preparedLaunch.env, adaptiveThinking, maxThinkingTokens, {
     approvalBridgeToken,
+    baseUrl: approvalBaseUrl,
+    port: approvalPort,
   })
   if (!options.providerAuth?.env?.CLAUDE_CODE_OAUTH_TOKEN) {
     spawnEnv.CLAUDE_CODE_OAUTH_TOKEN = undefined
@@ -667,6 +676,18 @@ export function createClaudeStreamSession(
     ) as StreamJsonEvent
     deps.appendEvent(session, stderrEvent)
     deps.broadcastEvent(session, stderrEvent)
+    if (isApprovalBridgeProviderError(text)) {
+      const bridgeErrorEvent = createClaudeProviderErrorEnvelope(
+        text,
+        { detail: `stderr: ${text}`, text },
+        readClaudeSessionId(session),
+        'approval_bridge',
+        'The approval bridge is stale or pointed at the wrong API base. Recover or relaunch this runtime session.',
+      ) as StreamJsonEvent
+      deps.appendEvent(session, bridgeErrorEvent)
+      deps.broadcastEvent(session, bridgeErrorEvent)
+      return
+    }
     if (isProviderAuthRequiredText(text)) {
       const authErrorEvent = createClaudeProviderErrorEnvelope(
         text,

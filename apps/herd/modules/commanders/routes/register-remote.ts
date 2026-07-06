@@ -88,7 +88,7 @@ export function registerRemoteRoutes(
       try {
         await scaffoldCommanderWorkflow(
           created.id,
-          {},
+          { displayName },
           context.commanderBasePath,
         )
       } catch (scaffoldError) {

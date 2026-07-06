@@ -5,6 +5,7 @@ import {
   buildLoginShellBootstrap,
   buildLoginShellCommand,
   buildSshArgs,
+  countMachineEnvSendKeys,
   isRemoteMachine,
   prepareMachineLaunchEnvironment,
   runCapturedCommand,
@@ -403,7 +404,12 @@ async function runMachineShellScript(
           'ConnectTimeout=10',
           ...buildSshArgs(
             machine,
-            buildLoginShellCommand(script, machine.cwd, undefined),
+            buildLoginShellCommand(
+              script,
+              machine.cwd,
+              undefined,
+              countMachineEnvSendKeys(prepared.sshSendEnvKeys),
+            ),
             false,
             undefined,
             prepared.sshSendEnvKeys,

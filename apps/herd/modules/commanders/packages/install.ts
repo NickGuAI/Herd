@@ -280,8 +280,9 @@ async function installCommanderPackageLocked(
   }
 
   try {
-    await scaffoldCommanderWorkflow(created.id, {}, commanderBasePath)
+    await scaffoldCommanderWorkflow(created.id, { displayName }, commanderBasePath)
     await mergeIdentityOperatingStyleIntoCommanderWorkflow(created.id, definition.commanderMd, {
+      displayName,
       basePath: commanderBasePath,
     })
     if (typeof options.conversationStore?.ensureDefaultConversation === 'function') {

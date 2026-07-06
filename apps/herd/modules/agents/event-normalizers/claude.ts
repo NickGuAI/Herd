@@ -218,7 +218,9 @@ export function createClaudeProviderErrorEnvelope(
       ...(normalizedCode ? { code: normalizedCode } : {}),
       ...(hint ? { hint } : {}),
       ...(limitDetails.resetAt ? { resetAt: limitDetails.resetAt } : {}),
-      retryable: limitDetails.classification === 'usage_limit' || limitDetails.classification === 'resume_not_found',
+      retryable: limitDetails.classification === 'usage_limit'
+        || limitDetails.classification === 'resume_not_found'
+        || limitDetails.classification === 'approval_bridge',
       data,
     },
     { sessionId },
@@ -1019,7 +1021,9 @@ function mapClaudeEvent(event: ClaudeStreamEvent): TranscriptEnvelope[] {
                 classification: errorDetails?.classification ?? 'other',
                 ...(normalizedErrorCode ? { code: normalizedErrorCode } : {}),
                 ...(errorDetails?.resetAt ? { resetAt: errorDetails.resetAt } : {}),
-                retryable: errorDetails?.classification === 'usage_limit' || errorDetails?.classification === 'resume_not_found',
+                retryable: errorDetails?.classification === 'usage_limit'
+                  || errorDetails?.classification === 'resume_not_found'
+                  || errorDetails?.classification === 'approval_bridge',
                 data: event,
               })]
             : []),

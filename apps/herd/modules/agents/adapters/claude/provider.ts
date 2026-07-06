@@ -232,7 +232,6 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       creator: entry.creator,
       conversationId: entry.conversationId,
       currentSkillInvocation: entry.currentSkillInvocation,
-      approvalBridgeNonce: entry.approvalBridgeNonce,
       effort: context?.effort,
       adaptiveThinking: context?.adaptiveThinking,
       maxThinkingTokens: context?.maxThinkingTokens,
