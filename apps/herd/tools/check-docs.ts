@@ -811,7 +811,13 @@ function checkNamingPolicy(): void {
     publicSecurityPolicyPath(),
   ]
 
-  const forbiddenPublicBranding = /Herd|herd|HERD|X-Herd/u
+  const deprecatedPublicName = ['Ham', 'murabi'].join('')
+  const forbiddenPublicBranding = new RegExp([
+    deprecatedPublicName,
+    deprecatedPublicName.toLowerCase(),
+    deprecatedPublicName.toUpperCase(),
+    `X-${deprecatedPublicName}`,
+  ].map(escapeRegExp).join('|'), 'u')
   const forbiddenSourceLabeling = /\bopen source\b/iu
 
   for (const filePath of files) {
@@ -834,11 +840,13 @@ function checkNamingPolicy(): void {
     'Herd is reconnecting',
     'App auth recovery copy',
   )
-  assertContains(
-    readText(path.join(appRoot, 'src', '__tests__', 'App.auth0.test.tsx')),
-    'Herd is reconnecting',
-    'App auth recovery copy test',
-  )
+  if (!publicReleaseDocsOnly) {
+    assertContains(
+      readText(path.join(appRoot, 'src', '__tests__', 'App.auth0.test.tsx')),
+      'Herd is reconnecting',
+      'App auth recovery copy test',
+    )
+  }
   assertContains(
     readText(path.join(docsRoot, 'reference', 'naming.md')),
     'Public docs and UI copy',
