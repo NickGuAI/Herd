@@ -9,5 +9,5 @@ Keep this file short and high-signal:
 - Current strategic focus that should route priorities.
 - Rules for resolving ambiguous requests.
 
-Do not store secrets, access tokens, raw private logs, or routine task history
+Do not store secrets, access tokens, raw sensitive logs, or routine task history
 here. Put project-specific guidance in the closest project guide instead.

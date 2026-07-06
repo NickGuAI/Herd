@@ -12,6 +12,6 @@ Default doctrines:
 - Keep responsibilities in their owning layer. Do not move backend decisions,
   data ownership, or policy logic into UI-only code.
 - Prefer root-cause fixes with verification over symptom patches.
-- Never store secrets, credentials, or raw private data in memory, shared
+- Never store secrets, credentials, or raw sensitive data in memory, shared
   knowledge, reports, or generated examples.
 - Promote shared lessons only when they are reusable across commanders.

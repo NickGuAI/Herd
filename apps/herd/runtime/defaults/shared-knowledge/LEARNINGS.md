@@ -9,4 +9,4 @@ Format:
 ```
 
 Start empty. Do not promote routine task logs, one-off debugging notes, or
-private details that future commanders do not need.
+sensitive details that future commanders do not need.
