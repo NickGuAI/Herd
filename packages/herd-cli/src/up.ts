@@ -12,8 +12,9 @@ export interface UpOptions {
   env?: NodeJS.ProcessEnv
 }
 
-export const APP_PATH_FILE = path.join(homedir(), '.herd', 'app-path')
-export const BOOTSTRAP_KEY_FILE = path.join(homedir(), '.herd', 'bootstrap-key.txt')
+export const DEFAULT_DATA_DIR = path.join(homedir(), '.herd')
+export const APP_PATH_FILE = path.join(DEFAULT_DATA_DIR, 'app-path')
+export const BOOTSTRAP_KEY_FILE = path.join(DEFAULT_DATA_DIR, 'bootstrap-key.txt')
 export const TMUX_SESSION = 'herd-dev'
 export const DEFAULT_PORT = 20001
 
@@ -21,12 +22,18 @@ function expandHome(value: string): string {
   return value.replace(/^~(?=$|\/)/u, homedir())
 }
 
+export function resolveDataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const dataDir = env.HERD_DATA_DIR?.trim() || env.HERD_DATA_DIR?.trim()
+  return dataDir ? path.resolve(expandHome(dataDir)) : DEFAULT_DATA_DIR
+}
+
+export function resolveBootstrapKeyFile(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveDataDir(env), 'bootstrap-key.txt')
+}
+
 export function resolveAppPathFileCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
   const candidates: string[] = []
-  const dataDir = env.HERD_DATA_DIR?.trim()
-  if (dataDir) {
-    candidates.push(path.join(path.resolve(expandHome(dataDir)), 'app-path'))
-  }
+  candidates.push(path.join(resolveDataDir(env), 'app-path'))
   if (!candidates.includes(APP_PATH_FILE)) {
     candidates.push(APP_PATH_FILE)
   }
@@ -497,8 +504,9 @@ export async function runUpCli(args: readonly string[]): Promise<number> {
     )
   }
 
-  if (existsSync(BOOTSTRAP_KEY_FILE)) {
-    process.stdout.write(`Bootstrap API key file: ${BOOTSTRAP_KEY_FILE}\n`)
+  const bootstrapKeyFile = resolveBootstrapKeyFile(process.env)
+  if (existsSync(bootstrapKeyFile)) {
+    process.stdout.write(`Bootstrap API key file: ${bootstrapKeyFile}\n`)
   }
   process.stdout.write(
     `  Open http://localhost:${plan.port} to sign in.\n`,

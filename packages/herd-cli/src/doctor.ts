@@ -10,11 +10,11 @@ import {
 } from './config.js'
 import {
   APP_PATH_FILE,
-  BOOTSTRAP_KEY_FILE,
   loadDotenv,
   readAppPathFileValue,
   resolveAppDir,
   resolveAppPathFileCandidates,
+  resolveBootstrapKeyFile,
 } from './up.js'
 import {
   formatStatusLine,
@@ -258,10 +258,11 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     runCommand,
   }))
 
+  const bootstrapKeyFile = resolveBootstrapKeyFile(effectiveEnv)
   checks.push({
     label: 'Bootstrap key',
-    state: existsSync(BOOTSTRAP_KEY_FILE) ? 'pass' : 'warn',
-    detail: BOOTSTRAP_KEY_FILE,
+    state: existsSync(bootstrapKeyFile) ? 'pass' : 'warn',
+    detail: bootstrapKeyFile,
   })
 
   checks.push({

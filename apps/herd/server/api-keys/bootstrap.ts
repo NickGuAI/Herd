@@ -26,7 +26,11 @@ interface BootstrapDefaultMasterKeyOptions {
 
 export function defaultBootstrapKeyPath(env: NodeJS.ProcessEnv = process.env): string {
   const home = env.HOME?.trim() || homedir()
-  return path.join(home, '.herd', DEFAULT_BOOTSTRAP_KEY_FILENAME)
+  const configuredDataDir = env.HERD_DATA_DIR?.trim() || env.HERD_DATA_DIR?.trim()
+  const dataDir = configuredDataDir
+    ? path.resolve(configuredDataDir.replace(/^~(?=$|\/)/u, home))
+    : path.join(home, '.herd')
+  return path.join(dataDir, DEFAULT_BOOTSTRAP_KEY_FILENAME)
 }
 
 function isNodeErrorWithCode(error: unknown, code: string): boolean {

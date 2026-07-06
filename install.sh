@@ -1407,9 +1407,13 @@ ok "wrote $APP_PATH_FILE"
 
 step "Installing herd CLI shim"
 mkdir -p "$BIN_DIR"
+shim_data_dir="$(single_quote "$DATA_DIR")"
 cat > "$SHIM_PATH" <<EOF
 #!/usr/bin/env bash
 export PATH="$PROVIDER_BIN_DIR:$PNPM_HOME/bin:$NODE_HOME/bin:\$PATH"
+if [ -z "\${HERD_DATA_DIR:-}" ]; then
+  export HERD_DATA_DIR=$shim_data_dir
+fi
 exec "$NODE_BIN" "$CLI_PKG_DIR/$CLI_BIN_REL" "\$@"
 EOF
 chmod +x "$SHIM_PATH"
