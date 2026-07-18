@@ -12,11 +12,11 @@ EnvironmentFile=-__APP_DIR__/.env
 Environment=HOME=__HOME_DIR__
 Environment=NODE_ENV=production
 Environment=PORT=__SERVICE_PORT__
-Environment=HERD_HOST=127.0.0.1
+Environment=HERD_HOST=0.0.0.0
 Environment=HERD_DATA_DIR=__DATA_DIR__
 Environment=HERD_DB_PATH=__DATA_DIR__/herd.sqlite
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/env PORT=__SERVICE_PORT__ HERD_HOST=127.0.0.1 node dist-server/server/index.js
+ExecStart=/usr/bin/env PORT=__SERVICE_PORT__ HERD_HOST=0.0.0.0 node dist-server/server/index.js
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

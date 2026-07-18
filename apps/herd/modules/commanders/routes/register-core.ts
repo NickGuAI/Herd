@@ -7,14 +7,12 @@ import {
   extractCommanderMdExcerpt,
 } from '../../../server/image-generation/sumi-portrait-prompt.js'
 import { DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE } from '../../claude-adaptive-thinking.js'
-import { DEFAULT_CLAUDE_EFFORT_LEVEL } from '../../claude-effort.js'
 import { DEFAULT_CLAUDE_MAX_THINKING_TOKENS } from '../../claude-max-thinking-tokens.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
 import { COMMANDER_STARTUP_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes.js'
 import { buildCommandRoomLaunchTarget } from '../../command-room/route-metadata.js'
 import {
   parseClaudeAdaptiveThinking,
-  parseClaudeEffort,
   parseClaudeMaxThinkingTokens,
 } from '../../agents/session/input.js'
 import {
@@ -44,7 +42,6 @@ import {
   parseOptionalCommanderAgentType,
   parseOptionalCommanderContextMode,
   parseOptionalCommanderCostCapUsd,
-  parseOptionalCommanderEffort,
   parseOptionalCommanderMaxTurns,
   parseOptionalCurrentTask,
   parseOptionalHeartbeatContextConfig,
@@ -68,7 +65,6 @@ import {
   buildCommanderWizardSystemPrompt,
 } from '../templates/wizard-prompt.js'
 import {
-  BENCHMARK_COMMANDER_CWD,
   BENCHMARK_COMMANDER_DISPLAY_NAME,
   BENCHMARK_COMMANDER_FAT_PIN_INTERVAL,
   BENCHMARK_COMMANDER_HEARTBEAT_MINUTES,
@@ -115,9 +111,19 @@ import {
   stopConversationSession,
 } from './conversation-runtime.js'
 import type { AgentType } from '../../agents/types.js'
-import { resolveDefaultProviderId } from '../../agents/providers/registry.js'
-import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import { getProvider, resolveDefaultProviderId } from '../../agents/providers/registry.js'
+import {
+  findProviderModelOption,
+  validateModelForAgentType,
+} from '../../agents/providers/validate-model.js'
+import { getCachedProviderModelsForValidation } from '../../agents/providers/model-discovery.js'
+import {
+  getAgentEffortLevels,
+  getAgentModelEffortCapability,
+  getDefaultAgentEffortForModel,
+  parseOptionalAgentEffort,
+  type AgentEffortLevel,
+} from '../../agents/effort.js'
 import { listCommanderPackages, loadCommanderPackage } from '../packages/registry.js'
 import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 import {
@@ -186,7 +192,7 @@ interface CommanderTemplatePackage {
     displayName: string
     agentType?: AgentType
     model?: string | null
-    effort?: ClaudeEffortLevel
+    effort?: AgentEffortLevel
     maxTurns?: number
     contextMode?: CommanderContextMode
     contextConfig?: HeartbeatContextConfig
@@ -211,6 +217,64 @@ function parseConversationId(raw: unknown): string | null {
   return typeof raw === 'string' && CONVERSATION_ID_PATTERN.test(raw.trim())
     ? raw.trim()
     : null
+}
+
+type CommanderModelEffortResolution =
+  | {
+      ok: true
+      effort: AgentEffortLevel | undefined
+      omitEffort: boolean
+    }
+  | {
+      ok: false
+      error: string
+    }
+
+function resolveCommanderModelEffort(
+  agentType: AgentType,
+  model: string | null | undefined,
+  rawEffort: unknown,
+  effortProvided: boolean,
+): CommanderModelEffortResolution {
+  const provider = getProvider(agentType)
+  const resolvedModels = provider
+    ? getCachedProviderModelsForValidation(provider).models
+    : []
+  const modelOption = findProviderModelOption(resolvedModels, model)
+  const capability = getAgentModelEffortCapability(agentType, modelOption)
+  const parsedEffort = parseOptionalAgentEffort(agentType, rawEffort)
+
+  if (effortProvided && (parsedEffort === null || rawEffort === null || rawEffort === '')) {
+    return {
+      ok: false,
+      error: `Invalid effort for provider "${agentType}". Expected one of: ${getAgentEffortLevels(agentType).join(', ')}`,
+    }
+  }
+  if (effortProvided && rawEffort != null && !capability.supportsEffort) {
+    return {
+      ok: false,
+      error: `Model "${modelOption?.label ?? model ?? agentType}" does not support effort`,
+    }
+  }
+  if (
+    effortProvided
+    && parsedEffort
+    && !capability.supportedEffortLevels.includes(parsedEffort)
+  ) {
+    return {
+      ok: false,
+      error: `Invalid effort for model "${modelOption?.label ?? model ?? agentType}". Expected one of: ${capability.supportedEffortLevels.join(', ')}`,
+    }
+  }
+
+  const storedEffort = parsedEffort && capability.supportedEffortLevels.includes(parsedEffort)
+    ? parsedEffort
+    : getDefaultAgentEffortForModel(agentType, modelOption)
+  return {
+    ok: true,
+    effort: capability.supportsEffort ? storedEffort : undefined,
+    omitEffort: !capability.supportsEffort,
+  }
 }
 
 function normalizeUserMessageText(content: unknown): string | null {
@@ -645,10 +709,14 @@ export function registerCoreRoutes(
       defaultConversationId = defaultConversation.id
 
       if (options.bootstrapBenchmark) {
-        await bootstrapBenchmarkCommanderFiles(created.id, context.commanderBasePath)
+        if (!created.cwd || !path.isAbsolute(created.cwd)) {
+          throw new Error('Benchmark commander cwd must be an absolute adapter root')
+        }
+        await bootstrapBenchmarkCommanderFiles(created.id, created.cwd, context.commanderBasePath)
         const automationSeed = await seedBenchmarkCommanderDefaultAutomations({
           commanderId: created.id,
           host: created.host,
+          cwd: created.cwd,
           model: created.model,
           automationStore: context.automationStore,
           automationScheduler: context.automationScheduler,
@@ -991,14 +1059,20 @@ export function registerCoreRoutes(
     }
 
     const speakingTone = parseField(req.body?.speakingTone)
-    const parsedEffort = parseOptionalCommanderEffort(req.body?.effort)
+    const effortProvided = req.body?.effort !== undefined
+    const effortResolution = resolveCommanderModelEffort(
+      session.agentType ?? resolveDefaultProviderId(),
+      session.model,
+      req.body?.effort,
+      effortProvided,
+    )
     const portraitStyleProvided = req.body?.portraitStyleId !== undefined
     const portraitStyleId = portraitStyleProvided
       ? parseCommanderPortraitStyleId(req.body?.portraitStyleId)
       : undefined
 
-    if (parsedEffort === null) {
-      res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
       return
     }
     if (portraitStyleProvided && !portraitStyleId) {
@@ -1014,10 +1088,10 @@ export function registerCoreRoutes(
     })
     await writeCommanderUiProfile(commanderId, context.commanderBasePath, merged)
 
-    if (req.body?.effort !== undefined) {
+    if (effortProvided) {
       await context.sessionStore.update(commanderId, (current) => ({
         ...current,
-        ...(req.body?.effort !== undefined ? { effort: parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL } : {}),
+        effort: effortResolution.effort,
       }))
     }
 
@@ -1090,16 +1164,17 @@ export function registerCoreRoutes(
       return
     }
 
-    const parsedEffort = parseOptionalCommanderEffort(req.body?.effort)
-    if (parsedEffort === null) {
-      res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
+    const selectedAgentType = parsedAgentType ?? resolveDefaultProviderId()
+    const effortResolution = resolveCommanderModelEffort(
+      selectedAgentType,
+      null,
+      req.body?.effort,
+      req.body?.effort !== undefined,
+    )
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
       return
     }
-
-    const selectedAgentType = parsedAgentType ?? resolveDefaultProviderId()
-    const selectedEffort = selectedAgentType === 'claude'
-      ? (parsedEffort ?? 'low')
-      : undefined
     const sessionName = `${WIZARD_SESSION_PREFIX}${randomUUID().split('-').join('')}`
     const cwd = parseMessage(req.body?.cwd) ?? undefined
     const wizardAuthHeaders = resolveWizardAuthHeaders(req)
@@ -1113,15 +1188,17 @@ export function registerCoreRoutes(
         name: sessionName,
         systemPrompt,
         agentType: selectedAgentType,
-        effort: selectedEffort,
+        effort: effortResolution.effort,
+        omitEffort: effortResolution.omitEffort,
         cwd,
         maxTurns: context.runtimeConfig.defaults.maxTurns,
       })
       const sent = await context.sessionsInterface.sendToSession(
         sessionName,
         COMMANDER_WIZARD_START_MESSAGE,
+        { intent: 'interrupt' },
       )
-      if (!sent) {
+      if (!sent.ok) {
         context.sessionsInterface.deleteSession(sessionName)
         res.status(503).json({
           error: 'Wizard startup message could not be delivered. Please retry.',
@@ -1216,10 +1293,11 @@ export function registerCoreRoutes(
       }
       throw error
     }
-    const cwd = parseMessage(req.body?.cwd)
-      ?? (isBenchmarkCreate
-        ? (benchmarkArchetype?.defaultCwd ?? BENCHMARK_COMMANDER_CWD)
-        : undefined)
+    const cwd = parseMessage(req.body?.cwd) ?? undefined
+    if (isBenchmarkCreate && (!cwd || !path.isAbsolute(cwd))) {
+      res.status(400).json({ error: 'Benchmark commander cwd must be an absolute adapter root' })
+      return
+    }
     const avatarSeed = parseMessage(req.body?.avatarSeed) ?? undefined
     const templateId = req.body?.templateId === null
       ? null
@@ -1280,15 +1358,20 @@ export function registerCoreRoutes(
       res.status(400).json({ error: 'model must be a string or null when provided' })
       return
     }
-    const parsedEffortCreate = parseOptionalCommanderEffort(req.body?.effort)
-    if (parsedEffortCreate === null) {
-      res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
-      return
-    }
     const selectedAgentType = parsedAgentTypeCreate ?? resolveDefaultProviderId()
     const modelValidation = validateModelForAgentType(selectedAgentType, parsedModelCreate.value ?? null)
     if (!modelValidation.ok) {
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
+      return
+    }
+    const effortResolution = resolveCommanderModelEffort(
+      selectedAgentType,
+      parsedModelCreate.value,
+      req.body?.effort,
+      req.body?.effort !== undefined,
+    )
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
       return
     }
 
@@ -1300,7 +1383,7 @@ export function registerCoreRoutes(
       created: context.now().toISOString(),
       agentType: selectedAgentType,
       ...(parsedModelCreate.value !== undefined ? { model: parsedModelCreate.value } : {}),
-      effort: parsedEffortCreate ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      ...(effortResolution.effort ? { effort: effortResolution.effort } : {}),
       maxTurns: parsedMaxTurns.value ?? context.runtimeConfig.defaults.maxTurns,
       contextMode: parsedContextMode.value ?? DEFAULT_COMMANDER_CONTEXT_MODE,
       contextConfig: parsedContextConfig.value,
@@ -1309,6 +1392,21 @@ export function registerCoreRoutes(
       cwd,
       ...(templateId !== undefined ? { templateId } : {}),
       ...(replicatedFromCommanderId !== undefined ? { replicatedFromCommanderId } : {}),
+    }
+
+    if (isBenchmarkCreate) {
+      if (!context.evalAdapterPreflight) {
+        res.status(503).json({ error: 'Eval adapter preflight is not configured' })
+        return
+      }
+      const preflight = await context.evalAdapterPreflight.check({
+        machineId: host,
+        adapterRoot: cwd!,
+      })
+      if (!preflight.ok) {
+        res.status(preflight.status).json({ error: preflight.error })
+        return
+      }
     }
 
     try {
@@ -1432,12 +1530,6 @@ export function registerCoreRoutes(
       return
     }
 
-    const parsedEffort = parseOptionalCommanderEffort(commander.effort)
-    if (parsedEffort === null) {
-      res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
-      return
-    }
-
     const parsedMaxTurns = parseOptionalCommanderMaxTurns(
       commander.maxTurns,
       { max: context.runtimeConfig.limits.maxTurns },
@@ -1507,6 +1599,16 @@ export function registerCoreRoutes(
       res.status(400).json({ error: importedModelValidation.error, validIds: importedModelValidation.validIds })
       return
     }
+    const effortResolution = resolveCommanderModelEffort(
+      importedAgentType,
+      parsedModel.value,
+      commander.effort,
+      commander.effort !== undefined,
+    )
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
+      return
+    }
     const parsedSkillBindings = isV2Bundle
       ? parseCommanderBundleSkillBindings(payload.skillBindings)
       : { ok: true as const, value: [] }
@@ -1529,7 +1631,7 @@ export function registerCoreRoutes(
       created: context.now().toISOString(),
       agentType: importedAgentType,
       ...(parsedModel.value !== undefined ? { model: parsedModel.value } : {}),
-      effort: parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      ...(effortResolution.effort ? { effort: effortResolution.effort } : {}),
       maxTurns: parsedMaxTurns.value ?? context.runtimeConfig.defaults.maxTurns,
       contextMode: parsedContextMode.value ?? DEFAULT_COMMANDER_CONTEXT_MODE,
       contextConfig: parsedContextConfig.value,
@@ -1654,6 +1756,17 @@ export function registerCoreRoutes(
       source.host,
       new Set(existing.map((session) => session.host)),
     )
+    const replicatedAgentType = source.agentType ?? resolveDefaultProviderId()
+    const effortResolution = resolveCommanderModelEffort(
+      replicatedAgentType,
+      source.model,
+      source.effort,
+      false,
+    )
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
+      return
+    }
 
     const session: CommanderSession = {
       id: randomUUID(),
@@ -1661,9 +1774,9 @@ export function registerCoreRoutes(
       avatarSeed: source.avatarSeed,
       state: 'idle',
       created: context.now().toISOString(),
-      agentType: source.agentType ?? resolveDefaultProviderId(),
+      agentType: replicatedAgentType,
       ...(source.model !== undefined ? { model: source.model } : {}),
-      effort: source.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      ...(effortResolution.effort ? { effort: effortResolution.effort } : {}),
       cwd: source.cwd,
       maxTurns: source.maxTurns,
       contextMode: source.contextMode,
@@ -1753,11 +1866,6 @@ export function registerCoreRoutes(
       return
     }
 
-    const parsedEffort = parseOptionalCommanderEffort(req.body?.effort)
-    if (effortProvided && (req.body?.effort === null || parsedEffort === null)) {
-      res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
-      return
-    }
     const parsedModel = parseOptionalModelSelection(req.body?.model)
     if (modelProvided && !parsedModel.ok) {
       res.status(400).json({ error: 'model must be a string or null when provided' })
@@ -1840,17 +1948,28 @@ export function registerCoreRoutes(
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
       return
     }
+    const effortResolution = resolveCommanderModelEffort(
+      nextAgentType,
+      nextModel,
+      effortProvided ? req.body?.effort : session.effort,
+      effortProvided,
+    )
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
+      return
+    }
 
     const updated = await context.sessionStore.update(commanderId, (current) => {
       const nextContextMode = parsedContextMode.value ?? current.contextMode
-      const nextEffort = parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
       return {
         ...current,
         ...(agentTypeProvided
           ? (nextAgentType ? { agentType: nextAgentType } : { agentType: undefined })
           : {}),
         ...(modelProvided ? { model: parsedModelValue } : {}),
-        ...(effortProvided ? { effort: nextEffort } : {}),
+        ...(agentTypeProvided || modelProvided || effortProvided
+          ? { effort: effortResolution.effort }
+          : {}),
         ...(cwdProvided ? { cwd } : {}),
         ...(maxTurnsProvided && parsedMaxTurns.value !== undefined ? { maxTurns: parsedMaxTurns.value } : {}),
         ...(contextModeProvided && parsedContextMode.value !== undefined ? { contextMode: parsedContextMode.value } : {}),
@@ -1945,6 +2064,21 @@ export function registerCoreRoutes(
       return
     }
     const selectedAgentType = parsedAgentType ?? resolveCommanderAgentType(session)
+    const modelValidation = validateModelForAgentType(selectedAgentType, session.model ?? null)
+    if (!modelValidation.ok) {
+      res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
+      return
+    }
+    const effortResolution = resolveCommanderModelEffort(
+      selectedAgentType,
+      session.model,
+      session.effort,
+      false,
+    )
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
+      return
+    }
     const previousState = session.state
     const defaultConversation = await context.ensureDefaultConversation(session, { surface: 'ui' })
     const sessionName = buildConversationSessionName(defaultConversation)
@@ -2056,9 +2190,8 @@ export function registerCoreRoutes(
         systemPrompt,
         agentType: selectedAgentType,
         model: started.model ?? undefined,
-        effort: selectedAgentType === 'claude'
-          ? started.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
-          : undefined,
+        effort: effortResolution.effort,
+        omitEffort: effortResolution.omitEffort,
         cwd: started.cwd ?? undefined,
         maxTurns: built.maxTurns,
         ...(gaiaOpsEnv ? {
@@ -2166,8 +2299,9 @@ export function registerCoreRoutes(
         explicitStartMessage == null
           ? { text: startPrompt, userEventSubtype: COMMANDER_STARTUP_USER_EVENT_SUBTYPE }
           : startPrompt,
+        { intent: 'interrupt' },
       )
-      if (!startupSent) {
+      if (!startupSent.ok) {
         console.warn(
           `[commanders] Startup message failed for "${commanderId}" (${selectedAgentType}); resetting runtime state`,
         )
@@ -2499,6 +2633,11 @@ export function registerCoreRoutes(
       res.status(400).json({ error: 'Invalid commander id' })
       return
     }
+    const session = await context.sessionStore.get(commanderId)
+    if (!session) {
+      res.status(404).json({ error: `Commander "${commanderId}" not found` })
+      return
+    }
 
     const parsedMaxTurns = parseOptionalCommanderMaxTurns(
       req.body?.maxTurns,
@@ -2530,9 +2669,14 @@ export function registerCoreRoutes(
     }
 
     const effortProvided = req.body?.effort !== undefined
-    const parsedEffort = parseClaudeEffort(req.body?.effort)
-    if (effortProvided && parsedEffort === null) {
-      res.status(400).json({ error: 'effort must be one of: low, medium, high, max' })
+    const effortResolution = resolveCommanderModelEffort(
+      session.agentType ?? resolveDefaultProviderId(),
+      session.model,
+      effortProvided ? req.body?.effort : session.effort,
+      effortProvided,
+    )
+    if (!effortResolution.ok) {
+      res.status(400).json({ error: effortResolution.error })
       return
     }
 
@@ -2576,7 +2720,7 @@ export function registerCoreRoutes(
         ...(parsedMaxTurns.value !== undefined ? { maxTurns: parsedMaxTurns.value } : {}),
         ...(parsedCostCapUsd.value !== undefined ? { costCapUsd: parsedCostCapUsd.value } : {}),
         ...(parsedContextMode.value !== undefined ? { contextMode: parsedContextMode.value } : {}),
-        ...(effortProvided ? { effort: parsedEffort ?? DEFAULT_CLAUDE_EFFORT_LEVEL } : {}),
+        ...(effortProvided ? { effort: effortResolution.effort } : {}),
         ...(adaptiveThinkingProvided
           ? { adaptiveThinking: parsedAdaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE }
           : {}),
@@ -2610,7 +2754,7 @@ export function registerCoreRoutes(
       costCapUsd: updated.costCapUsd ?? null,
       contextMode: updated.contextMode,
       contextConfig: updated.contextConfig ?? null,
-      effort: updated.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      effort: updated.effort,
       adaptiveThinking: updated.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
       maxThinkingTokens: updated.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     })

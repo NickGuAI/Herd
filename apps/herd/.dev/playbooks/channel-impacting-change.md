@@ -335,7 +335,7 @@ delivery status + route metadata coherent? -- no --> not done
    from ordinary API health:
 
 ```bash
-curl -fsS http://127.0.0.1:20009/api/health
+curl -fsS http://127.0.0.1:20001/api/health
 rg -n "Unhandled rejection|\\[CRASH\\]|Baileys|whatsapp|adapter|auth|restart" \
   operations/logs/server/herd/<current-launch> \
   ~/.herd 2>/dev/null

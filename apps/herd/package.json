@@ -1,8 +1,8 @@
 {
   "name": "herd",
-  "version": "0.0.7-beta",
+  "version": "0.0.8-beta",
   "private": true,
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "bin": {
     "herd": "./herd-cli.mjs"
@@ -17,9 +17,9 @@
     "migrate:machine-env-files": "tsx tools/migrate-machine-env-files.ts",
     "migrate:legacy-automations": "tsx tools/migrate-legacy-automations.ts",
     "build:deps": "pnpm run generate:provider-registry && pnpm --filter @gehirn/ai-services build && pnpm --filter @gehirn/herd-cli build && pnpm --filter @gehirn/auth-providers build && pnpm --filter @gehirn/telemetry build && pnpm --filter @gehirn/sse-streaming build && pnpm --filter @gehirn/transcription build",
-    "dev": "pnpm run build:deps && concurrently \"vite\" \"tsx watch server/index.ts\"",
+    "dev": "pnpm run build:deps && concurrently \"pnpm run dev:client\" \"pnpm run dev:server\"",
     "dev:client": "vite",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "PORT=${PORT:-20009} tsx watch server/index.ts",
     "start": "node dist-server/server/index.js",
     "start:src": "tsx server/index.ts",
     "build": "pnpm run build:deps && vite build && tsc -p tsconfig.node.json",

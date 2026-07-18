@@ -1,4 +1,6 @@
+import path from 'node:path'
 import { parseSessionId } from '../route-parsers.js'
+import { parseEvalAdapterDescriptor } from '../../eval/adapter-preflight.js'
 import type { CommanderRoutesContext } from './types.js'
 
 /**
@@ -34,33 +36,83 @@ export function registerWorkerRoutes(
       return
     }
 
+    const rawBody = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : null
+    let bodyForDispatch: unknown = req.body
+    if (rawBody && Object.prototype.hasOwnProperty.call(rawBody, 'evalAdapter')) {
+      const adapter = parseEvalAdapterDescriptor(rawBody.evalAdapter)
+      if (!adapter) {
+        res.status(400).json({
+          error: 'evalAdapter must contain an absolute adapterRoot and dotted adapterModule',
+        })
+        return
+      }
+      if (!context.evalAdapterPreflight) {
+        res.status(503).json({ error: 'Eval adapter preflight is not configured' })
+        return
+      }
+
+      const effectiveHost = typeof rawBody.host === 'string' && rawBody.host.trim().length > 0
+        ? rawBody.host.trim()
+        : commander.host
+      const effectiveCwd = typeof rawBody.cwd === 'string' && rawBody.cwd.trim().length > 0
+        ? rawBody.cwd.trim()
+        : commander.cwd
+      if (!effectiveCwd || !path.isAbsolute(effectiveCwd)) {
+        res.status(400).json({ error: 'Eval worker cwd must be an absolute adapter root' })
+        return
+      }
+      if (path.normalize(effectiveCwd) !== adapter.adapterRoot) {
+        res.status(400).json({ error: 'evalAdapter.adapterRoot must match the worker cwd' })
+        return
+      }
+
+      const preflight = await context.evalAdapterPreflight.check({
+        machineId: effectiveHost,
+        adapterRoot: adapter.adapterRoot,
+        adapterModule: adapter.adapterModule,
+      })
+      if (!preflight.ok) {
+        res.status(preflight.status).json({ error: preflight.error })
+        return
+      }
+
+      const { evalAdapter: _evalAdapter, ...dispatchFields } = rawBody
+      bodyForDispatch = {
+        ...dispatchFields,
+        host: preflight.machineId,
+        cwd: preflight.adapterRoot,
+      }
+    }
+
     try {
       const result = await context.sessionsInterface.dispatchWorkerForCommander({
         commanderId,
         rawBody: (
-          req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+          bodyForDispatch && typeof bodyForDispatch === 'object' && !Array.isArray(bodyForDispatch)
             ? {
-                ...(req.body as Record<string, unknown>),
+                ...(bodyForDispatch as Record<string, unknown>),
                 ...(
-                  !Object.prototype.hasOwnProperty.call(req.body, 'model')
+                  !Object.prototype.hasOwnProperty.call(bodyForDispatch, 'model')
                   && commander.model !== undefined
                     ? { model: commander.model }
                     : {}
                 ),
                 ...(
-                  !Object.prototype.hasOwnProperty.call(req.body, 'host')
+                  !Object.prototype.hasOwnProperty.call(bodyForDispatch, 'host')
                   && commander.host !== undefined
                     ? { host: commander.host }
                     : {}
                 ),
                 ...(
-                  !Object.prototype.hasOwnProperty.call(req.body, 'cwd')
+                  !Object.prototype.hasOwnProperty.call(bodyForDispatch, 'cwd')
                   && commander.cwd !== undefined
                     ? { cwd: commander.cwd }
                     : {}
                 ),
               }
-            : req.body
+            : bodyForDispatch
         ),
       })
       res.status(result.status).json(result.body)

@@ -39,6 +39,7 @@ export interface Conversation {
   status: ConversationStatus
   currentTask: Record<string, unknown> | null
   providerContext?: ProviderContext
+  credentialPoolId?: string
   lastHeartbeat: string | null
   heartbeatTickCount: number
   completedTasks: number

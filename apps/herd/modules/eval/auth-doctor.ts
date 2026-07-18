@@ -1,21 +1,11 @@
 import { execFile } from 'node:child_process'
-import path from 'node:path'
 import { promisify } from 'node:util'
 import {
-  EVAL_BENCHES,
   type EvalBench,
   type EvalRunnerMode,
 } from './types.js'
 
 const execFileAsync = promisify(execFile)
-
-const ADAPTER_IMPORTS: Record<EvalBench, { directory: string; module: string }> = {
-  'terminal-bench': { directory: 'terminal_bench', module: 'herd_terminal_bench.runner' },
-  locomo: { directory: 'locomo', module: 'herd_locomo.runner' },
-  marble: { directory: 'marble', module: 'herd_marble.runner' },
-  'hal-reliability': { directory: 'hal_reliability', module: 'herd_hal_reliability.runner' },
-  'tau-bench': { directory: 'tau_bench', module: 'herd_tau_bench.runner' },
-}
 
 export type EvalDoctorSeverity = 'pass' | 'warn' | 'fail'
 
@@ -125,61 +115,31 @@ async function checkTerminalBenchHarness(): Promise<EvalDoctorCheck> {
   }
 }
 
-function defaultBenchmarkAdapterRoot(env: NodeJS.ProcessEnv): string {
-  return env.HERD_BENCHMARK_ADAPTER_ROOT
-    ?? path.resolve(process.cwd(), '..', '..', 'benchmarks', 'herd')
-}
-
-async function checkAdapterInstallability(
-  env: NodeJS.ProcessEnv,
-  bench: EvalBench | undefined,
-): Promise<EvalDoctorCheck[]> {
-  const root = defaultBenchmarkAdapterRoot(env)
-  const benches = bench ? [bench] : [...EVAL_BENCHES]
-  const checks: EvalDoctorCheck[] = []
-
-  if (!await commandExists('python3')) {
-    return [{
-      id: 'adapter-python',
-      label: 'Benchmark adapter installability',
+async function checkHarborHarness(): Promise<EvalDoctorCheck> {
+  if (!await commandExists('harbor')) {
+    return {
+      id: 'harbor',
+      label: 'Harbor Terminal-Bench 2 harness',
       severity: 'fail',
-      message: 'python3 is not available for benchmark adapter import checks.',
-    }]
-  }
-
-  for (const benchId of benches) {
-    const adapter = ADAPTER_IMPORTS[benchId]
-    const adapterPath = path.join(root, adapter.directory)
-    try {
-      await execFileAsync(
-        'python3',
-        ['-c', `import ${adapter.module}`],
-        {
-          timeout: 10_000,
-          env: {
-            ...process.env,
-            ...env,
-            PYTHONPATH: `${root}:${adapterPath}`,
-          },
-        },
-      )
-      checks.push({
-        id: `adapter-${benchId}`,
-        label: 'Benchmark adapter installability',
-        severity: 'pass',
-        message: `${benchId} adapter runner imports from ${adapterPath}.`,
-      })
-    } catch {
-      checks.push({
-        id: `adapter-${benchId}`,
-        label: 'Benchmark adapter installability',
-        severity: 'fail',
-        message: `${benchId} adapter runner is not importable from ${adapterPath}.`,
-      })
+      message: 'Harbor CLI `harbor` is not available on PATH.',
     }
   }
 
-  return checks
+  if (!await commandWorks('harbor', ['run', '--help'])) {
+    return {
+      id: 'harbor',
+      label: 'Harbor Terminal-Bench 2 harness',
+      severity: 'fail',
+      message: 'Harbor CLI is installed, but `harbor run --help` is not usable.',
+    }
+  }
+
+  return {
+    id: 'harbor',
+    label: 'Harbor Terminal-Bench 2 harness',
+    severity: 'pass',
+    message: 'Harbor CLI is available and exposes the run command.',
+  }
 }
 
 function checkApiKey(env: NodeJS.ProcessEnv, bench: EvalBench | undefined): EvalDoctorCheck {
@@ -241,6 +201,57 @@ function checkArtifactSafety(env: NodeJS.ProcessEnv): EvalDoctorCheck {
     severity: 'pass',
     message: 'Eval runners use host env/config/secret stores and do not copy raw OAuth credential files into task containers or artifacts.',
   }
+}
+
+function checkHerdOrchestratedRuntime(env: NodeJS.ProcessEnv): EvalDoctorCheck[] {
+  const endpoint = (env.HERD_ENDPOINT ?? env.HERD_ENDPOINT ?? '').trim()
+  const apiKey = (env.HERD_API_KEY ?? env.HERD_API_KEY ?? '').trim()
+  const commanderId = (env.HERD_EVAL_COMMANDER_ID ?? env.HERD_COMMANDER_ID ?? '').trim()
+  const checks: EvalDoctorCheck[] = []
+
+  checks.push(endpoint.length > 0
+    ? {
+        id: 'herd-runtime-endpoint',
+        label: 'Herd-orchestrated runtime endpoint',
+        severity: 'pass',
+        message: 'The Herd-orchestrated runtime endpoint is configured in the host environment.',
+      }
+    : {
+        id: 'herd-runtime-endpoint',
+        label: 'Herd-orchestrated runtime endpoint',
+        severity: 'warn',
+        message: 'HERD_ENDPOINT or HERD_ENDPOINT is not set; the adapter will fall back to ~/.herd.json if present.',
+      })
+
+  checks.push(apiKey.length > 0
+    ? {
+        id: 'herd-runtime-api-key',
+        label: 'Herd-orchestrated runtime API key',
+        severity: 'pass',
+        message: 'The Herd-orchestrated runtime API key is configured in the host environment.',
+      }
+    : {
+        id: 'herd-runtime-api-key',
+        label: 'Herd-orchestrated runtime API key',
+        severity: 'warn',
+        message: 'HERD_API_KEY or HERD_API_KEY is not set; the adapter will fall back to ~/.herd.json if present.',
+      })
+
+  checks.push(commanderId.length > 0
+    ? {
+        id: 'herd-orchestrated-commander',
+        label: 'Herd-orchestrated commander identity',
+        severity: 'pass',
+        message: 'A commander id is configured for Herd-orchestrated benchmark attribution.',
+      }
+    : {
+        id: 'herd-orchestrated-commander',
+        label: 'Herd-orchestrated commander identity',
+        severity: 'fail',
+        message: 'Set HERD_EVAL_COMMANDER_ID or pass --commander before running the Herd-orchestrated benchmark path.',
+      })
+
+  return checks
 }
 
 function checkTelemetryReachability(env: NodeJS.ProcessEnv): EvalDoctorCheck {
@@ -430,7 +441,14 @@ export async function runEvalDoctor(options: EvalDoctorOptions = {}): Promise<Ev
     checks.push(await checkTerminalBenchHarness())
   }
 
-  checks.push(...await checkAdapterInstallability(env, options.bench))
+  if (
+    options.runnerMode === 'herd-orchestrated'
+    || options.bench === 'terminal-bench-2'
+    || options.bench === 'terminal-bench-2-1'
+  ) {
+    checks.push(await checkHarborHarness())
+    checks.push(...checkHerdOrchestratedRuntime(env))
+  }
 
   if (options.runnerMode === 'subscription-host-cli' || !options.runnerMode) {
     checks.push(...await checkCodexSubscription(env))

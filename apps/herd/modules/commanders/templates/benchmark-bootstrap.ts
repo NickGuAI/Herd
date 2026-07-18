@@ -8,7 +8,6 @@ import { COMMANDER_WORKFLOW_FILE } from '../workflow.js'
 
 export const BENCHMARK_COMMANDER_TEMPLATE_ID = 'benchmark'
 export const BENCHMARK_COMMANDER_DISPLAY_NAME = 'Benchmark Commander'
-export const BENCHMARK_COMMANDER_CWD = '/home/builder/App/benchmarks/herd'
 export const BENCHMARK_COMMANDER_HEARTBEAT_MINUTES = 30
 export const BENCHMARK_COMMANDER_MAX_TURNS = 300
 export const BENCHMARK_COMMANDER_FAT_PIN_INTERVAL = 2
@@ -30,6 +29,7 @@ export interface BenchmarkCommanderBootstrapResult {
 export interface BenchmarkCommanderAutomationSeedOptions {
   commanderId: string
   host: string
+  cwd: string
   model?: string | null
   automationStore: AutomationStore
   automationScheduler?: AutomationScheduler
@@ -41,80 +41,81 @@ export interface BenchmarkCommanderAutomationSeedResult {
   skipped: string[]
 }
 
-const BENCHMARK_COMMANDER_FILES: Record<string, string> = {
-  [COMMANDER_WORKFLOW_FILE]: [
-    'You are Benchmark Commander.',
-    `Workspace: ${BENCHMARK_COMMANDER_CWD}`,
-    '',
-    '## Identity and Operating Style',
-    '',
-    BENCHMARK_COMMANDER_PERSONA,
-    '',
-    '## Benchmark Scope',
-    '',
-    '- Only run benchmark tasks from `NickGuAI/Herd` with the `benchmark` label.',
-    '- Keep changes and notes focused on benchmark setup, execution, results, and regressions.',
-    '- Do not pick up unrelated implementation, triage, or operations work.',
-    '- Never modify product code while running a benchmark.',
-    '- Never write benchmark scores into durable commander memory.',
-    '- Never copy `~/.codex`, `~/.claude`, ChatGPT OAuth tokens, Claude OAuth tokens, or equivalent credential files into task containers.',
-    '',
-    '## Run Checklist',
-    '',
-    '1. Run `herd eval doctor --bench <bench> --runner <runner-mode>` before dispatch.',
-    '2. Select `subscription-host-cli`, `subscription-sbx`, `api-key`, or `proxy-experimental` explicitly.',
-    '3. Dispatch one worker per benchmark run unless the adapter documents sharding.',
-    '4. Store artifacts under `~/.herd/eval/<YYYY-MM-DD>/<bench>/<run-id>/`.',
-    '5. Report run ID, score, pass rate, cost or subscription-limit usage, runtime, failures, and artifact paths.',
-    '',
-    '## Memory',
-    '',
-    '- Read `.memory/MEMORY.md` before acting on prior benchmark context.',
-    '- Use `.memory/working-memory.md` for active scratch notes during a benchmark run.',
-    '- Save durable eval facts only: active baselines, leaderboard auth preconditions, and known flaky benches.',
-  ].join('\n'),
-  'WORKSPACE.md': [
-    '# Workspace',
-    '',
-    `- Cwd: \`${BENCHMARK_COMMANDER_CWD}\``,
-    '- Repository: `NickGuAI/Herd`',
-    '- Issue label: `benchmark`',
-    '- Adapter path: `benchmarks/herd/`',
-    '- Eval CLI: `packages/herd-cli/src/eval.ts`',
-    '- Eval result root: `~/.herd/eval/`',
-    '- Telemetry module: `apps/herd/modules/telemetry/`',
-    '- Eval UI/API module: `apps/herd/modules/eval/`',
-    '- Public release boundary: `operations/sops/scripts/sop-15-sync-herd.sh` and `check-herd-cleanliness.sh`',
-    '',
-    'Use this workspace only for benchmark-oriented tasks and artifacts.',
-    'Benchmark adapters remain internal and must not sync into public Herd release artifacts.',
-  ].join('\n'),
-  'SKILLS.md': [
-    '# Skills',
-    '',
-    '- benchmark-runner: Run `herd eval doctor`, dispatch the benchmark worker, and verify normalized artifacts.',
-    '- auth-doctor: Keep subscription CLI auth separate from API-key auth and fail unsafe token-in-container paths.',
-    '- telemetry-review: Query telemetry by `metadata.source`, `metadata.run_id`, `metadata.bench`, `metadata.task_id`, `metadata.turn`, and `metadata.runner_mode`.',
-    '- issue-reporting: Post concise issue/PR updates with run status, top failures, and artifact links.',
-    '- regression-triage: Open follow-up issues only when score deltas exceed configured thresholds.',
-  ].join('\n'),
-  '.memory/MEMORY.md': [
-    '# Benchmark Commander Memory',
-    '',
-    'Durable eval facts only belong here: active baselines, leaderboard auth preconditions, known flaky benches, and human-approved release-gate policy.',
-    '',
-    'Do not store benchmark scores, raw trajectories, OAuth credential paths, provider tokens, or active run scratch notes here.',
-  ].join('\n'),
-  '.memory/working-memory.md': [
-    '# Working Memory',
-    '',
-    'Active benchmark scratch notes belong here: current run ID, worker session, profile, runner mode, blockers, and report checklist.',
-  ].join('\n'),
+function buildBenchmarkCommanderFiles(cwd: string): Record<string, string> {
+  return {
+    [COMMANDER_WORKFLOW_FILE]: [
+      'You are Benchmark Commander.',
+      `Workspace: ${cwd}`,
+      '',
+      '## Identity and Operating Style',
+      '',
+      BENCHMARK_COMMANDER_PERSONA,
+      '',
+      '## Benchmark Scope',
+      '',
+      '- Only run benchmark tasks from `NickGuAI/Herd` with the `benchmark` label.',
+      '- Keep changes and notes focused on benchmark setup, execution, results, and regressions.',
+      '- Do not pick up unrelated implementation, triage, or operations work.',
+      '- Never modify product code while running a benchmark.',
+      '- Never write benchmark scores into durable commander memory.',
+      '- Never copy `~/.codex`, `~/.claude`, ChatGPT OAuth tokens, Claude OAuth tokens, or equivalent credential files into task containers.',
+      '',
+      '## Run Checklist',
+      '',
+      '1. Run `herd eval doctor --bench <bench> --runner <runner-mode>` before dispatch.',
+      '2. Select `herd-orchestrated`, `subscription-host-cli`, `subscription-sbx`, `api-key`, or `proxy-experimental` explicitly.',
+      '3. Pass the commander cwd as the absolute `--adapter-root` and pass the adapter entry point as an explicit dotted `--adapter-module`; never infer either from a benchmark name.',
+      '4. Dispatch one worker per benchmark run unless the adapter documents sharding.',
+      '5. Store artifacts under `~/.herd/eval/<YYYY-MM-DD>/<bench>/<run-id>/`.',
+      '6. Report run ID, score, pass rate, cost or subscription-limit usage, runtime, failures, and artifact paths.',
+      '',
+      '## Memory',
+      '',
+      '- Read `.memory/MEMORY.md` before acting on prior benchmark context.',
+      '- Use `.memory/working-memory.md` for active scratch notes during a benchmark run.',
+      '- Save durable eval facts only: active baselines, leaderboard auth preconditions, and known flaky benches.',
+    ].join('\n'),
+    'WORKSPACE.md': [
+      '# Workspace',
+      '',
+      `- Cwd: \`${cwd}\``,
+      '- Repository: `NickGuAI/Herd`',
+      '- Issue label: `benchmark`',
+      '- Adapter root: the commander cwd above; it is an external input and is not bundled with Herd.',
+      '- Adapter module: supplied explicitly as a dotted Python module for every eval run.',
+      '- Eval result root: `~/.herd/eval/`',
+      '',
+      'Use this workspace only for benchmark-oriented tasks and artifacts.',
+      'Benchmark adapters are external inputs and must not sync into public Herd release artifacts.',
+    ].join('\n'),
+    'SKILLS.md': [
+      '# Skills',
+      '',
+      '- benchmark-runner: Run `herd eval doctor`, dispatch the benchmark worker, and verify normalized artifacts.',
+      '- auth-doctor: Keep subscription CLI auth separate from API-key auth and fail unsafe token-in-container paths.',
+      '- telemetry-review: Query telemetry by `metadata.source`, `metadata.run_id`, `metadata.bench`, `metadata.task_id`, `metadata.turn`, and `metadata.runner_mode`.',
+      '- issue-reporting: Post concise issue/PR updates with run status, top failures, and artifact links.',
+      '- regression-triage: Open follow-up issues only when score deltas exceed configured thresholds.',
+    ].join('\n'),
+    '.memory/MEMORY.md': [
+      '# Benchmark Commander Memory',
+      '',
+      'Durable eval facts only belong here: active baselines, leaderboard auth preconditions, known flaky benches, and human-approved release-gate policy.',
+      '',
+      'Do not store benchmark scores, raw trajectories, OAuth credential paths, provider tokens, or active run scratch notes here.',
+    ].join('\n'),
+    '.memory/working-memory.md': [
+      '# Working Memory',
+      '',
+      'Active benchmark scratch notes belong here: current run ID, worker session, profile, runner mode, blockers, and report checklist.',
+    ].join('\n'),
+  }
 }
 
 export function buildBenchmarkCommanderDefaultAutomations(input: {
   commanderId: string
   host: string
+  cwd: string
   model?: string | null
 }): CreateAutomationInput[] {
   const base = {
@@ -123,7 +124,7 @@ export function buildBenchmarkCommanderDefaultAutomations(input: {
     agentType: 'codex' as const,
     permissionMode: 'default' as const,
     machine: input.host,
-    workDir: BENCHMARK_COMMANDER_CWD,
+    workDir: input.cwd,
     ...(input.model ? { model: input.model } : {}),
     sessionType: 'stream' as const,
     skills: [],
@@ -160,8 +161,8 @@ export function buildBenchmarkCommanderDefaultAutomations(input: {
       templateId: 'benchmark-release-gate',
       trigger: 'manual',
       description: 'Manual or release-label release gate using approved runner mode.',
-      instruction: 'Run smoke plus selected full benchmarks with `api-key` or an explicitly approved subscription runner, then post a pass/fail release comment with run IDs and artifact paths.',
-      seedMemory: 'Manual release-gate automation. Do not use proxy-experimental or unsafe credential mounting for release gates.',
+      instruction: 'Run smoke plus selected full benchmarks with `herd-orchestrated`, `api-key`, or an explicitly approved subscription runner, then post a pass/fail release comment with run IDs and artifact paths.',
+      seedMemory: 'Manual release-gate automation. Use herd-orchestrated for Terminal-Bench 2 submitted-agent runs. Do not use proxy-experimental or unsafe credential mounting for release gates.',
       status: 'active',
     },
     {
@@ -198,6 +199,7 @@ export async function seedBenchmarkCommanderDefaultAutomations(
   const definitions = buildBenchmarkCommanderDefaultAutomations({
     commanderId: options.commanderId,
     host: options.host,
+    cwd: options.cwd,
     model: options.model,
   })
   const existing = await options.automationStore.list({ parentCommanderId: options.commanderId })
@@ -259,6 +261,7 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
 
 export async function bootstrapBenchmarkCommanderFiles(
   commanderId: string,
+  cwd: string,
   basePath?: string,
 ): Promise<BenchmarkCommanderBootstrapResult> {
   const { commanderRoot } = resolveCommanderPaths(commanderId, basePath)
@@ -266,7 +269,7 @@ export async function bootstrapBenchmarkCommanderFiles(
 
   const written: string[] = []
   const skipped: string[] = []
-  for (const [relativePath, content] of Object.entries(BENCHMARK_COMMANDER_FILES)) {
+  for (const [relativePath, content] of Object.entries(buildBenchmarkCommanderFiles(cwd))) {
     const didWrite = await writeFileIfMissing(path.join(commanderRoot, relativePath), content)
     if (didWrite) {
       written.push(relativePath)

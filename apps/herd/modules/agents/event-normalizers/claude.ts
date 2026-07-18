@@ -1,4 +1,9 @@
-import type { TranscriptEnvelope, TranscriptEnvelopeEvent } from '../../../src/types/transcript-envelope.js'
+import type {
+  TranscriptEnvelope,
+  TranscriptEnvelopeEvent,
+  TranscriptTaskMetadata,
+  TranscriptTaskSubtype,
+} from '../../../src/types/transcript-envelope.js'
 import { extractProviderLimitDetails } from '../provider-errors.js'
 import { createTranscriptId } from '../transcript-id.js'
 
@@ -85,6 +90,7 @@ function readRawEventId(event: ClaudeStreamEvent): string | undefined {
   return readTrimmedString(event.id)
     ?? readTrimmedString(event.toolId)
     ?? readTrimmedString(event.tool_use_id)
+    ?? readTrimmedString(event.task_id)
     ?? readTrimmedString(message?.id)
     ?? readTrimmedString(contentBlock?.id)
 }
@@ -103,7 +109,7 @@ function readParentToolUseId(event: ClaudeStreamEvent): string | undefined {
   return readTrimmedString(event.parent_tool_use_id)
 }
 
-function readTaskToolUseId(event: ClaudeStreamEvent): string | undefined {
+function readTaskMetadata(event: ClaudeStreamEvent): TranscriptTaskMetadata | undefined {
   if (event.type !== 'system') {
     return undefined
   }
@@ -111,11 +117,28 @@ function readTaskToolUseId(event: ClaudeStreamEvent): string | undefined {
   if (!subtype || !CLAUDE_TASK_SYSTEM_SUBTYPES.has(subtype)) {
     return undefined
   }
-  return readTrimmedString(event.tool_use_id)
+  const taskId = readTrimmedString(event.task_id)
+  const toolUseId = readTrimmedString(event.tool_use_id)
+  const parentToolUseId = readTrimmedString(event.parent_tool_use_id)
+  const taskType = readTrimmedString(event.task_type) ?? readTrimmedString(event.subagent_type)
+  const description = readTrimmedString(event.task_description) ?? readTrimmedString(event.description)
+  const summary = readTrimmedString(event.summary)
+  const status = readTrimmedString(event.status)
+  return {
+    subtype: subtype as TranscriptTaskSubtype,
+    ...(taskId ? { taskId } : {}),
+    ...(toolUseId ? { toolUseId } : {}),
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+    ...(taskType ? { taskType } : {}),
+    ...(description ? { description } : {}),
+    ...(summary ? { summary } : {}),
+    ...(status ? { status } : {}),
+  }
 }
 
 function readSubagentId(event: ClaudeStreamEvent): string | undefined {
-  return readParentToolUseId(event) ?? readTaskToolUseId(event)
+  const task = readTaskMetadata(event)
+  return task?.toolUseId ?? task?.taskId ?? readParentToolUseId(event)
 }
 
 function withAgentSubagentId<T extends Record<string, unknown>>(
@@ -154,6 +177,7 @@ function envelope(
   const sessionId = readSessionId(event)
   const rawEventId = readRawEventId(event)
   const subagentId = overrides.subagentId ?? readSubagentId(event)
+  const task = overrides.task ?? readTaskMetadata(event)
   return {
     schemaVersion: 2,
     id: createTranscriptId(),
@@ -166,6 +190,7 @@ function envelope(
       ...(rawEventId ? { rawEventId } : {}),
     },
     ...(subagentId ? { subagentId } : {}),
+    ...(task ? { task } : {}),
     ev,
     ...overrides,
   }
@@ -303,7 +328,7 @@ function formatTaskSystemTitle(event: ClaudeStreamEvent): string | undefined {
   if (!subtype || !CLAUDE_TASK_SYSTEM_SUBTYPES.has(subtype)) {
     return undefined
   }
-  const description = readTrimmedString(event.description)
+  const description = readTrimmedString(event.description) ?? readTrimmedString(event.task_description)
   const summary = readTrimmedString(event.summary)
   const status = readTrimmedString(event.status)
   if (subtype === 'task_progress') {

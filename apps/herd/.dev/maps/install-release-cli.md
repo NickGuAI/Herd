@@ -72,5 +72,6 @@ bash operations/sops/scripts/check-herd-cleanliness.sh public
   skip it.
 - SOP-15 mirrors specific source paths; update the SOP/scripts when a required
   install/CLI/release source moves.
-- EC2 split-shell behavior spans installer, Caddyfile, service unit, launch
-  scripts, and tests; keep public `20001` and private `20009` assumptions in sync.
+- EC2 endpoint behavior spans the installer, service unit, launch scripts, and
+  tests; keep production/ALB/CLI `20001` and loopback development `20009`
+  assumptions in sync.

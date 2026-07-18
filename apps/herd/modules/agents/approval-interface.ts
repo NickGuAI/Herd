@@ -13,14 +13,20 @@
  */
 import { parseCodexApprovalId } from './codex-approval.js'
 import { readClaudeSessionId } from './providers/provider-session-context.js'
+import type { ApprovalBridgeTokenClaims } from '../policies/approval-bridge-token.js'
+import type { PersistenceHelpers } from './persistence-helpers.js'
 import type {
   AnySession,
+  AgentsRouterOptions,
+  ApprovalBridgeConversationState,
+  ApprovalBridgeCredentialInspection,
   ApprovalSessionContext,
   ApprovalSessionsInterface,
   CodexApprovalDecision,
   CodexApprovalQueueEvent,
   CodexPendingApprovalRequest,
   PendingCodexApprovalView,
+  PersistedStreamSession,
   StreamSession,
 } from './types.js'
 
@@ -55,6 +61,168 @@ export interface ApprovalInterfaceContext {
   getApprovalCommanderScopeId: ApprovalCommanderScopeResolver
   toPendingCodexApprovalView: PendingCodexApprovalProjection
   applyCodexApprovalDecision: CodexApprovalDecider
+  /**
+   * Resolve a conversation's status + approval bridge credential from
+   * canonical conversation state. Absent in deployments without the
+   * commanders conversation store, in which case bridge validation keeps the
+   * legacy session-scoped semantics.
+   */
+  getConversationApprovalBridgeState?: (
+    conversationId: string,
+  ) => Promise<ApprovalBridgeConversationState | null>
+  /**
+   * Resolve a session name to its conversation id from persisted session
+   * rows. Backs the v2-grace path when no live session holds the name
+   * (server restart, teardown gap).
+   */
+  resolvePersistedSessionConversationId?: (
+    sessionName: string,
+  ) => Promise<string | undefined>
+  /**
+   * Resolve a conversation's last persisted runtime policy snapshot. This is
+   * the no-live authority for cwd and active skill context during handoffs.
+   */
+  resolvePersistedConversationPolicyContext?: (
+    conversationId: string,
+    commanderId: string,
+  ) => Promise<ApprovalSessionContext | null>
+}
+
+type ConversationStore = AgentsRouterOptions['commanderConversationStore']
+type PersistenceGetter = () => Pick<PersistenceHelpers, 'readPersistedSessionsState'>
+type SessionBridgeDeps = Required<Pick<
+  ApprovalInterfaceContext,
+  | 'getConversationApprovalBridgeState'
+  | 'resolvePersistedSessionConversationId'
+  | 'resolvePersistedConversationPolicyContext'
+>>
+
+type PersistedConversationPolicySession = PersistedStreamSession & {
+  agentType: 'claude'
+  sessionType: 'commander'
+  creator: { kind: 'commander'; id: string }
+}
+
+function compareNewestPolicySession(
+  left: Pick<PersistedStreamSession, 'createdAt' | 'name'>,
+  right: Pick<PersistedStreamSession, 'createdAt' | 'name'>,
+): number {
+  return right.createdAt.localeCompare(left.createdAt)
+    || left.name.localeCompare(right.name)
+}
+
+function isPersistedConversationPolicySession(
+  entry: PersistedStreamSession,
+  conversationId: string,
+  commanderId: string,
+): entry is PersistedConversationPolicySession {
+  return entry.conversationId?.trim() === conversationId
+    && entry.agentType === 'claude'
+    && entry.sessionType === 'commander'
+    && (entry.transportType === undefined || entry.transportType === 'stream')
+    && entry.creator?.kind === 'commander'
+    && entry.creator.id?.trim() === commanderId
+}
+
+function selectPersistedConversationSession(
+  sessions: PersistedStreamSession[],
+  conversationId: string,
+  commanderId: string,
+): PersistedConversationPolicySession | undefined {
+  const matches = sessions.filter((entry): entry is PersistedConversationPolicySession => (
+    isPersistedConversationPolicySession(entry, conversationId, commanderId)
+  ))
+  const active = matches.filter((entry) => entry.sessionState !== 'exited')
+  const candidates = active.length > 0 ? active : matches
+  return candidates.sort(compareNewestPolicySession)[0]
+}
+
+/**
+ * Bind conversation-owned approval credentials to the router's canonical
+ * conversation and persisted-session stores. Provider replacement only
+ * reuses these resolvers; it never owns or rotates the credential itself.
+ */
+export const approvalBridgeDeps = {
+  provider(
+    approvalBridgeSigningSecret: string | undefined,
+    conversationStore: ConversationStore,
+  ) {
+    return {
+      approvalBridgeSigningSecret,
+      async resolveConversationApprovalBridgeCredential(conversationId: string) {
+        const credential = await conversationStore?.ensureApprovalBridgeCredential(conversationId)
+        return credential
+          ? { credentialId: credential.credentialId, epoch: credential.epoch }
+          : null
+      },
+    }
+  },
+
+  sessions(
+    conversationStore: ConversationStore,
+    getPersistenceHelpers: PersistenceGetter,
+  ): SessionBridgeDeps {
+    return {
+      async getConversationApprovalBridgeState(conversationId) {
+        const conversation = await conversationStore?.get(conversationId)
+        if (!conversation) {
+          return null
+        }
+        return {
+          status: conversation.status,
+          commanderId: conversation.commanderId,
+          approvalBridge: conversation.approvalBridge
+            ? {
+              credentialId: conversation.approvalBridge.credentialId,
+              epoch: conversation.approvalBridge.epoch,
+            }
+            : undefined,
+        }
+      },
+
+      async resolvePersistedSessionConversationId(sessionName) {
+        const state = await getPersistenceHelpers()
+          .readPersistedSessionsState()
+          .catch(() => ({ sessions: [] }))
+        const entry = state.sessions.find((candidate) => candidate.name === sessionName)
+        return entry?.conversationId?.trim() || undefined
+      },
+
+      async resolvePersistedConversationPolicyContext(conversationId, commanderId) {
+        const normalizedConversationId = conversationId.trim()
+        const normalizedCommanderId = commanderId.trim()
+        if (!normalizedConversationId || !normalizedCommanderId) {
+          return null
+        }
+        const state = await getPersistenceHelpers()
+          .readPersistedSessionsState()
+          .catch(() => ({ sessions: [] }))
+        const entry = selectPersistedConversationSession(
+          state.sessions,
+          normalizedConversationId,
+          normalizedCommanderId,
+        )
+        if (!entry) {
+          return null
+        }
+
+        return {
+          sessionName: entry.name,
+          sessionType: entry.sessionType,
+          creator: { ...entry.creator },
+          agentType: entry.agentType,
+          mode: entry.mode,
+          cwd: entry.cwd,
+          host: entry.host,
+          commanderScopeId: normalizedCommanderId,
+          conversationId: normalizedConversationId,
+          currentSkillInvocation: entry.currentSkillInvocation
+            ? { ...entry.currentSkillInvocation }
+            : undefined,
+        }
+      },
+    }
+  },
 }
 
 /**
@@ -71,6 +239,9 @@ export function createApprovalSessionsInterface(
     getApprovalCommanderScopeId,
     toPendingCodexApprovalView,
     applyCodexApprovalDecision,
+    getConversationApprovalBridgeState,
+    resolvePersistedSessionConversationId,
+    resolvePersistedConversationPolicyContext,
   } = ctx
 
   /**
@@ -94,7 +265,12 @@ export function createApprovalSessionsInterface(
     }
   }
 
-  function inspectApprovalBridgeCredential(sessionName: string, nonce: string): {
+  /**
+   * Legacy session-scoped bridge check: the token nonce must equal the nonce
+   * on the owning live stream/PTY session. Retained for sessions that have no
+   * conversation authority (non-conversation workers, PTY terminals).
+   */
+  function inspectSessionScopedBridgeNonce(sessionName: string, nonce: string): {
     ok: true
   } | {
     ok: false
@@ -109,6 +285,98 @@ export function createApprovalSessionsInterface(
       return { ok: false, reason: 'nonce_mismatch' }
     }
     return { ok: true }
+  }
+
+  /**
+   * Conversation authority: a bridge credential is valid while its
+   * conversation is known and non-revoked and the credential id/epoch match.
+   * There is deliberately NO live-session requirement and NO provider
+   * generation/lease/retirement gate — old provider processes keep passing
+   * checks for their conversation after any replacement, rotation, recovery,
+   * or server restart. Every accepted check still flows through the
+   * auto/review/block policy gate.
+   */
+  async function inspectConversationCredential(
+    conversationId: string,
+    credential?: { credentialId: string; epoch: number },
+  ): Promise<ApprovalBridgeCredentialInspection | null> {
+    if (!getConversationApprovalBridgeState) {
+      return null
+    }
+    const conversation = await getConversationApprovalBridgeState(conversationId)
+    if (!conversation) {
+      return credential
+        ? { ok: false, reason: 'conversation_revoked' }
+        : null
+    }
+    if (conversation.status === 'archived') {
+      return { ok: false, reason: 'conversation_revoked' }
+    }
+    if (credential) {
+      const bridge = conversation.approvalBridge
+      if (
+        !bridge
+        || bridge.credentialId !== credential.credentialId
+        || bridge.epoch !== credential.epoch
+      ) {
+        return { ok: false, reason: 'credential_revoked' }
+      }
+      return { ok: true, conversationId }
+    }
+    // v2 grace: the token predates conversation credentials, so it carries no
+    // epoch. It stays valid while the conversation's credential is still on
+    // its first epoch; an explicit operator rotation revokes it too.
+    if ((conversation.approvalBridge?.epoch ?? 1) !== 1) {
+      return { ok: false, reason: 'credential_revoked' }
+    }
+    return { ok: true, conversationId }
+  }
+
+  async function inspectApprovalBridgeCredential(
+    claims: ApprovalBridgeTokenClaims,
+  ): Promise<ApprovalBridgeCredentialInspection> {
+    if (claims.v === 3) {
+      const inspected = await inspectConversationCredential(claims.conversationId.trim(), {
+        credentialId: claims.credentialId,
+        epoch: claims.epoch,
+      })
+      // Conversation-scoped tokens are only mintable when conversation state
+      // exists, so an unresolvable conversation store means the credential
+      // cannot be validated — fail closed as revoked.
+      return inspected ?? { ok: false, reason: 'conversation_revoked' }
+    }
+
+    const sessionName = claims.sessionName.trim()
+    const session = sessions.get(sessionName)
+    if (session && (session.kind === 'stream' || session.kind === 'pty')) {
+      const conversationId = session.kind === 'stream'
+        ? session.conversationId?.trim()
+        : undefined
+      if (conversationId) {
+        // v2 grace (deploy transparency): resolve the session name to its
+        // conversation and accept while the conversation remains valid, so
+        // processes holding pre-upgrade tokens survive the deploy and any
+        // later provider replacement. When no conversation record exists the
+        // session keeps its legacy session-scoped semantics.
+        const inspected = await inspectConversationCredential(conversationId)
+        if (inspected) {
+          return inspected
+        }
+      }
+      return inspectSessionScopedBridgeNonce(sessionName, claims.nonce)
+    }
+
+    // No live session holds this name (server restart or a replacement
+    // teardown gap): resolve the conversation from persisted session rows —
+    // the conversation, not the provider session, is the authority.
+    const persistedConversationId = await resolvePersistedSessionConversationId?.(sessionName)
+    if (persistedConversationId) {
+      const inspected = await inspectConversationCredential(persistedConversationId)
+      if (inspected) {
+        return inspected
+      }
+    }
+    return { ok: false, reason: 'session_not_live' }
   }
 
   return {
@@ -162,10 +430,55 @@ export function createApprovalSessionsInterface(
       return null
     },
 
+    findLiveSessionByConversationId(conversationId) {
+      const normalizedConversationId = conversationId.trim()
+      if (!normalizedConversationId) {
+        return null
+      }
+      for (const session of sessions.values()) {
+        if (
+          session.kind === 'stream'
+          && session.conversationId?.trim() === normalizedConversationId
+        ) {
+          return session
+        }
+      }
+      return null
+    },
+
+    async resolveConversationPolicyContext(conversationId) {
+      const normalizedConversationId = conversationId.trim()
+      if (!normalizedConversationId) {
+        return null
+      }
+      const conversation = await getConversationApprovalBridgeState?.(normalizedConversationId)
+      const commanderId = conversation?.commanderId?.trim()
+      if (!conversation || conversation.status === 'archived' || !commanderId) {
+        return null
+      }
+      const liveSession = [...sessions.values()]
+        .filter((session): session is StreamSession => (
+          session.kind === 'stream'
+          && session.conversationId?.trim() === normalizedConversationId
+          && session.agentType === 'claude'
+          && session.sessionType === 'commander'
+          && session.creator.kind === 'commander'
+          && session.creator.id?.trim() === commanderId
+        ))
+        .sort(compareNewestPolicySession)[0]
+      if (liveSession) {
+        return projectSessionContext(liveSession)
+      }
+      return await resolvePersistedConversationPolicyContext?.(
+        normalizedConversationId,
+        commanderId,
+      ) ?? null
+    },
+
     inspectApprovalBridgeCredential,
 
     validateApprovalBridgeCredential(sessionName, nonce) {
-      return inspectApprovalBridgeCredential(sessionName, nonce).ok
+      return inspectSessionScopedBridgeNonce(sessionName, nonce).ok
     },
 
     listPendingCodexApprovals() {

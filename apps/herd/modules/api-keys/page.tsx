@@ -25,6 +25,7 @@ import { Toast } from '@modules/components/Toast'
 import { AccountProfileCard } from './components/AccountProfileCard'
 import { OrgIdentityCard } from '@modules/org-identity/components/OrgIdentityCard'
 import { ProviderAuthPanel } from '@modules/agents/components/ProviderAuthPanel'
+import { CredentialPoolsPanel } from '@modules/settings/CredentialPoolsPanel'
 
 interface ScopeOption {
   value: string
@@ -539,6 +540,18 @@ export default function ApiKeysPage() {
 
           <MagicBentoCard span={6} data-testid="settings-bento-provider-auth">
             <ProviderAuthPanel />
+          </MagicBentoCard>
+
+          <MagicBentoCard span={6} data-testid="settings-bento-credential-pools">
+            <div className="flex h-full flex-col">
+              <div>
+                <p className="section-title">Credential pools</p>
+                <p className="mt-2 text-sm text-[color:var(--hv-fg-subtle)]">
+                  Add and refresh Claude or Codex account pools for provider recovery.
+                </p>
+              </div>
+              <CredentialPoolsPanel className="mt-4" surface="desktop" />
+            </div>
           </MagicBentoCard>
 
           <MagicBentoCard span={3} data-testid="settings-bento-transcription">

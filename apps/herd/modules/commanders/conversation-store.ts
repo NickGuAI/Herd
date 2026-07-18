@@ -2,7 +2,19 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { AgentType } from '../agents/types.js'
+import {
+  parseStoredAgentEffort,
+  type AgentEffortLevel,
+} from '../agents/effort.js'
 import { parseProviderId } from '../agents/providers/registry.js'
+import {
+  isClaudeAdaptiveThinkingMode,
+  type ClaudeAdaptiveThinkingMode,
+} from '../claude-adaptive-thinking.js'
+import {
+  isClaudeMaxThinkingTokens,
+  type ClaudeMaxThinkingTokens,
+} from '../claude-max-thinking-tokens.js'
 import {
   type ProviderSessionContext,
 } from '../agents/providers/provider-session-context.js'
@@ -84,6 +96,19 @@ function activeChatStatusPriority(status: Conversation['status']): number {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * Conversation-lifetime approval bridge credential state. Owned by the
+ * conversation — not by any provider runtime session — so provider
+ * replacement, credential recovery, auto-rotation, model switch, relaunch,
+ * and server restart all preserve it. Revoked only when the conversation is
+ * archived/deleted or when an operator explicitly rotates the epoch.
+ */
+export interface ConversationApprovalBridgeState {
+  credentialId: string
+  epoch: number
+  createdAt: string
+}
+
 export interface Conversation {
   id: string
   commanderId: string
@@ -96,11 +121,15 @@ export interface Conversation {
   voiceConfig?: VoiceConfigOverride
   agentType?: AgentType | null
   model?: string | null
+  effort?: AgentEffortLevel
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   name: string
   status: 'active' | 'idle' | 'archived'
   currentTask: CommanderCurrentTask | null
   providerContext?: ProviderSessionContext
   credentialPoolId?: string
+  approvalBridge?: ConversationApprovalBridgeState
   lastHeartbeat: string | null
   heartbeatTickCount: number
   completedTasks: number
@@ -396,9 +425,27 @@ function parseProviderContext(
   return parseCanonicalProviderContext(raw.providerContext) ?? undefined
 }
 
+function parseApprovalBridgeState(raw: unknown): ConversationApprovalBridgeState | undefined {
+  if (!isObject(raw)) {
+    return undefined
+  }
+
+  const credentialId = asOptionalString(raw.credentialId)
+  const createdAt = asOptionalString(raw.createdAt)
+  const epoch = typeof raw.epoch === 'number' && Number.isInteger(raw.epoch) && raw.epoch >= 1
+    ? raw.epoch
+    : null
+  if (!credentialId || !createdAt || epoch === null) {
+    return undefined
+  }
+
+  return { credentialId, epoch, createdAt }
+}
+
 function cloneConversation(conversation: Conversation): Conversation {
   return {
     ...conversation,
+    approvalBridge: conversation.approvalBridge ? { ...conversation.approvalBridge } : undefined,
     currentTask: conversation.currentTask ? { ...conversation.currentTask } : null,
     channelMeta: conversation.channelMeta ? { ...conversation.channelMeta } : undefined,
     lastRoute: conversation.lastRoute ? { ...conversation.lastRoute } : undefined,
@@ -468,7 +515,15 @@ function parseConversation(raw: unknown): ParsedConversation | null {
   const agentType = parseProviderId(raw.agentType)
   const model = asOptionalNullableString(raw.model)
   const providerContext = parseProviderContext(raw)
+  const effort = parseStoredAgentEffort(agentType ?? providerContext?.providerId ?? '', raw.effort)
+  const adaptiveThinking = isClaudeAdaptiveThinkingMode(raw.adaptiveThinking)
+    ? raw.adaptiveThinking
+    : undefined
+  const maxThinkingTokens = isClaudeMaxThinkingTokens(raw.maxThinkingTokens)
+    ? raw.maxThinkingTokens
+    : undefined
   const credentialPoolId = asOptionalString(raw.credentialPoolId)
+  const approvalBridge = parseApprovalBridgeState(raw.approvalBridge)
 
   return {
     id,
@@ -482,11 +537,15 @@ function parseConversation(raw: unknown): ParsedConversation | null {
     voiceConfig: normalizeVoiceConfig(raw.voiceConfig),
     agentType,
     ...(model !== undefined ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(adaptiveThinking ? { adaptiveThinking } : {}),
+    ...(maxThinkingTokens ? { maxThinkingTokens } : {}),
     name,
     status,
     currentTask: parseCurrentTask(raw.currentTask),
     ...(providerContext ? { providerContext } : {}),
     ...(credentialPoolId ? { credentialPoolId } : {}),
+    ...(approvalBridge ? { approvalBridge } : {}),
     lastHeartbeat,
     heartbeatTickCount,
     completedTasks,
@@ -529,6 +588,8 @@ function normalizeConversation(
     throw new Error(`Invalid conversation createdByKind "${input.createdByKind}"`)
   }
   const model = asOptionalNullableString(input.model)
+  const effort = parseStoredAgentEffort(input.agentType ?? input.providerContext?.providerId ?? '', input.effort)
+  const approvalBridge = parseApprovalBridgeState(input.approvalBridge)
   const createdById = asOptionalString(input.createdById)
   const createdBySessionName = asOptionalString(input.createdBySessionName)
   const createdByConversationId = asOptionalString(input.createdByConversationId)
@@ -563,11 +624,19 @@ function normalizeConversation(
     ...(input.voiceConfig ? { voiceConfig: normalizeVoiceConfig(input.voiceConfig) } : {}),
     agentType: input.agentType ?? null,
     ...(model !== undefined ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(isClaudeAdaptiveThinkingMode(input.adaptiveThinking)
+      ? { adaptiveThinking: input.adaptiveThinking }
+      : {}),
+    ...(isClaudeMaxThinkingTokens(input.maxThinkingTokens)
+      ? { maxThinkingTokens: input.maxThinkingTokens }
+      : {}),
     name,
     status: input.status,
     currentTask: input.currentTask ? { ...input.currentTask } : null,
     ...(input.providerContext ? { providerContext: { ...input.providerContext } } : {}),
     ...(credentialPoolId ? { credentialPoolId } : {}),
+    ...(approvalBridge ? { approvalBridge } : {}),
     lastHeartbeat: input.lastHeartbeat,
     heartbeatTickCount: Math.max(0, Math.floor(input.heartbeatTickCount)),
     completedTasks: Math.max(0, Math.floor(input.completedTasks)),
@@ -704,6 +773,60 @@ export class ConversationStore {
       await this.deleteConversationFile(existing)
       return cloneConversation(existing)
     })
+  }
+
+  /**
+   * Resolve the conversation-lifetime approval bridge credential, creating it
+   * on first use. Every provider launch/replacement path for the same
+   * conversation resolves this same credential, so all process generations
+   * hold equivalent bridge tokens and provider rotation stays invisible to
+   * the approval path. Returns null when the conversation does not exist.
+   */
+  async ensureApprovalBridgeCredential(
+    conversationId: string,
+  ): Promise<ConversationApprovalBridgeState | null> {
+    const existing = await this.get(conversationId)
+    if (!existing) {
+      return null
+    }
+    if (existing.approvalBridge) {
+      return { ...existing.approvalBridge }
+    }
+
+    const updated = await this.update(conversationId, (current) => {
+      if (current.approvalBridge) {
+        return current
+      }
+      return {
+        ...current,
+        approvalBridge: {
+          credentialId: randomUUID(),
+          epoch: 1,
+          createdAt: new Date().toISOString(),
+        },
+      }
+    })
+    return updated?.approvalBridge ? { ...updated.approvalBridge } : null
+  }
+
+  /**
+   * Explicit operator revocation: mint a fresh credential id and bump the
+   * epoch so every outstanding bridge token for this conversation stops
+   * validating. This is the only revocation trigger besides conversation
+   * archive/delete — provider replacement must never call this.
+   */
+  async rotateApprovalBridgeCredential(
+    conversationId: string,
+  ): Promise<ConversationApprovalBridgeState | null> {
+    const updated = await this.update(conversationId, (current) => ({
+      ...current,
+      approvalBridge: {
+        credentialId: randomUUID(),
+        epoch: (current.approvalBridge?.epoch ?? 1) + 1,
+        createdAt: new Date().toISOString(),
+      },
+    }))
+    return updated?.approvalBridge ? { ...updated.approvalBridge } : null
   }
 
   async ensureDefaultConversation(input: {

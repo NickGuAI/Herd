@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -15,9 +15,10 @@ import {
   type ClaudeAdaptiveThinkingMode,
 } from '../../claude-adaptive-thinking.js'
 import {
-  CLAUDE_EFFORT_LEVELS,
-  type ClaudeEffortLevel,
-} from '../../claude-effort.js'
+  getDefaultAgentEffortForModel,
+  getAgentEffortLevelsForModel,
+  type AgentEffortLevel,
+} from '../../agents/effort.js'
 import {
   MAX_CLAUDE_MAX_THINKING_TOKENS,
   MIN_CLAUDE_MAX_THINKING_TOKENS,
@@ -80,7 +81,7 @@ async function updateCommanderRuntime(
       fatPinInterval?: number
     }
     costCapUsd: number | null
-    effort: ClaudeEffortLevel
+    effort?: AgentEffortLevel
     adaptiveThinking: ClaudeAdaptiveThinkingMode
     maxThinkingTokens: number
   },
@@ -186,8 +187,21 @@ export function CommanderIdentityTab({
     ? getProviderLabel(providers, commanderAgentType)
     : 'Unavailable'
   const providerDefaults = getProviderControlDefaults(currentProvider)
-  const [effort, setEffort] = useState<ClaudeEffortLevel>(
-    commander.effort ?? providerDefaults.effort,
+  const commanderModel = currentProvider?.availableModels.find((option) => option.id === commander.model)
+    ?? (commander.model == null
+      ? currentProvider?.availableModels.find((option) => option.default)
+        ?? currentProvider?.availableModels[0]
+      : undefined)
+  const effortOptions = useMemo(
+    () => getAgentEffortLevelsForModel(commanderAgentType ?? '', commanderModel),
+    [commanderAgentType, commanderModel],
+  )
+  const supportsEffort = currentProvider?.uiCapabilities.supportsEffort === true
+    && effortOptions.length > 0
+  const [effort, setEffort] = useState<AgentEffortLevel>(
+    commander.effort
+    ?? getDefaultAgentEffortForModel(commanderAgentType ?? '', commanderModel)
+    ?? providerDefaults.effort,
   )
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
     commander.adaptiveThinking ?? providerDefaults.adaptiveThinking,
@@ -217,7 +231,7 @@ export function CommanderIdentityTab({
         fatPinInterval?: number
       }
       costCapUsd: number | null
-      effort: ClaudeEffortLevel
+      effort?: AgentEffortLevel
       adaptiveThinking: ClaudeAdaptiveThinkingMode
       maxThinkingTokens: number
     }) => updateCommanderRuntime(commander.id, input),
@@ -230,7 +244,12 @@ export function CommanderIdentityTab({
   })
 
   useEffect(() => {
-    setEffort(commander.effort ?? providerDefaults.effort)
+    setEffort(
+      commander.effort && effortOptions.includes(commander.effort)
+        ? commander.effort
+        : getDefaultAgentEffortForModel(commanderAgentType ?? '', commanderModel)
+          ?? providerDefaults.effort,
+    )
     setAdaptiveThinking(commander.adaptiveThinking ?? providerDefaults.adaptiveThinking)
     setMaxThinkingTokens(String(commander.maxThinkingTokens ?? providerDefaults.maxThinkingTokens))
     setMaxTurns(String(
@@ -261,6 +280,9 @@ export function CommanderIdentityTab({
     detailQuery.data?.contextConfig?.fatPinInterval,
     detailQuery.data?.contextMode,
     detailQuery.data?.runtimeConfig?.defaults.maxTurns,
+    commanderAgentType,
+    commanderModel,
+    effortOptions,
     providerDefaults.adaptiveThinking,
     providerDefaults.effort,
     providerDefaults.maxThinkingTokens,
@@ -323,7 +345,11 @@ export function CommanderIdentityTab({
           ? { fatPinInterval: parsedFatPinInterval }
           : {},
         costCapUsd: parsedCostCapUsd,
-        effort,
+        ...(supportsEffort
+          ? { effort: effortOptions.includes(effort)
+              ? effort
+              : getDefaultAgentEffortForModel(commanderAgentType ?? '', commanderModel) }
+          : {}),
         adaptiveThinking,
         maxThinkingTokens: parsedMaxThinkingTokens,
       })
@@ -493,18 +519,18 @@ export function CommanderIdentityTab({
               </label>
             )}
             <div className="grid gap-3 md:grid-cols-3">
-              <label className="block">
-                <span className="section-title block mb-2">Claude effort</span>
+              {supportsEffort ? <label className="block">
+                <span className="section-title block mb-2">Effort</span>
                 <select
                   value={effort}
-                  onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
+                  onChange={(event) => setEffort(event.target.value as AgentEffortLevel)}
                   className={FIELD_CLASS}
                 >
-                  {CLAUDE_EFFORT_LEVELS.map((level) => (
+                  {effortOptions.map((level) => (
                     <option key={level} value={level}>{level}</option>
                   ))}
                 </select>
-              </label>
+              </label> : null}
               <label className="block">
                 <span className="section-title block mb-2">Adaptive thinking</span>
                 <select

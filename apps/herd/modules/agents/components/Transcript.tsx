@@ -18,6 +18,7 @@ export interface TranscriptProps {
   events?: HerdEvent[]
   messages?: MsgItem[]
   sessionId: string
+  sessionHost?: string
   agentAvatarUrl?: string
   agentAccentColor?: string
   onAnswer?: (toolId: string, answers: Record<string, string[]>) => void
@@ -59,6 +60,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
     events,
     messages,
     sessionId,
+    sessionHost,
     agentAvatarUrl,
     agentAccentColor,
     onAnswer,
@@ -204,6 +206,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(function
         messages={renderedMessages}
         onAnswer={onAnswer ?? (() => {})}
         sessionName={sessionId}
+        sessionHost={sessionHost}
         emptyLabel="Session started"
         agentAvatarUrl={agentAvatarUrl}
         agentAccentColor={agentAccentColor}

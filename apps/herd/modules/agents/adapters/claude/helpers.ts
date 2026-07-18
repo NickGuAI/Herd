@@ -26,6 +26,13 @@ import {
 } from '../../../policies/approval-bridge-token.js'
 
 const CLAUDE_APPEND_PROMPT_FILE_ARG = '__HERD_CLAUDE_APPEND_PROMPT_FILE__'
+const CLAUDE_OAUTH_OVERRIDE_ENV_KEYS = [
+  'CLAUDE_CONFIG_DIR',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] as const
 
 function buildPromptFileDelimiter(prompt: string): string {
   let delimiter = 'HERD_CLAUDE_PROMPT'
@@ -63,11 +70,14 @@ export function buildClaudeStreamArgs(
   resumeSessionId?: string,
   appendSystemPromptFile?: string,
   maxTurns?: number,
-  effort: ClaudeEffortLevel = DEFAULT_CLAUDE_EFFORT_LEVEL,
+  effort: ClaudeEffortLevel | null = DEFAULT_CLAUDE_EFFORT_LEVEL,
   settingsJson?: string,
   model?: string,
 ): string[] {
-  const args = ['-p', '--verbose', '--output-format', 'stream-json', '--input-format', 'stream-json', '--effort', effort]
+  const args = ['-p', '--verbose', '--output-format', 'stream-json', '--input-format', 'stream-json']
+  if (effort) {
+    args.push('--effort', effort)
+  }
   if (appendSystemPromptFile) {
     args.push('--append-system-prompt-file', appendSystemPromptFile)
     args.push('--exclude-dynamic-system-prompt-sections')
@@ -255,8 +265,15 @@ export function buildClaudeShellInvocation(
   adaptiveThinking: ClaudeAdaptiveThinkingMode = DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   maxThinkingTokens: ClaudeMaxThinkingTokens = DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   appendSystemPrompt?: string,
+  scrubOauthOverrides = false,
 ): string {
-  const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} MAX_THINKING_TOKENS=${maxThinkingTokens}; ${buildUnsetEnvironmentCommand(['CLAUDECODE', 'HERD_INTERNAL_TOKEN', ...ANTHROPIC_MODEL_ENV_KEYS])};`
+  const unsetKeys = [
+    'CLAUDECODE',
+    'HERD_INTERNAL_TOKEN',
+    ...ANTHROPIC_MODEL_ENV_KEYS,
+    ...(scrubOauthOverrides ? CLAUDE_OAUTH_OVERRIDE_ENV_KEYS : []),
+  ]
+  const envPrefix = `export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=${getClaudeDisableAdaptiveThinkingEnvValue(adaptiveThinking)} MAX_THINKING_TOKENS=${maxThinkingTokens}; ${buildUnsetEnvironmentCommand(unsetKeys)};`
   const promptBootstrap = appendSystemPrompt
     ? buildAppendPromptFileBootstrap(appendSystemPrompt)
     : ''
@@ -301,10 +318,11 @@ export function buildClaudeLocalLoginShellSpawn(
   envFile?: string,
   shellPath?: string,
   appendSystemPrompt?: string,
+  scrubOauthOverrides = false,
 ): { command: string; args: string[] } {
   const normalizedScript = cwd
-    ? `cd ${shellEscape(cwd)} && ${buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)}`
-    : buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)
+    ? `cd ${shellEscape(cwd)} && ${buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt, scrubOauthOverrides)}`
+    : buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt, scrubOauthOverrides)
   const script = `${buildLoginShellBootstrap(envFile)}; ${normalizedScript}`
   return {
     command: shellPath?.trim() || '/bin/bash',

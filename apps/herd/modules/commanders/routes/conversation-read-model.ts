@@ -1,11 +1,41 @@
 import { liveSessionToApiPayload } from '../../agents/session/state.js'
-import { getProvider } from '../../agents/providers/registry.js'
+import {
+  getProvider,
+  listProviders,
+  resolveDefaultProviderId,
+} from '../../agents/providers/registry.js'
+import {
+  resolveProviderDefaults,
+  type ProviderModelDiscoveryMetadata,
+  type ProviderModelOption,
+} from '../../agents/providers/provider-adapter.js'
+import { getCachedProviderModelsForValidation } from '../../agents/providers/model-discovery.js'
+import { hasNativeProviderResumeIdentifier } from '../../agents/providers/native-resume.js'
+import {
+  getAgentEffortLevelsForModel,
+  parseStoredAgentEffort,
+  parseOptionalAgentEffort,
+  type AgentEffortLevel,
+} from '../../agents/effort.js'
+import {
+  CLAUDE_ADAPTIVE_THINKING_MODES,
+  type ClaudeAdaptiveThinkingMode,
+} from '../../claude-adaptive-thinking.js'
+import {
+  MAX_CLAUDE_MAX_THINKING_TOKENS,
+  MIN_CLAUDE_MAX_THINKING_TOKENS,
+} from '../../claude-max-thinking-tokens.js'
 import type { AgentSession, AgentType, StreamSession } from '../../agents/types.js'
-import { buildDefaultCommanderConversationId } from '../store.js'
+import type { ProviderSessionContext } from '../../agents/providers/provider-session-context.js'
+import {
+  buildDefaultCommanderConversationId,
+  type CommanderSession,
+} from '../store.js'
 import type { Conversation } from '../conversation-store.js'
 import type { CommanderRoutesContext } from './types.js'
 import {
   buildConversationSessionName,
+  getConversationRuntimeSettingsDisabledReason,
   getLiveConversationSession,
   type ConversationMessagesPage,
 } from './conversation-runtime.js'
@@ -24,6 +54,7 @@ type ConversationAction =
   | 'archive'
   | 'delete'
   | 'updateProvider'
+  | 'updateRuntimeSettings'
 
 type ConversationDisabledReasons = Record<ConversationAction, string | null>
 type ConversationAllowedActions = Record<ConversationAction, boolean>
@@ -32,6 +63,31 @@ type ConversationTransportType = 'stream' | 'pty' | 'external' | null
 interface LiveConversationSessionLike {
   kind?: string
   agentType?: AgentType
+  model?: string
+  effort?: AgentEffortLevel
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: number
+  credentialPoolId?: string
+  providerAuthSnapshot?: {
+    accountId?: string
+    accountEmail?: string
+  }
+  providerContext?: ProviderSessionContext
+}
+
+function findRuntimeModelOption(
+  models: readonly ProviderModelOption[],
+  model: string | null | undefined,
+): ProviderModelOption | undefined {
+  const id = model?.trim()
+  if (!id) {
+    return models.find((option) => option.default)
+  }
+  return models.find((option) => (
+    option.id === id
+    || option.resolvedModel === id
+    || option.aliases?.includes(id) === true
+  ))
 }
 
 function hasSerializableStreamShape(
@@ -89,6 +145,33 @@ export interface ConversationSummaryDTO extends Conversation {
     }
   }
   allowedActions: ConversationAllowedActions
+  runtimeSettings: {
+    current: {
+      agentType: AgentType
+      model: string | null
+      effort: AgentEffortLevel | null
+      adaptiveThinking: ClaudeAdaptiveThinkingMode | null
+      maxThinkingTokens: number | null
+    }
+    supported: {
+      agentType: true
+      model: true
+      effort: boolean
+      adaptiveThinking: boolean
+      maxThinkingTokens: boolean
+    }
+    options: {
+      agentType: AgentType[]
+      model: ProviderModelOption[]
+      effort: AgentEffortLevel[]
+      adaptiveThinking: ClaudeAdaptiveThinkingMode[]
+      maxThinkingTokens: { min: number; max: number } | null
+    }
+    modelDiscovery: ProviderModelDiscoveryMetadata
+    supportsCustomModels: boolean
+    allowed: boolean
+    disabledReason: string | null
+  }
   initialMessagePage?: ConversationMessagesPage
 }
 
@@ -154,6 +237,10 @@ export function buildConversationSummaryDTO(
   context: CommanderRoutesContext,
   conversation: Conversation,
   canonicalOrder = 0,
+  commander?: Pick<
+    CommanderSession,
+    'agentType' | 'model' | 'effort' | 'adaptiveThinking' | 'maxThinkingTokens' | 'providerContext' | 'cwd'
+  > | null,
 ): ConversationSummaryDTO {
   const liveSession = getLiveConversationSession(context, conversation) as LiveConversationSessionLike | undefined
   const transportType = resolveTransportType(liveSession)
@@ -185,6 +272,137 @@ export function buildConversationSummaryDTO(
     (conversation.status === 'idle' || canRecoverActiveNoLiveSession)
     && runtimeState !== 'starting'
     && !hasLiveSession
+  )
+  const commanderAgentType = commander?.agentType ?? resolveDefaultProviderId()
+  const effectiveAgentType = liveSession?.agentType
+    ?? conversation.agentType
+    ?? commanderAgentType
+  const runtimeProvider = getProvider(effectiveAgentType)
+  const runtimeAccountId = liveSession?.providerAuthSnapshot?.accountId
+    ?? liveSession?.providerAuthSnapshot?.accountEmail
+  const runtimeModels = runtimeProvider
+    ? getCachedProviderModelsForValidation(runtimeProvider, {
+        credentialPoolId: liveSession?.credentialPoolId ?? conversation.credentialPoolId,
+        ...(runtimeAccountId ? { accountId: runtimeAccountId } : {}),
+      })
+    : null
+  const runtimeProviderDefaults = runtimeProvider
+    ? resolveProviderDefaults(runtimeProvider, runtimeModels?.models)
+    : undefined
+  const hasStoredConversationModel = conversation.agentType === effectiveAgentType
+    && Object.prototype.hasOwnProperty.call(conversation, 'model')
+    && conversation.model !== undefined
+  const commanderMatchesProvider = commanderAgentType === effectiveAgentType
+  const hasNativeResumeIdentifier = Boolean(
+    !liveSession
+    && runtimeProvider
+    && hasNativeProviderResumeIdentifier({
+      provider: runtimeProvider,
+      agentType: effectiveAgentType,
+      providerContext: conversation.providerContext,
+      sessionName,
+      cwd: commander?.cwd ?? process.env.HOME ?? '/tmp',
+    }),
+  )
+  const effectiveModel = liveSession?.model
+    ?? (hasStoredConversationModel
+      ? conversation.model ?? runtimeProviderDefaults?.model
+      : commanderMatchesProvider
+        ? commander?.model ?? (hasNativeResumeIdentifier ? null : runtimeProviderDefaults?.model)
+        : hasNativeResumeIdentifier ? null : runtimeProviderDefaults?.model)
+    ?? null
+  const runtimeModel = findRuntimeModelOption(runtimeModels?.models ?? [], effectiveModel)
+  const runtimeModelOptions = runtimeModel || !effectiveModel
+    ? runtimeModels?.models ?? []
+    : [
+        {
+          id: effectiveModel,
+          label: effectiveModel,
+          description: 'Current runtime model; not present in the latest discovered catalog.',
+        },
+        ...(runtimeModels?.models ?? []),
+      ]
+  const persistedProviderContext = conversation.providerContext as {
+    effort?: unknown
+    omitEffort?: boolean
+    adaptiveThinking?: unknown
+    maxThinkingTokens?: unknown
+  } | undefined
+  const commanderProviderContext = commanderMatchesProvider
+    ? commander?.providerContext as {
+        effort?: unknown
+        adaptiveThinking?: unknown
+        maxThinkingTokens?: unknown
+      } | undefined
+    : undefined
+  const liveProviderContext = liveSession?.providerContext as { omitEffort?: boolean } | undefined
+  const omitEffort = liveProviderContext?.omitEffort === true
+    || persistedProviderContext?.omitEffort === true
+  const supportedEffortOptions = getAgentEffortLevelsForModel(
+    effectiveAgentType,
+    runtimeModel,
+  )
+  const supportsEffort = runtimeProvider?.uiCapabilities.supportsEffort === true
+    && supportedEffortOptions.length > 0
+    && !omitEffort
+  const supportsAdaptiveThinking = runtimeProvider?.uiCapabilities.supportsAdaptiveThinking === true
+    && runtimeModel?.supportsAdaptiveThinking !== false
+  const modelDefaultEffort = parseOptionalAgentEffort(
+    effectiveAgentType,
+    runtimeModel?.defaultEffort,
+  )
+  const providerDefaultEffort = parseOptionalAgentEffort(
+    effectiveAgentType,
+    runtimeProviderDefaults?.effort,
+  )
+  const defaultEffort = modelDefaultEffort && supportedEffortOptions.includes(modelDefaultEffort)
+    ? modelDefaultEffort
+    : providerDefaultEffort && supportedEffortOptions.includes(providerDefaultEffort)
+      ? providerDefaultEffort
+      : supportedEffortOptions[0]
+  const persistedEffort = conversation.effort
+    ?? parseStoredAgentEffort(effectiveAgentType, persistedProviderContext?.effort)
+    ?? (commanderMatchesProvider
+      ? parseStoredAgentEffort(
+          effectiveAgentType,
+          commander?.effort ?? commanderProviderContext?.effort,
+        )
+      : undefined)
+  const currentEffort = supportsEffort
+    ? liveSession?.effort
+      ?? (persistedEffort && supportedEffortOptions.includes(persistedEffort)
+        ? persistedEffort
+        : defaultEffort)
+      ?? null
+    : null
+  const currentAdaptiveThinking = supportsAdaptiveThinking
+    ? liveSession?.adaptiveThinking
+      ?? conversation.adaptiveThinking
+      ?? (persistedProviderContext?.adaptiveThinking as ClaudeAdaptiveThinkingMode | undefined)
+      ?? (commanderMatchesProvider
+        ? commander?.adaptiveThinking
+          ?? (commanderProviderContext?.adaptiveThinking as ClaudeAdaptiveThinkingMode | undefined)
+        : undefined)
+      ?? runtimeProviderDefaults?.adaptiveThinking
+      ?? null
+    : null
+  const currentMaxThinkingTokens = liveSession?.maxThinkingTokens
+    ?? conversation.maxThinkingTokens
+    ?? (typeof persistedProviderContext?.maxThinkingTokens === 'number'
+      ? persistedProviderContext.maxThinkingTokens
+      : undefined)
+    ?? (commanderMatchesProvider
+      ? commander?.maxThinkingTokens
+        ?? (typeof commanderProviderContext?.maxThinkingTokens === 'number'
+          ? commanderProviderContext.maxThinkingTokens
+          : undefined)
+      : undefined)
+    ?? runtimeProviderDefaults?.maxThinkingTokens
+    ?? null
+  const runtimeSettingsDisabledReason = getConversationRuntimeSettingsDisabledReason(
+    context,
+    conversation,
+    effectiveAgentType,
   )
 
   const noActiveStreamReason = 'Conversation image transport requires an active stream session'
@@ -221,7 +439,8 @@ export function buildConversationSummaryDTO(
     resume: canStartOrResume,
     archive: true,
     delete: true,
-    updateProvider: conversation.status === 'idle' && runtimeState !== 'starting' && !hasLiveSession,
+    updateProvider: runtimeSettingsDisabledReason === null,
+    updateRuntimeSettings: runtimeSettingsDisabledReason === null,
   }
   const disabledReasons: ConversationDisabledReasons = {
     send: allowedActions.send ? null : sendReason,
@@ -252,15 +471,8 @@ export function buildConversationSummaryDTO(
             : 'Conversation is not idle',
     archive: null,
     delete: null,
-    updateProvider: allowedActions.updateProvider
-      ? null
-      : isArchived
-        ? 'Archived conversations cannot change provider'
-        : runtimeState === 'starting'
-          ? 'Conversation is starting'
-          : hasLiveSession || conversation.status === 'active'
-            ? 'Stop the conversation before changing provider or model'
-            : 'Conversation provider cannot be updated in the current state',
+    updateProvider: runtimeSettingsDisabledReason,
+    updateRuntimeSettings: runtimeSettingsDisabledReason,
   }
 
   const queueSupport = {
@@ -307,5 +519,52 @@ export function buildConversationSummaryDTO(
           media: mediaSupport,
         },
     allowedActions,
+    runtimeSettings: {
+      current: {
+        agentType: effectiveAgentType,
+        model: effectiveModel,
+        effort: currentEffort,
+        adaptiveThinking: currentAdaptiveThinking,
+        maxThinkingTokens: currentMaxThinkingTokens,
+      },
+      supported: {
+        agentType: true,
+        model: true,
+        effort: supportsEffort,
+        adaptiveThinking: supportsAdaptiveThinking,
+        maxThinkingTokens: runtimeProvider?.uiCapabilities.supportsMaxThinkingTokens === true,
+      },
+      options: {
+        agentType: listProviders()
+          .filter((provider) => provider.capabilities.supportsCommanderConversation)
+          .map((provider) => provider.id),
+        model: runtimeModelOptions.map((model) => ({ ...model })),
+        effort: supportsEffort
+          ? supportedEffortOptions
+          : [],
+        adaptiveThinking: supportsAdaptiveThinking
+          ? [...CLAUDE_ADAPTIVE_THINKING_MODES]
+          : [],
+        maxThinkingTokens: runtimeProvider?.uiCapabilities.supportsMaxThinkingTokens
+          ? {
+              min: MIN_CLAUDE_MAX_THINKING_TOKENS,
+              max: MAX_CLAUDE_MAX_THINKING_TOKENS,
+            }
+          : null,
+      },
+      modelDiscovery: runtimeModels?.discovery ?? {
+        source: 'static-fallback',
+        freshness: 'fallback',
+        fetchedAt: null,
+        expiresAt: null,
+        refreshAllowedAt: null,
+        error: runtimeProvider ? null : `Unknown provider "${effectiveAgentType}"`,
+        credentialPoolId: liveSession?.credentialPoolId ?? conversation.credentialPoolId ?? null,
+        accountId: null,
+      },
+      supportsCustomModels: runtimeModels?.supportsCustomModels ?? false,
+      allowed: runtimeSettingsDisabledReason === null,
+      disabledReason: runtimeSettingsDisabledReason,
+    },
   }
 }

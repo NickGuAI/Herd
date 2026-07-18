@@ -486,8 +486,8 @@ export function registerChannelRoutes(
       }
 
       const sendOptions = parsed.value.mode === 'collect'
-        ? { queue: true, priority: 'normal' as const }
-        : undefined
+        ? { intent: 'queue' as const, priority: 'normal' as const }
+        : { intent: 'interrupt' as const }
 
       let deliverySucceeded = false
       let delivered: Awaited<ReturnType<typeof deliverConversationMessage>>

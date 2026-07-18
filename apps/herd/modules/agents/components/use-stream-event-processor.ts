@@ -81,6 +81,32 @@ function shouldPreferExistingMessage(existing: MsgItem, incoming: MsgItem): bool
   return false
 }
 
+function preserveTerminalReplayStatus(existing: MsgItem, incoming: MsgItem): MsgItem {
+  if (existing.kind !== 'tool' || incoming.kind !== 'tool') {
+    return existing
+  }
+  const incomingTerminal = incoming.toolStatus === 'success' || incoming.toolStatus === 'error'
+  const existingTerminal = existing.toolStatus === 'success' || existing.toolStatus === 'error'
+  const toolStatus = incomingTerminal
+    ? incoming.toolStatus
+    : existingTerminal
+      ? existing.toolStatus
+      : existing.toolStatus ?? incoming.toolStatus
+  return {
+    ...existing,
+    ...(toolStatus ? { toolStatus } : {}),
+    ...(incomingTerminal && incoming.transcript
+      ? {
+          transcript: {
+            ...existing.transcript,
+            ...incoming.transcript,
+            task: incoming.transcript.task ?? existing.transcript?.task,
+          },
+        }
+      : {}),
+  }
+}
+
 function hasDurableMessageAnchor(message: MsgItem): boolean {
   if (message.clientSendId) {
     return true
@@ -128,7 +154,7 @@ function mergeReplayMessagesWithCurrent(currentMessages: MsgItem[], nextMessages
     }
 
     if (shouldPreferExistingMessage(currentMessage, merged[existingIndex])) {
-      merged[existingIndex] = currentMessage
+      merged[existingIndex] = preserveTerminalReplayStatus(currentMessage, merged[existingIndex])
     }
   }
 

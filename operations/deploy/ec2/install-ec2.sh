@@ -9,8 +9,7 @@ REQUIRED_NODE_MAJOR="22"
 REQUIRED_NODE_VERSION="22.16.0"
 REQUIRED_PNPM_VERSION="10.23.0"
 SERVICE_NAME="herd"
-PUBLIC_SHELL_PORT="20001"
-SERVICE_PORT="20009"
+SERVICE_PORT="20001"
 
 TARGET_DOMAIN=""
 APP_USER=""
@@ -30,8 +29,7 @@ SYSTEM_PATH=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_TEMPLATE_PATH="$SCRIPT_DIR/herd.service"
-CADDY_TEMPLATE_PATH="$SCRIPT_DIR/Caddyfile"
-CHECK_SCRIPT_PATH="$SCRIPT_DIR/check-herd-split-shell.sh"
+CADDYFILE_PATH="${HERD_CADDYFILE_PATH:-/etc/caddy/Caddyfile}"
 
 log() {
   printf '[%s] %s\n' "$SERVICE_NAME" "$*"
@@ -51,14 +49,14 @@ usage() {
 Usage: sudo bash install-ec2.sh --domain <fqdn> [options]
 
 Options:
-  --domain <fqdn>       Public DNS name to terminate in Caddy (required)
+  --domain <fqdn>       Public DNS name routed by the ALB (required)
   --app-user <user>     Linux user that owns the checkout and runs the service
   --repo-slug <owner/name>
                         GitHub repo to clone (default: ${DEFAULT_REPO_SLUG})
   --branch <branch>     Git branch to deploy (default: ${DEFAULT_REPO_BRANCH})
   --install-dir <path>  Checkout directory (default: ~app-user/.herd)
   --data-dir <path>     HERD_DATA_DIR value (default: ~app-user/.herd)
-  --service-port <port> Private Herd API port behind Caddy (default: ${SERVICE_PORT})
+  --service-port <port> Direct ALB target port (default: ${SERVICE_PORT})
   -h, --help            Show this help
 EOF
 }
@@ -198,47 +196,105 @@ prompt_for_domain() {
 validate_ports() {
   [[ "$SERVICE_PORT" =~ ^[0-9]+$ ]] || die "Invalid --service-port value: ${SERVICE_PORT}"
   [[ "$SERVICE_PORT" -gt 0 ]] || die "Invalid --service-port value: ${SERVICE_PORT}"
-  [[ "$SERVICE_PORT" != "$PUBLIC_SHELL_PORT" ]] || die "SERVICE_PORT must not reuse the public Caddy shell port ${PUBLIC_SHELL_PORT}."
 }
 
-port_listener_pids() {
-  local probe_port="$1"
-  if command_exists lsof; then
-    lsof -tiTCP:"$probe_port" -sTCP:LISTEN 2>/dev/null || true
+strip_legacy_caddy_site() {
+  local input_path="$1"
+  local output_path="$2"
+  local target_domain="$3"
+
+  awk -v target_domain="$target_domain" '
+    BEGIN {
+      depth = 0
+      removed = 0
+      skipping = 0
+      invalid = 0
+    }
+    {
+      scan = $0
+      opens = gsub(/\{/, "{", scan)
+      closes = gsub(/\}/, "}", scan)
+
+      if (!skipping && depth == 0 && opens > 0 && index($0, target_domain) > 0) {
+        skipping = 1
+        removed = 1
+      }
+
+      if (!skipping) {
+        print
+      }
+
+      depth += opens - closes
+      if (depth < 0) {
+        invalid = 1
+        exit
+      }
+      if (skipping && depth == 0) {
+        skipping = 0
+      }
+    }
+    END {
+      if (invalid || depth != 0 || skipping) {
+        exit 4
+      }
+      if (!removed) {
+        exit 3
+      }
+    }
+  ' "$input_path" > "$output_path"
+}
+
+retire_legacy_caddy_site() {
+  [[ -f "$CADDYFILE_PATH" ]] || return 0
+
+  local candidate
+  candidate="$(mktemp "${TMPDIR:-/tmp}/herd-caddyfile.XXXXXX")"
+  local strip_status=0
+  if strip_legacy_caddy_site "$CADDYFILE_PATH" "$candidate" "$TARGET_DOMAIN"; then
+    :
+  else
+    strip_status=$?
+    rm -f "$candidate"
+    if [[ "$strip_status" -eq 3 ]]; then
+      return 0
+    fi
+    die "Unable to safely remove the legacy ${TARGET_DOMAIN} Caddy site from ${CADDYFILE_PATH}."
+  fi
+
+  log "Removing the legacy ${TARGET_DOMAIN} Caddy site before direct-port handoff"
+  local has_remaining_sites=0
+  if grep -Eq '^[[:space:]]*[^#[:space:]]' "$candidate"; then
+    has_remaining_sites=1
+    command_exists caddy \
+      || die "Caddy is required to validate the remaining sites in ${CADDYFILE_PATH}."
+    caddy validate --config "$candidate" --adapter caddyfile >/dev/null \
+      || die "Refusing to install an invalid Caddy configuration after removing ${TARGET_DOMAIN}."
+  fi
+
+  local backup
+  backup="$(mktemp "${CADDYFILE_PATH}.pre-herd-direct.XXXXXX")"
+  cp -p "$CADDYFILE_PATH" "$backup"
+  install -m 0644 "$candidate" "$CADDYFILE_PATH"
+  rm -f "$candidate"
+
+  if [[ "$has_remaining_sites" -eq 0 ]]; then
+    if systemctl cat caddy.service >/dev/null 2>&1; then
+      if ! systemctl disable --now caddy.service; then
+        cp -p "$backup" "$CADDYFILE_PATH"
+        systemctl restart caddy.service || true
+        die "Failed to stop Caddy after removing its final site; restored ${backup}."
+      fi
+    fi
     return 0
   fi
-  if command_exists ss; then
-    ss -tlnp "sport = :$probe_port" 2>/dev/null | grep -oP 'pid=\K\d+' | sort -u || true
+
+  if systemctl is-active --quiet caddy.service; then
+    if ! systemctl reload caddy.service && ! systemctl restart caddy.service; then
+      cp -p "$backup" "$CADDYFILE_PATH"
+      systemctl restart caddy.service || true
+      die "Failed to reload Caddy without the legacy Herd site; restored ${backup}."
+    fi
   fi
-}
-
-release_public_shell_port_for_caddy() {
-  local session
-  for session in server-herd server-herd; do
-    if command_exists tmux && tmux has-session -t "$session" 2>/dev/null; then
-      log "Stopping legacy tmux ${session} launcher before Caddy takes port ${PUBLIC_SHELL_PORT}"
-      tmux kill-session -t "$session" 2>/dev/null || true
-      sleep 1
-    fi
-  done
-
-  local pids
-  pids="$(port_listener_pids "$PUBLIC_SHELL_PORT")"
-  [[ -n "$pids" ]] || return 0
-
-  local non_caddy=""
-  local pid
-  while read -r pid; do
-    [[ -n "$pid" ]] || continue
-    local args
-    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
-    if [[ ! "$args" =~ [Cc]addy ]]; then
-      non_caddy+="${pid} ${args}"$'\n'
-    fi
-  done <<< "$pids"
-
-  [[ -z "$non_caddy" ]] || die "Public shell port ${PUBLIC_SHELL_PORT} is still occupied by a non-Caddy listener:
-${non_caddy}"
 }
 
 node_meets_required_version() {
@@ -264,12 +320,12 @@ install_base_packages() {
   if command_exists apt-get; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y curl git ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https build-essential python3
+    apt-get install -y curl git ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https build-essential python3 lsof
     return 0
   fi
 
   if command_exists dnf; then
-    dnf install -y curl git ca-certificates gnupg2 gcc-c++ make python3 dnf-plugins-core
+    dnf install -y curl git ca-certificates gnupg2 gcc-c++ make python3 dnf-plugins-core lsof
     return 0
   fi
 
@@ -307,30 +363,6 @@ install_pnpm() {
   PNPM_BIN="$(command -v pnpm || true)"
   [[ -n "$PNPM_BIN" ]] || die "pnpm activation failed."
   SYSTEM_PATH="$(dirname "$PNPM_BIN"):$(dirname "$NODE_BIN"):/usr/local/bin:/usr/bin:/bin"
-}
-
-install_caddy() {
-  if command_exists caddy; then
-    return 0
-  fi
-
-  if command_exists apt-get; then
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
-    chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    chmod o+r /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update
-    apt-get install -y caddy
-    return 0
-  fi
-
-  if command_exists dnf; then
-    dnf -y copr enable @caddy/caddy
-    dnf install -y caddy
-    return 0
-  fi
-
-  die "Unable to install Caddy on this system."
 }
 
 run_as_app_user() {
@@ -392,8 +424,6 @@ resolve_repo_layout() {
 
   [[ -n "$CLI_ENTRYPOINT" ]] || die "Unable to locate the Herd CLI entrypoint inside ${INSTALL_DIR}."
   [[ -f "$SERVICE_TEMPLATE_PATH" ]] || die "Missing systemd template at ${SERVICE_TEMPLATE_PATH}."
-  [[ -f "$CADDY_TEMPLATE_PATH" ]] || die "Missing Caddy template at ${CADDY_TEMPLATE_PATH}."
-  [[ -f "$CHECK_SCRIPT_PATH" ]] || die "Missing split-shell check script at ${CHECK_SCRIPT_PATH}."
 
   APP_PACKAGE_NAME="$(
     node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).name" \
@@ -527,7 +557,16 @@ install_systemd_unit() {
     "$SERVICE_TEMPLATE_PATH" > "/etc/systemd/system/${SERVICE_NAME}.service"
 
   systemctl daemon-reload
-  systemctl enable --now "$SERVICE_NAME"
+  systemctl enable "$SERVICE_NAME"
+}
+
+restart_systemd_unit() {
+  log "Restarting ${SERVICE_NAME}.service on direct port ${SERVICE_PORT}"
+  systemctl restart "$SERVICE_NAME"
+}
+
+port_listener_pids() {
+  lsof -nP -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | sort -u || true
 }
 
 verify_local_health_service_owner() {
@@ -536,6 +575,16 @@ verify_local_health_service_owner() {
   if systemctl is-active --quiet hervald.service; then
     die "Legacy hervald.service is still active while port ${SERVICE_PORT} answers /api/health."
   fi
+
+  local main_pid
+  main_pid="$(systemctl show "${SERVICE_NAME}.service" --property=MainPID --value)"
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] \
+    || die "${SERVICE_NAME}.service has no live MainPID while port ${SERVICE_PORT} answers /api/health."
+
+  local listener_pids
+  listener_pids="$(port_listener_pids "$SERVICE_PORT")"
+  grep -Fxq "$main_pid" <<< "$listener_pids" \
+    || die "Port ${SERVICE_PORT} is not owned by ${SERVICE_NAME}.service MainPID ${main_pid}; listeners: ${listener_pids:-none}."
 }
 
 wait_for_local_health() {
@@ -552,28 +601,12 @@ wait_for_local_health() {
   die "Local health check never became ready on port ${SERVICE_PORT}."
 }
 
-install_caddy_config() {
-  log "Installing Caddy reverse proxy for ${TARGET_DOMAIN}"
-
-  sed \
-    -e "s|__DOMAIN__|$(escape_sed_replacement "$TARGET_DOMAIN")|g" \
-    -e "s|__APP_DIR__|$(escape_sed_replacement "$APP_DIR")|g" \
-    -e "s|__SERVICE_PORT__|$(escape_sed_replacement "$SERVICE_PORT")|g" \
-    "$CADDY_TEMPLATE_PATH" > /etc/caddy/Caddyfile
-
-  caddy validate --config /etc/caddy/Caddyfile
-  systemctl enable caddy
-  release_public_shell_port_for_caddy
-  systemctl restart caddy
-}
-
-verify_split_shell_topology() {
-  log "Verifying split-shell topology"
-  bash "$CHECK_SCRIPT_PATH" \
-    --domain "$TARGET_DOMAIN" \
-    --service-port "$SERVICE_PORT" \
-    --shell-port "$PUBLIC_SHELL_PORT" \
-    --caddyfile /etc/caddy/Caddyfile
+verify_direct_listener() {
+  log "Verifying direct application listener"
+  curl -fsS --max-time 3 "http://127.0.0.1:${SERVICE_PORT}/api/health" >/dev/null \
+    || die "Direct API health check failed on port ${SERVICE_PORT}."
+  curl -fsS --max-time 3 "http://127.0.0.1:${SERVICE_PORT}/org" | grep -Eiq '<!doctype html|<html' \
+    || die "Direct document route check failed on port ${SERVICE_PORT}."
 }
 
 print_summary() {
@@ -587,24 +620,20 @@ Local health:
 Expected public URL:
   https://${TARGET_DOMAIN}
 
-Public shell health:
-  https://${TARGET_DOMAIN}/healthz
-
 Verification:
-  bash ${CHECK_SCRIPT_PATH} --domain ${TARGET_DOMAIN} --service-port ${SERVICE_PORT} --shell-port ${PUBLIC_SHELL_PORT}
+  curl -fsS http://127.0.0.1:${SERVICE_PORT}/api/health
+  curl -fsS https://${TARGET_DOMAIN}/api/health
 
 Services:
   systemctl status ${SERVICE_NAME}
-  systemctl status caddy
 
 Logs:
   journalctl -u ${SERVICE_NAME} -f
-  journalctl -u caddy -f
 
 Reminder:
-  - Point ${TARGET_DOMAIN} at this EC2 host before expecting a Let's Encrypt cert.
-  - Open inbound TCP 80 and 443 on the EC2 security group.
-  - If this host is behind an ALB, use /healthz for the target-group health check.
+  - Point ${TARGET_DOMAIN} at the ALB and route its host rule to port ${SERVICE_PORT}.
+  - Allow port ${SERVICE_PORT} from the ALB security group only.
+  - Use /api/health for the target-group health check.
 EOF
 }
 
@@ -625,7 +654,6 @@ main() {
   install_base_packages
   install_node
   install_pnpm
-  install_caddy
   clone_or_update_repo
   resolve_repo_layout
   ensure_env_file
@@ -637,9 +665,10 @@ main() {
   install_cli_shim
   migrate_legacy_hervald_service
   install_systemd_unit
+  retire_legacy_caddy_site
+  restart_systemd_unit
   wait_for_local_health
-  install_caddy_config
-  verify_split_shell_topology
+  verify_direct_listener
   print_summary
 }
 

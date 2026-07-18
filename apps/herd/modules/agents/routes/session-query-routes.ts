@@ -1,5 +1,8 @@
 import type { RequestHandler, Router } from 'express'
-import type { ProviderAuthStore } from '../provider-auth.js'
+import {
+  resolveCredentialPoolRuntimeMode,
+  type ProviderAuthStore,
+} from '../provider-auth.js'
 import { parseSessionName } from '../session/input.js'
 import {
   buildPersistedEntryFromExitedSession,
@@ -98,7 +101,9 @@ function parseBooleanQueryParam(rawValue: unknown, fallback: boolean): boolean |
 type CredentialPoolAttribution = NonNullable<AgentSession['credentialPool']>
 type CredentialPoolAttributablePayload = {
   agentType?: AgentSession['agentType']
+  host?: AgentSession['host']
   credentialPoolId?: string
+  credentialPoolMode?: AgentSession['credentialPoolMode']
   credentialPool?: CredentialPoolAttribution
 }
 
@@ -130,6 +135,8 @@ function attachCredentialPoolAttribution<T extends CredentialPoolAttributablePay
   if (!payload.credentialPoolId || (payload.agentType !== 'claude' && payload.agentType !== 'codex')) {
     return payload
   }
+  const mode = payload.credentialPoolMode
+    ?? resolveCredentialPoolRuntimeMode(payload.agentType, payload.host)
   const credentialPool = attributions.get(`${payload.agentType}:${payload.credentialPoolId}`) ?? {
     provider: payload.agentType,
     id: payload.credentialPoolId,
@@ -137,7 +144,11 @@ function attachCredentialPoolAttribution<T extends CredentialPoolAttributablePay
   }
   return {
     ...payload,
-    credentialPool,
+    credentialPool: {
+      ...credentialPool,
+      mode,
+    },
+    credentialPoolMode: mode,
   }
 }
 
@@ -202,6 +213,12 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
       return
     }
 
+    const fullText = parseBooleanQueryParam(req.query.full, false)
+    if (fullText === null) {
+      res.status(400).json({ error: 'Invalid full query parameter' })
+      return
+    }
+
     const activeSession = deps.sessions.get(name)
     if (activeSession) {
       const events = activeSession.kind === 'pty' ? [] : activeSession.events
@@ -210,6 +227,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         last,
         role,
         includeToolUse,
+        fullText,
         fallbackTimestamp,
       })
 
@@ -228,6 +246,7 @@ export function registerSessionQueryRoutes(deps: SessionQueryRouteDeps): void {
         last,
         role,
         includeToolUse,
+        fullText,
         fallbackTimestamp: exitedSession.createdAt,
       })
 

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { isClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import { isClaudeEffortLevel } from '../../claude-effort.js'
 import { isClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
+import { parseStoredAgentEffort } from '../effort.js'
 import type {
   AgentType,
   ClaudePermissionMode,
@@ -58,6 +58,7 @@ type RuntimeStatePayload = Partial<Pick<
   | 'queuedMessages'
   | 'currentQueuedMessage'
   | 'pendingDirectSendMessages'
+  | 'activeTurnMessage'
   | 'events'
 >>
 
@@ -231,7 +232,10 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
   const provider = parsedProvider === 'claude' || parsedProvider === 'codex'
     ? parsedProvider
     : undefined
-  const reason = record.reason === 'manual_switch' || record.reason === 'usage_limit'
+  const reason = record.reason === 'auth_required'
+    || record.reason === 'manual_switch'
+    || record.reason === 'quota_threshold'
+    || record.reason === 'usage_limit'
     ? record.reason
     : undefined
   const requestedAt = parseOptionalNonEmptyString(record.requestedAt)
@@ -243,8 +247,22 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
   const credentialPoolId = parseOptionalNonEmptyString(record.credentialPoolId)
   const previousCredentialPoolId = parseOptionalNonEmptyString(record.previousCredentialPoolId)
   const resetAt = parseOptionalNonEmptyString(record.resetAt)
+  const failureCode = parseOptionalNonEmptyString(record.failureCode)
+  const failureReason = parseOptionalNonEmptyString(record.failureReason)
   const blockedUntil = parseOptionalNonEmptyString(record.blockedUntil)
   const interruptedTurnId = parseOptionalNonEmptyString(record.interruptedTurnId)
+  const state = record.state === 'awaiting_safe_boundary'
+    || record.state === 'stopping_old_runtime'
+    || record.state === 'activating_credential'
+    || record.state === 'reloading_session'
+    || record.state === 'retry_scheduled'
+    || record.state === 'blocked'
+    ? record.state
+    : blockedUntil
+      ? 'blocked'
+      : credentialPoolId
+        ? 'reloading_session'
+        : 'awaiting_safe_boundary'
   return {
     provider,
     ...(credentialPoolId ? { credentialPoolId } : {}),
@@ -252,6 +270,9 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
     clearResumeProviderContext: record.clearResumeProviderContext !== false,
     reason,
     requestedAt,
+    state,
+    ...(failureCode ? { failureCode } : {}),
+    ...(failureReason ? { failureReason } : {}),
     ...(resetAt ? { resetAt } : {}),
     ...(blockedUntil ? { blockedUntil } : {}),
     ...(interruptedMessage ? { interruptedMessage } : {}),
@@ -283,21 +304,18 @@ function parseOptionalFiniteNumber(value: unknown): number | undefined {
     : undefined
 }
 
-function readClaudeRuntimeOptions(
+function readRuntimeOptions(
   agentType: AgentType,
   providerContext: ProviderSessionContext,
 ): Pick<PersistedStreamSession, 'effort' | 'adaptiveThinking' | 'maxThinkingTokens'> {
-  if (agentType !== 'claude') {
-    return {}
-  }
-
   const record = providerContext as unknown as Record<string, unknown>
+  const effort = parseStoredAgentEffort(agentType, record.effort)
   return {
-    ...(isClaudeEffortLevel(record.effort) ? { effort: record.effort } : {}),
-    ...(isClaudeAdaptiveThinkingMode(record.adaptiveThinking)
+    ...(effort ? { effort } : {}),
+    ...(agentType === 'claude' && isClaudeAdaptiveThinkingMode(record.adaptiveThinking)
       ? { adaptiveThinking: record.adaptiveThinking }
       : {}),
-    ...(isClaudeMaxThinkingTokens(record.maxThinkingTokens)
+    ...(agentType === 'claude' && isClaudeMaxThinkingTokens(record.maxThinkingTokens)
       ? { maxThinkingTokens: record.maxThinkingTokens }
       : {}),
   }
@@ -322,6 +340,7 @@ function buildRuntimeStatePayload(entry: PersistedStreamSession): RuntimeStatePa
     ...(entry.pendingDirectSendMessages && entry.pendingDirectSendMessages.length > 0
       ? { pendingDirectSendMessages: entry.pendingDirectSendMessages }
       : {}),
+    ...(entry.activeTurnMessage ? { activeTurnMessage: entry.activeTurnMessage } : {}),
     ...(events ? { events } : {}),
   }
 }
@@ -343,6 +362,7 @@ function rowToPersistedStreamSession(row: RuntimeRow): PersistedStreamSession | 
   const queuedMessages = parseQueuedMessages(runtimeState.queuedMessages)
   const currentQueuedMessage = parseCurrentQueuedMessage(runtimeState.currentQueuedMessage)
   const pendingDirectSendMessages = parseQueuedMessages(runtimeState.pendingDirectSendMessages)
+  const activeTurnMessage = parseCurrentQueuedMessage(runtimeState.activeTurnMessage)
   const resumedFrom = parseOptionalNonEmptyString(runtimeState.resumedFrom)
   const activeTurnId = parseOptionalNonEmptyString(runtimeState.activeTurnId)
   const credentialPoolId = parseOptionalNonEmptyString(runtimeState.credentialPoolId)
@@ -351,7 +371,7 @@ function rowToPersistedStreamSession(row: RuntimeRow): PersistedStreamSession | 
   const conversationEntryCount = parseOptionalFiniteNumber(runtimeState.conversationEntryCount)
   const currentSkillInvocation = parseActiveSkillInvocation(runtimeState.currentSkillInvocation)
   const events = parseReplayEvents(runtimeState.events)
-  const claudeRuntimeOptions = readClaudeRuntimeOptions(agentType, providerContext.providerContext)
+  const runtimeOptions = readRuntimeOptions(agentType, providerContext.providerContext)
 
   return {
     name: row.name,
@@ -366,7 +386,7 @@ function rowToPersistedStreamSession(row: RuntimeRow): PersistedStreamSession | 
     ...(typeof runtimeState.model === 'string' && runtimeState.model.trim().length > 0
       ? { model: runtimeState.model.trim() }
       : {}),
-    ...claudeRuntimeOptions,
+    ...runtimeOptions,
     mode,
     cwd: row.cwd,
     ...(row.machine_id && row.machine_id !== 'local' ? { host: row.machine_id } : {}),
@@ -387,6 +407,7 @@ function rowToPersistedStreamSession(row: RuntimeRow): PersistedStreamSession | 
     ...(queuedMessages ? { queuedMessages } : {}),
     ...(currentQueuedMessage ? { currentQueuedMessage } : {}),
     ...(pendingDirectSendMessages ? { pendingDirectSendMessages } : {}),
+    ...(activeTurnMessage ? { activeTurnMessage } : {}),
     ...(events ? { events } : {}),
   }
 }

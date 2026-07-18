@@ -6,7 +6,7 @@ import {
   buildFallbackClaudeApprovalSession,
   claudeApprovalAdapter,
 } from '../agents/adapters/claude/approval-adapter.js'
-import type { ApprovalSessionsInterface } from '../agents/routes.js'
+import type { ApprovalSessionContext, ApprovalSessionsInterface } from '../agents/routes.js'
 import {
   ActionPolicyGate,
   DEFAULT_REVIEW_RETRY_AFTER_MS,
@@ -26,6 +26,7 @@ import {
 import {
   APPROVAL_BRIDGE_TOKEN_HEADER,
   verifyApprovalBridgeToken,
+  type ApprovalBridgeTokenClaims,
 } from './approval-bridge-token.js'
 
 export interface PoliciesRouterOptions {
@@ -206,6 +207,8 @@ type ApprovalBridgeAuthFailureReason =
   | 'invalid_signature'
   | 'session_not_live'
   | 'nonce_mismatch'
+  | 'conversation_revoked'
+  | 'credential_revoked'
 
 function toApprovalBridgeFailureHint(reason: ApprovalBridgeAuthFailureReason): string {
   switch (reason) {
@@ -217,6 +220,10 @@ function toApprovalBridgeFailureHint(reason: ApprovalBridgeAuthFailureReason): s
       return 'The approval bridge token belongs to a session that is no longer live; recover or relaunch the runtime session.'
     case 'nonce_mismatch':
       return 'The approval bridge token is stale for this live session; recover or relaunch the runtime session.'
+    case 'conversation_revoked':
+      return 'The approval bridge token belongs to a conversation that was closed, archived, or deleted; start a new conversation.'
+    case 'credential_revoked':
+      return 'The approval bridge credential for this conversation was explicitly rotated; relaunch the conversation runtime to mint a fresh bridge token.'
   }
 }
 
@@ -232,16 +239,22 @@ function sendApprovalBridgeAuthFailure(
   })
 }
 
-function inspectApprovalBridgeCredential(
+async function inspectApprovalBridgeCredential(
   approvalSessionsInterface: PoliciesRouterOptions['approvalSessionsInterface'],
-  sessionName: string,
-  nonce: string,
-): { ok: true } | { ok: false; reason: 'session_not_live' | 'nonce_mismatch' } {
-  const inspected = approvalSessionsInterface.inspectApprovalBridgeCredential?.(sessionName, nonce)
+  claims: ApprovalBridgeTokenClaims,
+): Promise<
+  | { ok: true; conversationId?: string }
+  | { ok: false; reason: Exclude<ApprovalBridgeAuthFailureReason, 'malformed_token' | 'invalid_signature'> }
+> {
+  const inspected = await approvalSessionsInterface.inspectApprovalBridgeCredential?.(claims)
   if (inspected) {
     return inspected
   }
-  return approvalSessionsInterface.validateApprovalBridgeCredential(sessionName, nonce)
+  if (claims.v !== 2) {
+    // The fallback validator only understands session-scoped nonce tokens.
+    return { ok: false, reason: 'session_not_live' }
+  }
+  return approvalSessionsInterface.validateApprovalBridgeCredential(claims.sessionName, claims.nonce)
     ? { ok: true }
     : { ok: false, reason: 'nonce_mismatch' }
 }
@@ -268,26 +281,30 @@ function createApprovalCheckAuth(
       return
     }
 
-    const credential = inspectApprovalBridgeCredential(
-      options.approvalSessionsInterface,
-      verification.sessionName,
-      verification.nonce,
-    )
-    if (!credential.ok) {
-      sendApprovalBridgeAuthFailure(res, credential.reason)
-      return
-    }
+    const claims = verification.claims
+    void (async () => {
+      const credential = await inspectApprovalBridgeCredential(
+        options.approvalSessionsInterface,
+        claims,
+      )
+      if (!credential.ok) {
+        sendApprovalBridgeAuthFailure(res, credential.reason)
+        return
+      }
 
-    req.approvalBridgeSessionName = verification.sessionName
-    req.authMode = 'api-key'
-    req.user = {
-      id: 'approval-bridge',
-      email: 'worker',
-      metadata: {
-        scopes: ['approval:check'],
-      },
-    }
-    next()
+      req.approvalBridgeSessionName = claims.sessionName
+      req.approvalBridgeConversationId = credential.conversationId
+      req.approvalBridgeTokenVersion = claims.v
+      req.authMode = 'api-key'
+      req.user = {
+        id: 'approval-bridge',
+        email: 'worker',
+        metadata: {
+          scopes: ['approval:check'],
+        },
+      }
+      next()
+    })().catch(next)
   }
 }
 
@@ -435,18 +452,22 @@ export function createPoliciesRouter(options: PoliciesRouterOptions): { router: 
       ? payload.herd_session_name.trim()
       : undefined
     const bridgeSessionName = req.approvalBridgeSessionName?.trim()
+    const conversationScopedV3 = req.approvalBridgeTokenVersion === 3
+      && Boolean(req.approvalBridgeConversationId?.trim())
     if (bridgeSessionName) {
-      if (resolvedSessionName && resolvedSessionName !== bridgeSessionName) {
+      if (!conversationScopedV3 && resolvedSessionName && resolvedSessionName !== bridgeSessionName) {
         res.status(403).json({ error: 'Approval bridge token is scoped to a different session' })
         return
       }
-      resolvedSessionName = bridgeSessionName
+      resolvedSessionName = conversationScopedV3 ? undefined : bridgeSessionName
     }
     const resolvedClaudeSessionId = typeof payload?.session_id === 'string'
       && payload.session_id.trim().length > 0
       ? payload.session_id.trim()
       : undefined
-    const liveSession = (
+    const bridgeConversationId = req.approvalBridgeConversationId?.trim()
+    let bridgePolicyContext: ApprovalSessionContext | null = null
+    let liveSession = bridgeConversationId ? null : (
       resolvedSessionName
         ? options.approvalSessionsInterface.getLiveSession(resolvedSessionName)
         : null
@@ -454,14 +475,34 @@ export function createPoliciesRouter(options: PoliciesRouterOptions): { router: 
       resolvedClaudeSessionId
         ? options.approvalSessionsInterface.findLiveSessionByClaudeSessionId(resolvedClaudeSessionId)
         : null
-    ) ?? buildFallbackClaudeApprovalSession(resolvedSessionName ?? 'claude-hook')
+    )
+    if (bridgeConversationId) {
+      // The conversation store establishes raw commander ownership first;
+      // only a matching Claude commander live/persisted snapshot may provide
+      // cwd and active-skill policy context. v3 session names are diagnostic.
+      bridgePolicyContext = await options.approvalSessionsInterface
+        .resolveConversationPolicyContext?.(bridgeConversationId) ?? null
+      if (!bridgePolicyContext?.commanderScopeId?.trim()) {
+        res.json({
+          decision: 'deny',
+          reason: 'Conversation policy context is unavailable',
+        })
+        return
+      }
+      liveSession = options.approvalSessionsInterface.getLiveSession(bridgePolicyContext.sessionName)
+    }
+    const approvalSession = liveSession
+      ?? buildFallbackClaudeApprovalSession(resolvedSessionName ?? 'claude-hook')
     const request = claudeApprovalAdapter.toUnifiedRequest(
       {
         payload: payload ?? {},
         respond() {},
       },
-      liveSession,
+      approvalSession,
     )
+    if (bridgeConversationId) {
+      request.sessionContext = bridgePolicyContext
+    }
     const result = await options.actionPolicyGate.enforce(request, { waitForReview: false })
     res.json(toApprovalDecisionResponse(result))
   })
@@ -479,8 +520,22 @@ export function createPoliciesRouter(options: PoliciesRouterOptions): { router: 
       return
     }
 
+    const bridgeConversationId = req.approvalBridgeConversationId?.trim()
     const bridgeSessionName = req.approvalBridgeSessionName?.trim()
-    if (bridgeSessionName && status.approval.sessionId !== bridgeSessionName) {
+    if (bridgeConversationId) {
+      // Conversation-scoped polls: any provider generation of the owning
+      // conversation may read the approval; other conversations may not.
+      // Approvals recorded without a conversation id (pre-upgrade rows) fall
+      // back to the session-name comparison.
+      const approvalConversationId = status.approval.conversationId?.trim()
+      const allowed = approvalConversationId
+        ? approvalConversationId === bridgeConversationId
+        : Boolean(bridgeSessionName) && status.approval.sessionId === bridgeSessionName
+      if (!allowed) {
+        res.status(403).json({ error: 'Approval bridge token cannot read another conversation approval' })
+        return
+      }
+    } else if (bridgeSessionName && status.approval.sessionId !== bridgeSessionName) {
       res.status(403).json({ error: 'Approval bridge token cannot read another session approval' })
       return
     }

@@ -1,4 +1,4 @@
-import { extractCommandText, isRecord, truncateText } from './shared.js'
+import { extractCommandText, extractToolPath, isRecord, truncateText } from './shared.js'
 import type { ActionCategoryDefinition, ApprovalContext } from './types.js'
 
 function getCandidateObjects(value: unknown): Array<Record<string, unknown>> {
@@ -115,6 +115,20 @@ function readFlag(command: string | undefined, flags: string[]): string | undefi
 
 function joinSummary(parts: Array<string | undefined>): string {
   return parts.filter((part): part is string => Boolean(part)).join(' | ')
+}
+
+function extractInternalEditContext(
+  action: ActionCategoryDefinition,
+  toolInput: unknown,
+): ApprovalContext {
+  const target = extractToolPath(toolInput)
+  return {
+    summary: target ? `Path: ${target}` : action.label,
+    details: target ? { Path: target } : {},
+    primaryTarget: target
+      ? { label: action.primaryTargetLabel ?? 'Path', value: target }
+      : undefined,
+  }
 }
 
 function extractEmailContext(
@@ -405,6 +419,8 @@ export function extractApprovalContext(
   }
 
   switch (action.id) {
+    case 'internal:edit-in-cwd':
+      return extractInternalEditContext(action, toolInput)
     case 'send-email':
       return extractEmailContext(action, toolInput, command)
     case 'send-message':

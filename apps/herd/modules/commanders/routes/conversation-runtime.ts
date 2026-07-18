@@ -4,9 +4,20 @@ import {
   buildCommanderSessionSeedFromResolvedWorkflow,
 } from '../memory/module.js'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
-import type { AgentType, StreamJsonEvent, StreamSession } from '../../agents/types.js'
+import type {
+  AgentType,
+  SessionSendDisposition,
+  SessionSendIntent,
+  StreamJsonEvent,
+  StreamSession,
+} from '../../agents/types.js'
+import {
+  getAgentModelEffortCapability,
+  parseOptionalAgentEffort,
+  parseStoredAgentEffort,
+  type AgentEffortLevel,
+} from '../../agents/effort.js'
 import type { QueuedMessageImage } from '../../agents/message-queue.js'
 import { mapStreamEventsToMessages } from '../../agents/messages/history.js'
 import { COMMANDER_STARTUP_USER_EVENT_SUBTYPE } from '../../agents/user-event-subtypes.js'
@@ -26,9 +37,16 @@ import type {
 import type { ChannelReplyForwarder, CommanderRoutesContext } from './types.js'
 import { createChannelReplyStreamDispatch } from '../channel-dispatchers.js'
 import { sanitizeProviderContextForPersistence } from '../../agents/providers/provider-context-normalization.js'
-import { asClaudeProviderContext } from '../../agents/providers/provider-session-context.js'
+import {
+  asClaudeProviderContext,
+  createProviderContextForAgentType,
+} from '../../agents/providers/provider-session-context.js'
 import { getProvider, resolveDefaultProviderId } from '../../agents/providers/registry.js'
-import { resolveProviderDefaults } from '../../agents/providers/provider-adapter.js'
+import {
+  resolveProviderDefaults,
+  type ProviderModelOption,
+} from '../../agents/providers/provider-adapter.js'
+import { getCachedProviderModelsForValidation } from '../../agents/providers/model-discovery.js'
 import { appendClaudeReasoningPolicy } from '../../agents/adapters/claude/reasoning-policy.js'
 import { hasNativeProviderResumeIdentifier } from '../../agents/providers/native-resume.js'
 import { isResumeNotFoundProviderError } from '../../agents/provider-errors.js'
@@ -37,9 +55,25 @@ import {
   computeLiveSessionMonthlySpendUsd,
   enforceCommanderCostCap,
 } from '../cost-control.js'
+import { getConversationRuntimeOverlay } from './conversation-runtime-state.js'
+import { CommanderSessionReplacementConflictError } from '../../agents/commander-interface.js'
 
 export function buildConversationSessionName(conversation: Conversation): string {
   return `commander-${conversation.commanderId}-conversation-${conversation.id}`
+}
+
+export function canConversationSelectCredentialPool(
+  agentType: AgentType,
+  host?: string | null,
+): boolean {
+  if (agentType === 'codex') {
+    return true
+  }
+  if (agentType !== 'claude') {
+    return false
+  }
+  const targetHost = host?.trim()
+  return Boolean(targetHost && targetHost !== 'local')
 }
 
 export function getLiveConversationSession(
@@ -540,7 +574,7 @@ export async function getConversationMessagesPage(
 export interface ConversationSpawnOptions {
   agentType?: AgentType
   model?: string | null
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   credentialPoolId?: string
@@ -561,7 +595,8 @@ interface PreparedConversationSession {
     systemPrompt: string
     agentType: AgentType
     model?: string
-    effort?: ClaudeEffortLevel
+    effort?: AgentEffortLevel
+    omitEffort?: boolean
     adaptiveThinking?: ClaudeAdaptiveThinkingMode
     maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
@@ -575,6 +610,7 @@ interface PreparedConversationSession {
   gaiaOpsEnvRequired: boolean
   credentialRecoveryApplied?: boolean
   resumeNotFoundRecoveryApplied?: boolean
+  resumingNativeSession?: boolean
 }
 
 function resolveGaiaApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -775,6 +811,107 @@ export class ConversationProviderSwapUnavailableError extends Error {
   }
 }
 
+export interface ConversationRuntimeSettingsValues {
+  agentType: AgentType
+  model?: string | null
+  credentialPoolId?: string
+  effort?: AgentEffortLevel
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
+}
+
+function liveSessionHasQueuedWork(liveSession: StreamSession): boolean {
+  const queueSize = typeof liveSession.messageQueue?.size === 'number'
+    ? liveSession.messageQueue.size
+    : 0
+  return Boolean(
+    liveSession.currentQueuedMessage
+      || (liveSession.pendingDirectSendMessages?.length ?? 0) > 0
+      || queueSize > 0,
+  )
+}
+
+export function getConversationRuntimeSettingsDisabledReason(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  nextAgentType: AgentType = conversation.agentType ?? resolveDefaultProviderId(),
+): string | null {
+  if (conversation.status === 'archived') {
+    return 'Archived conversations cannot change runtime settings'
+  }
+  if (getConversationRuntimeOverlay(conversation.id)?.state === 'starting') {
+    return 'Conversation is starting; runtime settings cannot change until startup finishes'
+  }
+
+  const liveSession = getLiveConversationSession(context, conversation)
+  if (!liveSession) {
+    return null
+  }
+  if (!liveSession.lastTurnCompleted) {
+    return 'Conversation is mid-turn; runtime settings can change after the current turn completes'
+  }
+  if (liveSessionHasQueuedWork(liveSession)) {
+    return 'Conversation has queued work; runtime settings can change after the queue drains'
+  }
+
+  const canUpdateCodexInPlace = liveSession.agentType === 'codex'
+    && nextAgentType === 'codex'
+    && Boolean(context.sessionsInterface?.updateCommanderSessionRuntimeSettings)
+  if (!canUpdateCodexInPlace && !context.sessionsInterface?.replaceCommanderSession) {
+    return 'Live runtime settings updates are unavailable'
+  }
+  return null
+}
+
+function applyConversationRuntimeSettings(
+  current: Conversation,
+  settings: ConversationRuntimeSettingsValues,
+  credentialSelectionAllowed: boolean,
+): Conversation {
+  const providerChanged = current.agentType !== settings.agentType
+  const credentialPoolId = credentialSelectionAllowed
+    ? settings.credentialPoolId
+      ?? (providerChanged ? undefined : current.credentialPoolId)
+    : undefined
+  const credentialPoolChanged = credentialSelectionAllowed
+    && credentialPoolId !== current.credentialPoolId
+  const baseProviderContext = !credentialPoolChanged
+    && current.providerContext?.providerId === settings.agentType
+    ? { ...current.providerContext }
+    : createProviderContextForAgentType(settings.agentType)
+  delete (baseProviderContext as { effort?: unknown }).effort
+  delete (baseProviderContext as { omitEffort?: unknown }).omitEffort
+  delete (baseProviderContext as { adaptiveThinking?: unknown }).adaptiveThinking
+  delete (baseProviderContext as { maxThinkingTokens?: unknown }).maxThinkingTokens
+  if (settings.agentType === 'claude' && settings.effort === undefined) {
+    ;(baseProviderContext as { omitEffort?: boolean }).omitEffort = true
+  }
+  const providerContext = sanitizeProviderContextForPersistence(baseProviderContext, {
+    effort: settings.effort,
+    adaptiveThinking: settings.adaptiveThinking,
+    maxThinkingTokens: settings.maxThinkingTokens,
+  }) ?? createProviderContextForAgentType(settings.agentType, {
+    effort: settings.effort,
+    omitEffort: settings.agentType === 'claude' && settings.effort === undefined,
+    adaptiveThinking: settings.adaptiveThinking,
+    maxThinkingTokens: settings.maxThinkingTokens,
+  })
+
+  return {
+    ...current,
+    agentType: settings.agentType,
+    ...(Object.prototype.hasOwnProperty.call(settings, 'model')
+      ? { model: settings.model }
+      : {}),
+    credentialPoolId,
+    effort: settings.effort,
+    adaptiveThinking: settings.adaptiveThinking,
+    maxThinkingTokens: settings.maxThinkingTokens,
+    providerContext,
+    lastMessageAt: new Date().toISOString(),
+  }
+}
+
 async function prepareConversationSession(
   context: CommanderRoutesContext,
   commanderId: string,
@@ -792,7 +929,6 @@ async function prepareConversationSession(
   const commanderAgentType = commander.agentType ?? resolveDefaultProviderId()
   const agentType = spawnOptions?.agentType ?? conversation.agentType ?? commanderAgentType
   const provider = getProvider(agentType)
-  const providerDefaults = provider ? resolveProviderDefaults(provider) : undefined
   const cwd = commander.cwd ?? undefined
   const host = commander.host ?? undefined
   const sessionName = buildConversationSessionName(conversation)
@@ -806,7 +942,22 @@ async function prepareConversationSession(
       : undefined
   const credentialPoolId = spawnOptions?.credentialPoolId
     ?? credentialRecovery?.credentialPoolId
-    ?? (conversation.agentType === agentType ? conversation.credentialPoolId : undefined)
+    ?? (
+      canConversationSelectCredentialPool(agentType, liveSession?.host ?? host)
+      && conversation.agentType === agentType
+        ? conversation.credentialPoolId
+        : undefined
+    )
+  const modelAccountId = liveSession?.agentType === agentType
+    ? liveSession.providerAuthSnapshot?.accountId ?? liveSession.providerAuthSnapshot?.accountEmail
+    : undefined
+  const providerModels = provider
+    ? getCachedProviderModelsForValidation(provider, {
+        credentialPoolId,
+        ...(modelAccountId ? { accountId: modelAccountId } : {}),
+      }).models
+    : []
+  const providerDefaults = provider ? resolveProviderDefaults(provider, providerModels) : undefined
   let clearResumeProviderContext = Boolean(
     spawnOptions?.clearResumeProviderContext
       || credentialRecovery?.clearResumeProviderContext,
@@ -838,6 +989,11 @@ async function prepareConversationSession(
     resumeProviderContext = undefined
     hasNativeResumeIdentifier = false
   }
+  const conversationProviderEffort = conversation.agentType === agentType
+    ? conversation.effort
+      ?? parseStoredAgentEffort(agentType, (resumeProviderContext as { effort?: unknown } | undefined)?.effort)
+      ?? undefined
+    : undefined
   const conversationClaudeContext = conversation.agentType === agentType
     ? asClaudeProviderContext(resumeProviderContext)
     : null
@@ -847,8 +1003,20 @@ async function prepareConversationSession(
   const hasSpawnModel = spawnOptions
     ? Object.prototype.hasOwnProperty.call(spawnOptions, 'model')
     : false
-  const conversationModel = conversation.agentType === agentType
-    ? (conversation.model ?? undefined)
+  const hasSpawnEffort = spawnOptions
+    ? Object.prototype.hasOwnProperty.call(spawnOptions, 'effort')
+    : false
+  const hasSpawnAdaptiveThinking = spawnOptions
+    ? Object.prototype.hasOwnProperty.call(spawnOptions, 'adaptiveThinking')
+    : false
+  const hasSpawnMaxThinkingTokens = spawnOptions
+    ? Object.prototype.hasOwnProperty.call(spawnOptions, 'maxThinkingTokens')
+    : false
+  const hasStoredConversationModel = conversation.agentType === agentType
+    && Object.prototype.hasOwnProperty.call(conversation, 'model')
+    && conversation.model !== undefined
+  const conversationModel = hasStoredConversationModel
+    ? (conversation.model ?? providerDefaults?.model ?? undefined)
     : undefined
   const inheritedModel = conversationModel ?? (agentType === commanderAgentType
     ? (commander.model ?? undefined)
@@ -856,26 +1024,68 @@ async function prepareConversationSession(
   const model = hasSpawnModel
     ? (spawnOptions?.model ?? undefined)
     : inheritedModel ?? (hasNativeResumeIdentifier ? undefined : providerDefaults?.model) ?? undefined
-  const effort = provider?.uiCapabilities.supportsEffort
+  const findModelOption = (candidate: string | undefined): ProviderModelOption | undefined => {
+    if (!candidate) {
+      return providerModels.find((option) => option.default)
+    }
+    return providerModels.find((option) => (
+      option.id === candidate
+      || option.resolvedModel === candidate
+      || option.aliases?.includes(candidate) === true
+    ))
+  }
+  const modelOption = findModelOption(model ?? providerDefaults?.model ?? undefined)
+  const modelEffortCapability = getAgentModelEffortCapability(agentType, modelOption)
+  const supportedEffortLevels = modelEffortCapability.supportedEffortLevels
+  const modelSupportsEffort = provider?.uiCapabilities.supportsEffort === true
+    && modelEffortCapability.supportsEffort
+  const modelDefaultEffort = parseOptionalAgentEffort(agentType, modelOption?.defaultEffort)
+  const providerDefaultEffort = parseOptionalAgentEffort(agentType, providerDefaults?.effort)
+  const defaultEffort = modelDefaultEffort && supportedEffortLevels.includes(modelDefaultEffort)
+    ? modelDefaultEffort
+    : providerDefaultEffort && supportedEffortLevels.includes(providerDefaultEffort)
+      ? providerDefaultEffort
+      : supportedEffortLevels[0]
+  const inheritedEffort = hasSpawnEffort
     ? spawnOptions?.effort
-      ?? conversationClaudeContext?.effort
-      ?? commander.effort
+    : conversationProviderEffort
+      ?? parseStoredAgentEffort(agentType, commander.effort)
       ?? commanderClaudeContext?.effort
-      ?? providerDefaults?.effort
+      ?? defaultEffort
+  const normalizedEffort = modelSupportsEffort
+    ? inheritedEffort && supportedEffortLevels.includes(inheritedEffort)
+      ? inheritedEffort
+      : defaultEffort
     : undefined
-  const adaptiveThinking = provider?.uiCapabilities.supportsAdaptiveThinking
-    ? spawnOptions?.adaptiveThinking
-      ?? conversationClaudeContext?.adaptiveThinking
-      ?? commander.adaptiveThinking
-      ?? commanderClaudeContext?.adaptiveThinking
-      ?? providerDefaults?.adaptiveThinking
+  const spawnKeepsStoredModel = hasSpawnModel
+    && spawnOptions?.model !== null
+    && spawnOptions?.model === conversation.model
+  const omitEffort = provider?.uiCapabilities.supportsEffort === true && (
+    !modelEffortCapability.supportsEffort
+    || (hasSpawnEffort && spawnOptions?.effort === undefined)
+    || (
+      conversationClaudeContext?.omitEffort === true
+      && (!hasSpawnModel || spawnKeepsStoredModel)
+    )
+  )
+  const effort = omitEffort ? undefined : normalizedEffort
+  const modelSupportsAdaptiveThinking = provider?.uiCapabilities.supportsAdaptiveThinking === true
+    && modelOption?.supportsAdaptiveThinking !== false
+  const adaptiveThinking = modelSupportsAdaptiveThinking
+    ? hasSpawnAdaptiveThinking
+      ? spawnOptions?.adaptiveThinking
+      : conversationClaudeContext?.adaptiveThinking
+        ?? commander.adaptiveThinking
+        ?? commanderClaudeContext?.adaptiveThinking
+        ?? providerDefaults?.adaptiveThinking
     : undefined
   const maxThinkingTokens = provider?.uiCapabilities.supportsMaxThinkingTokens
-    ? spawnOptions?.maxThinkingTokens
-      ?? conversationClaudeContext?.maxThinkingTokens
-      ?? commander.maxThinkingTokens
-      ?? commanderClaudeContext?.maxThinkingTokens
-      ?? providerDefaults?.maxThinkingTokens
+    ? hasSpawnMaxThinkingTokens
+      ? spawnOptions?.maxThinkingTokens
+      : conversationClaudeContext?.maxThinkingTokens
+        ?? commander.maxThinkingTokens
+        ?? commanderClaudeContext?.maxThinkingTokens
+        ?? providerDefaults?.maxThinkingTokens
     : undefined
   const hasPriorTranscriptMessages = hasNativeResumeIdentifier || !mayHavePriorConversationHistory(conversation)
     ? false
@@ -918,6 +1128,7 @@ async function prepareConversationSession(
       agentType,
       model,
       effort,
+      ...(omitEffort ? { omitEffort: true } : {}),
       adaptiveThinking,
       maxThinkingTokens,
       cwd,
@@ -929,6 +1140,7 @@ async function prepareConversationSession(
     gaiaOpsEnvRequired,
     credentialRecoveryApplied: Boolean(credentialRecovery),
     resumeNotFoundRecoveryApplied,
+    resumingNativeSession: hasNativeResumeIdentifier,
   }
 }
 
@@ -937,13 +1149,24 @@ function applyLiveSessionState(
   liveSession: StreamSession | null,
   nextAgentType: AgentType,
   nextStatus: Conversation['status'],
+  targetHost?: string | null,
 ): Conversation {
+  const persistCredentialPoolId = canConversationSelectCredentialPool(
+    nextAgentType,
+    liveSession?.host ?? targetHost,
+  )
   return {
     ...current,
     agentType: nextAgentType,
     model: liveSession?.model,
+    effort: liveSession?.effort,
+    adaptiveThinking: liveSession?.adaptiveThinking,
+    maxThinkingTokens: liveSession?.maxThinkingTokens,
     providerContext: sanitizeConversationProviderContext(liveSession) ?? current.providerContext,
-    ...(liveSession?.credentialPoolId ? { credentialPoolId: liveSession.credentialPoolId } : {}),
+    credentialPoolId: persistCredentialPoolId
+      ? liveSession?.credentialPoolId
+        ?? (current.agentType === nextAgentType ? current.credentialPoolId : undefined)
+      : undefined,
     status: nextStatus,
     lastHeartbeat: nextStatus === 'active' ? null : current.lastHeartbeat,
     heartbeatTickCount: nextStatus === 'active' ? 0 : current.heartbeatTickCount,
@@ -963,6 +1186,22 @@ function sanitizeConversationProviderContext(
     adaptiveThinking: session.adaptiveThinking,
     maxThinkingTokens: session.maxThinkingTokens,
   }) ?? undefined
+}
+
+function withoutRuntimeSettings(
+  providerContext: Conversation['providerContext'] | null | undefined,
+): Record<string, unknown> | null {
+  if (!providerContext) {
+    return null
+  }
+  const {
+    effort: _effort,
+    omitEffort: _omitEffort,
+    adaptiveThinking: _adaptiveThinking,
+    maxThinkingTokens: _maxThinkingTokens,
+    ...resumeContext
+  } = providerContext as unknown as Record<string, unknown>
+  return resumeContext
 }
 
 function hasFreshGaiaOpsApiKey(liveSession: StreamSession, now: Date): boolean {
@@ -999,12 +1238,29 @@ function isCompatibleLiveConversationSession(
   }
 
   const expectedCwd = createSessionInput.cwd ?? process.env.HOME ?? '/tmp'
+  const liveProviderContext = sanitizeConversationProviderContext(liveSession)
+  const liveRuntimeSettings = liveProviderContext as {
+    effort?: AgentEffortLevel
+    adaptiveThinking?: ClaudeAdaptiveThinkingMode
+    maxThinkingTokens?: ClaudeMaxThinkingTokens
+  } | undefined
+  const runtimeSettingsMatch = (
+    (liveSession.effort ?? liveRuntimeSettings?.effort) === undefined
+      || (liveSession.effort ?? liveRuntimeSettings?.effort) === createSessionInput.effort
+  ) && (
+    (liveSession.adaptiveThinking ?? liveRuntimeSettings?.adaptiveThinking) === undefined
+      || (liveSession.adaptiveThinking ?? liveRuntimeSettings?.adaptiveThinking) === createSessionInput.adaptiveThinking
+  ) && (
+    (liveSession.maxThinkingTokens ?? liveRuntimeSettings?.maxThinkingTokens) === undefined
+      || (liveSession.maxThinkingTokens ?? liveRuntimeSettings?.maxThinkingTokens) === createSessionInput.maxThinkingTokens
+  )
   return liveSession.agentType === createSessionInput.agentType
     && liveSession.model === createSessionInput.model
     && liveSession.cwd === expectedCwd
+    && runtimeSettingsMatch
     && isDeepStrictEqual(
-      sanitizeConversationProviderContext(liveSession) ?? null,
-      createSessionInput.resumeProviderContext ?? null,
+      withoutRuntimeSettings(liveProviderContext),
+      withoutRuntimeSettings(createSessionInput.resumeProviderContext),
     )
 }
 
@@ -1055,7 +1311,7 @@ export async function startConversationSession(
   conversation: Conversation,
   initialMessage?: string | null,
   spawnOptions?: ConversationSpawnOptions,
-  sendOptions?: { queue?: boolean; priority?: 'high' | 'normal' | 'low' },
+  sendOptions: { intent: SessionSendIntent; priority?: 'high' | 'normal' | 'low' } = { intent: 'interrupt' },
   dispatchChannelReplies = false,
   channelReplySkipCompletedTurns = 0,
   lifecycleCallbacks?: ConversationStartLifecycleCallbacks,
@@ -1155,7 +1411,13 @@ export async function startConversationSession(
   }
 
   const updated = await context.conversationStore.update(conversationForStart.id, (current) => ({
-    ...applyLiveSessionState(current, liveSession, createSessionInput.agentType, 'active'),
+    ...applyLiveSessionState(
+      current,
+      liveSession,
+      createSessionInput.agentType,
+      'active',
+      createSessionInput.host,
+    ),
   }))
   lifecycleCallbacks?.onConversationActivated?.(updated ?? conversationForStart)
   await updateCommanderDerivedState(context, commanderId)
@@ -1167,7 +1429,7 @@ export async function startConversationSession(
   )
   const isBackendStartupPrompt = initialMessage == null
     && !reusingLiveSession
-    && !conversationForStart.providerContext
+    && !prepared.resumingNativeSession
   if (dispatchChannelReplies) {
     ensureChannelReplyForwarder(context, heartbeatConversation, {
       skipCompletedTurns: isBackendStartupPrompt
@@ -1185,8 +1447,8 @@ export async function startConversationSession(
         : messageToSend,
       sendOptions,
     )
-    : true
-  if (!sent) {
+    : { ok: true as const, disposition: 'started' as const }
+  if (!sent.ok) {
     const failedSession = sessionsInterface.getSession(sessionName) ?? liveSession
     const resumeNotFoundFailure = !recoveryAlreadyAttempted &&
       createSessionInput.resumeProviderContext &&
@@ -1240,74 +1502,150 @@ export async function startConversationSession(
   }
 }
 
+export async function updateConversationRuntimeSettings(
+  context: CommanderRoutesContext,
+  conversation: Conversation,
+  settings: ConversationRuntimeSettingsValues,
+): Promise<Conversation> {
+  const liveSession = getLiveConversationSession(context, conversation)
+  const commander = await context.sessionStore?.get(conversation.commanderId)
+  const targetHost = liveSession?.host ?? commander?.host
+  const credentialSelectionAllowed = canConversationSelectCredentialPool(
+    settings.agentType,
+    targetHost,
+  )
+  const effectiveSettings = !credentialSelectionAllowed
+    ? { ...settings, credentialPoolId: undefined }
+    : settings.credentialPoolId === undefined
+      && conversation.agentType === settings.agentType
+      ? { ...settings, credentialPoolId: conversation.credentialPoolId ?? undefined }
+      : settings
+  const disabledReason = getConversationRuntimeSettingsDisabledReason(
+    context,
+    conversation,
+    effectiveSettings.agentType,
+  )
+  if (disabledReason) {
+    throw new ConversationProviderSwapConflictError(disabledReason)
+  }
+
+  if (!liveSession) {
+    const updated = await context.conversationStore.update(conversation.id, (current) => ({
+      ...applyConversationRuntimeSettings(current, effectiveSettings, credentialSelectionAllowed),
+    }))
+    return updated ?? conversation
+  }
+
+  const sessionsInterface = context.sessionsInterface
+  if (
+    liveSession.agentType === 'codex'
+    && effectiveSettings.agentType === 'codex'
+    && effectiveSettings.credentialPoolId === (liveSession.credentialPoolId ?? conversation.credentialPoolId)
+    && sessionsInterface?.updateCommanderSessionRuntimeSettings
+  ) {
+    const updatedSession = sessionsInterface.updateCommanderSessionRuntimeSettings(
+      buildConversationSessionName(conversation),
+      effectiveSettings,
+    )
+    if (!updatedSession) {
+      throw new ConversationProviderSwapUnavailableError(
+        `Conversation "${conversation.id}" has no updateable live session`,
+      )
+    }
+    const updated = await context.conversationStore.update(conversation.id, (current) => (
+      applyLiveSessionState(
+        applyConversationRuntimeSettings(current, effectiveSettings, credentialSelectionAllowed),
+        updatedSession,
+        effectiveSettings.agentType,
+        'active',
+        targetHost,
+      )
+    ))
+    return updated ?? conversation
+  }
+  if (!sessionsInterface?.replaceCommanderSession) {
+    throw new ConversationProviderSwapUnavailableError(
+      'sessionsInterface does not support live runtime settings updates',
+    )
+  }
+  const prepared = await prepareConversationSession(
+    context,
+    conversation.commanderId,
+    conversation,
+    {
+      agentType: effectiveSettings.agentType,
+      ...(Object.prototype.hasOwnProperty.call(effectiveSettings, 'model')
+        ? { model: effectiveSettings.model }
+        : {}),
+      credentialPoolId: effectiveSettings.credentialPoolId,
+      effort: effectiveSettings.effort,
+      adaptiveThinking: effectiveSettings.adaptiveThinking,
+      maxThinkingTokens: effectiveSettings.maxThinkingTokens,
+      clearResumeProviderContext: liveSession.agentType !== effectiveSettings.agentType
+        || (
+          credentialSelectionAllowed
+          && effectiveSettings.credentialPoolId !== (liveSession.credentialPoolId ?? conversation.credentialPoolId)
+        ),
+    },
+  )
+  let replacement: StreamSession
+  try {
+    replacement = await sessionsInterface.replaceCommanderSession({
+      ...prepared.createSessionInput,
+      requireIdleReplacement: true,
+    })
+  } catch (error) {
+    if (error instanceof CommanderSessionReplacementConflictError) {
+      throw new ConversationProviderSwapConflictError(error.message)
+    }
+    throw error
+  }
+
+  const updated = await context.conversationStore.update(conversation.id, (current) => ({
+    ...applyLiveSessionState(
+      applyConversationRuntimeSettings(current, effectiveSettings, credentialSelectionAllowed),
+      replacement,
+      effectiveSettings.agentType,
+      'active',
+      prepared.createSessionInput.host,
+    ),
+  }))
+  await updateCommanderDerivedState(context, conversation.commanderId)
+  return updated ?? conversation
+}
+
 export async function swapConversationProvider(
   context: CommanderRoutesContext,
   conversation: Conversation,
   agentType: AgentType,
   spawnOptions?: Omit<ConversationSpawnOptions, 'agentType'>,
 ): Promise<Conversation> {
+  const providerChanged = conversation.agentType !== agentType
+  const provider = getProvider(agentType)
+  const defaults = provider ? resolveProviderDefaults(provider) : undefined
   const modelProvided = spawnOptions
     ? Object.prototype.hasOwnProperty.call(spawnOptions, 'model')
     : false
-  if (
-    conversation.agentType === agentType
-    && !modelProvided
-    && !getLiveConversationSession(context, conversation)
-  ) {
-    return conversation
-  }
-
-  const liveSession = getLiveConversationSession(context, conversation)
-  if (!liveSession) {
-    const updated = await context.conversationStore.update(conversation.id, (current) => ({
-      ...current,
-      agentType,
-      ...(modelProvided ? { model: spawnOptions?.model ?? null } : {}),
-      lastMessageAt: new Date().toISOString(),
-    }))
-    return updated ?? conversation
-  }
-
-  const sessionsInterface = context.sessionsInterface
-  if (!sessionsInterface?.replaceCommanderSession) {
-    throw new ConversationProviderSwapUnavailableError(
-      'sessionsInterface does not support provider swapping',
-    )
-  }
-
-  if (!liveSession.lastTurnCompleted) {
-    throw new ConversationProviderSwapConflictError(
-      `Conversation "${conversation.id}" is mid-turn and cannot swap providers yet`,
-    )
-  }
-  if (liveSession.currentQueuedMessage || liveSession.pendingDirectSendMessages.length > 0) {
-    throw new ConversationProviderSwapConflictError(
-      `Conversation "${conversation.id}" has queued work and cannot swap providers yet`,
-    )
-  }
-
-  const prepared = await prepareConversationSession(
-    context,
-    conversation.commanderId,
-    conversation,
-    {
-      ...spawnOptions,
-      agentType,
-    },
-  )
-  const replacement = await sessionsInterface.replaceCommanderSession(
-    prepared.createSessionInput,
-  )
-
-  const updated = await context.conversationStore.update(conversation.id, (current) => ({
-    ...applyLiveSessionState(current, replacement, agentType, 'active'),
-  }))
-  await updateCommanderDerivedState(context, conversation.commanderId)
-  return updated ?? conversation
+  return updateConversationRuntimeSettings(context, conversation, {
+    agentType,
+    ...(modelProvided
+      ? { model: spawnOptions?.model ?? null }
+      : providerChanged
+        ? { model: null }
+        : {}),
+    credentialPoolId: spawnOptions?.credentialPoolId
+      ?? (providerChanged ? undefined : conversation.credentialPoolId),
+    effort: spawnOptions?.effort
+      ?? (providerChanged ? defaults?.effort : conversation.effort),
+    adaptiveThinking: spawnOptions?.adaptiveThinking
+      ?? (providerChanged ? defaults?.adaptiveThinking : conversation.adaptiveThinking),
+    maxThinkingTokens: spawnOptions?.maxThinkingTokens
+      ?? (providerChanged ? defaults?.maxThinkingTokens : conversation.maxThinkingTokens),
+  })
 }
 
 export interface DeliverConversationMessageOptions {
-  queue?: boolean
+  intent?: SessionSendIntent
   priority?: 'high' | 'normal' | 'low'
   dispatchChannelReplies?: boolean
   /**
@@ -1337,6 +1675,7 @@ type DeliverConversationMessageSuccess = {
   ok: true
   createdSession: boolean
   conversation: Conversation
+  disposition: SessionSendDisposition | 'duplicate'
   operationId?: string
 }
 
@@ -1344,6 +1683,8 @@ type DeliverConversationMessageFailure = {
   ok: false
   status: number
   error: string
+  code?: string
+  retryable?: boolean
 }
 
 type DeliverConversationMessageResult =
@@ -1654,6 +1995,20 @@ async function launchDeepThinkingWorkers(input: {
     const result = await sessionsInterface.dispatchWorkerForCommander({
       commanderId: input.conversation.commanderId,
       abortSignal: input.signal,
+      trustedSourceDefaults: {
+        agentType: input.liveSession.agentType,
+        ...(input.liveSession.model !== undefined ? { model: input.liveSession.model } : {}),
+        ...(input.liveSession.effort !== undefined ? { effort: input.liveSession.effort } : {}),
+        ...(asClaudeProviderContext(input.liveSession.providerContext)?.omitEffort
+          ? { omitEffort: true }
+          : {}),
+        ...(input.liveSession.adaptiveThinking !== undefined
+          ? { adaptiveThinking: input.liveSession.adaptiveThinking }
+          : {}),
+        ...(input.liveSession.maxThinkingTokens !== undefined
+          ? { maxThinkingTokens: input.liveSession.maxThinkingTokens }
+          : {}),
+      },
       rawBody: {
         name: sessionName,
         sessionType: 'worker',
@@ -1808,8 +2163,8 @@ async function runDeepThinkingRoutingOperation(input: {
   liveSession: StreamSession
   sessionName: string
   payload: ConversationMessagePayload
-  sendOptions?: {
-    queue?: boolean
+  sendOptions: {
+    intent: SessionSendIntent
     priority?: 'high' | 'normal' | 'low'
   }
   originalMessage: string
@@ -1902,7 +2257,7 @@ async function runDeepThinkingRoutingOperation(input: {
       },
       input.sendOptions,
     )
-    if (!sent) {
+    if (!sent?.ok) {
       cleanupDeepThinkingWorkers(input.context, launchedWorkers)
       recordDeepThinkingRoutingDecision({
         context: input.context,
@@ -1956,20 +2311,23 @@ async function sendConversationPayloadWithDeepThinkingGuard(input: {
   liveSession: StreamSession
   sessionName: string
   payload: ConversationMessagePayload
-  sendOptions?: {
-    queue?: boolean
+  sendOptions: {
+    intent: SessionSendIntent
     priority?: 'high' | 'normal' | 'low'
   }
   abortSignal?: AbortSignal
 }): Promise<
   | {
     ok: true
+    disposition: SessionSendDisposition
     operationId?: string
   }
   | {
     ok: false
     status: number
     error: string
+    code?: string
+    retryable?: boolean
   }
 > {
   const originalMessage = (input.payload.displayMessage ?? input.payload.message).trim()
@@ -2034,7 +2392,7 @@ async function sendConversationPayloadWithDeepThinkingGuard(input: {
         completeDeepThinkingOperation(input.conversation.id, controller)
       }
     })
-    return { ok: true, operationId }
+    return { ok: true, disposition: 'started' as const, operationId }
   }
 
   const sent = await input.context.sessionsInterface?.sendToSession(
@@ -2047,15 +2405,34 @@ async function sendConversationPayloadWithDeepThinkingGuard(input: {
     },
     input.sendOptions,
   )
-  if (!sent) {
+  if (!sent?.ok) {
+    const code = sent?.code ?? 'session_unavailable'
+    const retryable = sent?.retryable ?? false
+    console.warn('[commanders/conversation-send] delivery failed', {
+      conversationId: input.conversation.id,
+      sessionName: input.sessionName,
+      provider: input.liveSession.agentType,
+      requestedIntent: input.sendOptions.intent,
+      code,
+      retryable,
+    })
     return {
       ok: false,
-      status: 409,
-      error: `Conversation "${input.conversation.id}" session unavailable`,
+      status: retryable ? 503 : 409,
+      code,
+      error: sent?.error ?? `Conversation "${input.conversation.id}" session unavailable`,
+      retryable,
     }
   }
 
-  return { ok: true }
+  console.info('[commanders/conversation-send] delivered', {
+    conversationId: input.conversation.id,
+    sessionName: input.sessionName,
+    provider: input.liveSession.agentType,
+    requestedIntent: input.sendOptions.intent,
+    disposition: sent.disposition,
+  })
+  return { ok: true, disposition: sent.disposition }
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -3546,9 +3923,10 @@ async function deliverConversationMessageUnchecked(
     }
   }
 
-  const sendOptions = options?.queue === undefined && options?.priority === undefined
-    ? undefined
-    : { queue: options.queue, priority: options.priority }
+  const sendOptions = {
+    intent: options?.intent ?? 'interrupt',
+    priority: options?.priority,
+  }
 
   const liveSession = getLiveConversationSession(context, conversation)
   if (await conversationAlreadyHasClientSendId(context, conversation, liveSession, payload.clientSendId)) {
@@ -3560,6 +3938,7 @@ async function deliverConversationMessageUnchecked(
       ok: true,
       createdSession: false,
       conversation,
+      disposition: 'duplicate',
     }
   }
 
@@ -3581,7 +3960,7 @@ async function deliverConversationMessageUnchecked(
         conversation,
         shouldSendAutoStartSeed ? null : '',
         options.startSpawnOptions,
-        undefined,
+        { intent: 'interrupt' },
         options.dispatchChannelReplies === true,
         shouldSendAutoStartSeed ? 1 : 0,
       )
@@ -3593,9 +3972,9 @@ async function deliverConversationMessageUnchecked(
         }
       }
       const sessionName = buildConversationSessionName(started.conversation)
-      const autoStartedSendOptions = sendOptions ?? (shouldSendAutoStartSeed
-        ? { queue: true, priority: 'normal' as const }
-        : undefined)
+      const autoStartedSendOptions = shouldSendAutoStartSeed
+        ? { intent: 'queue' as const, priority: 'normal' as const }
+        : sendOptions
       const startedLiveSession = getLiveConversationSession(context, started.conversation)
       if (!startedLiveSession) {
         await stopConversationSession(context, started.conversation, 'idle')
@@ -3629,6 +4008,8 @@ async function deliverConversationMessageUnchecked(
           ok: false,
           status: sent.status,
           error: sent.error,
+          ...(sent.code ? { code: sent.code } : {}),
+          ...(sent.retryable !== undefined ? { retryable: sent.retryable } : {}),
         }
       }
       if (options.dispatchChannelReplies === true) {
@@ -3644,6 +4025,7 @@ async function deliverConversationMessageUnchecked(
         ok: true,
         createdSession: true,
         conversation: updated ?? started.conversation,
+        disposition: sent.disposition,
         ...(sent.operationId ? { operationId: sent.operationId } : {}),
       }
     }
@@ -3669,7 +4051,7 @@ async function deliverConversationMessageUnchecked(
         conversation,
         null,
         options?.startSpawnOptions,
-        undefined,
+        { intent: 'interrupt' },
         options?.dispatchChannelReplies === true,
         options?.dispatchChannelReplies === true ? 1 : 0,
       )
@@ -3694,8 +4076,9 @@ async function deliverConversationMessageUnchecked(
         await recordChannelReplyIntentPending(context, restarted.conversation, payload.clientSendId)
         armChannelReplyForwarder(context, restarted.conversation, payload.clientSendId)
       }
-      const recoveredSendOptions = sendOptions
-        ?? (options?.dispatchChannelReplies === true ? { queue: true, priority: 'normal' as const } : undefined)
+      const recoveredSendOptions = options?.dispatchChannelReplies === true
+        ? { intent: 'queue' as const, priority: 'normal' as const }
+        : sendOptions
       const sent = await sendConversationPayloadWithDeepThinkingGuard({
         context,
         conversation: restarted.conversation,
@@ -3716,6 +4099,8 @@ async function deliverConversationMessageUnchecked(
           ok: false,
           status: sent.status,
           error: sent.error,
+          ...(sent.code ? { code: sent.code } : {}),
+          ...(sent.retryable !== undefined ? { retryable: sent.retryable } : {}),
         }
       }
       if (options?.dispatchChannelReplies === true) {
@@ -3731,6 +4116,7 @@ async function deliverConversationMessageUnchecked(
         ok: true,
         createdSession: true,
         conversation: updated ?? restarted.conversation,
+        disposition: sent.disposition,
         ...(sent.operationId ? { operationId: sent.operationId } : {}),
       }
     }
@@ -3750,11 +4136,6 @@ async function deliverConversationMessageUnchecked(
       error: costCap.body.error,
     }
   }
-  const pendingCredentialRecovery = context.sessionsInterface?.getCredentialRecoveryRequest?.(sessionName)
-    ?? liveSession.credentialPoolRecovery
-  const guardedSendOptions = pendingCredentialRecovery
-    ? { queue: true, priority: 'high' as const }
-    : sendOptions
   if (options?.dispatchChannelReplies === true) {
     await recordChannelReplyIntentPending(context, conversation, payload.clientSendId)
     armChannelReplyForwarder(context, conversation, payload.clientSendId)
@@ -3766,7 +4147,7 @@ async function deliverConversationMessageUnchecked(
     liveSession,
     sessionName,
     payload,
-    sendOptions: guardedSendOptions,
+    sendOptions,
     abortSignal: options?.abortSignal,
   })
   if (!sent.ok) {
@@ -3778,6 +4159,8 @@ async function deliverConversationMessageUnchecked(
       ok: false,
       status: sent.status,
       error: sent.error,
+      ...(sent.code ? { code: sent.code } : {}),
+      ...(sent.retryable !== undefined ? { retryable: sent.retryable } : {}),
     }
   }
   if (options?.dispatchChannelReplies === true) {
@@ -3802,6 +4185,7 @@ async function deliverConversationMessageUnchecked(
     ok: true,
     createdSession: false,
     conversation: updated ?? conversation,
+    disposition: sent.disposition,
     ...(sent.operationId ? { operationId: sent.operationId } : {}),
   }
 }

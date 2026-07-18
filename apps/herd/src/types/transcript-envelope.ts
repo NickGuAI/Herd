@@ -22,6 +22,19 @@ export interface TranscriptEnvelopeSource {
   rawEventType?: string
 }
 
+export type TranscriptTaskSubtype = 'task_started' | 'task_progress' | 'task_notification'
+
+export interface TranscriptTaskMetadata {
+  subtype: TranscriptTaskSubtype
+  taskId?: string
+  toolUseId?: string
+  parentToolUseId?: string
+  taskType?: string
+  description?: string
+  summary?: string
+  status?: string
+}
+
 export type TranscriptEnvelopeEvent =
   | { type: 'turn.start'; role?: TranscriptMessageRole }
   | {
@@ -97,6 +110,7 @@ export interface TranscriptEnvelope {
   itemId?: string
   parentId?: string
   subagentId?: string
+  task?: TranscriptTaskMetadata
   clientSendId?: string
   seq?: number
   ev: TranscriptEnvelopeEvent

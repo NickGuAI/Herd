@@ -1,6 +1,6 @@
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
+import type { AgentEffortLevel } from '../effort.js'
 import type {
   CodexSessionRuntimeHandle,
   GeminiAcpRuntimeHandle,
@@ -15,7 +15,8 @@ export interface ProviderSessionContext {
 export interface ClaudeProviderContext extends ProviderSessionContext {
   providerId: 'claude'
   sessionId?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
+  omitEffort?: boolean
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -24,6 +25,7 @@ export interface CodexProviderContext extends ProviderSessionContext {
   providerId: 'codex'
   threadId?: string
   codexHome?: string
+  effort?: AgentEffortLevel
   runtime?: CodexSessionRuntimeHandle
   notificationCleanup?: () => void
   runtimeTeardownPromise?: Promise<void>
@@ -48,7 +50,8 @@ export interface OpenCodeProviderContext extends ProviderSessionContext {
 export interface ProviderContextInit {
   sessionId?: string
   threadId?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
+  omitEffort?: boolean
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -105,6 +108,7 @@ export function createProviderContextForAgentType(
   if (agentType === 'codex') {
     return createCodexProviderContext({
       threadId: init.threadId,
+      effort: init.effort,
     })
   }
   if (agentType === 'gemini') {
@@ -120,6 +124,7 @@ export function createProviderContextForAgentType(
   return createClaudeProviderContext({
     sessionId: init.sessionId,
     effort: init.effort,
+    ...(init.omitEffort ? { omitEffort: true } : {}),
     adaptiveThinking: init.adaptiveThinking,
     maxThinkingTokens: init.maxThinkingTokens,
   })

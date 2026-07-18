@@ -63,10 +63,63 @@ export interface DaemonCliDependencies {
   reconnectDelayMs?: number
   maxBufferedMessages?: number
   signal?: AbortSignal
+  killProcess?: typeof process.kill
+  shutdownTermTimeoutMs?: number
+  shutdownKillTimeoutMs?: number
 }
 
 const DAEMON_VERSION = '0.1.0'
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
+
+function signalOwnedDaemonProcess(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  killProcess: typeof process.kill,
+): void {
+  if (process.platform !== 'win32' && Number.isInteger(child.pid) && (child.pid ?? 0) > 0) {
+    try {
+      killProcess(-child.pid!, signal)
+      return
+    } catch {
+      // Fall through if the group exited between lookup and signal.
+    }
+  }
+  child.kill(signal)
+}
+
+function ownedDaemonProcessTreeAlive(
+  child: ChildProcess,
+  killProcess: typeof process.kill,
+): boolean {
+  if (process.platform !== 'win32' && Number.isInteger(child.pid) && (child.pid ?? 0) > 0) {
+    try {
+      killProcess(-child.pid!, 0)
+      return true
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+    }
+  }
+  return child.exitCode === null && child.signalCode === null
+}
+
+async function waitForOwnedDaemonProcessTreeExit(
+  child: ChildProcess,
+  killProcess: typeof process.kill,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  while (ownedDaemonProcessTreeAlive(child, killProcess)) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      return false
+    }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, Math.min(25, remaining))
+      timer.unref?.()
+    })
+  }
+  return true
+}
 
 const PROVIDERS = [
   {
@@ -376,6 +429,7 @@ export async function runDaemonCli(
   }
 
   const spawnImpl = dependencies.spawnImpl ?? spawn
+  const killProcess = dependencies.killProcess ?? process.kill
   const env = dependencies.env ?? process.env
   const websocketUrl = buildDaemonWebSocketUrl(runOptions)
   const children = new Map<string, ChildProcess>()
@@ -386,6 +440,8 @@ export async function runDaemonCli(
     ?? (Number.isFinite(configuredReconnectDelayMs) && configuredReconnectDelayMs > 0
       ? configuredReconnectDelayMs
       : 1_000)
+  const shutdownTermTimeoutMs = dependencies.shutdownTermTimeoutMs ?? 5_000
+  const shutdownKillTimeoutMs = dependencies.shutdownKillTimeoutMs ?? 2_000
   let activeWs: WebSocketLike | null = null
   let heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS
   let heartbeatSequence = 0
@@ -473,6 +529,7 @@ export async function runDaemonCli(
     const child = spawnImpl(message.command, message.args, {
       cwd: message.cwd,
       env: normalizeSpawnEnv(runOptions.endpoint, env, message.env),
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     children.set(message.processId, child)
@@ -508,13 +565,25 @@ export async function runDaemonCli(
       })
     })
     child.on('exit', (code, signal) => {
-      children.delete(message.processId)
-      sendToServer({
-        type: 'exit',
-        processId: message.processId,
-        exitCode: code,
-        signal,
-      })
+      const reportExitWhenTreeStops = async () => {
+        while (ownedDaemonProcessTreeAlive(child, killProcess)) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 25)
+            timer.unref?.()
+          })
+        }
+        if (children.get(message.processId) !== child) {
+          return
+        }
+        children.delete(message.processId)
+        sendToServer({
+          type: 'exit',
+          processId: message.processId,
+          exitCode: code,
+          signal,
+        })
+      }
+      void reportExitWhenTreeStops()
     })
   }
 
@@ -542,7 +611,7 @@ export async function runDaemonCli(
       return
     }
     if (message.type === 'kill') {
-      child.kill((message.signal ?? 'SIGTERM') as NodeJS.Signals)
+      signalOwnedDaemonProcess(child, (message.signal ?? 'SIGTERM') as NodeJS.Signals, killProcess)
       return
     }
     if (message.type === 'resize') {
@@ -562,15 +631,29 @@ export async function runDaemonCli(
         clearTimeout(reconnectTimer)
         reconnectTimer = null
       }
-      for (const child of children.values()) {
-        child.kill('SIGTERM')
-      }
-      try {
-        activeWs?.close(1000, 'daemon shutting down')
-      } catch {
-        // Best effort.
-      }
-      resolve(code)
+      const ownedChildren = [...children.values()]
+      void (async () => {
+        for (const child of ownedChildren) {
+          signalOwnedDaemonProcess(child, 'SIGTERM', killProcess)
+        }
+        const gracefullyStopped = await Promise.all(ownedChildren.map((child) => (
+          waitForOwnedDaemonProcessTreeExit(child, killProcess, shutdownTermTimeoutMs)
+        )))
+        for (let index = 0; index < ownedChildren.length; index += 1) {
+          if (!gracefullyStopped[index]) {
+            signalOwnedDaemonProcess(ownedChildren[index]!, 'SIGKILL', killProcess)
+          }
+        }
+        await Promise.all(ownedChildren.map((child) => (
+          waitForOwnedDaemonProcessTreeExit(child, killProcess, shutdownKillTimeoutMs)
+        )))
+        try {
+          activeWs?.close(1000, 'daemon shutting down')
+        } catch {
+          // Best effort.
+        }
+        resolve(code)
+      })()
     }
 
     const scheduleReconnect = () => {

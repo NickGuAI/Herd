@@ -1,9 +1,9 @@
 # Security Policy
 
-Herd is source-available software distributed under the PolyForm
-Noncommercial license. It is built for self-hosted, single-operator use where
-the operator controls the host, provider accounts, reverse proxy, and worker
-machines.
+Herd is open-source software distributed under the GNU Affero General Public License
+version 3 (`AGPL-3.0-only`). It is built for self-hosted,
+single-operator use where the operator controls the host, provider accounts,
+reverse proxy, and worker machines.
 
 ## Supported Versions
 

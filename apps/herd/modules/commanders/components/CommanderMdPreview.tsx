@@ -1,4 +1,5 @@
 import type { AgentType } from '@/types'
+import type { AgentEffortLevel } from '../../agents/effort.js'
 
 const DEFAULT_HEARTBEAT_MESSAGE = 'Check for pending tasks and report status.'
 const MS_PER_MINUTE = 60_000
@@ -9,7 +10,7 @@ export interface CommanderMdPreviewProps {
   cwd?: string
   identityOperatingStyle?: string
   agentType?: AgentType
-  effort?: 'low' | 'medium' | 'high' | 'max'
+  effort?: AgentEffortLevel
   heartbeatIntervalMs?: number
   heartbeatMessage?: string
   fatPinInterval?: number
@@ -92,7 +93,7 @@ function buildPreviewContent(props: CommanderMdPreviewProps): string {
     lines.push(`- Agent: ${agentType}`)
   }
   if (effort) {
-    lines.push(`- Claude effort: ${effort}`)
+    lines.push(`- Effort: ${effort}`)
   }
 
   if (identityOperatingStyleValue !== '') {

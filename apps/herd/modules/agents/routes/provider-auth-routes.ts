@@ -7,19 +7,29 @@ import {
   buildProviderNativeAuthDetail,
   buildProviderReauthUrl,
   completeProviderOAuthFlow,
+  isCredentialPoolProvider,
   prepareProviderSpawnAuth,
   ProviderAuthRequiredError,
   ProviderAuthStore,
   providerUsesManagedOAuth,
+  resolveCredentialPoolRuntimeMode,
   resolveProviderAuthScopeId,
+  shouldClearResumeProviderContextForCredentialPoolRecovery,
+  scrubClaudeAuthOverrideEnv,
   startProviderOAuthFlow,
   type CredentialPoolCredentialReadiness,
   type CredentialPoolCredentialView,
+  type CredentialPoolSwitchResult,
   type CredentialPoolView,
+  type ClaudeGlobalAuthStatus,
   type ProviderAuthSnapshot,
   type CredentialPoolProvider,
   type ProviderOAuthCompleteResult,
 } from '../provider-auth.js'
+import {
+  evaluateClaudeQuotaEligibility,
+  type ClaudeQuotaSnapshot,
+} from '../claude-quota.js'
 import type {
   AgentType,
   AgentsRouterOptions,
@@ -61,12 +71,30 @@ interface ProviderAuthRouteDeps {
     sessionName: string,
     request: CredentialPoolRecoveryRequest,
   ): Promise<Record<string, unknown>>
+  getClaudeQuotaSnapshot?(credentialId: string): ClaudeQuotaSnapshot
+  getGlobalClaudeCredentialId?(): Promise<string | undefined>
+  claudeQuotaRefreshIntervalMs?: number
+  activateGlobalClaudeCredential?(
+    credentialId: string,
+    options?: { sourceAuthoritative?: boolean; forceReload?: boolean },
+  ): Promise<CredentialPoolSwitchResult>
+  refreshClaudeQuota?(credentialId?: string): Promise<unknown>
+  recoverGlobalClaudeAuthRequired?(
+    session: StreamSession,
+    detail: string,
+  ): Promise<CredentialPoolSwitchResult | null>
+  validateClaudeCredentialLogin?(absoluteDir: string): Promise<ClaudeGlobalAuthStatus>
 }
 
 interface RegisteredProviderAuthRoutes {
   markProviderAuthRequired(
     session: StreamSession,
     detail: string,
+    recovery?: {
+      interruptedMessage?: StreamSession['currentQueuedMessage']
+      interruptedTurnHadSideEffects?: boolean
+      interruptedTurnId?: string
+    },
   ): Promise<ProviderAuthSnapshot>
   refreshProviderAuthSnapshots(): Promise<ProviderAuthSnapshot[]>
 }
@@ -212,6 +240,7 @@ interface CredentialLoginFlow {
   signal?: number | string
   error?: string
   mintPromise?: Promise<void>
+  sensitiveInputs?: string[]
 }
 
 interface CredentialLoginFlowDto {
@@ -249,8 +278,14 @@ interface CredentialPoolRotationEventDto {
 }
 
 type CredentialPoolRouteView = CredentialPoolView & {
+  globalActive?: string
+  generatedAt?: string
+  quotaRefreshIntervalMs?: number
   latestRotationEvent?: CredentialPoolRotationEventDto
   credentials: Array<CredentialPoolCredentialView & {
+    globalActive?: boolean
+    quotaEligibility?: ReturnType<typeof evaluateClaudeQuotaEligibility>['status']
+    quota?: ClaudeQuotaSnapshot
     liveSessionCount: number
     liveSessions: CredentialPoolLiveSessionDto[]
     latestRotationEvent?: CredentialPoolRotationEventDto
@@ -275,7 +310,10 @@ function stripAnsi(value: string): string {
 }
 
 function appendCredentialFlowTranscript(flow: CredentialLoginFlow, value: string): void {
-  const safe = redactCredentialFlowOutput(stripAnsi(value))
+  let safe = redactCredentialFlowOutput(stripAnsi(value))
+  for (const secret of flow.sensitiveInputs ?? []) {
+    safe = safe.split(secret).join('[redacted]')
+  }
   flow.transcript = `${flow.transcript}${safe}`.slice(-CREDENTIAL_LOGIN_TRANSCRIPT_MAX_CHARS)
   flow.updatedAt = new Date().toISOString()
 }
@@ -316,6 +354,14 @@ function extractClaudeSetupToken(output: string): string | null {
   return null
 }
 
+function parseClaudeSetupTokenInput(value: unknown): string | undefined {
+  const text = parseOptionalString(value)
+  if (!text) {
+    return undefined
+  }
+  return extractClaudeSetupToken(text) ?? undefined
+}
+
 function runCommandCaptureOutput(
   command: string,
   args: readonly string[],
@@ -323,7 +369,7 @@ function runCommandCaptureOutput(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawnChild(command, [...args], {
-      env: { ...process.env, ...env },
+      env: { ...scrubClaudeAuthOverrideEnv(process.env), ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const chunks: string[] = []
@@ -389,9 +435,15 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     provider: CredentialPoolProvider,
     exhaustedId: string | undefined,
     result: Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>,
+    context: { host?: string; credentialPoolMode?: StreamSession['credentialPoolMode'] } = {},
   ): Promise<Record<string, unknown> | undefined> {
     const activeCredentialId = result.activeCredential?.id
     const previousCredentialPoolId = exhaustedId ?? result.previousCredential?.id
+    const clearResumeProviderContext = shouldClearResumeProviderContextForCredentialPoolRecovery(
+      provider,
+      context.host,
+      context.credentialPoolMode,
+    )
     if (sessionName && result.blocked) {
       const session = sessions.get(sessionName)
       if (session?.kind === 'stream' && session.agentType === provider) {
@@ -414,7 +466,7 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
           ...(previousCredentialPoolId
             ? { previousCredentialPoolId }
             : {}),
-          clearResumeProviderContext: true,
+          clearResumeProviderContext,
           reason: exhaustedId ? 'usage_limit' : 'manual_switch',
           requestedAt: new Date().toISOString(),
           ...(result.blocked.earliestExhaustedUntil ? { blockedUntil: result.blocked.earliestExhaustedUntil } : {}),
@@ -432,11 +484,12 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
 
     const request: CredentialPoolRecoveryRequest = {
       provider,
+      state: 'reloading_session',
       credentialPoolId: activeCredentialId,
       ...(previousCredentialPoolId
         ? { previousCredentialPoolId }
           : {}),
-      clearResumeProviderContext: true,
+      clearResumeProviderContext,
       reason: exhaustedId ? 'usage_limit' : 'manual_switch',
       requestedAt: new Date().toISOString(),
     }
@@ -459,7 +512,7 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
   async function resolvePoolSwitchSessionContext(
     sessionName: string | undefined,
     provider: CredentialPoolProvider,
-  ): Promise<{ host?: string; credentialPoolId?: string }> {
+  ): Promise<{ host?: string; credentialPoolId?: string; credentialPoolMode?: StreamSession['credentialPoolMode'] }> {
     if (!sessionName) {
       return {}
     }
@@ -468,6 +521,7 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
       return {
         ...(liveSession.host ? { host: liveSession.host } : {}),
         ...(liveSession.credentialPoolId ? { credentialPoolId: liveSession.credentialPoolId } : {}),
+        ...(liveSession.credentialPoolMode ? { credentialPoolMode: liveSession.credentialPoolMode } : {}),
       }
     }
     const persisted = await readPersistedSessionsState()
@@ -477,12 +531,18 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     return {
       ...(session?.host ? { host: session.host } : {}),
       ...(session?.credentialPoolId ? { credentialPoolId: session.credentialPoolId } : {}),
+      ...(session?.credentialPoolMode ? { credentialPoolMode: session.credentialPoolMode } : {}),
     }
   }
 
   async function markProviderAuthRequired(
     session: StreamSession,
     detail: string,
+    recovery: {
+      interruptedMessage?: StreamSession['currentQueuedMessage']
+      interruptedTurnHadSideEffects?: boolean
+      interruptedTurnId?: string
+    } = {},
   ): Promise<ProviderAuthSnapshot> {
     const scopeId = resolveProviderAuthScopeId(session.creator)
     const host = session.host ?? 'local'
@@ -498,10 +558,59 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
       lastCheckedAt: new Date().toISOString(),
       ...(managedOAuth ? { reauthUrl: buildProviderReauthUrl(session.agentType, scopeId, host) } : {}),
     }
+    const localGlobalClaude = isCredentialPoolProvider(session.agentType)
+      && resolveCredentialPoolRuntimeMode(session.agentType, host) === 'global-continuity'
+      && session.credentialPoolMode !== 'isolated-runtime'
+    const duplicateGlobalRecovery = localGlobalClaude
+      && session.credentialPoolRecovery?.reason === 'auth_required'
+    if (localGlobalClaude && !duplicateGlobalRecovery) {
+      const request: CredentialPoolRecoveryRequest = {
+        provider: 'claude',
+        state: 'awaiting_safe_boundary',
+        ...(session.credentialPoolId ? { previousCredentialPoolId: session.credentialPoolId } : {}),
+        clearResumeProviderContext: false,
+        reason: 'auth_required',
+        requestedAt: new Date().toISOString(),
+        ...(recovery.interruptedMessage ? { interruptedMessage: recovery.interruptedMessage } : {}),
+        interruptedTurnHadSideEffects: recovery.interruptedTurnHadSideEffects ?? true,
+        ...(recovery.interruptedTurnId ? { interruptedTurnId: recovery.interruptedTurnId } : {}),
+      }
+      session.lastTurnCompleted = true
+      session.credentialPoolRecovery = request
+      deps.markCredentialRecoveryRequest(session.name, request)
+      deps.schedulePersistedSessionsWrite()
+    }
     session.providerAuthSnapshot = snapshot
     await providerAuthStore.upsertSnapshot(snapshot)
+    if (duplicateGlobalRecovery) {
+      return snapshot
+    }
+    let recoveredGlobalClaude = false
+    if (localGlobalClaude) {
+      try {
+        const credentialId = session.credentialPoolId
+          ?? await deps.getGlobalClaudeCredentialId?.()
+        if (credentialId) {
+          await providerAuthStore.markPoolCredentialAuthBroken('claude', credentialId, detail)
+        }
+        const recovery = await deps.recoverGlobalClaudeAuthRequired?.(session, detail)
+        recoveredGlobalClaude = Boolean(recovery?.activeCredential && !recovery.blocked)
+      } catch (error) {
+        console.warn('[agents/provider-auth] global Claude auth recovery failed', {
+          session: session.name,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
     if (session.creator.kind === 'commander' && session.creator.id) {
-      await questStore?.blockActiveForAuthRequired(session.creator.id, detail)
+      if (recoveredGlobalClaude) {
+        await questStore?.unblockAuthRequired(
+          session.creator.id,
+          'Claude recovered automatically on another global credential',
+        )
+      } else {
+        await questStore?.blockActiveForAuthRequired(session.creator.id, detail)
+      }
     }
     return snapshot
   }
@@ -657,7 +766,26 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
       await flow.mintPromise
     }
     const credential = await readCredentialForFlow(flow.provider, flow.credentialId)
-    flow.readiness = credential.readiness
+    const sourceFileReady = await providerAuthStore.hasValidPoolCredentialLogin(
+      flow.provider,
+      flow.credentialId,
+    )
+    const sourceReadyLocal = credential.readiness.readyLocal
+      || sourceFileReady && (!credential.authBrokenAt || flow.exitCode === 0)
+    const sourceReadyRemote = flow.provider === 'claude'
+      ? sourceReadyLocal && Boolean(credential.remoteTokenPresent)
+      : credential.readiness.readyRemote
+    flow.readiness = {
+      ...credential.readiness,
+      local: sourceReadyLocal ? 'ready' : 'auth_required',
+      readyLocal: sourceReadyLocal,
+      ...(flow.provider === 'claude'
+        ? {
+            remote: sourceReadyRemote ? 'ready' : 'auth_required',
+            readyRemote: sourceReadyRemote,
+          }
+        : {}),
+    }
     if (flow.provider !== 'claude') {
       flow.remoteToken = { status: 'not_required' }
     } else if (credential.remoteTokenPresent) {
@@ -769,7 +897,7 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
       cols: 96,
       rows: 24,
       cwd: process.cwd(),
-      env: { ...process.env, ...login.env },
+      env: { ...scrubClaudeAuthOverrideEnv(process.env), ...login.env },
     })
     flow.pty = pty
     flow.pid = pty.pid
@@ -880,6 +1008,9 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
 
   async function buildCredentialPoolRouteView(provider: CredentialPoolProvider): Promise<CredentialPoolRouteView> {
     const pool = await providerAuthStore.listPoolCredentials(provider)
+    const globalActive = provider === 'claude'
+      ? await deps.getGlobalClaudeCredentialId?.()
+      : undefined
     const labelByCredentialId = new Map(pool.credentials.map((credential) => [credential.id, credential.label]))
     const liveSessionsByCredentialId = new Map<string, CredentialPoolLiveSessionDto[]>()
     const rotationByCredentialId = new Map<string, CredentialPoolRotationEventDto>()
@@ -933,8 +1064,16 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     const credentials = pool.credentials.map((credential) => {
       const liveSessions = liveSessionsByCredentialId.get(credential.id) ?? []
       const latestCredentialRotation = rotationByCredentialId.get(credential.id)
+      const quota = provider === 'claude'
+        ? deps.getClaudeQuotaSnapshot?.(credential.id)
+        : undefined
       return {
         ...credential,
+        ...(provider === 'claude' ? { globalActive: credential.id === globalActive } : {}),
+        ...(quota ? {
+          quota,
+          quotaEligibility: evaluateClaudeQuotaEligibility(quota).status,
+        } : {}),
         liveSessionCount: liveSessions.length,
         liveSessions,
         ...(latestCredentialRotation ? { latestRotationEvent: latestCredentialRotation } : {}),
@@ -943,6 +1082,13 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
 
     return {
       ...pool,
+      ...(globalActive ? { globalActive } : {}),
+      ...(provider === 'claude' ? {
+        generatedAt: new Date().toISOString(),
+        ...(deps.claudeQuotaRefreshIntervalMs !== undefined
+          ? { quotaRefreshIntervalMs: deps.claudeQuotaRefreshIntervalMs }
+          : {}),
+      } : {}),
       credentials,
       ...(pool.nextCredential ? {
         nextCredential: credentials.find((credential) => credential.id === pool.nextCredential?.id) ?? pool.nextCredential,
@@ -1005,6 +1151,44 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     }
   })
 
+  router.post('/provider-auth/pool/credentials/:provider/:credentialId/remote-token', requireWriteAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.params.provider)
+    const credentialId = parseOptionalString(req.params.credentialId)
+    if (!provider || !credentialId) {
+      res.status(400).json({ error: 'Invalid credential pool credential' })
+      return
+    }
+    if (provider !== 'claude') {
+      res.status(400).json({ error: `${provider} credential pools do not store remote tokens` })
+      return
+    }
+    const remoteToken = parseClaudeSetupTokenInput(req.body?.token ?? req.body?.remoteToken)
+    if (!remoteToken) {
+      res.status(400).json({ error: 'Claude setup token is required' })
+      return
+    }
+
+    try {
+      await providerAuthStore.putPoolCredentialRemoteToken(provider, credentialId, remoteToken)
+      for (const flow of credentialLoginFlows.values()) {
+        if (flow.provider !== provider || flow.credentialId !== credentialId) {
+          continue
+        }
+        await refreshCredentialLoginFlow(flow)
+      }
+      const pool = await buildCredentialPoolRouteView(provider)
+      const credential = pool.credentials.find((candidate) => candidate.id === credentialId)
+      if (!credential) {
+        res.status(404).json({ error: 'Credential pool credential not found' })
+        return
+      }
+      res.json({ credential, pool })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to store Claude setup token'
+      res.status(400).json({ error: message })
+    }
+  })
+
   router.post('/provider-auth/pool/credentials/:provider/:credentialId/login-flow', requireWriteAccess, async (req, res) => {
     const provider = parsePoolProvider(req.params.provider)
     const credentialId = parseOptionalString(req.params.credentialId)
@@ -1043,6 +1227,40 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     }
   })
 
+  router.post('/provider-auth/pool/credentials/:provider/:credentialId/login-flow/:flowId/input', requireWriteAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.params.provider)
+    const credentialId = parseOptionalString(req.params.credentialId)
+    const flowId = parseOptionalString(req.params.flowId)
+    if (!provider || !credentialId || !flowId) {
+      res.status(400).json({ error: 'Invalid credential login flow' })
+      return
+    }
+    const input = parseOptionalString(req.body?.input ?? req.body?.code)
+    if (!input) {
+      res.status(400).json({ error: 'Authorization code is required' })
+      return
+    }
+    const flow = lookupCredentialLoginFlow(provider, credentialId, flowId)
+    if (!flow) {
+      res.status(404).json({ error: 'Credential login flow not found' })
+      return
+    }
+    if (!flow.pty) {
+      res.status(409).json({ error: 'The login terminal is no longer running. Restart the guided login and paste the code while it is waiting.' })
+      return
+    }
+    try {
+      ;(flow.sensitiveInputs ??= []).push(input)
+      flow.pty.write(`${input}\r`)
+      appendCredentialFlowTranscript(flow, `\n[ui] authorization code submitted (length=${input.length})\n`)
+      await refreshCredentialLoginFlow(flow)
+      res.json(serializeCredentialLoginFlow(flow))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to send the authorization code to the login terminal'
+      res.status(400).json({ error: message })
+    }
+  })
+
   router.post('/provider-auth/pool/credentials/:provider/:credentialId/login-flow/:flowId/finalize', requireWriteAccess, async (req, res) => {
     const provider = parsePoolProvider(req.params.provider)
     const credentialId = parseOptionalString(req.params.credentialId)
@@ -1058,10 +1276,83 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
     }
     try {
       await refreshCredentialLoginFlow(flow, { waitForMint: true, retryMint: true })
+      if (provider === 'claude' && flow.readiness.readyLocal) {
+        const pool = await providerAuthStore.listPoolCredentials('claude')
+        const credential = pool.credentials.find((candidate) => candidate.id === credentialId)
+        if (!credential) {
+          throw new Error('Credential pool credential not found')
+        }
+        const validation = await deps.validateClaudeCredentialLogin?.(credential.absoluteDir)
+        if (validation && (
+          !validation.loggedIn
+          || (
+            validation.authMethod
+            && !['claude.ai', 'oauth'].includes(validation.authMethod.toLowerCase())
+          )
+          || (
+            credential.email
+            && validation.email
+            && credential.email.toLowerCase() !== validation.email.toLowerCase()
+          )
+        )) {
+          throw new Error('Claude credential login validation failed')
+        }
+        if (pool.active === credentialId && deps.activateGlobalClaudeCredential) {
+          await deps.activateGlobalClaudeCredential(credentialId, {
+            sourceAuthoritative: true,
+            forceReload: true,
+          })
+        } else {
+          await providerAuthStore.clearPoolCredentialAuthBroken('claude', credentialId)
+        }
+      }
       res.json(serializeCredentialLoginFlow(flow))
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to finalize credential login flow'
       res.status(400).json({ error: message })
+    }
+  })
+
+  router.post('/provider-auth/pool/activate', requireWriteAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.body?.provider)
+    const credentialId = parseOptionalString(req.body?.credentialId)
+    if (provider !== 'claude' || !credentialId) {
+      res.status(400).json({ error: 'A Claude credential is required' })
+      return
+    }
+    if (!deps.activateGlobalClaudeCredential) {
+      res.status(503).json({ error: 'Global Claude credential activation is unavailable' })
+      return
+    }
+    try {
+      await deps.activateGlobalClaudeCredential(credentialId)
+      res.json(await buildCredentialPoolRouteView('claude'))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to activate global Claude credential'
+      res.status(400).json({ error: message })
+    }
+  })
+
+  router.post('/provider-auth/pool/quota/refresh', requireWriteAccess, async (req, res) => {
+    const provider = parsePoolProvider(req.body?.provider)
+    const credentialId = parseOptionalString(req.body?.credentialId)
+    if (provider !== 'claude') {
+      res.status(400).json({ error: 'Claude is required for quota refresh' })
+      return
+    }
+    if (!deps.refreshClaudeQuota) {
+      res.status(503).json({ error: 'Claude quota refresh is unavailable' })
+      return
+    }
+    try {
+      await deps.refreshClaudeQuota(credentialId)
+      res.json(await buildCredentialPoolRouteView('claude'))
+    } catch (error) {
+      console.warn('[agents/provider-auth] requested Claude quota refresh failed', {
+        credentialId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      res.status(502).json({ error: 'Claude quota refresh failed' })
     }
   })
 
@@ -1071,10 +1362,17 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
       res.status(400).json({ error: 'Invalid credential pool provider' })
       return
     }
+    const requestedSessionName = parseOptionalString(req.body?.sessionName)
     try {
       const requestedExhaustedId = parseOptionalString(req.body?.exhaustedId)
-      const sessionName = parseOptionalString(req.body?.sessionName)
+      const sessionName = requestedSessionName
       const sessionContext = await resolvePoolSwitchSessionContext(sessionName, provider)
+      if (provider === 'claude' && (sessionContext.host ?? 'local') === 'local') {
+        res.status(400).json({
+          error: 'Local Claude uses one global credential; select it in Settings',
+        })
+        return
+      }
       const exhaustedId = sessionContext.credentialPoolId ?? requestedExhaustedId
       const result = await providerAuthStore.switchToNextPoolCredential(
         provider,
@@ -1094,6 +1392,7 @@ export function registerProviderAuthRoutes(deps: ProviderAuthRouteDeps): Registe
         provider,
         exhaustedId,
         result,
+        sessionContext,
       )
       res.json({
         ...responseResult,

@@ -15,7 +15,10 @@ import {
   type CreateConversationReasoningConfig,
 } from '@modules/conversation/components/CreateConversationPanel'
 import type { Commander, Worker } from '@modules/command-room/components/desktop/SessionRow'
-import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type {
+  ConversationRecord,
+  ConversationRuntimeSettingsUpdate,
+} from '@modules/conversation/hooks/use-conversations'
 import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
 import { orderMobileConversations } from './orderMobileConversations'
 
@@ -60,15 +63,15 @@ interface MobileChatViewProps {
     agentType: AgentType,
     model: string | null,
     reasoningConfig: CreateConversationReasoningConfig,
+    credentialPoolId?: string,
   ) => Promise<ConversationRecord | null> | ConversationRecord | null
   onRequestCreateConversation?: () => void | Promise<void>
   onStartConversation?: (conversationId: string) => void | Promise<void>
   onStopConversation?: (conversationId: string) => void | Promise<void>
   onRenameConversation?: (conversationId: string, name: string) => void | Promise<void>
-  onSwapConversationProvider?: (
+  onUpdateConversationRuntimeSettings?: (
     conversationId: string,
-    agentType: AgentType,
-    model: string | null,
+    settings: ConversationRuntimeSettingsUpdate,
   ) => void | Promise<void>
   onArchiveConversation?: (conversationId: string) => void | Promise<void>
   onRemoveConversation?: (conversationId: string) => void | Promise<void>
@@ -261,7 +264,7 @@ export function MobileChatView({
   onStartConversation,
   onStopConversation,
   onRenameConversation,
-  onSwapConversationProvider,
+  onUpdateConversationRuntimeSettings,
   onArchiveConversation,
   onRemoveConversation,
   onStopCommander,
@@ -520,6 +523,7 @@ export function MobileChatView({
     nextAgentType: AgentType,
     nextModel: string | null,
     reasoningConfig: CreateConversationReasoningConfig,
+    credentialPoolId?: string,
   ) => {
     if (!commander || !onCreateConversation) {
       return
@@ -527,7 +531,12 @@ export function MobileChatView({
 
     setIsCreatingConversation(true)
     try {
-      const created = await onCreateConversation(nextAgentType, nextModel, reasoningConfig)
+      const created = await onCreateConversation(
+        nextAgentType,
+        nextModel,
+        reasoningConfig,
+        credentialPoolId,
+      )
       if (!created) {
         return
       }
@@ -717,8 +726,14 @@ export function MobileChatView({
           >
             <CreateConversationPanel
               commanderName={commander.name}
-              onCreateChat={(nextAgentType, nextModel, reasoningConfig) => {
-                void handleCreateConversation(nextAgentType, nextModel, reasoningConfig)
+              commanderHost={commander.host}
+              onCreateChat={(nextAgentType, nextModel, reasoningConfig, credentialPoolId) => {
+                void handleCreateConversation(
+                  nextAgentType,
+                  nextModel,
+                  reasoningConfig,
+                  credentialPoolId,
+                )
               }}
               createChatPending={isCreatingConversation}
               defaultAgentType={agentType}
@@ -761,6 +776,7 @@ export function MobileChatView({
                   activeConversationId,
                   sessionName,
                 )}
+                sessionHost={commander.host}
                 sessionLabel={commander.name}
                 chatLabel={conversation.name?.trim() || undefined}
                 agentType={conversation.liveSession?.agentType ?? conversation.agentType ?? agentType}
@@ -822,7 +838,7 @@ export function MobileChatView({
                 onStartConversation={onStartConversation}
                 onStopConversation={onStopConversation}
                 onRenameConversation={onRenameConversation}
-                onSwapConversationProvider={onSwapConversationProvider}
+                onUpdateConversationRuntimeSettings={onUpdateConversationRuntimeSettings}
                 onArchiveConversation={handleArchiveConversation}
                 onRemoveConversation={handleRemoveConversation}
                 belowHeader={streamNotice}

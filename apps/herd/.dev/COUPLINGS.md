@@ -175,5 +175,5 @@ Contrarian risks from source review:
   Herd/Herd; SOP-15 sanitizes public output.
 - public docs may use `HERD_DATA_DIR/herd.sqlite`, while implementation defaults
   to `HERD_DATA_DIR/herd.sqlite`.
-- split-shell ports appear across EC2 installer, Caddy, launch scripts, tests,
-  and SOPs: public `20001`, private `20009`.
+- endpoint roles appear across the EC2 installer, launch scripts, tests, and
+  SOPs: production/ALB/CLI `20001`, loopback development API `20009`.

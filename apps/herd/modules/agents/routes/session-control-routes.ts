@@ -10,6 +10,7 @@ import type { QueuedMessage, QueuedMessageImage, QueuedMessagePriority } from '.
 import { parseMessageImagesForRequest } from '../message-images.js'
 import type { ProviderCreateOptions, ProviderTeardownOptions } from '../providers/provider-adapter.js'
 import { getProvider } from '../providers/registry.js'
+import { asClaudeProviderContext } from '../providers/provider-session-context.js'
 import { ProviderAuthRequiredError } from '../provider-auth.js'
 import { parseSessionName } from '../session/input.js'
 import {
@@ -49,8 +50,8 @@ type QueueMutationResult =
   | { ok: false; status: number; error: string }
 
 type ImmediateSendResult =
-  | { ok: true; queued: boolean; message: QueuedMessage }
-  | { ok: false; error: string }
+  | { ok: true; disposition: 'started' | 'interrupted'; message: QueuedMessage }
+  | { ok: false; code?: 'credential_recovery_failed'; error: string; retryable: boolean }
 
 interface SessionControlRouteDeps {
   router: Router
@@ -178,20 +179,16 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
 
     const result = await deps.sendImmediateTextToStreamSession(session, messageText, undefined, text, clientSendId)
     if (!result.ok) {
-      const isQueueBackpressure = deps.isQueueBackpressureError(result.error)
-      res.status(isQueueBackpressure ? 409 : 503).json({
+      res.status(503).json({
         sent: false,
-        error: isQueueBackpressure ? result.error : 'Stream session unavailable',
+        ...(result.code ? { code: result.code } : {}),
+        error: result.error,
+        retryable: result.retryable,
       })
       return
     }
 
-    if (result.queued) {
-      res.status(202).json({ sent: false, queued: true })
-      return
-    }
-
-    res.json({ sent: true })
+    res.json({ sent: true, disposition: result.disposition })
   })
 
   router.post('/sessions/:name/message', requireWriteAccess, async (req, res) => {
@@ -250,17 +247,18 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
 
     const result = await deps.sendImmediateTextToStreamSession(session, messageText, images, text, clientSendId)
     if (!result.ok) {
-      const isQueueBackpressure = deps.isQueueBackpressureError(result.error)
-      res.status(isQueueBackpressure ? 409 : 503).json({
+      res.status(503).json({
         sent: false,
-        error: isQueueBackpressure ? result.error : 'Stream session unavailable',
+        ...(result.code ? { code: result.code } : {}),
+        error: result.error,
+        retryable: result.retryable,
       })
       return
     }
 
-    res.status(result.queued ? 202 : 200).json({
-      sent: !result.queued,
-      queued: result.queued,
+    res.status(200).json({
+      sent: true,
+      disposition: result.disposition,
       id: result.message.id,
     })
   })
@@ -586,6 +584,9 @@ export function registerSessionControlRoutes(deps: SessionControlRouteDeps): voi
         source.agentType,
         {
           effort: source.effort,
+          ...(asClaudeProviderContext(source.providerContext)?.omitEffort
+            ? { omitEffort: true }
+            : {}),
           adaptiveThinking: source.adaptiveThinking,
           maxThinkingTokens: source.maxThinkingTokens,
           model: source.model,

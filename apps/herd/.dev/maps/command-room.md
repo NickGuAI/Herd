@@ -18,6 +18,8 @@ provider selection, and settings.
 - `apps/herd/modules/commanders/routes/conversation-websocket.ts`
 - `apps/herd/modules/agents/websocket.ts`
 - `apps/herd/modules/agents/components/SessionComposer.tsx`
+- `apps/herd/modules/agents/components/session-message-list/render-items.ts`
+- `apps/herd/modules/agents/messages/stream-event-machine.ts`
 - `apps/herd/modules/agents/queue-state.ts`
 - `apps/herd/modules/workspace/use-workspace.ts`
 - `apps/herd/src/module-manifest.ts`
@@ -82,3 +84,7 @@ pnpm --filter herd exec vitest run \
   shared hook changes.
 - Conversation-bound chat and standalone session chat use different endpoints;
   check both when changing composer behavior.
+- Sub-agent activity groups correlate by durable transcript ids. Header counts
+  must distinguish owners from nested tool calls, and provider-runtime
+  boundaries must settle prior running rows in the stream state machine rather
+  than through viewport or websocket inference.

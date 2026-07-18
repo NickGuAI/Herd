@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-d97745" alt="PolyForm Noncommercial license" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-d97745" alt="GNU AGPLv3 license" /></a>
   <a href="./docs/llms.txt"><img src="https://img.shields.io/badge/docs-llms.txt-70a37f" alt="Agent-readable docs" /></a>
   <a href="https://herd.gehirn.ai/install.sh"><img src="https://img.shields.io/badge/install-one%20line-10212a" alt="One-line installer" /></a>
 </p>
@@ -36,7 +36,7 @@ Herd owns mission state, worker orchestration, memory, approvals, and the comman
 
 ## What Herd Is
 
-Herd is a source-available meta-harness for personal agent fleets.
+Herd is an open-source meta-harness for personal agent fleets.
 
 It looks like an operating room for agent work. Under the hood: commanders, workers, persistent memory, agent-harness readiness, machine routing, action policies, approvals, public docs, and an install path that keeps the runtime on infrastructure you own.
 
@@ -146,8 +146,17 @@ accepted pull requests.
 
 ## License
 
-Herd is source-available under the [PolyForm Noncommercial 1.0.0](./LICENSE) license.
+The current Herd release line, beginning with `v0.0.8-beta`, is available under the
+[GNU Affero General Public License version 3](./LICENSE), identified by SPDX as
+`AGPL-3.0-only`.
 
-- Personal and other noncommercial use is allowed under that license.
-- Commercial use requires a separate written agreement.
+- You may use, modify, and distribute Herd, including for commercial purposes,
+  under the AGPL.
+- If you run a modified version over a network, the AGPL requires you to offer
+  the corresponding source to users who interact with it remotely.
+- A separate paid commercial agreement is available for proprietary or other
+  non-AGPL use. No license purchase is required for commercial use that
+  complies with the AGPL.
+- Earlier tagged releases remain available under the license terms included
+  with those releases.
 - See [COMMERCIAL-LICENSE.md](./COMMERCIAL-LICENSE.md) and [NOTICE](./NOTICE).

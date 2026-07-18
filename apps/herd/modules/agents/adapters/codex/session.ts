@@ -444,7 +444,8 @@ export async function startCodexTurn(
   await runtime.ensureConnected()
   await runtime.sendRequest('turn/start', {
     threadId: resumeThreadId,
-    effort: 'xhigh',
+    ...(session.model ? { model: session.model } : {}),
+    ...(session.effort ? { effort: session.effort } : {}),
     input: buildCodexTurnInput(text, images),
   })
 }
@@ -841,54 +842,73 @@ export async function sendTextToCodexSession(
     }
   }
 
+  if (session.codexDispatchInFlight) {
+    return { ok: false, retryable: true, reason: 'Codex input dispatch is already in progress' }
+  }
+
   const activeTurnId = getCodexActiveTurnId(session)
   const dispatchMethod = activeTurnId ? 'turn/steer' : 'turn/start'
   const clientSendId = options.clientSendId?.trim()
+  const previousTurnState = {
+    lastTurnCompleted: session.lastTurnCompleted,
+    completedTurnAt: session.completedTurnAt,
+    finalResultEvent: session.finalResultEvent,
+  }
+  session.codexDispatchInFlight = true
   deps.resetActiveTurnState(session)
-  if (!isHiddenInternalUserEventSubtype(options.userEventSubtype) && !hasCodexUserEnvelopeForClientSendId(session, clientSendId)) {
-    appendAndBroadcastCodexEvents(
-      session,
-      buildCodexUserEnvelopeEvents(session, text, options, images),
-      deps,
-    )
-    deps.schedulePersistedSessionsWrite()
-  }
   try {
-    if (activeTurnId) {
-      await steerCodexTurn(session, activeTurnId, text, images)
-    } else {
-      await startCodexTurn(session, text, images)
-    }
-  } catch (error) {
-    if (deps.getActiveSession(session.name) !== session) {
-      return { ok: false, retryable: false, reason: 'Session unavailable' }
-    }
-
-    const runtime = readCodexRuntime(session)
-    const classifiedError = classifyCodexDispatchError(dispatchMethod, error)
-    if (classifiedError.retryable) {
-      if (classifiedError.clearActiveTurnId) {
-        clearCodexActiveTurnId(session)
+    try {
+      if (activeTurnId) {
+        await steerCodexTurn(session, activeTurnId, text, images)
+      } else {
+        await startCodexTurn(session, text, images)
       }
-      runtime?.log('info', 'Codex live dispatch deferred after retryable transport response', {
-        sessionName: session.name,
-        threadId: readCodexThreadId(session),
-        method: dispatchMethod,
-        activeTurnId: activeTurnId ?? null,
-        reason: classifiedError.reason,
-        clearedActiveTurnId: classifiedError.clearActiveTurnId,
-      })
-      return { ok: false, retryable: true, reason: classifiedError.reason }
-    }
-    const detail = classifiedError.reason
-    console.warn(`[agents] Codex input delivery failed for ${session.name}: ${detail}`)
-    await failCodexSession(session.name, session, detail, deps)
-    deps.schedulePersistedSessionsWrite()
-    return { ok: false, retryable: false, reason: detail }
-  }
+    } catch (error) {
+      if (deps.getActiveSession(session.name) !== session) {
+        return { ok: false, retryable: false, reason: 'Session unavailable' }
+      }
 
-  deps.scheduleTurnWatchdog(session)
-  return { ok: true }
+      const runtime = readCodexRuntime(session)
+      const classifiedError = classifyCodexDispatchError(dispatchMethod, error)
+      if (classifiedError.retryable) {
+        if (classifiedError.clearActiveTurnId) {
+          clearCodexActiveTurnId(session)
+        }
+        if (!session.activeTurnId) {
+          session.lastTurnCompleted = previousTurnState.lastTurnCompleted
+          session.completedTurnAt = previousTurnState.completedTurnAt
+          session.finalResultEvent = previousTurnState.finalResultEvent
+        }
+        runtime?.log('info', 'Codex live dispatch deferred after retryable transport response', {
+          sessionName: session.name,
+          threadId: readCodexThreadId(session),
+          method: dispatchMethod,
+          activeTurnId: activeTurnId ?? null,
+          reason: classifiedError.reason,
+          clearedActiveTurnId: classifiedError.clearActiveTurnId,
+        })
+        return { ok: false, retryable: true, reason: classifiedError.reason }
+      }
+      const detail = classifiedError.reason
+      console.warn(`[agents] Codex input delivery failed for ${session.name}: ${detail}`)
+      await failCodexSession(session.name, session, detail, deps)
+      deps.schedulePersistedSessionsWrite()
+      return { ok: false, retryable: false, reason: detail }
+    }
+
+    if (!isHiddenInternalUserEventSubtype(options.userEventSubtype) && !hasCodexUserEnvelopeForClientSendId(session, clientSendId)) {
+      appendAndBroadcastCodexEvents(
+        session,
+        buildCodexUserEnvelopeEvents(session, text, options, images),
+        deps,
+      )
+      deps.schedulePersistedSessionsWrite()
+    }
+    deps.scheduleTurnWatchdog(session)
+    return { ok: true }
+  } finally {
+    session.codexDispatchInFlight = false
+  }
 }
 
 export function createCodexSessionAdapter(
@@ -993,6 +1013,7 @@ async function createCodexSessionFromThread(
     lastEventAt: initializedAt,
     systemPrompt: options.systemPrompt,
     model: options.model,
+    effort: options.effort,
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
     stdoutBuffer: '',
     stdinDraining: false,
@@ -1010,10 +1031,12 @@ async function createCodexSessionFromThread(
     providerContext: createCodexProviderContext({
       threadId,
       codexHome: resolveCodexHomeForProviderContext(options),
+      effort: options.effort,
       runtime,
     }),
     providerAuthSnapshot: options.providerAuth?.snapshot,
     credentialPoolId: options.providerAuth?.credentialPoolId,
+    credentialPoolMode: options.providerAuth?.credentialPoolMode,
     activeTurnId: undefined,
     adapter: createCodexSessionAdapter(deps),
     resumedFrom: options.resumedFrom,

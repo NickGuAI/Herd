@@ -39,6 +39,7 @@ export const HERD_MODULE_GRAPH = [
         'agents.sessions-interface',
         'agents.approval-sessions-interface',
         'agents.session-websocket',
+        'agents.machine-command-executor',
         'agents.runtime',
         'agents.machines',
         'agents.world-state',
@@ -323,7 +324,7 @@ export const HERD_MODULE_GRAPH = [
     status: 'public',
     summary: 'Commander profiles, memory, conversations, quests, heartbeat, transcript, avatar, and runtime orchestration.',
     dependencies: {
-      modules: ['agents', 'automations', 'channels', 'policies'],
+      modules: ['agents', 'automations', 'channels', 'eval', 'policies'],
       capabilities: [
         'agents.sessions-interface',
         'automations.scheduler',
@@ -334,6 +335,7 @@ export const HERD_MODULE_GRAPH = [
         'channels.bindings',
         'policies.action-gate',
         'provider-secrets-store',
+        'eval.adapter-preflight',
       ],
     },
     capabilities: {
@@ -357,6 +359,7 @@ export const HERD_MODULE_GRAPH = [
         'channels.bindings',
         'policies.action-gate',
         'provider-secrets-store',
+        'eval.adapter-preflight',
       ],
     },
     ui: {
@@ -893,12 +896,17 @@ export const HERD_MODULE_GRAPH = [
     status: 'private',
     summary: 'Internal benchmark evaluation runner manifests, auth doctor, result reports, and submission state.',
     dependencies: {
-      modules: ['api-keys', 'telemetry'],
-      capabilities: ['auth.api-keys', 'telemetry.hub'],
+      modules: ['agents', 'api-keys', 'telemetry'],
+      capabilities: ['agents.machine-command-executor', 'auth.api-keys', 'telemetry.hub'],
     },
     capabilities: {
-      provides: ['eval.result-manifests', 'eval.auth-doctor', 'eval.reports-ui'],
-      consumes: ['auth.api-keys', 'telemetry.hub'],
+      provides: [
+        'eval.adapter-preflight',
+        'eval.result-manifests',
+        'eval.auth-doctor',
+        'eval.reports-ui',
+      ],
+      consumes: ['agents.machine-command-executor', 'auth.api-keys', 'telemetry.hub'],
     },
     ui: {
       kind: 'route',

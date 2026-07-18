@@ -4,6 +4,8 @@ import {
   type ProviderErrorClassification,
   type TranscriptEnvelope,
   type TranscriptMessageRole,
+  type TranscriptTaskMetadata,
+  type TranscriptTaskSubtype,
 } from '../../../src/types/transcript-envelope.js'
 import { classifyProviderError } from '../provider-errors.js'
 import {
@@ -94,6 +96,46 @@ export function resetStreamProcessorState(state: MutableStreamProcessorState) {
   state.seenProviderErrorKeys = {}
 }
 
+function uniqueSubagentIds(values: Array<string | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))]
+}
+
+function getEnvelopeSubagentIds(envelope: TranscriptEnvelope): string[] {
+  return uniqueSubagentIds([
+    envelope.task?.toolUseId,
+    envelope.subagentId,
+    envelope.task?.taskId,
+  ])
+}
+
+function getMessageSubagentIds(message: MsgItem): string[] {
+  return uniqueSubagentIds([
+    message.transcript?.task?.toolUseId,
+    message.transcript?.subagentId,
+    message.transcript?.task?.taskId,
+    message.kind === 'tool' && message.toolName === 'Agent' ? message.toolId : undefined,
+  ])
+}
+
+function registerEnvelopeSubagentParent(
+  state: MutableStreamProcessorState,
+  envelope: TranscriptEnvelope,
+  messageId: string,
+) {
+  for (const subagentId of getEnvelopeSubagentIds(envelope)) {
+    state.activeEnvelopeSubagents[subagentId] = messageId
+  }
+}
+
+function registerMessageSubagentParent(
+  state: MutableStreamProcessorState,
+  message: MsgItem,
+) {
+  for (const subagentId of getMessageSubagentIds(message)) {
+    state.activeEnvelopeSubagents[subagentId] = message.id
+  }
+}
+
 function hydrateEnvelopeMessageStateFromMessage(
   state: MutableStreamProcessorState,
   message: MsgItem,
@@ -128,11 +170,10 @@ function hydrateEnvelopeMessageStateFromMessage(
   if (
     message.kind === 'tool'
     && message.toolName === 'Agent'
-    && message.toolStatus === 'running'
+    && (message.toolStatus === 'running' || Boolean(transcript.task))
   ) {
-    const subagentId = transcript.subagentId ?? message.toolId
-    if (subagentId) {
-      state.activeEnvelopeSubagents[subagentId] = message.id
+    registerMessageSubagentParent(state, message)
+    if (message.toolStatus === 'running') {
       pushActiveAgentMessageId(state, message.id)
     }
   }
@@ -191,6 +232,81 @@ function clearActiveAgentMessageIds(state: MutableStreamProcessorState) {
   state.activeAgentMessageIds = []
 }
 
+function settleRunningTools(
+  messages: readonly MsgItem[],
+  status: 'success' | 'error',
+): MsgItem[] {
+  return messages.map((message) => {
+    const children = message.children
+      ? settleRunningTools(message.children, status)
+      : undefined
+    const nextStatus = message.kind === 'tool' && message.toolStatus === 'running'
+      ? status
+      : message.toolStatus
+    if (children === message.children && nextStatus === message.toolStatus) {
+      return message
+    }
+    return {
+      ...message,
+      ...(children ? { children } : {}),
+      ...(nextStatus ? { toolStatus: nextStatus } : {}),
+    }
+  })
+}
+
+function settleSubagentTools(
+  messages: readonly MsgItem[],
+  subagentId: string,
+  parentMessageId: string | undefined,
+  status: 'success' | 'error',
+): MsgItem[] {
+  return messages.map((message) => {
+    const ownsTurn = parentMessageId
+      ? message.id === parentMessageId
+      : getMessageSubagentIds(message).includes(subagentId)
+    if (ownsTurn) {
+      return settleRunningTools([message], status)[0]
+    }
+    if (!message.children) {
+      return message
+    }
+    const children = settleSubagentTools(
+      message.children,
+      subagentId,
+      parentMessageId,
+      status,
+    )
+    return children === message.children ? message : { ...message, children }
+  })
+}
+
+function clearSubagentRuntimeState(
+  state: MutableStreamProcessorState,
+  subagentId: string,
+  parentMessageId: string | undefined,
+) {
+  if (parentMessageId) {
+    removeActiveAgentMessageId(state, parentMessageId)
+  }
+  for (const [id, messageId] of Object.entries(state.activeEnvelopeSubagents)) {
+    if (id === subagentId || (parentMessageId && messageId === parentMessageId)) {
+      delete state.activeEnvelopeSubagents[id]
+    }
+  }
+  for (const key of Object.keys(state.activeEnvelopeMessages)) {
+    if (key.endsWith(`:${subagentId}`)) {
+      delete state.activeEnvelopeMessages[key]
+    }
+  }
+}
+
+function terminalizePriorRuntime(context: StreamEventProcessorContext) {
+  context.setMessages((prev) => settleRunningTools(prev, 'error'))
+  clearActiveAgentMessageIds(context.state)
+  context.state.activeEnvelopeSubagents = {}
+  context.state.activeEnvelopeMessages = {}
+}
+
 function stringifyUnknown(value: unknown): string {
   if (typeof value === 'string') {
     return value
@@ -202,6 +318,31 @@ function stringifyUnknown(value: unknown): string {
     return JSON.stringify(value, null, 2)
   } catch {
     return String(value)
+  }
+}
+
+function buildSystemEventTranscriptMeta(event: StreamEvent): MsgItem['transcript'] {
+  const record = asRecord(event)
+  const subtype = typeof record?.subtype === 'string' ? record.subtype.trim() : ''
+  if (subtype !== 'credential_pool_recovery') {
+    return undefined
+  }
+  const provider = typeof record?.provider === 'string' && record.provider.trim().length > 0
+    ? record.provider.trim()
+    : 'herd'
+  const backend = typeof record?.backend === 'string' && record.backend.trim().length > 0
+    ? record.backend.trim()
+    : 'herd'
+  const time = typeof record?.time === 'string' ? record.time : undefined
+  return {
+    time,
+    source: {
+      provider,
+      backend,
+      rawEventType: subtype,
+    },
+    providerEventType: subtype,
+    providerPayload: event,
   }
 }
 
@@ -217,6 +358,7 @@ function buildTranscriptMeta(
     itemId: envelope.itemId,
     parentId: envelope.parentId,
     subagentId: envelope.subagentId,
+    task: envelope.task,
     seq: envelope.seq,
     providerEventType: envelope.source.rawEventType,
     providerEventId: envelope.source.rawEventId,
@@ -315,10 +457,13 @@ function getEnvelopeSubagentParentId(
   state: MutableStreamProcessorState,
   envelope: TranscriptEnvelope,
 ): string | undefined {
-  if (!envelope.subagentId) {
-    return undefined
+  for (const subagentId of getEnvelopeSubagentIds(envelope)) {
+    const parentId = state.activeEnvelopeSubagents[subagentId]
+    if (parentId) {
+      return parentId
+    }
   }
-  return state.activeEnvelopeSubagents[envelope.subagentId]
+  return undefined
 }
 
 function appendMessageWithOptionalParent(
@@ -649,13 +794,168 @@ function readPlanningEventFromV2Plan(plan: unknown): Extract<StreamEvent, { type
   }
 }
 
+function mergeTaskMetadata(
+  current: TranscriptEnvelope['task'] | undefined,
+  incoming: NonNullable<TranscriptEnvelope['task']>,
+): NonNullable<TranscriptEnvelope['task']> {
+  return {
+    ...current,
+    ...incoming,
+    subtype: incoming.subtype,
+    taskId: incoming.taskId ?? current?.taskId,
+    toolUseId: incoming.toolUseId ?? current?.toolUseId,
+    parentToolUseId: incoming.parentToolUseId ?? current?.parentToolUseId,
+    taskType: incoming.taskType ?? current?.taskType,
+    description: incoming.description ?? current?.description,
+    summary: incoming.summary ?? current?.summary,
+    status: incoming.status ?? current?.status,
+  }
+}
+
+function readLegacyTaskMetadata(envelope: TranscriptEnvelope): TranscriptTaskMetadata | undefined {
+  if (envelope.task || envelope.ev.type !== 'provider.activity') {
+    return envelope.task
+  }
+  const data = asRecord(envelope.ev.data)
+  const subtype = readTrimmedString(data?.subtype)
+  if (
+    subtype !== 'task_started'
+    && subtype !== 'task_progress'
+    && subtype !== 'task_notification'
+  ) {
+    return undefined
+  }
+  const taskId = readTrimmedString(data?.task_id)
+  const toolUseId = readTrimmedString(data?.tool_use_id)
+  const parentToolUseId = readTrimmedString(data?.parent_tool_use_id)
+  const taskType = readTrimmedString(data?.task_type) ?? readTrimmedString(data?.subagent_type)
+  const description = readTrimmedString(data?.task_description) ?? readTrimmedString(data?.description)
+  const summary = readTrimmedString(data?.summary)
+  const status = readTrimmedString(data?.status)
+  if (!taskId && !toolUseId && !envelope.subagentId) {
+    return undefined
+  }
+  return {
+    subtype: subtype as TranscriptTaskSubtype,
+    ...(taskId ? { taskId } : {}),
+    ...(toolUseId ? { toolUseId } : {}),
+    ...(parentToolUseId ? { parentToolUseId } : {}),
+    ...(taskType ? { taskType } : {}),
+    ...(description ? { description } : {}),
+    ...(summary ? { summary } : {}),
+    ...(status ? { status } : {}),
+  }
+}
+
+function findTaskContainerId(
+  messages: MsgItem[],
+  envelope: TranscriptEnvelope,
+): string | undefined {
+  const taskIds = new Set(getEnvelopeSubagentIds(envelope))
+  if (taskIds.size === 0) {
+    return undefined
+  }
+  return findMessageId(messages, (message) =>
+    message.kind === 'tool'
+    && message.toolName === 'Agent'
+    && getMessageSubagentIds(message).some((taskId) => taskIds.has(taskId))
+  )
+}
+
+function appendTaskProviderActivity(
+  context: StreamEventProcessorContext,
+  envelope: TranscriptEnvelope,
+  message: MsgItem,
+): boolean {
+  const task = readLegacyTaskMetadata(envelope)
+  const taskEnvelope = task === envelope.task
+    ? envelope
+    : {
+        ...envelope,
+        task,
+        subagentId: envelope.subagentId ?? task?.toolUseId ?? task?.taskId,
+      }
+  const taskIds = getEnvelopeSubagentIds(taskEnvelope)
+  if (!task || taskIds.length === 0) {
+    return false
+  }
+
+  const mappedParentId = getEnvelopeSubagentParentId(context.state, taskEnvelope)
+  const placeholderId = context.nextId()
+  let terminalParentId: string | undefined
+  context.setMessages((prev) => {
+    const mappedTaskContainerId = mappedParentId
+      ? findMessageId(prev, (candidate) =>
+          candidate.id === mappedParentId
+          && candidate.kind === 'tool'
+          && candidate.toolName === 'Agent'
+        )
+      : undefined
+    const parentId = mappedTaskContainerId ?? findTaskContainerId(prev, taskEnvelope)
+
+    if (parentId) {
+      if (task.status && normalizeToolStatus(task.status) !== 'running') {
+        terminalParentId = parentId
+      }
+      registerEnvelopeSubagentParent(context.state, taskEnvelope, parentId)
+      const updated = updateMessageOrChild(prev, parentId, (parent) => {
+        const mergedTask = mergeTaskMetadata(parent.transcript?.task, task)
+        return {
+          ...parent,
+          ...(task.status ? { toolStatus: normalizeToolStatus(task.status) } : {}),
+          ...(parent.isTaskPlaceholder
+            ? {
+                subagentDescription: mergedTask.description
+                  ?? parent.subagentDescription
+                  ?? mergedTask.summary
+                  ?? SUBAGENT_WORKING_LABEL,
+              }
+            : {}),
+          transcript: parent.transcript
+            ? { ...parent.transcript, task: mergedTask }
+            : buildTranscriptMeta(taskEnvelope),
+          children: [...(parent.children ?? []), message],
+        }
+      })
+      return (context.capMessages ?? capMessages)(updated)
+    }
+
+    const taskContainer: MsgItem = {
+      id: placeholderId,
+      kind: 'tool',
+      text: '',
+      toolId: task.taskId ?? task.toolUseId ?? taskEnvelope.subagentId ?? taskEnvelope.id,
+      toolName: 'Agent',
+      toolStatus: normalizeToolStatus(task.status),
+      subagentDescription: task.description ?? task.summary ?? SUBAGENT_WORKING_LABEL,
+      isTaskPlaceholder: true,
+      transcript: buildTranscriptMeta(taskEnvelope),
+      children: [message],
+    }
+    registerMessageSubagentParent(context.state, taskContainer)
+    if (task.status && normalizeToolStatus(task.status) !== 'running') {
+      terminalParentId = placeholderId
+    }
+    return (context.capMessages ?? capMessages)([...prev, taskContainer])
+  })
+  if (terminalParentId) {
+    removeActiveAgentMessageId(context.state, terminalParentId)
+    for (const taskId of taskIds) {
+      if (context.state.activeEnvelopeSubagents[taskId] === terminalParentId) {
+        delete context.state.activeEnvelopeSubagents[taskId]
+      }
+    }
+  }
+  return true
+}
+
 function appendProviderActivity(
   context: StreamEventProcessorContext,
   envelope: TranscriptEnvelope,
   text: string,
   payload: unknown,
 ) {
-  appendMessageWithOptionalParent(context, {
+  const message: MsgItem = {
     id: context.nextId(),
     kind: 'provider',
     text,
@@ -663,7 +963,15 @@ function appendProviderActivity(
       providerPayload: payload,
       providerEventType: envelope.source.rawEventType ?? envelope.ev.type,
     }),
-  }, getEnvelopeSubagentParentId(context.state, envelope))
+  }
+  if (appendTaskProviderActivity(context, envelope, message)) {
+    return
+  }
+  appendMessageWithOptionalParent(
+    context,
+    message,
+    getEnvelopeSubagentParentId(context.state, envelope),
+  )
 }
 
 function appendProviderError(
@@ -772,7 +1080,10 @@ function normalizeToolStatus(status: string | undefined): 'running' | 'success' 
   if (['ok', 'completed', 'complete', 'success', 'succeeded'].includes(normalized)) {
     return 'success'
   }
-  if (['error', 'failed', 'failure', 'cancelled', 'canceled', 'rejected'].includes(normalized)) {
+  if (
+    ['error', 'failed', 'failure', 'cancelled', 'canceled', 'rejected', 'stopped', 'interrupted', 'aborted']
+      .includes(normalized)
+  ) {
     return 'error'
   }
   return 'running'
@@ -847,6 +1158,9 @@ function processTranscriptEnvelope(
 
   switch (ev.type) {
     case 'turn.start':
+      if (envelope.subagentId) {
+        return
+      }
       context.setMessages((prev) =>
         prev.map((message) =>
           message.kind === 'tool' && message.toolStatus === 'running'
@@ -863,18 +1177,18 @@ function processTranscriptEnvelope(
 
     case 'turn.end': {
       const resultStatus = normalizeToolStatus(ev.status)
-      const isSubagentResult = Boolean(envelope.subagentId)
+      const terminalStatus = resultStatus === 'running' ? 'error' : resultStatus
+      const subagentId = envelope.subagentId
+      const isSubagentResult = Boolean(subagentId)
       const terminalProviderError = buildTurnEndProviderError(ev)
       if (terminalProviderError) {
         appendProviderError(context, envelope, terminalProviderError)
       }
       context.setMessages((prev) =>
         (context.capMessages ?? capMessages)([
-          ...prev.map((message) =>
-            message.kind === 'tool' && message.toolStatus === 'running'
-              ? { ...message, toolStatus: resultStatus }
-              : message,
-          ),
+          ...(subagentId
+            ? settleSubagentTools(prev, subagentId, parentMessageId, terminalStatus)
+            : settleRunningTools(prev, terminalStatus)),
           ...(isSubagentResult
             ? []
             : [{
@@ -885,8 +1199,12 @@ function processTranscriptEnvelope(
               }]),
         ]),
       )
-      clearActiveAgentMessageIds(context.state)
-      context.setIsStreaming(false)
+      if (subagentId) {
+        clearSubagentRuntimeState(context.state, subagentId, parentMessageId)
+      } else {
+        clearActiveAgentMessageIds(context.state)
+        context.setIsStreaming(false)
+      }
       context.onWorkspaceMutation?.()
       return
     }
@@ -1168,7 +1486,7 @@ function processTranscriptEnvelope(
     }
 
     case 'tool.end': {
-      const status = normalizeToolStatus(ev.status)
+      const status = normalizeToolStatus(ev.status ?? (ev.error ? 'error' : 'completed'))
       const output = stringifyUnknown(ev.result ?? ev.error)
       let shouldTriggerWorkspaceRefresh = false
       let completedMessageId: string | undefined
@@ -1195,13 +1513,26 @@ function processTranscriptEnvelope(
           if (message.toolName === 'Agent') {
             removeActiveAgentMessageId(context.state, message.id)
           }
+          const completedTranscript = buildTranscriptMeta(envelope, {
+            providerPayload: ev.result ?? ev.error,
+          })
           return {
             ...message,
             toolStatus: status,
             ...(output ? { toolOutput: output } : {}),
-            transcript: buildTranscriptMeta(envelope, {
-              providerPayload: ev.result ?? ev.error,
-            }),
+            transcript: {
+              ...completedTranscript,
+              ...(message.transcript?.subagentId && !completedTranscript.subagentId
+                ? { subagentId: message.transcript.subagentId }
+                : {}),
+              ...(message.transcript?.task
+                ? {
+                    task: completedTranscript.task
+                      ? mergeTaskMetadata(message.transcript.task, completedTranscript.task)
+                      : message.transcript.task,
+                  }
+                : {}),
+            },
           }
         })
       })
@@ -1253,10 +1584,14 @@ function processTranscriptEnvelope(
         }
         return updateMessageOrChild(prev, toolMessageId, (message) => ({
           ...message,
-          toolStatus: normalizeToolStatus(ev.status),
+          toolStatus: normalizeToolStatus(ev.status ?? 'completed'),
           transcript: buildTranscriptMeta(envelope),
         }))
       })
+      const completedMessageId = context.state.activeEnvelopeSubagents[targetSubagentId]
+      if (completedMessageId) {
+        removeActiveAgentMessageId(context.state, completedMessageId)
+      }
       delete context.state.activeEnvelopeSubagents[targetSubagentId]
       return
     }
@@ -1379,7 +1714,20 @@ function processTranscriptEnvelope(
       return
     }
 
-    case 'provider.activity':
+    case 'provider.activity': {
+      const activityData = asRecord(ev.data)
+      const explicitBoundary = readTrimmedString(activityData?.lifecycleBoundary)
+      const rawSubtype = readTrimmedString(activityData?.subtype)
+      const runtimeBoundary = explicitBoundary === 'runtime.start' || explicitBoundary === 'runtime.end'
+        ? explicitBoundary
+        : envelope.source.rawEventType === 'system' && rawSubtype === 'init'
+          ? 'runtime.start'
+          : ev.title === 'Claude process exited'
+            ? 'runtime.end'
+            : undefined
+      if (runtimeBoundary) {
+        terminalizePriorRuntime(context)
+      }
       appendProviderActivity(
         context,
         envelope,
@@ -1390,6 +1738,7 @@ function processTranscriptEnvelope(
         appendAgentImagesFromPayload(context, envelope, ev.data, parentMessageId)
       }
       return
+    }
 
     case 'provider.raw':
       appendProviderActivity(
@@ -2278,33 +2627,29 @@ export function processStreamEvent(
     }
 
     case 'exit': {
-      context.setMessages((prev) => {
-        const hasRunning = prev.some(
-          (message) => message.kind === 'tool' && message.toolStatus === 'running',
-        )
-        if (!hasRunning) {
-          return (context.capMessages ?? capMessages)([
-            ...prev,
-            { id: context.nextId(), kind: 'system', text: 'Session ended' },
-          ])
-        }
-        return (context.capMessages ?? capMessages)([
-          ...prev.map((message) =>
-            message.kind === 'tool' && message.toolStatus === 'running'
-              ? { ...message, toolStatus: 'error' as const }
-              : message,
-          ),
+      context.setMessages((prev) =>
+        (context.capMessages ?? capMessages)([
+          ...settleRunningTools(prev, 'error'),
           { id: context.nextId(), kind: 'system', text: 'Session ended' },
-        ])
-      })
+        ]),
+      )
       clearActiveAgentMessageIds(context.state)
+      context.state.activeEnvelopeSubagents = {}
+      context.state.activeEnvelopeMessages = {}
       context.setIsStreaming(false)
       break
     }
 
     case 'system': {
+      const subtype = (event as { subtype?: string }).subtype
+      if (
+        subtype === 'credential_pool_switch_started'
+        || subtype === 'credential_pool_recovery'
+        || subtype === 'session_rotated'
+      ) {
+        terminalizePriorRuntime(context)
+      }
       if (!event.text) {
-        const subtype = (event as { subtype?: string }).subtype
         const toolUseId = (event as { tool_use_id?: string }).tool_use_id
         if (subtype === 'task_progress') {
           const description = (event as { description?: string }).description
@@ -2344,7 +2689,12 @@ export function processStreamEvent(
       context.setMessages((prev) =>
         (context.capMessages ?? capMessages)([
           ...prev,
-          { id: context.nextId(), kind: 'system', text: event.text ?? '' },
+          {
+            id: context.nextId(),
+            kind: 'system',
+            text: event.text ?? '',
+            transcript: buildSystemEventTranscriptMeta(event),
+          },
         ]),
       )
       break

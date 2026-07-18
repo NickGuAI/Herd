@@ -14,6 +14,7 @@ import type { CommanderChannelBindingStore } from '../../channels/store.js'
 import type { ProviderSessionContext } from '../../agents/providers/provider-session-context.js'
 import type { ActionPolicyGate } from '../../policies/action-policy-gate.js'
 import type { WorkspaceResolverCapability } from '../../workspace/capability.js'
+import type { EvalAdapterPreflight } from '../../eval/adapter-preflight.js'
 import type { ChannelMessageIdempotencyLedger } from '../channel-idempotency-ledger.js'
 import type { ChannelReplyStreamDispatch } from '../channel-dispatchers.js'
 import type {
@@ -85,6 +86,7 @@ export interface CommandersRouterOptions {
   channelMessageIdempotencyLedger?: ChannelMessageIdempotencyLedger
   actionPolicyGate?: ActionPolicyGate
   getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
+  evalAdapterPreflight?: EvalAdapterPreflight
 }
 
 export interface CommandersRouterResult {
@@ -239,6 +241,7 @@ export interface CommanderRoutesContext {
    */
   requireWorkerDispatchAccess: RequestHandler
   getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
+  evalAdapterPreflight?: EvalAdapterPreflight
   heartbeatManager: CommanderHeartbeatManager
   runtimes: Map<string, CommanderRuntime>
   activeCommanderSessions: Map<string, { sessionName: string; startedAt: string }>

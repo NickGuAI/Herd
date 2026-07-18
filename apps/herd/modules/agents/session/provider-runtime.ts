@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ActionPolicyGate } from '../../policies/action-policy-gate.js'
 import type { QuestStore } from '../../commanders/quest-store.js'
 import { truncateLogText } from './helpers.js'
+import { isDaemonMachine, isRemoteMachine } from '../machines.js'
 import {
   clearCodexTurnWatchdog,
   extractCodexUsageTotals,
@@ -18,6 +19,7 @@ import {
   ProviderAuthRequiredError,
   resolveProviderAuthScopeId,
   isReadyPoolCredentialForHost,
+  shouldClearResumeProviderContextForCredentialPoolRecovery,
   type ProviderAuthStore,
   type ProviderAuthSnapshot,
   type ProviderSpawnAuth,
@@ -48,6 +50,7 @@ import type {
   ProviderAdapterDeps,
   ProviderCreateOptions,
   ProviderTeardownOptions,
+  ProviderTeardownResult,
 } from '../providers/provider-adapter.js'
 import { asObject } from './state.js'
 import type { MachineDaemonRegistry } from '../daemon/registry.js'
@@ -67,6 +70,12 @@ import type {
   StreamSession,
 } from '../types.js'
 import type { QueuedMessage } from '../message-queue.js'
+import {
+  listProviderProcessMembers,
+  providerProcessAlive,
+  signalProviderProcess,
+  waitForProviderProcessExit,
+} from '../provider-process.js'
 
 type ProviderStreamSessionOptions = Omit<
   ProviderCreateOptions,
@@ -106,6 +115,9 @@ interface ProviderSessionRuntimeDeps {
   codexTurnWatchdogTimeoutMs: number
   internalToken?: string
   approvalBridgeSigningSecret?: string
+  resolveConversationApprovalBridgeCredential?(
+    conversationId: string,
+  ): Promise<{ credentialId: string; epoch: number } | null>
   getActionPolicyGate?: () => ActionPolicyGate | null
   appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void
   broadcastStreamEvent(session: StreamSession, event: StreamJsonEvent): void
@@ -113,11 +125,21 @@ interface ProviderSessionRuntimeDeps {
   schedulePersistedSessionsWrite(): void
   markCredentialRecoveryRequest?(sessionName: string, request: CredentialPoolRecoveryRequest): void
   scheduleCredentialRecoveryReplacement?(sessionName: string): void
+  acquireClaudeGlobalCredentialLease?(): Promise<() => void>
+  rotateCredentialAfterUsageLimit?(
+    session: StreamSession,
+    options: UsageLimitRecoveryOptions,
+  ): Promise<Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>> | null>
   writeToStdin(session: StreamSession, data: string): boolean
   writeTranscriptMeta(session: StreamSession): void
   markProviderAuthRequired(
     session: StreamSession,
     detail: string,
+    recovery?: {
+      interruptedMessage?: StreamSession['currentQueuedMessage']
+      interruptedTurnHadSideEffects?: boolean
+      interruptedTurnId?: string
+    },
   ): Promise<ProviderAuthSnapshot>
 }
 
@@ -135,7 +157,11 @@ export interface ProviderSessionRuntime {
     entry: PersistedStreamSession,
     machine: MachineConfig | undefined,
   ): Promise<StreamSession>
-  teardownProviderSession(session: StreamSession, reason: string, options?: ProviderTeardownOptions): Promise<void>
+  teardownProviderSession(
+    session: StreamSession,
+    reason: string,
+    options?: ProviderTeardownOptions,
+  ): Promise<ProviderTeardownResult>
   shutdownProviderRuntimes(reason?: string): Promise<void>
   applyCodexApprovalDecision(
     session: StreamSession,
@@ -146,6 +172,15 @@ export interface ProviderSessionRuntime {
     code: 'invalid_session' | 'unavailable' | 'not_found' | 'protocol_error'
     reason: string
   }
+  handleAuthRequiredSignal(
+    session: StreamSession,
+    detail: string,
+    recovery?: {
+      interruptedMessage?: StreamSession['currentQueuedMessage']
+      interruptedTurnHadSideEffects?: boolean
+      interruptedTurnId?: string
+    },
+  ): void
   scheduleCodexTurnWatchdog(session: StreamSession): void
   handleUsageLimitSignal(
     session: StreamSession,
@@ -250,6 +285,7 @@ type UsageLimitRecoveryDeps = Pick<
   | 'appendStreamEvent'
   | 'broadcastStreamEvent'
   | 'markCredentialRecoveryRequest'
+  | 'rotateCredentialAfterUsageLimit'
   | 'scheduleCredentialRecoveryReplacement'
 > & {
   schedulePersistedSessionsWrite?: () => void
@@ -268,9 +304,14 @@ function buildRecoveryRequest(
 ): CredentialPoolRecoveryRequest {
   return {
     provider: session.agentType as CredentialPoolRecoveryRequest['provider'],
+    state: credentialPoolId ? 'reloading_session' : 'awaiting_safe_boundary',
     ...(credentialPoolId ? { credentialPoolId } : {}),
     ...(session.credentialPoolId ? { previousCredentialPoolId: session.credentialPoolId } : {}),
-    clearResumeProviderContext: true,
+    clearResumeProviderContext: shouldClearResumeProviderContextForCredentialPoolRecovery(
+      session.agentType as CredentialPoolRecoveryRequest['provider'],
+      session.host,
+      session.credentialPoolMode,
+    ),
     reason: 'usage_limit',
     requestedAt: new Date().toISOString(),
     ...(options.resetAt ? { resetAt: options.resetAt } : {}),
@@ -321,6 +362,7 @@ export function installBlockedCredentialPoolRecovery(
 
   const request = buildRecoveryRequest(session, undefined, options)
   request.reason = options.reason ?? 'usage_limit'
+  request.state = 'blocked'
   if (options.blockedUntil) {
     request.blockedUntil = options.blockedUntil
   }
@@ -333,7 +375,7 @@ export function installBlockedCredentialPoolRecovery(
   return request
 }
 
-function createCredentialRecoverySystemEvent(
+function createCredentialSwitchStartedSystemEvent(
   session: StreamSession,
   result: Awaited<ReturnType<ProviderAuthStore['switchToNextPoolCredential']>>,
   resetAt: string | undefined,
@@ -390,9 +432,12 @@ function isReadyCredentialPoolRecoveryTarget(
   if (session.agentType !== 'claude' && session.agentType !== 'codex') {
     return false
   }
+  const canReloadSameGlobalCredential = session.agentType === 'claude'
+    && (session.host ?? 'local') === 'local'
+    && session.credentialPoolMode !== 'isolated-runtime'
   return Boolean(
     credential
-    && credential.id !== session.credentialPoolId
+    && (credential.id !== session.credentialPoolId || canReloadSameGlobalCredential)
     && isReadyPoolCredentialForHost(session.agentType, credential, session.host ?? 'local'),
   )
 }
@@ -425,11 +470,24 @@ export async function switchCredentialAfterUsageLimit(
   if (!latestDetails && !options.resetAt) {
     return
   }
-  const result = await deps.providerAuthStore.switchToNextPoolCredential(
-    session.agentType,
-    session.credentialPoolId,
-    { resetAt, host: session.host },
-  ).catch((error) => {
+  const result = await (deps.rotateCredentialAfterUsageLimit
+    ? deps.rotateCredentialAfterUsageLimit(session, {
+        ...options,
+        ...(resetAt ? { resetAt } : {}),
+      })
+    : deps.providerAuthStore.switchToNextPoolCredential(
+        session.agentType,
+        session.credentialPoolId,
+        {
+          resetAt,
+          host: session.host,
+          ...(session.agentType === 'claude'
+            && (session.host ?? 'local') === 'local'
+            && session.credentialPoolMode === 'isolated-runtime'
+            ? { preserveActive: true }
+            : {}),
+        },
+      )).catch((error) => {
     console.warn(
       '[agents/provider-auth] failed to switch credential pool after usage limit',
       { session: session.name, provider: session.agentType, error: error instanceof Error ? error.message : String(error) },
@@ -448,7 +506,7 @@ export async function switchCredentialAfterUsageLimit(
     })
     session.credentialPoolRecovery = request
     deps.markCredentialRecoveryRequest?.(session.name, request)
-    const event = createCredentialRecoverySystemEvent(session, result, resetAt)
+    const event = createCredentialSwitchStartedSystemEvent(session, result, resetAt)
     deps.appendStreamEvent(session, event)
     deps.broadcastStreamEvent(session, event)
     deps.schedulePersistedSessionsWrite?.()
@@ -472,7 +530,7 @@ export async function switchCredentialAfterUsageLimit(
   })
   session.credentialPoolRecovery = request
   deps.markCredentialRecoveryRequest?.(session.name, request)
-  const event = createCredentialRecoverySystemEvent(session, result, resetAt)
+  const event = createCredentialSwitchStartedSystemEvent(session, result, resetAt)
   deps.appendStreamEvent(session, event)
   deps.broadcastStreamEvent(session, event)
   deps.schedulePersistedSessionsWrite?.()
@@ -482,6 +540,33 @@ export async function switchCredentialAfterUsageLimit(
 export function createProviderSessionRuntime(
   deps: ProviderSessionRuntimeDeps,
 ): ProviderSessionRuntime {
+  const preservedForReplacement = new WeakSet<StreamSession>()
+
+  async function beginLocalClaudeSpawn(
+    agentType: AgentType,
+    machine: MachineConfig | undefined,
+  ): Promise<() => void> {
+    if (agentType !== 'claude' || isRemoteMachine(machine) || isDaemonMachine(machine)) {
+      return () => undefined
+    }
+    return deps.acquireClaudeGlobalCredentialLease?.() ?? (() => undefined)
+  }
+
+  function preservedLiveSession(name: string): StreamSession | undefined {
+    const session = deps.sessions.get(name)
+    return session?.kind === 'stream' && (
+      preservedForReplacement.has(session)
+      || (
+        session.agentType === 'claude'
+        && (session.host ?? 'local') === 'local'
+        && session.credentialPoolMode !== 'isolated-runtime'
+        && Boolean(session.credentialPoolRecovery)
+      )
+    )
+      ? session
+      : undefined
+  }
+
   function listActiveCodexSessionNames(): string[] {
     return [...deps.sessions.entries()]
       .filter(([, candidate]) => (
@@ -495,12 +580,21 @@ export function createProviderSessionRuntime(
     appendEvent: deps.appendStreamEvent,
     broadcastEvent: deps.broadcastStreamEvent,
     clearExitedSession: (name: string) => {
+      if (preservedLiveSession(name)) {
+        return
+      }
       deps.exitedStreamSessions.delete(name)
     },
     deleteLiveSession: (name: string) => {
+      if (preservedLiveSession(name)) {
+        return
+      }
       deps.sessions.delete(name)
     },
     deleteSessionEventHandlers: (name: string) => {
+      if (preservedLiveSession(name)) {
+        return
+      }
       deps.sessionEventHandlers.delete(name)
     },
     getActiveSession: (name: string) => deps.sessions.get(name),
@@ -508,18 +602,26 @@ export function createProviderSessionRuntime(
     schedulePersistedSessionsWrite: deps.schedulePersistedSessionsWrite,
     setCompletedSession: async (name: string, session: CompletedSession) => {
       const active = deps.sessions.get(name)
+      if (active?.kind === 'stream' && preservedForReplacement.has(active)) {
+        return
+      }
       if (active?.kind === 'stream') {
         await switchCredentialAfterUsageLimit(deps, active)
       }
       deps.completedSessions.set(name, session)
     },
     setExitedSession: (name: string, session: ExitedStreamSessionState) => {
+      if (preservedLiveSession(name)) {
+        return
+      }
       deps.exitedStreamSessions.set(name, session)
     },
+    shouldPreserveSession: (session: StreamSession) => preservedLiveSession(session.name) === session,
     spawnImpl: spawn,
     daemonRegistry: deps.daemonRegistry,
     internalToken: deps.internalToken,
     approvalBridgeSigningSecret: deps.approvalBridgeSigningSecret,
+    resolveConversationApprovalBridgeCredential: deps.resolveConversationApprovalBridgeCredential,
     writeToStdin: deps.writeToStdin,
     writeTranscriptMeta: deps.writeTranscriptMeta,
     getActionPolicyGate: deps.getActionPolicyGate,
@@ -589,6 +691,7 @@ export function createProviderSessionRuntime(
     creator: ProviderStreamSessionOptions['creator'],
     resumeProviderContext?: ProviderStreamSessionOptions['resumeProviderContext'],
     credentialPoolId?: string,
+    credentialPoolMode?: ProviderStreamSessionOptions['credentialPoolMode'],
   ): Promise<ProviderSpawnAuth> {
     try {
       const codexContext = agentType === 'codex'
@@ -610,13 +713,14 @@ export function createProviderSessionRuntime(
         env: process.env,
         codexHome,
         credentialPoolId,
+        credentialPoolMode,
       })
     } catch (error) {
       if (
         error instanceof ProviderAuthRequiredError
         && creator?.kind === 'commander'
         && creator.id
-      ) {
+) {
         await deps.questStore?.blockActiveForAuthRequired(creator.id, error.message)
       }
       throw error
@@ -637,34 +741,40 @@ export function createProviderSessionRuntime(
       throw new Error(`Unknown provider: ${agentType}`)
     }
 
-    const providerAuth = await prepareSessionProviderAuth(
-      agentType,
-      machine,
-      sessionOptions.creator,
-      sessionOptions.resumeProviderContext,
-      sessionOptions.credentialPoolId,
-    )
-    const providerSessionOptions = { ...sessionOptions }
-    delete providerSessionOptions.env
-    const mergedProviderAuth = sessionOptions.env
-      ? {
-          ...providerAuth,
-          env: {
-            ...(providerAuth.env ?? {}),
-            ...sessionOptions.env,
-          },
-        }
-      : providerAuth
+    const releaseSpawn = await beginLocalClaudeSpawn(agentType, machine)
+    try {
+      const providerAuth = await prepareSessionProviderAuth(
+        agentType,
+        machine,
+        sessionOptions.creator,
+        sessionOptions.resumeProviderContext,
+        sessionOptions.credentialPoolId,
+        sessionOptions.credentialPoolMode,
+      )
+      const providerSessionOptions = { ...sessionOptions }
+      delete providerSessionOptions.env
+      const mergedProviderAuth = sessionOptions.env
+        ? {
+            ...providerAuth,
+            env: {
+              ...(providerAuth.env ?? {}),
+              ...sessionOptions.env,
+            },
+          }
+        : providerAuth
 
-    return await provider.create({
-      sessionName,
-      mode,
-      task,
-      cwd,
-      machine,
-      ...providerSessionOptions,
-      providerAuth: mergedProviderAuth,
-    }, getProviderSessionDeps(agentType))
+      return await provider.create({
+        sessionName,
+        mode,
+        task,
+        cwd,
+        machine,
+        ...providerSessionOptions,
+        providerAuth: mergedProviderAuth,
+      }, getProviderSessionDeps(agentType))
+    } finally {
+      setImmediate(releaseSpawn)
+    }
   }
 
   async function restoreProviderStreamSession(
@@ -675,26 +785,97 @@ export function createProviderSessionRuntime(
     if (!provider) {
       throw new Error(`Unknown provider: ${entry.agentType}`)
     }
-    const providerAuth = await prepareSessionProviderAuth(
-      entry.agentType,
-      machine,
-      entry.creator,
-      entry.providerContext,
-      entry.credentialPoolId,
-    )
-    return await provider.restore(entry, machine, getProviderSessionDeps(entry.agentType), providerAuth)
+    const releaseSpawn = await beginLocalClaudeSpawn(entry.agentType, machine)
+    try {
+      const providerAuth = await prepareSessionProviderAuth(
+        entry.agentType,
+        machine,
+        entry.creator,
+        entry.providerContext,
+        entry.credentialPoolId,
+        entry.credentialPoolMode,
+      )
+      return await provider.restore(entry, machine, getProviderSessionDeps(entry.agentType), providerAuth)
+    } finally {
+      setImmediate(releaseSpawn)
+    }
   }
 
   async function teardownProviderSession(
     session: StreamSession,
     reason: string,
     options?: ProviderTeardownOptions,
-  ): Promise<void> {
+  ): Promise<ProviderTeardownResult> {
+    const startedAt = Date.now()
+    const resultBase = (): Omit<ProviderTeardownResult, 'verified' | 'phase'> => ({
+      elapsedMs: Date.now() - startedAt,
+      ...(session.process.pid ? { pid: session.process.pid } : {}),
+      ...(session.processTree?.processGroupId
+        ? { processGroupId: session.processTree.processGroupId }
+        : {}),
+      ownership: session.processTree?.ownership ?? 'untracked',
+      survivingPids: listProviderProcessMembers(session.processTree),
+    })
     const provider = getProvider(session.agentType)
     if (!provider) {
-      return
+      return { verified: false, phase: 'not-verified', ...resultBase() }
     }
-    await provider.teardown(session, reason, options)
+    if (options?.preserveForReplacement) {
+      preservedForReplacement.add(session)
+    }
+    let teardownError: unknown
+    try {
+      await provider.teardown(session, reason, options)
+    } catch (error) {
+      teardownError = error
+    }
+    if (options?.preserveForReplacement) {
+      let stopped = await waitForProviderProcessExit(session.process, session.processTree, 5_000)
+      let phase: ProviderTeardownResult['phase'] = 'sigterm'
+      if (!stopped) {
+        console.warn('[agents/provider-auth] provider runtime did not stop after SIGTERM; escalating', {
+          session: session.name,
+          provider: session.agentType,
+          pid: session.process.pid,
+          processGroupId: session.processTree?.processGroupId,
+          elapsedMs: Date.now() - startedAt,
+          survivingPids: listProviderProcessMembers(session.processTree),
+        })
+        signalProviderProcess(session.process, session.processTree, 'SIGKILL')
+        phase = 'sigkill'
+        stopped = await waitForProviderProcessExit(session.process, session.processTree, 2_000)
+      }
+      if (!stopped || providerProcessAlive(session.process, session.processTree)) {
+        const exitError = new Error(`Timed out stopping session "${session.name}" for credential replacement`)
+        console.warn('[agents/provider-auth] provider runtime process tree survived credential replacement teardown', {
+          session: session.name,
+          provider: session.agentType,
+          pid: session.process.pid,
+          processGroupId: session.processTree?.processGroupId,
+          elapsedMs: Date.now() - startedAt,
+          survivingPids: listProviderProcessMembers(session.processTree),
+        })
+        if (teardownError) {
+          throw new AggregateError([teardownError, exitError], `Failed to stop session "${session.name}"`)
+        }
+        throw exitError
+      }
+      session.cleanupProcessResources?.()
+      if (teardownError) {
+        console.warn('[agents/provider-auth] provider teardown failed after process stopped', {
+          session: session.name,
+          error: teardownError instanceof Error ? teardownError.message : String(teardownError),
+        })
+      }
+      return { verified: true, phase, ...resultBase() }
+    }
+    if (teardownError) {
+      console.warn('[agents/provider-auth] provider teardown failed after process stopped', {
+        session: session.name,
+        error: teardownError instanceof Error ? teardownError.message : String(teardownError),
+      })
+    }
+    return { verified: false, phase: 'not-verified', ...resultBase() }
   }
 
   async function shutdownProviderRuntimes(reason = 'Herd shutdown'): Promise<void> {
@@ -964,6 +1145,26 @@ export function createProviderSessionRuntime(
     })
   }
 
+  function handleAuthRequiredSignal(
+    session: StreamSession,
+    detail: string,
+    recovery: {
+      interruptedMessage?: StreamSession['currentQueuedMessage']
+      interruptedTurnHadSideEffects?: boolean
+      interruptedTurnId?: string
+    } = {},
+  ): void {
+    if (session.credentialPoolRecovery?.reason === 'auth_required') {
+      return
+    }
+    void deps.markProviderAuthRequired(session, detail, recovery).catch((error) => {
+      console.warn('[agents/provider-auth] failed to recover after authentication rejection', {
+        session: session.name,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
+
   function restoreCredentialPoolRecovery(session: StreamSession): void {
     registerRestoredCredentialPoolRecovery(deps, session)
   }
@@ -976,6 +1177,7 @@ export function createProviderSessionRuntime(
     applyCodexApprovalDecision,
     scheduleCodexTurnWatchdog,
     handleUsageLimitSignal,
+    handleAuthRequiredSignal,
     restoreCredentialPoolRecovery,
   }
 }

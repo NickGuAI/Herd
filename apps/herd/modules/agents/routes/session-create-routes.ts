@@ -10,7 +10,7 @@ import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   type ClaudeAdaptiveThinkingMode,
 } from '../../claude-adaptive-thinking.js'
-import { DEFAULT_CLAUDE_EFFORT_LEVEL, type ClaudeEffortLevel } from '../../claude-effort.js'
+import { DEFAULT_CLAUDE_EFFORT_LEVEL, isClaudeEffortLevel } from '../../claude-effort.js'
 import { DEFAULT_CLAUDE_MAX_THINKING_TOKENS } from '../../claude-max-thinking-tokens.js'
 import {
   createApprovalBridgeNonce,
@@ -18,6 +18,14 @@ import {
 } from '../../policies/approval-bridge-token.js'
 import { appendToBuffer, broadcastOutput } from '../session/helpers.js'
 import { ProviderAuthRequiredError } from '../provider-auth.js'
+import {
+  getAgentEffortLevels,
+  getAgentModelEffortCapability,
+  getDefaultAgentEffort,
+  parseOptionalAgentEffort,
+  parseStoredAgentEffort,
+  type AgentEffortLevel,
+} from '../effort.js'
 import type { ProviderCreateOptions } from '../providers/provider-adapter.js'
 import {
   providerSupportsPermissionMode,
@@ -25,7 +33,12 @@ import {
   unsupportedProviderPermissionModeError,
 } from '../providers/provider-adapter.js'
 import { getProvider, resolveProviderIdForRequest } from '../providers/registry.js'
-import { validateModelForAgentType } from '../providers/validate-model.js'
+import { asClaudeProviderContext } from '../providers/provider-session-context.js'
+import { getCachedProviderModelsForValidation } from '../providers/model-discovery.js'
+import {
+  findProviderModelOption,
+  validateModelForAgentType,
+} from '../providers/validate-model.js'
 import {
   codexRolloutUnavailableMessage,
   hasCodexRolloutFile,
@@ -43,7 +56,6 @@ import { MachineDaemonRegistry } from '../daemon/registry.js'
 import {
   parseActiveSkillInvocation,
   parseClaudeAdaptiveThinking,
-  parseClaudeEffort,
   parseClaudeMaxThinkingTokens,
   parseCwd,
   parseOptionalHost,
@@ -195,6 +207,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
         currentSkillInvocation: sourceSession.currentSkillInvocation,
         cwd: sourceSession.cwd,
         effort: sourceSession.effort,
+        omitEffort: asClaudeProviderContext(sourceSession.providerContext)?.omitEffort,
         host: sourceSession.host,
         maxThinkingTokens: sourceSession.maxThinkingTokens,
         mode: sourceSession.mode,
@@ -256,12 +269,6 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
       res.status(400).json({
         error: 'Invalid permissionMode. Expected one of: default, acceptEdits, bypassPermissions',
       })
-      return
-    }
-
-    const parsedEffort = parseClaudeEffort(req.body?.effort)
-    if (parsedEffort === null) {
-      res.status(400).json({ error: 'Invalid effort. Expected one of: low, medium, high, max' })
       return
     }
 
@@ -393,25 +400,61 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
       return
     }
     const providerDefaults = resolveProviderDefaults(provider)
+    const sourceOmitsEffort = resumeSource?.source.agentType === agentType
+      && asClaudeProviderContext(resumeSource.source.providerContext)?.omitEffort === true
+    const parsedEffort = parseOptionalAgentEffort(agentType, req.body?.effort)
+    if (parsedEffort === null) {
+      res.status(400).json({
+        error: `Invalid effort for ${agentType}. Expected one of: ${getAgentEffortLevels(agentType).join(', ')}`,
+      })
+      return
+    }
     const mode: ClaudePermissionMode = requestedMode ?? resumeSource?.source.mode ?? 'default'
     if (!providerSupportsPermissionMode(provider, mode)) {
       res.status(400).json({ error: unsupportedProviderPermissionModeError(provider, mode) })
       return
     }
-    const effectiveModel = resumeSource?.source.model ?? model ?? null
-    const modelValidation = validateModelForAgentType(agentType, effectiveModel)
+    const effectiveModel = model ?? resumeSource?.source.model ?? null
+    const usesTrustedResumeModel = resumeSource?.source.agentType === agentType
+      && resumeSource.source.model !== undefined
+      && effectiveModel === resumeSource.source.model
+      && (model === undefined || model === resumeSource.source.model)
+    const resumeOmitsEffort = usesTrustedResumeModel && sourceOmitsEffort
+    const modelValidation = usesTrustedResumeModel
+      ? { ok: true as const }
+      : validateModelForAgentType(agentType, effectiveModel)
     if (!modelValidation.ok) {
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
       return
     }
-    const effort: ClaudeEffortLevel | undefined = provider.uiCapabilities.supportsEffort
+    const resolvedModels = getCachedProviderModelsForValidation(provider)
+    const modelOption = findProviderModelOption(resolvedModels.models, effectiveModel)
+    const modelEffortCapability = getAgentModelEffortCapability(agentType, modelOption)
+    const supportedEffortLevels = modelEffortCapability.supportedEffortLevels
+    const modelOmitsEffort = provider.uiCapabilities.supportsEffort
+      && !modelEffortCapability.supportsEffort
+    const omitEffort = resumeOmitsEffort || modelOmitsEffort
+    if (omitEffort && parsedEffort) {
+      res.status(400).json({
+        error: `Model "${modelOption?.label ?? effectiveModel ?? agentType}" does not support effort`,
+      })
+      return
+    }
+    const storedResumeEffort = parseStoredAgentEffort(agentType, resumeSource?.source.effort)
+    const effort: AgentEffortLevel | undefined = provider.uiCapabilities.supportsEffort && !omitEffort
       ? (
-        resumeSource?.source.effort
-        ?? parsedEffort
+        parsedEffort
+        ?? storedResumeEffort
         ?? providerDefaults.effort
-        ?? DEFAULT_CLAUDE_EFFORT_LEVEL
+        ?? getDefaultAgentEffort(agentType)
       )
       : undefined
+    if (effort && !supportedEffortLevels.includes(effort)) {
+      res.status(400).json({
+        error: `Invalid effort for model "${modelOption?.label ?? effectiveModel ?? agentType}". Expected one of: ${supportedEffortLevels.join(', ')}`,
+      })
+      return
+    }
     const adaptiveThinking: ClaudeAdaptiveThinkingMode | undefined = provider.uiCapabilities.supportsAdaptiveThinking
       ? (
         resumeSource?.source.adaptiveThinking
@@ -545,6 +588,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
           agentType,
           {
             effort,
+            ...(omitEffort ? { omitEffort: true } : {}),
             adaptiveThinking,
             maxThinkingTokens,
             model: effectiveModel ?? undefined,
@@ -594,11 +638,14 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
     }
 
     try {
-      const claudeEffort = effort ?? providerDefaults.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
+      const ptyEffort = effort ?? providerDefaults.effort ?? getDefaultAgentEffort(agentType)
+      const claudeEffort = isClaudeEffortLevel(ptyEffort)
+        ? ptyEffort
+        : DEFAULT_CLAUDE_EFFORT_LEVEL
       const ptySpawner = daemonMachine ? null : await deps.getSpawner()
       const localSpawnCwd = process.env.HOME || '/tmp'
       const preparedLaunch = prepareMachineLaunchEnvironment(machine, process.env)
-      const providerPtyEnv = provider.preparePtyEnv?.({ mode, effort: claudeEffort }) ?? {}
+      const providerPtyEnv = provider.preparePtyEnv?.({ mode, effort: ptyEffort }) ?? {}
       const requiresApprovalBridge = provider.uiCapabilities.supportsAdaptiveThinking
       const approvalBridgeNonce = requiresApprovalBridge ? createApprovalBridgeNonce() : undefined
       const approvalBridgeToken = requiresApprovalBridge && approvalBridgeSigningSecret && approvalBridgeNonce
@@ -672,7 +719,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
         sessionType,
         creator,
         agentType,
-        effort: provider.uiCapabilities.supportsEffort ? claudeEffort : undefined,
+        effort: provider.uiCapabilities.supportsEffort ? ptyEffort : undefined,
         adaptiveThinking: provider.uiCapabilities.supportsAdaptiveThinking ? adaptiveThinking : undefined,
         maxThinkingTokens: provider.uiCapabilities.supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
         cwd: sessionCwd,
@@ -705,7 +752,7 @@ export function registerSessionCreateRoutes(deps: SessionCreateRouteDeps): void 
 
       sessions.set(sessionName, session)
 
-      const command = provider.uiCapabilities.supportsEffort
+      const command = provider.id === 'claude'
         ? buildClaudePtyCommand(
           mode,
           claudeEffort,

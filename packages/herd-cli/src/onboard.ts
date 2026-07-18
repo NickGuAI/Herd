@@ -43,6 +43,7 @@ const DEFAULT_AGENTS: readonly HerdAgent[] = [
   'codex',
   'terminal-cri',
 ]
+const DEFAULT_DEVELOPMENT_API_PORT = 20_009
 
 interface ParsedOnboardArgs {
   endpoint?: string
@@ -446,9 +447,11 @@ function createFounderOperator(input: {
 
 export function resolveDefaultOnboardEndpoint(env: NodeJS.ProcessEnv = process.env): string {
   const appDir = resolveAppDir(env)
-  const dotenv = appDir ? loadDotenv(appDir) : {}
-  const configuredPort = Number(dotenv.PORT)
-  const port = Number.isInteger(configuredPort) && configuredPort > 0
+  const configuredPort = appDir ? Number(loadDotenv(appDir).PORT) : Number.NaN
+  const port = Number.isInteger(configuredPort)
+    && configuredPort > 0
+    && configuredPort <= 65_535
+    && configuredPort !== DEFAULT_DEVELOPMENT_API_PORT
     ? configuredPort
     : DEFAULT_PORT
   return `http://${DEFAULT_LOCAL_ENDPOINT_HOST}:${port}`

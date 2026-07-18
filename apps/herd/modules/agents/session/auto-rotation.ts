@@ -2,8 +2,10 @@ import { getProvider } from '../providers/registry.js'
 import { SessionMessageQueue, type QueuedMessage } from '../message-queue.js'
 import { getNextStreamEventSeq } from '../messages/canonical-timeline.js'
 import type { ProviderCreateOptions, ProviderTeardownOptions } from '../providers/provider-adapter.js'
+import { asClaudeProviderContext } from '../providers/provider-session-context.js'
 import {
   isReadyPoolCredentialForHost,
+  shouldClearResumeProviderContextForCredentialPoolRecovery,
   type ProviderAuthStore,
 } from '../provider-auth.js'
 import type {
@@ -63,6 +65,31 @@ export function createSessionAutoRotationRuntime(
   deps: SessionAutoRotationRuntimeDeps,
 ): SessionAutoRotationRuntime {
   const autoRotationQueues = new Map<string, Promise<StreamSession | null>>()
+  const recoveryRetryDelays = new Map<string, number>()
+  const recoveryRetryTimers = new Map<string, NodeJS.Timeout>()
+
+  function clearRecoveryRetry(sessionName: string): void {
+    const timer = recoveryRetryTimers.get(sessionName)
+    if (timer) {
+      clearTimeout(timer)
+      recoveryRetryTimers.delete(sessionName)
+    }
+    recoveryRetryDelays.delete(sessionName)
+  }
+
+  function scheduleRecoveryRetry(sessionName: string): void {
+    if (recoveryRetryTimers.has(sessionName)) {
+      return
+    }
+    const delay = recoveryRetryDelays.get(sessionName) ?? 250
+    recoveryRetryDelays.set(sessionName, Math.min(delay * 2, 10_000))
+    const timer = setTimeout(() => {
+      recoveryRetryTimers.delete(sessionName)
+      scheduleAutoRotationIfNeeded(sessionName)
+    }, delay)
+    timer.unref?.()
+    recoveryRetryTimers.set(sessionName, timer)
+  }
 
   function supportsAutoRotation(session: StreamSession): boolean {
     if (session.sessionType === 'cron' || session.sessionType === 'automation') {
@@ -100,6 +127,30 @@ export function createSessionAutoRotationRuntime(
       fromBackingId: fromBackingId ?? null,
       toBackingId: toBackingId ?? null,
       text: `Session auto-rotated after ${session.conversationEntryCount} entries (${backingLabel}: ${fromBackingId ?? 'unknown'} -> ${toBackingId ?? 'pending'}).`,
+    }
+  }
+
+  function createCredentialRecoveryCompletedEvent(
+    session: StreamSession,
+    request: CredentialPoolRecoveryRequest,
+  ): StreamJsonEvent {
+    const previousCredentialId = request.previousCredentialPoolId ?? session.credentialPoolId
+    const activeCredentialId = request.credentialPoolId ?? session.credentialPoolId
+    const switchLabel = session.agentType === 'claude' && (session.host ?? 'local') === 'local'
+      ? 'Global Claude credential switched'
+      : session.agentType + ' credential switched'
+    return {
+      type: 'system',
+      subtype: 'credential_pool_recovery',
+      reason: request.reason,
+      provider: session.agentType,
+      ...(previousCredentialId ? { previousCredentialId } : {}),
+      ...(activeCredentialId ? { activeCredentialId } : {}),
+      text: switchLabel + ': '
+        + (previousCredentialId ?? 'previous')
+        + ' -> '
+        + (activeCredentialId ?? 'active')
+        + '; continuing automatically.',
     }
   }
 
@@ -151,6 +202,9 @@ export function createSessionAutoRotationRuntime(
       session.agentType,
       {
         effort: session.effort,
+        ...(asClaudeProviderContext(session.providerContext)?.omitEffort
+          ? { omitEffort: true }
+          : {}),
         adaptiveThinking: session.adaptiveThinking,
         maxThinkingTokens: session.maxThinkingTokens,
         model: session.model,
@@ -164,8 +218,13 @@ export function createSessionAutoRotationRuntime(
         currentSkillInvocation: session.currentSkillInvocation,
         systemPrompt: promptOptions.systemPrompt,
         maxTurns: promptOptions.maxTurns,
-        ...(credentialRecovery?.clearResumeProviderContext ? { resumeProviderContext: undefined } : {}),
+        ...(credentialRecovery
+          ? credentialRecovery.clearResumeProviderContext
+            ? { resumeProviderContext: undefined }
+            : { resumeProviderContext: session.providerContext }
+          : {}),
         ...(credentialRecovery?.credentialPoolId ? { credentialPoolId: credentialRecovery.credentialPoolId } : {}),
+        ...(session.credentialPoolMode ? { credentialPoolMode: session.credentialPoolMode } : {}),
       },
     )
   }
@@ -177,9 +236,14 @@ export function createSessionAutoRotationRuntime(
     const turnText = request?.interruptedTurnId
       ? ` turn ${request.interruptedTurnId}`
       : ' the interrupted turn'
+    const recoveryReason = request?.reason === 'auth_required'
+      ? 'because the previous global Claude login was rejected'
+      : request?.interruptedTurnHadSideEffects
+        ? 'after side-effect events were emitted'
+        : 'before Herd captured a replayable user message'
     return {
       id: `credential-recovery-${Date.now()}-${suffix}`,
-      text: `Continue${turnText} after automatic credential-pool rotation. The previous provider credential hit a usage limit after side-effect events were emitted. Use the transcript and available Herd CLI context to continue without re-running completed external actions.`,
+      text: `Continue${turnText} after automatic credential-pool rotation ${recoveryReason}. Use the transcript and available Herd CLI context to continue without re-running completed external actions.`,
       clientSendId: `credential-recovery-${Date.now()}-${suffix}`,
       priority: 'high',
       queuedAt: now,
@@ -188,8 +252,19 @@ export function createSessionAutoRotationRuntime(
 
   function recoveryMessagesForReplacement(session: StreamSession): StreamSession['pendingDirectSendMessages'] {
     const request = session.credentialPoolRecovery
-    if (!request?.interruptedMessage) {
+    if (!request) {
       return []
+    }
+    if (
+      request.reason !== 'usage_limit'
+      && request.reason !== 'auth_required'
+      && !request.interruptedMessage
+      && !request.interruptedTurnId
+    ) {
+      return []
+    }
+    if (!request.interruptedMessage) {
+      return [createCredentialRecoveryContinuationMessage(session)]
     }
     if (request.interruptedTurnHadSideEffects) {
       return [createCredentialRecoveryContinuationMessage(session)]
@@ -202,19 +277,35 @@ export function createSessionAutoRotationRuntime(
     if (!recovery || recovery.credentialPoolId) {
       return
     }
+    if (
+      session.agentType === 'claude'
+      && (session.host ?? 'local') === 'local'
+      && session.credentialPoolMode !== 'isolated-runtime'
+    ) {
+      // Only the global Claude coordinator may pick/materialize a target.
+      return
+    }
 
     const pool = await deps.providerAuthStore.listPoolCredentialsForSpawn(session.agentType)
     const host = session.host ?? 'local'
-    const ready = pool.credentials.find((credential) => (
+    const active = pool.credentials.find((credential) => (
       credential.id === pool.active
       && isReadyPoolCredentialForHost(pool.provider, credential, host)
-    )) ?? pool.credentials.find((credential) => isReadyPoolCredentialForHost(pool.provider, credential, host))
+    ))
+    const ready = session.agentType === 'claude'
+      && host === 'local'
+      && session.credentialPoolMode !== 'isolated-runtime'
+      ? active
+      : active ?? pool.credentials.find((credential) => (
+          isReadyPoolCredentialForHost(pool.provider, credential, host)
+        ))
 
     if (!ready) {
       const blockedUntil = pool.earliestExhaustedUntil
       if (blockedUntil && blockedUntil !== recovery.blockedUntil) {
         session.credentialPoolRecovery = {
           ...recovery,
+          state: 'blocked',
           blockedUntil,
         }
         deps.markCredentialRecoveryRequest?.(session.name, session.credentialPoolRecovery)
@@ -225,12 +316,19 @@ export function createSessionAutoRotationRuntime(
 
     const request: CredentialPoolRecoveryRequest = {
       ...recovery,
+      state: 'reloading_session',
       credentialPoolId: ready.id,
       previousCredentialPoolId: session.credentialPoolId,
-      clearResumeProviderContext: true,
+      clearResumeProviderContext: shouldClearResumeProviderContextForCredentialPoolRecovery(
+        session.agentType as CredentialPoolRecoveryRequest['provider'],
+        session.host,
+        session.credentialPoolMode,
+      ),
       requestedAt: new Date().toISOString(),
     }
     delete request.blockedUntil
+    delete request.failureCode
+    delete request.failureReason
     session.credentialPoolRecovery = request
     deps.markCredentialRecoveryRequest?.(session.name, request)
     deps.schedulePersistedSessionsWrite()
@@ -251,7 +349,7 @@ export function createSessionAutoRotationRuntime(
     if (!current.autoRotatePending && !credentialRecovery) {
       return current
     }
-    if (!supportsAutoRotation(current)) {
+    if (!supportsAutoRotation(current) && !credentialRecovery) {
       current.autoRotatePending = false
       return current
     }
@@ -297,6 +395,12 @@ export function createSessionAutoRotationRuntime(
 
       deps.sessions.set(sessionName, rotated)
 
+      if (credentialRecovery) {
+        const recoveredEvent = createCredentialRecoveryCompletedEvent(rotated, credentialRecovery)
+        deps.appendStreamEvent(rotated, recoveredEvent)
+        deps.broadcastStreamEvent(rotated, recoveredEvent)
+      }
+
       void deps.teardownProviderSession(current, `Auto-rotated session "${sessionName}"`).catch(() => undefined)
 
       for (const preludeEvent of rotatedPreludeEvents) {
@@ -305,6 +409,7 @@ export function createSessionAutoRotationRuntime(
 
       deps.schedulePersistedSessionsWrite()
       deps.clearCredentialRecoveryRequest?.(sessionName)
+      clearRecoveryRetry(sessionName)
       if (queueRuntime.getQueuedBacklogCount(rotated) > 0 && rotated.lastTurnCompleted && !rotated.currentQueuedMessage) {
         queueRuntime.scheduleQueuedMessageDrain(rotated, { force: true })
       }
@@ -323,6 +428,10 @@ export function createSessionAutoRotationRuntime(
       }
       deps.appendStreamEvent(live, failureEvent)
       deps.broadcastStreamEvent(live, failureEvent)
+      if (live.credentialPoolRecovery) {
+        live.autoRotatePending = true
+        scheduleRecoveryRetry(sessionName)
+      }
       deps.schedulePersistedSessionsWrite()
       return live
     }
@@ -345,8 +454,10 @@ export function createSessionAutoRotationRuntime(
           live &&
           live.kind === 'stream' &&
           live.autoRotatePending &&
+          (!live.credentialPoolRecovery || Boolean(live.credentialPoolRecovery.credentialPoolId)) &&
           live.lastTurnCompleted &&
           !live.currentQueuedMessage &&
+          !recoveryRetryTimers.has(sessionName) &&
           !autoRotationQueues.has(sessionName)
         ) {
           scheduleAutoRotationIfNeeded(sessionName)

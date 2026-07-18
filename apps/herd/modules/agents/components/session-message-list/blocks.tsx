@@ -21,6 +21,7 @@ import {
   type MessageImageAttachment,
   type MsgItem,
 } from '../../messages/model'
+import { projectAgentActivity } from './render-items'
 import { formatToolDisplayName, getToolMeta, isAgentAccentColor } from './tool-meta'
 
 const ALLOWED_INLINE_IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -722,7 +723,17 @@ function formatProviderErrorClassification(
   }
 }
 
-export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; sessionName?: string }) {
+export function ProviderErrorBlock({
+  msg,
+  sessionName,
+  sessionHost,
+  credentialRecoveryResolved = false,
+}: {
+  msg: MsgItem
+  sessionName?: string
+  sessionHost?: string
+  credentialRecoveryResolved?: boolean
+}) {
   const provider = msg.transcript?.source?.provider ?? 'provider'
   const backend = msg.transcript?.source?.backend ?? 'unknown'
   const classification = msg.providerError?.classification ?? 'other'
@@ -730,7 +741,11 @@ export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; session
   const code = msg.providerError?.code
   const hint = msg.providerError?.hint
   const poolProvider = isCredentialPoolProvider(provider) ? provider : null
-  const shouldLoadPool = classification === 'usage_limit' && poolProvider !== null
+  const recoveredByBackend = (
+    classification === 'usage_limit'
+    || classification === 'auth_required'
+  ) && poolProvider !== null && credentialRecoveryResolved
+  const shouldLoadPool = classification === 'usage_limit' && poolProvider !== null && !recoveredByBackend
   const [pool, setPool] = useState<CredentialPoolDto | null>(null)
   const [poolError, setPoolError] = useState<string | null>(null)
   const [poolActionMessage, setPoolActionMessage] = useState<string | null>(null)
@@ -882,6 +897,12 @@ export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; session
   }
 
   const nextCredential = pool?.nextCredential
+  const usesGlobalClaudeCredential = poolProvider === 'claude'
+    && (sessionHost?.trim() || 'local') === 'local'
+  const needsGlobalClaudeReauth = classification === 'auth_required'
+    && provider === 'claude'
+    && (sessionHost?.trim() || 'local') === 'local'
+    && !recoveredByBackend
   const showPoolAction = shouldLoadPool && !poolError && pool !== null
   const actionDisabled = poolAction !== null
 
@@ -914,9 +935,26 @@ export function ProviderErrorBlock({ msg, sessionName }: { msg: MsgItem; session
               {hint}
             </p>
           )}
+          {recoveredByBackend ? (
+            <p className="pt-1 text-xs text-[color:var(--hv-accent-success)]">
+              Recovered automatically on another credential.
+            </p>
+          ) : null}
+          {needsGlobalClaudeReauth ? (
+            <a
+              href="/settings"
+              className="inline-flex rounded-[2px_8px] border border-[color:var(--hv-accent-danger)] px-3 py-1.5 text-xs text-[color:var(--hv-accent-danger)] shadow-[2px_2px_0_var(--hv-accent-danger)] transition hover:bg-[var(--hv-accent-danger-wash)]"
+            >
+              Reauthenticate global Claude credential in Settings
+            </a>
+          ) : null}
           {showPoolAction ? (
             <div className="pt-1">
-              {nextCredential ? (
+              {nextCredential && usesGlobalClaudeCredential ? (
+                <p className="text-xs text-[color:var(--hv-fg-muted)]">
+                  Global Claude credential failover is automatic and continues this conversation in place.
+                </p>
+              ) : nextCredential ? (
                 <button
                   type="button"
                   disabled={actionDisabled}
@@ -1330,12 +1368,9 @@ export function AgentMessage({
 }
 
 export function RunningAgentsPanel({ messages }: { messages: MsgItem[] }) {
-  const running = messages.filter(
-    (message) =>
-      message.kind === 'tool'
-      && message.toolName === 'Agent'
-      && message.toolStatus === 'running',
-  )
+  const running = projectAgentActivity(messages).subagents
+    .map((subagent) => subagent.message)
+    .filter((message) => message.toolStatus === 'running')
   if (running.length === 0) {
     return null
   }
@@ -1382,16 +1417,43 @@ function pluralize(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`
 }
 
+function countActivityKind(
+  messages: readonly MsgItem[],
+  kind: MsgItem['kind'],
+): number {
+  let count = 0
+  for (const message of messages) {
+    if (message.kind === kind) {
+      count += 1
+    }
+    if (message.children) {
+      count += countActivityKind(message.children, kind)
+    }
+  }
+  return count
+}
+
 function renderActivityMessage(
   message: MsgItem,
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void,
   sessionName?: string,
+  sessionHost?: string,
+  credentialRecoveryResolvedErrorIds?: ReadonlySet<string>,
 ) {
   switch (message.kind) {
     case 'system':
       return <SystemDivider key={message.id} text={message.text} />
     case 'tool':
-      return <ToolBlock key={message.id} msg={message} nested onAnswer={onAnswer} sessionName={sessionName} />
+      return (
+        <ToolBlock
+          key={message.id}
+          msg={message}
+          nested
+          onAnswer={onAnswer}
+          sessionName={sessionName}
+          sessionHost={sessionHost}
+        />
+      )
     case 'agent':
       return <AgentMessage key={message.id} text={message.text} images={message.images} />
     case 'thinking':
@@ -1411,7 +1473,15 @@ function renderActivityMessage(
     case 'provider':
       return <ProviderActivityBlock key={message.id} msg={message} />
     case 'error':
-      return <ProviderErrorBlock key={message.id} msg={message} sessionName={sessionName} />
+      return (
+        <ProviderErrorBlock
+          key={message.id}
+          msg={message}
+          sessionName={sessionName}
+          sessionHost={sessionHost}
+          credentialRecoveryResolved={credentialRecoveryResolvedErrorIds?.has(message.id) === true}
+        />
+      )
     default:
       return null
   }
@@ -1421,26 +1491,45 @@ export function AgentActivityGroup({
   messages,
   onAnswer,
   sessionName,
+  sessionHost,
+  credentialRecoveryResolvedErrorIds,
 }: {
   messages: MsgItem[]
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   sessionName?: string
+  sessionHost?: string
+  credentialRecoveryResolvedErrorIds?: ReadonlySet<string>
 }) {
   const [expanded, setExpanded] = useState(false)
+  const projection = projectAgentActivity(messages)
+  const subagentCount = projection.subagents.length
   const tools = messages.filter((message) => message.kind === 'tool')
-  const providers = messages.filter((message) => message.kind === 'provider')
-  const thinking = messages.filter((message) => message.kind === 'thinking')
-  const subagents = tools.filter((message) => message.toolName === 'Agent')
-  const running = tools.filter((tool) => tool.toolStatus === 'running').length
-  const errors = tools.filter((tool) => tool.toolStatus === 'error').length
-  const done = tools.filter((tool) => tool.toolStatus === 'success').length
-
-  const hasSubagents = subagents.length > 0
-  const label = hasSubagents ? pluralize(subagents.length, 'sub-agent') : 'Main agent'
+  const statusRows = subagentCount > 0
+    ? projection.subagents.map((subagent) => subagent.message)
+    : tools
+  const running = statusRows.filter((row) => row.toolStatus === 'running').length
+  const errors = statusRows.filter((row) => row.toolStatus === 'error').length
+  const done = statusRows.filter((row) => row.toolStatus === 'success').length
+  const toolCallCount = subagentCount > 0
+    ? projection.subagents.reduce((total, subagent) => total + subagent.toolCallCount, 0)
+    : tools.length
+  const projectedMessages = subagentCount > 0
+    ? [
+        ...projection.subagents.map((subagent) => subagent.message),
+        ...projection.unowned,
+      ]
+    : messages
+  const providerCount = subagentCount > 0
+    ? countActivityKind(projectedMessages, 'provider')
+    : messages.filter((message) => message.kind === 'provider').length
+  const thinkingCount = subagentCount > 0
+    ? countActivityKind(projectedMessages, 'thinking')
+    : messages.filter((message) => message.kind === 'thinking').length
+  const label = subagentCount > 0 ? pluralize(subagentCount, 'sub-agent') : 'Main agent'
   const chips = [
-    tools.length > 0 ? pluralize(tools.length, 'tool call') : null,
-    providers.length > 0 ? pluralize(providers.length, 'event') : null,
-    thinking.length > 0 ? 'thinking' : null,
+    toolCallCount > 0 ? pluralize(toolCallCount, 'tool call') : null,
+    providerCount > 0 ? pluralize(providerCount, 'event') : null,
+    thinkingCount > 0 ? 'thinking' : null,
   ].filter((chip): chip is string => Boolean(chip))
   const statusLabel =
     running > 0
@@ -1498,7 +1587,40 @@ export function AgentActivityGroup({
       </button>
       {expanded && (
         <div className="msg-agent-activity-body space-y-1 border-t border-[color:var(--hv-border-soft)] p-1.5">
-          {messages.map((message) => renderActivityMessage(message, onAnswer, sessionName))}
+          {subagentCount > 0
+            ? (
+                <>
+                  {projection.subagents.map((subagent) => (
+                    <SubagentBlock
+                      key={subagent.id}
+                      msg={subagent.message}
+                      toolCallCount={subagent.toolCallCount}
+                      nested
+                      onAnswer={onAnswer}
+                      sessionName={sessionName}
+                      sessionHost={sessionHost}
+                    />
+                  ))}
+                  {projection.unowned.map((message) =>
+                    renderActivityMessage(
+                      message,
+                      onAnswer,
+                      sessionName,
+                      sessionHost,
+                      credentialRecoveryResolvedErrorIds,
+                    ),
+                  )}
+                </>
+              )
+            : messages.map((message) =>
+                renderActivityMessage(
+                  message,
+                  onAnswer,
+                  sessionName,
+                  sessionHost,
+                  credentialRecoveryResolvedErrorIds,
+                ),
+              )}
         </div>
       )}
     </div>
@@ -1509,14 +1631,16 @@ function NestedActivity({
   children,
   onAnswer,
   sessionName,
+  sessionHost,
 }: {
   children: MsgItem[]
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   sessionName?: string
+  sessionHost?: string
 }) {
   return (
     <div className="msg-tool-activity space-y-1 rounded border border-[color:var(--hv-border-soft)] bg-[var(--hv-bg-sunken)] p-1.5">
-      {children.map((child) => renderActivityMessage(child, onAnswer, sessionName))}
+      {children.map((child) => renderActivityMessage(child, onAnswer, sessionName, sessionHost))}
     </div>
   )
 }
@@ -1525,19 +1649,31 @@ export function SubagentBlock({
   msg,
   onAnswer,
   nested = false,
+  toolCallCount,
   sessionName,
+  sessionHost,
 }: {
   msg: MsgItem
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   nested?: boolean
+  toolCallCount?: number
   sessionName?: string
+  sessionHost?: string
 }) {
   const children = msg.children ?? []
   const hasChildren = children.length > 0
   const hasOutput = Boolean(msg.toolOutput?.trim())
   const hasInput = Boolean(msg.toolInput?.trim())
   const [expanded, setExpanded] = useState(false)
-  const status = getToolStatusView(msg.toolStatus)
+  const baseStatus = getToolStatusView(msg.toolStatus)
+  const status = {
+    ...baseStatus,
+    text: msg.toolStatus === 'running'
+      ? 'running'
+      : msg.toolStatus === 'error'
+        ? 'failed'
+        : 'succeeded',
+  }
   const description = msg.subagentDescription?.trim() || SUBAGENT_WORKING_LABEL
 
   return (
@@ -1559,6 +1695,11 @@ export function SubagentBlock({
         <div className="msg-subagent-meta min-w-0 flex-1">
           <div className="msg-subagent-label font-mono text-[10px] uppercase tracking-[0.2em] text-[color:var(--hv-accent-info)]">
             Sub-agent
+            {toolCallCount !== undefined && (
+              <span className="msg-subagent-tool-count ml-2 normal-case tracking-normal text-[color:var(--hv-fg-subtle)]">
+                {pluralize(toolCallCount, 'call')}
+              </span>
+            )}
           </div>
           <div className="msg-subagent-description mt-0.5 break-words text-sm leading-relaxed text-[color:var(--hv-fg)]">
             {description}
@@ -1588,7 +1729,12 @@ export function SubagentBlock({
               <div className="msg-subagent-section-label mb-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--hv-fg-subtle)]">
                 activity
               </div>
-              <NestedActivity children={children} onAnswer={onAnswer} sessionName={sessionName} />
+              <NestedActivity
+                children={children}
+                onAnswer={onAnswer}
+                sessionName={sessionName}
+                sessionHost={sessionHost}
+              />
             </div>
           )}
           {hasOutput && (
@@ -1621,15 +1767,25 @@ export function ToolBlock({
   onAnswer,
   nested = false,
   sessionName,
+  sessionHost,
 }: {
   msg: MsgItem
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   nested?: boolean
   sessionName?: string
+  sessionHost?: string
 }) {
   const isAgentTool = msg.toolName === 'Agent'
   if (isAgentTool) {
-    return <SubagentBlock msg={msg} onAnswer={onAnswer} nested={nested} sessionName={sessionName} />
+    return (
+      <SubagentBlock
+        msg={msg}
+        onAnswer={onAnswer}
+        nested={nested}
+        sessionName={sessionName}
+        sessionHost={sessionHost}
+      />
+    )
   }
 
   const children = msg.children ?? []
@@ -1728,7 +1884,12 @@ export function ToolBlock({
               <div className="msg-tool-section-label mb-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--hv-fg)]">
                 activity
               </div>
-              <NestedActivity children={children} onAnswer={onAnswer} sessionName={sessionName} />
+              <NestedActivity
+                children={children}
+                onAnswer={onAnswer}
+                sessionName={sessionName}
+                sessionHost={sessionHost}
+              />
             </div>
           )}
         </div>

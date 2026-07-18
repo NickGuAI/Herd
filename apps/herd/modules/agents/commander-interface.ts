@@ -17,10 +17,12 @@
  */
 import { SessionMessageQueue, type QueuedMessage, type QueuedMessageImage, type QueuedMessagePriority } from './message-queue.js'
 import { WebSocket } from 'ws'
-import type { ProviderCreateOptions } from './providers/provider-adapter.js'
+import { resolveProviderDefaults, type ProviderCreateOptions } from './providers/provider-adapter.js'
 import { getProvider } from './providers/registry.js'
 import { getNextStreamEventSeq } from './messages/canonical-timeline.js'
 import { resolveNativeProviderResumeId } from './providers/native-resume.js'
+import { sanitizeProviderContextForPersistence } from './providers/provider-context-normalization.js'
+import { shouldClearResumeProviderContextForCredentialPoolRecovery } from './provider-auth.js'
 import type {
   AgentType,
   AnySession,
@@ -51,6 +53,21 @@ export type ProviderSessionCreator = (
 export type SessionTeardown = (session: StreamSession, reason: string) => Promise<void>
 export type RuntimeShutdown = (reason?: string) => Promise<void>
 
+export class CommanderSessionReplacementConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CommanderSessionReplacementConflictError'
+  }
+}
+
+function hasQueuedSessionWork(session: StreamSession): boolean {
+  return Boolean(
+    session.currentQueuedMessage
+      || session.pendingDirectSendMessages.length > 0
+      || session.messageQueue.size > 0,
+  )
+}
+
 export type CreateQueuedMessage = (
   text: string,
   priority: QueuedMessagePriority,
@@ -70,12 +87,6 @@ export type ScheduleQueueDrain = (
   options?: { force?: boolean },
 ) => void
 
-/**
- * Signature matches the router's internal `sendImmediateTextToStreamSession`:
- * returns a discriminated-union success/failure result. The commander
- * interface only uses `result.ok`, so we do not model the full success payload
- * here — callers of `sendToSession` return a boolean.
- */
 export type SendImmediateText = (
   session: StreamSession,
   text: string,
@@ -84,8 +95,8 @@ export type SendImmediateText = (
   clientSendId?: string,
   userEventSubtype?: string,
 ) => Promise<
-  | { ok: true; queued: boolean; message: QueuedMessage }
-  | { ok: false; error: string }
+  | { ok: true; disposition: 'started' | 'interrupted'; message: QueuedMessage }
+  | { ok: false; code?: 'credential_recovery_failed'; error: string; retryable: boolean }
 >
 
 /**
@@ -145,6 +156,16 @@ function clearResumeContextOnCredentialPoolChange(
     return input
   }
 
+  const provider = input.agentType === 'claude' || input.agentType === 'codex'
+    ? input.agentType
+    : null
+  if (
+    provider &&
+    !shouldClearResumeProviderContextForCredentialPoolRecovery(provider, undefined, input.credentialPoolMode)
+  ) {
+    return input
+  }
+
   return {
     ...input,
     resumeProviderContext: undefined,
@@ -200,11 +221,13 @@ export function createCommanderSessionsInterface(
     agentType,
     model,
     effort,
+    omitEffort,
     adaptiveThinking,
     maxThinkingTokens,
     cwd,
     resumeProviderContext,
     credentialPoolId,
+    credentialPoolMode,
     maxTurns,
     env,
     gaiaOpsApiKeyExpiresAt,
@@ -229,6 +252,7 @@ export function createCommanderSessionsInterface(
       systemPrompt,
       model,
       effort,
+      omitEffort,
       adaptiveThinking,
       maxThinkingTokens,
       maxTurns,
@@ -237,6 +261,7 @@ export function createCommanderSessionsInterface(
       conversationId,
       resumeProviderContext,
       credentialPoolId,
+      credentialPoolMode,
       env,
     }
 
@@ -285,11 +310,19 @@ export function createCommanderSessionsInterface(
       const replacement = await buildCommanderSession(
         clearResumeContextOnCredentialPoolChange(input, previous),
       )
-      if (previous && previous.kind === 'stream') {
-        // Keep the old provider alive until the replacement is ready. If
-        // provider auth or remote launch fails above, callers still have the
-        // existing runtime instead of a torn-down session slot.
-        await teardownProviderSession(previous, `Provider swap on session "${name}"`)
+      if (input.requireIdleReplacement && previous?.kind === 'stream') {
+        let conflictReason: string | null = null
+        if (sessions.get(name) !== previous) {
+          conflictReason = 'Runtime session changed while settings update was prepared; retry the update'
+        } else if (!previous.lastTurnCompleted) {
+          conflictReason = 'Conversation is mid-turn; runtime settings can change after the current turn completes'
+        } else if (hasQueuedSessionWork(previous)) {
+          conflictReason = 'Conversation has queued work; runtime settings can change after the queue drains'
+        }
+        if (conflictReason) {
+          await teardownProviderSession(replacement, `Aborted runtime settings update for session "${name}"`)
+          throw new CommanderSessionReplacementConflictError(conflictReason)
+        }
       }
       if (previous && previous.kind === 'stream' && replacement.kind === 'stream') {
         // Mirror websocket.ts auto-rotate replacement so same-name provider
@@ -329,7 +362,9 @@ export function createCommanderSessionsInterface(
         previous.clients.clear()
       }
       // sessionEventHandlers is keyed by `name`, so the replacement that
-      // reuses the same slot naturally keeps prior subscribers attached.
+      // reuses the same slot naturally keeps prior subscribers attached. Swap
+      // the routable slot before awaiting teardown so a concurrent send cannot
+      // enter the provider runtime that is being retired.
       sessions.set(name, replacement)
       schedulePersistedSessionsWrite()
       if (
@@ -339,44 +374,83 @@ export function createCommanderSessionsInterface(
       ) {
         scheduleQueuedMessageDrain(replacement, { force: true })
       }
+      if (previous && previous.kind === 'stream') {
+        // Keep the old provider alive until the replacement is fully built and
+        // its replay/queue state has moved. The slot already points at the new
+        // runtime, so messages arriving during asynchronous teardown are sent
+        // to the replacement instead of being lost with the old provider.
+        await teardownProviderSession(previous, `Provider swap on session "${name}"`)
+      }
       return replacement
+    },
+
+    updateCommanderSessionRuntimeSettings(name, settings) {
+      const session = sessions.get(name)
+      if (!session || session.kind !== 'stream' || session.agentType !== settings.agentType) {
+        return undefined
+      }
+
+      const provider = getProvider(settings.agentType)
+      if (Object.prototype.hasOwnProperty.call(settings, 'model')) {
+        session.model = settings.model
+          ?? (provider ? resolveProviderDefaults(provider).model ?? undefined : undefined)
+      }
+      session.effort = settings.effort
+      session.adaptiveThinking = settings.adaptiveThinking
+      session.maxThinkingTokens = settings.maxThinkingTokens
+      const persistedProviderContext = sanitizeProviderContextForPersistence(session.providerContext, {
+        effort: settings.effort,
+        adaptiveThinking: settings.adaptiveThinking,
+        maxThinkingTokens: settings.maxThinkingTokens,
+      })
+      if (persistedProviderContext) {
+        Object.assign(session.providerContext, persistedProviderContext)
+      }
+      schedulePersistedSessionsWrite()
+      return session
     },
 
     async sendToSession(name, payload, options) {
       const session = sessions.get(name)
       if (!session || session.kind !== 'stream') {
-        return false
+        return {
+          ok: false,
+          code: 'session_unavailable',
+          error: 'Stream session unavailable',
+          retryable: false,
+        }
       }
       const { text, images, displayText, clientSendId, userEventSubtype } = normalizeSendPayload(payload)
-      const recovery = getCredentialRecoveryRequest?.(name) ?? session.credentialPoolRecovery
-      if (options?.queue) {
+      if (options.intent === 'queue') {
         const message = displayText !== undefined || clientSendId || userEventSubtype
           ? createQueuedMessage(text, options.priority ?? 'normal', images, displayText, clientSendId, userEventSubtype)
           : createQueuedMessage(text, options.priority ?? 'normal', images)
         const queued = enqueueQueuedMessage(session, message)
         if (!queued.ok) {
-          return false
+          return {
+            ok: false,
+            code: 'queue_rejected',
+            error: queued.error,
+            retryable: false,
+          }
         }
         scheduleQueuedMessageDrain(session)
-        return true
-      }
-
-      if (recovery) {
-        const message = displayText !== undefined || clientSendId || userEventSubtype
-          ? createQueuedMessage(text, 'high', images, displayText, clientSendId, userEventSubtype)
-          : createQueuedMessage(text, 'high', images)
-        const queued = enqueueQueuedMessage(session, message)
-        if (!queued.ok) {
-          return false
-        }
-        scheduleQueuedMessageDrain(session, { force: true })
-        return true
+        return { ok: true, disposition: 'queued' }
       }
 
       const result = displayText !== undefined || clientSendId || userEventSubtype
         ? await sendImmediateTextToStreamSession(session, text, images, displayText, clientSendId, userEventSubtype)
         : await sendImmediateTextToStreamSession(session, text, images)
-      return result.ok
+      if (!result.ok) {
+        return {
+          ok: false,
+          code: result.code
+            ?? (result.error === 'Stream session unavailable' ? 'session_unavailable' : 'interrupt_unavailable'),
+          error: result.error,
+          retryable: result.retryable,
+        }
+      }
+      return { ok: true, disposition: result.disposition }
     },
 
     recordSessionEvent(name, event) {

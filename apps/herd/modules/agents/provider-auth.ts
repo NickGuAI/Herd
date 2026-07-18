@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { chmod, mkdir, readFile, rm, stat, writeFile, access } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile, access } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -18,6 +19,19 @@ const CODEX_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize'
 const CODEX_REDIRECT_PORT = 1455
 export const HERD_CODEX_AUTH_JSON_B64 = 'HERD_CODEX_AUTH_JSON_B64'
 export const HERD_CODEX_REMOTE_HOME_KEY = 'HERD_CODEX_REMOTE_HOME_KEY'
+export const HERD_CLAUDE_GLOBAL_CONFIG_DIR = 'HERD_CLAUDE_GLOBAL_CONFIG_DIR'
+const CLAUDE_PROFILE_ENDPOINT = 'https://api.anthropic.com/api/oauth/profile'
+const CLAUDE_AUTH_STATUS_TIMEOUT_MS = 8_000
+const CLAUDE_PROFILE_TIMEOUT_MS = 8_000
+const CLAUDE_PROFILE_MAX_RESPONSE_BYTES = 64 * 1024
+const CLAUDE_GLOBAL_LOCK_TIMEOUT_MS = 15_000
+const CLAUDE_GLOBAL_LOCK_STALE_MS = 2 * 60_000
+const CLAUDE_GLOBAL_AUTH_OVERRIDE_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+] as const
 const nodeSqlite = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')
 
 export type ProviderAuthStatus = 'ready' | 'auth_required' | 'unknown'
@@ -52,6 +66,7 @@ export interface ProviderSpawnAuth {
   snapshot: ProviderAuthSnapshot
   env?: NodeJS.ProcessEnv
   credentialPoolId?: string
+  credentialPoolMode?: CredentialPoolRuntimeMode
 }
 
 export interface PersistedProviderAuthStore {
@@ -63,6 +78,7 @@ export interface PersistedProviderAuthStore {
 }
 
 export type CredentialPoolProvider = 'claude' | 'codex'
+export type CredentialPoolRuntimeMode = 'global-continuity' | 'isolated-runtime'
 export type CredentialPoolCredentialStatus = 'active' | 'available' | 'exhausted' | 'auth_required'
 export type CredentialPoolRemoteReadiness = 'ready' | 'auth_required' | 'not_required'
 
@@ -80,18 +96,25 @@ export interface CredentialPoolCredential {
   label: string
   dir: string
   email?: string
+  accountId?: string
   remoteToken?: string
   remoteHomeKey?: string
   createdAt?: string
   lastUsedAt?: string
   exhaustedAt?: string
   exhaustedUntil?: string
+  authBrokenAt?: string
+  authBrokenReason?: string
 }
 
 export interface CredentialPoolState {
   active?: string
   credentials: Record<string, CredentialPoolCredential>
   exhausted: string[]
+  installedGlobalClaude?: {
+    credentialId: string
+    oauthHash: string
+  }
 }
 
 export interface CredentialPoolCredentialView extends Omit<CredentialPoolCredential, 'remoteToken' | 'remoteHomeKey'> {
@@ -156,6 +179,35 @@ export interface CredentialPoolSwitchResult {
   }
   pool: CredentialPoolView
 }
+
+export interface ClaudeGlobalCredentialActivationOptions {
+  env?: NodeJS.ProcessEnv
+  expectedActiveId?: string
+  allowExhausted?: boolean
+  clearExhaustion?: boolean
+  sourceAuthoritative?: boolean
+  replaceForeignGlobal?: boolean
+  resolveAccountId?: ClaudeAccountIdentityResolver
+  validateGlobalAuth?: ClaudeGlobalAuthValidator
+}
+
+export class ClaudeForeignGlobalLoginError extends Error {}
+
+export interface ClaudeGlobalAuthStatus {
+  loggedIn: boolean
+  authMethod?: string
+  email?: string
+  orgId?: string
+  subscriptionType?: string
+}
+
+export type ClaudeAccountIdentityResolver = (
+  accessToken: string,
+) => Promise<string | undefined>
+
+export type ClaudeGlobalAuthValidator = (
+  env: NodeJS.ProcessEnv,
+) => Promise<ClaudeGlobalAuthStatus>
 
 export interface ProviderOAuthFlowRecord {
   provider: AgentType
@@ -243,6 +295,7 @@ function normalizeTokenRecord(raw: unknown): ProviderTokenRecord | null {
     ...(asTrimmedString(raw.idToken) ? { idToken: asTrimmedString(raw.idToken) } : {}),
     ...(asTrimmedString(raw.accountId) ? { accountId: asTrimmedString(raw.accountId) } : {}),
     ...(asTrimmedString(raw.email) ? { email: asTrimmedString(raw.email) } : {}),
+    ...(asTrimmedString(raw.accountId) ? { accountId: asTrimmedString(raw.accountId) } : {}),
     ...(asTrimmedString(raw.updatedAt) ? { updatedAt: asTrimmedString(raw.updatedAt) } : {}),
   }
 }
@@ -308,7 +361,7 @@ function normalizeFlow(raw: unknown): ProviderOAuthFlowRecord | null {
 
 const CREDENTIAL_POOL_PROVIDERS: readonly CredentialPoolProvider[] = ['claude', 'codex']
 
-function isCredentialPoolProvider(provider: AgentType): provider is CredentialPoolProvider {
+export function isCredentialPoolProvider(provider: AgentType): provider is CredentialPoolProvider {
   return CREDENTIAL_POOL_PROVIDERS.includes(provider as CredentialPoolProvider)
 }
 
@@ -356,6 +409,7 @@ function normalizePoolCredential(
     id,
     label,
     dir: normalizeCredentialPoolDir(provider, id, raw.dir),
+    ...(asTrimmedString(raw.accountId) ? { accountId: asTrimmedString(raw.accountId) } : {}),
     ...(asTrimmedString(raw.email) ? { email: asTrimmedString(raw.email) } : {}),
     ...(asTrimmedString(raw.remoteToken) ? { remoteToken: asTrimmedString(raw.remoteToken) } : {}),
     ...(normalizeRemoteHomeKey(raw.remoteHomeKey) ? { remoteHomeKey: normalizeRemoteHomeKey(raw.remoteHomeKey) } : {}),
@@ -363,6 +417,8 @@ function normalizePoolCredential(
     ...(asTrimmedString(raw.lastUsedAt) ? { lastUsedAt: asTrimmedString(raw.lastUsedAt) } : {}),
     ...(normalizeIsoTimestamp(raw.exhaustedAt) ? { exhaustedAt: normalizeIsoTimestamp(raw.exhaustedAt) } : {}),
     ...(normalizeIsoTimestamp(raw.exhaustedUntil) ? { exhaustedUntil: normalizeIsoTimestamp(raw.exhaustedUntil) } : {}),
+    ...(normalizeIsoTimestamp(raw.authBrokenAt) ? { authBrokenAt: normalizeIsoTimestamp(raw.authBrokenAt) } : {}),
+    ...(asTrimmedString(raw.authBrokenReason) ? { authBrokenReason: asTrimmedString(raw.authBrokenReason) } : {}),
   }
 }
 
@@ -393,6 +449,13 @@ function normalizeCredentialPool(
   const active = normalizeCredentialId(raw.active)
   if (active && state.credentials[active]) {
     state.active = active
+  }
+  if (provider === 'claude' && isObject(raw.installedGlobalClaude)) {
+    const credentialId = normalizeCredentialId(raw.installedGlobalClaude.credentialId)
+    const oauthHash = asTrimmedString(raw.installedGlobalClaude.oauthHash)
+    if (credentialId && state.credentials[credentialId] && oauthHash && /^[a-f0-9]{64}$/u.test(oauthHash)) {
+      state.installedGlobalClaude = { credentialId, oauthHash }
+    }
   }
   return state
 }
@@ -478,6 +541,9 @@ function cloneCredential(credential: CredentialPoolCredential): CredentialPoolCr
 function cloneCredentialPool(state: CredentialPoolState): CredentialPoolState {
   return {
     ...(state.active ? { active: state.active } : {}),
+    ...(state.installedGlobalClaude
+      ? { installedGlobalClaude: { ...state.installedGlobalClaude } }
+      : {}),
     credentials: Object.fromEntries(
       Object.entries(state.credentials).map(([id, credential]) => [id, cloneCredential(credential)]),
     ),
@@ -557,6 +623,11 @@ function clearCredentialExhaustion(credential: CredentialPoolCredential): void {
   delete credential.exhaustedUntil
 }
 
+function clearCredentialAuthBroken(credential: CredentialPoolCredential): void {
+  delete credential.authBrokenAt
+  delete credential.authBrokenReason
+}
+
 function pruneExpiredCredentialExhaustion(pool: CredentialPoolState, nowMs = Date.now()): void {
   for (const credential of Object.values(pool.credentials)) {
     if (credential.exhaustedAt && !isCredentialTemporarilyExhausted(credential, nowMs)) {
@@ -591,6 +662,32 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`
 }
 
+async function atomicWritePrivateFile(
+  filePath: string,
+  contents: string | Buffer,
+): Promise<void> {
+  const directory = path.dirname(filePath)
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  await chmod(directory, 0o700)
+  const tmp = path.join(
+    directory,
+    `.${path.basename(filePath)}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`,
+  )
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(tmp, 'wx', 0o600)
+    await handle.writeFile(contents)
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await rename(tmp, filePath)
+  } catch (error) {
+    await handle?.close().catch(() => undefined)
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
 export class ProviderAuthStore {
   private queue = Promise.resolve()
 
@@ -613,12 +710,7 @@ export class ProviderAuthStore {
   }
 
   async write(store: PersistedProviderAuthStore): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 })
-    await writeFile(this.filePath, `${JSON.stringify(store, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    })
-    await chmod(this.filePath, 0o600)
+    await atomicWritePrivateFile(this.filePath, `${JSON.stringify(store, null, 2)}\n`)
   }
 
   async getToken(provider: AgentType, scopeId: string): Promise<ProviderTokenRecord | null> {
@@ -689,9 +781,22 @@ export class ProviderAuthStore {
     if (pool.credentials.length === 0) {
       return null
     }
-    return pool.credentials.find((credential) => credential.id === pool.active && isReadyCredentialView(credential))
-      ?? pool.credentials.find(isReadyCredentialView)
-      ?? null
+    const active = pool.credentials.find((credential) => credential.id === pool.active)
+    if (poolProvider === 'claude') {
+      return active && isReadyCredentialView(active) ? active : null
+    }
+    return active && isReadyCredentialView(active)
+      ? active
+      : pool.credentials.find(isReadyCredentialView) ?? null
+  }
+
+  async getInstalledGlobalClaudeCredentialId(): Promise<string | undefined> {
+    const store = await this.read()
+    const pool = store.credentialPools?.claude
+    const installed = pool?.installedGlobalClaude
+    return installed && pool?.active === installed.credentialId
+      ? installed.credentialId
+      : undefined
   }
 
   async getPoolCredential(provider: AgentType, id: string): Promise<CredentialPoolCredentialView | null> {
@@ -796,7 +901,7 @@ export class ProviderAuthStore {
   async switchToNextPoolCredential(
     provider: AgentType,
     exhaustedId?: string,
-    options: { resetAt?: string; host?: string } = {},
+    options: { resetAt?: string; host?: string; preserveActive?: boolean } = {},
   ): Promise<CredentialPoolSwitchResult> {
     const poolProvider = requireCredentialPoolProvider(provider)
     const exhaustedCredentialId = exhaustedId ? requireCredentialId(exhaustedId) : undefined
@@ -808,8 +913,12 @@ export class ProviderAuthStore {
       const pool = getMutableCredentialPool(store, poolProvider)
       const now = Date.now()
       const host = options.host?.trim() || 'local'
+      const preserveGlobalActive = poolProvider === 'claude'
+        && (options.preserveActive === true || host !== 'local')
       pruneExpiredCredentialExhaustion(pool, now)
-      previousId = pool.active ?? firstCredentialId(pool)
+      previousId = preserveGlobalActive && exhaustedCredentialId
+        ? exhaustedCredentialId
+        : pool.active ?? firstCredentialId(pool)
       let view: CredentialPoolInternalView | undefined
       const readPoolView = async (): Promise<CredentialPoolInternalView> => {
         view ??= await this.buildPoolView(poolProvider, pool, { includeSecrets: true })
@@ -843,12 +952,16 @@ export class ProviderAuthStore {
         credential.id !== previousId && isReadyPoolCredentialForHost(poolProvider, credential, host)
       ))
       if (next) {
-        pool.active = next.id
+        if (!preserveGlobalActive) {
+          pool.active = next.id
+        }
         pool.credentials[next.id].lastUsedAt = new Date(now).toISOString()
         activeId = next.id
         switched = true
       } else if (previousId && pool.credentials[previousId]) {
-        pool.active = previousId
+        if (!preserveGlobalActive) {
+          pool.active = previousId
+        }
         activeId = previousId
         blocked = {
           reason: 'no_ready_credentials',
@@ -867,6 +980,349 @@ export class ProviderAuthStore {
     }
   }
 
+  async activateGlobalClaudeCredential(
+    id: string,
+    options: ClaudeGlobalCredentialActivationOptions = {},
+  ): Promise<CredentialPoolSwitchResult> {
+    const credentialId = requireCredentialId(id)
+    let previousId: string | undefined
+    let activeId: string | undefined
+    let switched = false
+    const env = options.env ?? process.env
+    const resolveAccountId = options.resolveAccountId ?? (async () => undefined)
+    const accountIdsByAccessToken = new Map<string, string | undefined>()
+    const initialPool = await this.listPoolCredentialsForSpawn('claude')
+    const initialPrevious = initialPool.credentials.find((candidate) => (
+      candidate.id === initialPool.active
+    ))
+    const initialTarget = initialPool.credentials.find((candidate) => candidate.id === credentialId)
+    const identityFiles = [
+      initialPrevious ? path.join(initialPrevious.absoluteDir, '.credentials.json') : undefined,
+      initialTarget ? path.join(initialTarget.absoluteDir, '.credentials.json') : undefined,
+      path.join(resolveClaudeGlobalConfigDir(env), '.credentials.json'),
+    ].filter((value): value is string => Boolean(value))
+    for (const filePath of new Set(identityFiles)) {
+      try {
+        const record = await readClaudeCredentialRecord(filePath)
+        const accessToken = asTrimmedString(record.oauth.accessToken)
+        if (accessToken && !accountIdsByAccessToken.has(accessToken)) {
+          accountIdsByAccessToken.set(accessToken, await resolveAccountId(accessToken))
+        }
+      } catch {
+        // Missing or invalid auth is handled authoritatively inside the locked transaction.
+      }
+    }
+    const resolvePreparedAccountId: ClaudeAccountIdentityResolver = async (accessToken) => (
+      accountIdsByAccessToken.get(accessToken)
+    )
+    try {
+      await this.mutateClaudeGlobal(env, async (store) => {
+      const pool = getMutableCredentialPool(store, 'claude')
+      pruneExpiredCredentialExhaustion(pool)
+      previousId = pool.active ?? firstCredentialId(pool)
+      if (options.expectedActiveId && previousId !== options.expectedActiveId) {
+        activeId = previousId
+        return { result: undefined }
+      }
+      const view = await this.buildPoolView('claude', pool, { includeSecrets: true })
+      const credential = view.credentials.find((candidate) => candidate.id === credentialId)
+      if (!credential) {
+        throw new Error('Credential "' + credentialId + '" is not registered for claude')
+      }
+      const sourceHasValidLogin = await hasValidClaudeLoginAuth(
+        path.join(credential.absoluteDir, '.credentials.json'),
+      )
+      if (!credential.readiness.readyLocal && !(options.sourceAuthoritative && sourceHasValidLogin)) {
+        throw new Error('Claude credential "' + credential.label + '" requires login')
+      }
+      if (credential.exhausted && !options.allowExhausted) {
+        throw new Error('Claude credential "' + credential.label + '" is not currently eligible')
+      }
+      const installed = pool.installedGlobalClaude
+      if (!options.sourceAuthoritative && installed && installed.credentialId !== previousId) {
+        throw new Error('Installed global Claude credential does not match the configured active account')
+      }
+      if (!options.sourceAuthoritative) {
+        const previousCredential = view.credentials.find((candidate) => candidate.id === previousId)
+        if (previousCredential) {
+          try {
+            const refreshed = await synchronizeClaudeGlobalRefreshToPool(
+              previousCredential,
+              installed?.oauthHash ?? '',
+              env,
+              resolvePreparedAccountId,
+            )
+            if (refreshed.oauthHash) {
+              pool.installedGlobalClaude = {
+                credentialId: previousCredential.id,
+                oauthHash: refreshed.oauthHash,
+              }
+            }
+            if (refreshed.accountId) {
+              pool.credentials[previousCredential.id].accountId = refreshed.accountId
+            }
+          } catch (error) {
+            // An explicit operator switch may replace a foreign manual global
+            // login that was never installed from the pool; there is no
+            // recorded lineage to adopt, so skip the sync and install over it.
+            if (!(
+              error instanceof ClaudeForeignGlobalLoginError
+              && options.replaceForeignGlobal
+              && !installed
+            )) {
+              throw error
+            }
+          }
+        }
+      }
+      const activation = await activateClaudeGlobalCredential(
+        credential,
+        env,
+        options.validateGlobalAuth,
+      )
+      const sourceRecord = await readClaudeCredentialRecord(
+        path.join(credential.absoluteDir, '.credentials.json'),
+      )
+      const sourceAccessToken = asTrimmedString(sourceRecord.oauth.accessToken)
+      const accountId = credential.accountId
+        ?? (sourceAccessToken ? await resolvePreparedAccountId(sourceAccessToken) : undefined)
+      pool.active = credentialId
+      pool.installedGlobalClaude = {
+        credentialId,
+        oauthHash: activation.oauthHash,
+      }
+      pool.credentials[credentialId].lastUsedAt = new Date().toISOString()
+      if (accountId) {
+        pool.credentials[credentialId].accountId = accountId
+      }
+      if (activation.validation?.email) {
+        pool.credentials[credentialId].email = activation.validation.email
+      }
+      clearCredentialAuthBroken(pool.credentials[credentialId])
+      if (options.clearExhaustion) {
+        clearCredentialExhaustion(pool.credentials[credentialId])
+        pool.exhausted = pool.exhausted.filter((candidate) => candidate !== credentialId)
+      }
+      activeId = credentialId
+      switched = previousId !== credentialId
+        return { result: undefined, rollback: activation.rollback }
+      })
+    } catch (error) {
+      if (error instanceof ClaudeGlobalAuthValidationError) {
+        await this.markPoolCredentialAuthBroken('claude', credentialId, error.message)
+      }
+      throw error
+    }
+    const pool = await this.listPoolCredentials('claude')
+    return {
+      provider: 'claude',
+      switched,
+      ...(previousId ? {
+        previousCredential: pool.credentials.find((credential) => credential.id === previousId),
+      } : {}),
+      ...(activeId ? {
+        activeCredential: pool.credentials.find((credential) => credential.id === activeId),
+      } : {}),
+      pool,
+    }
+  }
+
+  async reconcileGlobalClaudeCredential(
+    options: Pick<
+      ClaudeGlobalCredentialActivationOptions,
+      'env' | 'resolveAccountId' | 'validateGlobalAuth'
+    > = {},
+  ): Promise<CredentialPoolSwitchResult | null> {
+    const pool = await this.listPoolCredentialsForSpawn('claude')
+    const configured = pool.credentials.find((credential) => (
+      credential.id === pool.active && credential.readiness.readyLocal
+    ))
+    if (pool.active && !configured) {
+      return null
+    }
+    const target = configured ?? pool.credentials.find((credential) => credential.readiness.readyLocal)
+    if (!target) {
+      return null
+    }
+    return this.activateGlobalClaudeCredential(target.id, {
+      ...options,
+      allowExhausted: true,
+    })
+  }
+
+  async synchronizeGlobalClaudeCredential(
+    options: Pick<
+      ClaudeGlobalCredentialActivationOptions,
+      'env' | 'resolveAccountId' | 'validateGlobalAuth'
+    > = {},
+  ): Promise<boolean> {
+    let synchronized = false
+    const env = options.env ?? process.env
+    const resolveAccountId = options.resolveAccountId ?? (async () => undefined)
+    const accountIdsByAccessToken = new Map<string, string | undefined>()
+    const initialPool = await this.listPoolCredentialsForSpawn('claude')
+    const initialActive = initialPool.credentials.find((candidate) => candidate.id === initialPool.active)
+    const identityFiles = [
+      initialActive ? path.join(initialActive.absoluteDir, '.credentials.json') : undefined,
+      path.join(resolveClaudeGlobalConfigDir(env), '.credentials.json'),
+    ].filter((value): value is string => Boolean(value))
+    for (const filePath of new Set(identityFiles)) {
+      try {
+        const record = await readClaudeCredentialRecord(filePath)
+        const accessToken = asTrimmedString(record.oauth.accessToken)
+        if (accessToken && !accountIdsByAccessToken.has(accessToken)) {
+          accountIdsByAccessToken.set(accessToken, await resolveAccountId(accessToken))
+        }
+      } catch {
+        // The locked transaction owns missing/invalid credential classification.
+      }
+    }
+    const resolvePreparedAccountId: ClaudeAccountIdentityResolver = async (accessToken) => (
+      accountIdsByAccessToken.get(accessToken)
+    )
+    await this.mutateClaudeGlobal(env, async (store) => {
+      const pool = getMutableCredentialPool(store, 'claude')
+      const installed = pool.installedGlobalClaude
+      const activeId = pool.active ?? firstCredentialId(pool)
+      if (!installed || installed.credentialId !== activeId) {
+        return { result: undefined }
+      }
+      const view = await this.buildPoolView('claude', pool, { includeSecrets: true })
+      const credential = view.credentials.find((candidate) => candidate.id === activeId)
+      if (!credential || !(await hasValidClaudeLoginAuth(
+        path.join(credential.absoluteDir, '.credentials.json'),
+      ))) {
+        return { result: undefined }
+      }
+      const refresh = await synchronizeClaudeGlobalRefreshToPool(
+        credential,
+        installed.oauthHash,
+        env,
+        resolvePreparedAccountId,
+      )
+      if (refresh.missingGlobalAuth || refresh.staleGlobalAuth) {
+        const activation = await activateClaudeGlobalCredential(
+          credential,
+          env,
+          options.validateGlobalAuth,
+        )
+        synchronized = true
+        pool.installedGlobalClaude = {
+          credentialId: activeId,
+          oauthHash: activation.oauthHash,
+        }
+        if (refresh.accountId) {
+          pool.credentials[activeId].accountId = refresh.accountId
+        }
+        if (activation.validation) {
+          clearCredentialAuthBroken(pool.credentials[activeId])
+          if (activation.validation.email) {
+            pool.credentials[activeId].email = activation.validation.email
+          }
+        }
+        return { result: undefined, rollback: activation.rollback }
+      }
+      synchronized = refresh.synchronized
+      pool.installedGlobalClaude = { credentialId: activeId, oauthHash: refresh.oauthHash }
+      if (refresh.accountId) {
+        pool.credentials[activeId].accountId = refresh.accountId
+      }
+      if (credential.authBrokenAt && options.validateGlobalAuth) {
+        await stripClaudeOauthAccount(env)
+        try {
+          const validation = await options.validateGlobalAuth(env)
+          assertClaudeGlobalAuthValidation(credential, validation)
+          clearCredentialAuthBroken(pool.credentials[activeId])
+          if (validation.email) {
+            pool.credentials[activeId].email = validation.email
+          }
+        } catch {
+          // Keep the explicit auth-broken quarantine. Quota polling must still
+          // continue so another healthy account can become globally active.
+        }
+      }
+      return { result: undefined }
+    })
+    return synchronized
+  }
+
+  async reconcilePoolCredentialExhaustion(
+    provider: AgentType,
+    id: string,
+    blockedUntil: string | null,
+  ): Promise<CredentialPoolView> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const credentialId = requireCredentialId(id)
+    await this.mutate((store) => {
+      const pool = getMutableCredentialPool(store, poolProvider)
+      const credential = pool.credentials[credentialId]
+      if (!credential) {
+        throw new Error('Credential "' + credentialId + '" is not registered for ' + poolProvider)
+      }
+      if (blockedUntil === null) {
+        clearCredentialExhaustion(credential)
+        pool.exhausted = pool.exhausted.filter((candidate) => candidate !== credentialId)
+        return
+      }
+      const now = Date.now()
+      credential.exhaustedAt = new Date(now).toISOString()
+      credential.exhaustedUntil = resolveExhaustedUntil(blockedUntil, now)
+      pool.exhausted = [...new Set([...pool.exhausted, credentialId])]
+    })
+    return this.listPoolCredentials(poolProvider)
+  }
+
+  async markPoolCredentialAuthBroken(
+    provider: AgentType,
+    id: string,
+    reason = 'Provider authentication is required',
+  ): Promise<CredentialPoolView> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const credentialId = requireCredentialId(id)
+    await this.mutate((store) => {
+      const credential = getMutableCredentialPool(store, poolProvider).credentials[credentialId]
+      if (!credential) {
+        throw new Error(`Credential "${credentialId}" is not registered for ${poolProvider}`)
+      }
+      credential.authBrokenAt = new Date().toISOString()
+      credential.authBrokenReason = reason.trim().slice(0, 500)
+    })
+    return this.listPoolCredentials(poolProvider)
+  }
+
+  async clearPoolCredentialAuthBroken(
+    provider: AgentType,
+    id: string,
+  ): Promise<CredentialPoolView> {
+    const poolProvider = requireCredentialPoolProvider(provider)
+    const credentialId = requireCredentialId(id)
+    await this.mutate((store) => {
+      const credential = getMutableCredentialPool(store, poolProvider).credentials[credentialId]
+      if (!credential) {
+        throw new Error(`Credential "${credentialId}" is not registered for ${poolProvider}`)
+      }
+      clearCredentialAuthBroken(credential)
+    })
+    return this.listPoolCredentials(poolProvider)
+  }
+
+  async hasValidPoolCredentialLogin(
+    provider: CredentialPoolProvider,
+    id: string,
+  ): Promise<boolean> {
+    const credentialId = requireCredentialId(id)
+    const store = await this.read()
+    const pool = getMutableCredentialPool(store, provider)
+    const credential = pool.credentials[credentialId]
+    if (!credential) {
+      return false
+    }
+    const absoluteDir = this.resolveCredentialPoolDir(credential.dir)
+    return provider === 'claude'
+      ? hasValidClaudeLoginAuth(path.join(absoluteDir, '.credentials.json'))
+      : hasNonEmptyFile(path.join(absoluteDir, 'auth.json'))
+  }
+
   async removePoolCredential(provider: AgentType, id: string): Promise<CredentialPoolView> {
     const poolProvider = requireCredentialPoolProvider(provider)
     const credentialId = requireCredentialId(id)
@@ -878,6 +1334,9 @@ export class ProviderAuthStore {
       if (!credential) {
         throw new Error(`Credential "${credentialId}" is not registered for ${poolProvider}`)
       }
+      if (poolProvider === 'claude' && pool.installedGlobalClaude?.credentialId === credentialId) {
+        throw new Error('Activate another global Claude credential before removing this one')
+      }
       dir = credential.dir
       delete pool.credentials[credentialId]
       pool.exhausted = pool.exhausted.filter((entry) => entry !== credentialId)
@@ -885,6 +1344,9 @@ export class ProviderAuthStore {
         const exhausted = exhaustedIds(pool)
         pool.active = orderedCredentials(pool).find((entry) => !exhausted.has(entry.id))?.id
           ?? firstCredentialId(pool)
+      }
+      if (pool.installedGlobalClaude?.credentialId === credentialId) {
+        delete pool.installedGlobalClaude
       }
       if (Object.keys(pool.credentials).length === 0) {
         delete store.credentialPools?.[poolProvider]
@@ -896,7 +1358,11 @@ export class ProviderAuthStore {
     return this.listPoolCredentials(poolProvider)
   }
 
-  async markPoolCredentialUsed(provider: AgentType, id: string): Promise<void> {
+  async markPoolCredentialUsed(
+    provider: AgentType,
+    id: string,
+    options: { setActive?: boolean } = {},
+  ): Promise<void> {
     const poolProvider = requireCredentialPoolProvider(provider)
     const credentialId = requireCredentialId(id)
     await this.mutate((store) => {
@@ -905,7 +1371,9 @@ export class ProviderAuthStore {
       if (!credential) {
         throw new Error(`Credential "${credentialId}" is not registered for ${poolProvider}`)
       }
-      pool.active = credentialId
+      if (options.setActive !== false) {
+        pool.active = credentialId
+      }
       clearCredentialExhaustion(credential)
       pool.exhausted = pool.exhausted.filter((entry) => entry !== credentialId)
       credential.lastUsedAt = new Date().toISOString()
@@ -935,11 +1403,20 @@ export class ProviderAuthStore {
     const exhausted = exhaustedIds(pool)
     const active = pool.active && pool.credentials[pool.active] ? pool.active : firstCredentialId(pool)
     const credentials = await Promise.all(orderedCredentials(pool).map(async (credential): Promise<CredentialPoolCredentialInternalView> => {
-      const readiness = await readCredentialPoolCredentialReadiness(
+      const discoveredReadiness = await readCredentialPoolCredentialReadiness(
         provider,
         this.resolveCredentialPoolCredentialDir(credential),
         credential.remoteToken,
       )
+      const readiness = credential.authBrokenAt
+        ? {
+            ...discoveredReadiness,
+            local: 'auth_required' as const,
+            remote: provider === 'claude' ? 'auth_required' as const : discoveredReadiness.remote,
+            readyLocal: false,
+            readyRemote: provider === 'claude' ? false : discoveredReadiness.readyRemote,
+          }
+        : discoveredReadiness
       const { remoteToken, remoteHomeKey, ...publicCredential } = credential
       const isExhausted = exhausted.has(credential.id)
       const isReady = readiness.readyLocal
@@ -1001,6 +1478,36 @@ export class ProviderAuthStore {
     this.queue = next.catch(() => undefined)
     await next
   }
+
+  private async mutateClaudeGlobal<T>(
+    env: NodeJS.ProcessEnv,
+    mutator: (
+      store: PersistedProviderAuthStore,
+    ) => Promise<{ result: T; rollback?: ClaudeGlobalActivationRollback }>,
+  ): Promise<T> {
+    const next = this.queue.then(() => withClaudeGlobalSwitchLock(env, async () => {
+      const store = await this.read()
+      const mutation = await mutator(store)
+      try {
+        await this.write(store)
+      } catch (error) {
+        if (mutation.rollback) {
+          try {
+            await rollbackClaudeGlobalActivation(mutation.rollback)
+          } catch (rollbackError) {
+            throw new ClaudeGlobalCredentialStateError(
+              'Global Claude activation state commit failed and auth rollback failed',
+              { cause: rollbackError },
+            )
+          }
+        }
+        throw error
+      }
+      return mutation.result
+    }))
+    this.queue = next.then(() => undefined, () => undefined)
+    return next
+  }
 }
 
 function requireCredentialPoolProvider(provider: AgentType): CredentialPoolProvider {
@@ -1032,6 +1539,24 @@ function getMutableCredentialPool(
 
 function providerHost(machine: MachineConfig | undefined): string {
   return machine?.id?.trim() || 'local'
+}
+
+export function resolveCredentialPoolRuntimeMode(
+  provider: CredentialPoolProvider,
+  host?: string,
+): CredentialPoolRuntimeMode {
+  const targetHost = host?.trim() || 'local'
+  return provider === 'claude' && targetHost === 'local'
+    ? 'global-continuity'
+    : 'isolated-runtime'
+}
+
+export function shouldClearResumeProviderContextForCredentialPoolRecovery(
+  provider: CredentialPoolProvider,
+  host?: string,
+  credentialPoolMode?: CredentialPoolRuntimeMode,
+): boolean {
+  return (credentialPoolMode ?? resolveCredentialPoolRuntimeMode(provider, host)) !== 'global-continuity'
 }
 
 export function resolveProviderAuthScopeId(creator: { id?: string; kind?: string } | undefined): string {
@@ -1113,6 +1638,517 @@ function credentialPoolEnv(provider: CredentialPoolProvider, absoluteDir: string
     : { CODEX_HOME: absoluteDir }
 }
 
+function resolveClaudeGlobalConfigDir(env: NodeJS.ProcessEnv): string {
+  const configured = env[HERD_CLAUDE_GLOBAL_CONFIG_DIR]?.trim()
+  return path.resolve(configured && configured.length > 0
+    ? configured
+    : path.join(env.HOME?.trim() || homedir(), '.claude'))
+}
+
+function resolveClaudeGlobalStateFile(env: NodeJS.ProcessEnv): string {
+  const configured = env[HERD_CLAUDE_GLOBAL_CONFIG_DIR]?.trim()
+  return configured
+    ? path.join(path.dirname(path.resolve(configured)), '.claude.json')
+    : path.join(env.HOME?.trim() || homedir(), '.claude.json')
+}
+
+export function scrubClaudeAuthOverrideEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized = { ...env }
+  for (const key of CLAUDE_GLOBAL_AUTH_OVERRIDE_KEYS) {
+    delete sanitized[key]
+  }
+  return sanitized
+}
+
+function sanitizedClaudeOauthEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized = scrubClaudeAuthOverrideEnv(env)
+  const configured = env[HERD_CLAUDE_GLOBAL_CONFIG_DIR]?.trim()
+  if (configured) {
+    sanitized.CLAUDE_CONFIG_DIR = path.resolve(configured)
+  } else {
+    delete sanitized.CLAUDE_CONFIG_DIR
+  }
+  return sanitized
+}
+
+export const resolveClaudeAccountIdFromProfile: ClaudeAccountIdentityResolver = async (
+  accessToken,
+) => {
+  const token = accessToken.trim()
+  if (!token) {
+    return undefined
+  }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CLAUDE_PROFILE_TIMEOUT_MS)
+  try {
+    const response = await fetch(CLAUDE_PROFILE_ENDPOINT, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+        'User-Agent': 'claude-code',
+      },
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined)
+      return undefined
+    }
+    const declaredLength = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > CLAUDE_PROFILE_MAX_RESPONSE_BYTES) {
+      await response.body?.cancel().catch(() => undefined)
+      return undefined
+    }
+    const text = await response.text()
+    if (Buffer.byteLength(text, 'utf8') > CLAUDE_PROFILE_MAX_RESPONSE_BYTES) {
+      return undefined
+    }
+    const parsed = JSON.parse(text) as unknown
+    if (!isObject(parsed) || !isObject(parsed.account)) {
+      return undefined
+    }
+    return asTrimmedString(parsed.account.uuid)
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export const validateClaudeGlobalAuthWithCli: ClaudeGlobalAuthValidator = async (env) => (
+  new Promise<ClaudeGlobalAuthStatus>((resolve, reject) => {
+    execFile(
+      'claude',
+      ['auth', 'status', '--json'],
+      {
+        env: sanitizedClaudeOauthEnv(env),
+        timeout: CLAUDE_AUTH_STATUS_TIMEOUT_MS,
+        maxBuffer: 64 * 1024,
+        windowsHide: true,
+      },
+      (error, stdout) => {
+        if (error) {
+          reject(new Error('Claude global authentication validation failed'))
+          return
+        }
+        try {
+          const parsed = JSON.parse(stdout) as unknown
+          if (!isObject(parsed)) {
+            throw new Error('invalid response')
+          }
+          resolve({
+            loggedIn: parsed.loggedIn === true,
+            ...(asTrimmedString(parsed.authMethod) ? { authMethod: asTrimmedString(parsed.authMethod) } : {}),
+            ...(asTrimmedString(parsed.email) ? { email: asTrimmedString(parsed.email) } : {}),
+            ...(asTrimmedString(parsed.orgId) ? { orgId: asTrimmedString(parsed.orgId) } : {}),
+            ...(asTrimmedString(parsed.subscriptionType)
+              ? { subscriptionType: asTrimmedString(parsed.subscriptionType) }
+              : {}),
+          })
+        } catch {
+          reject(new Error('Claude global authentication validation returned invalid JSON'))
+        }
+      },
+    )
+  })
+)
+
+interface PrivateFileSnapshot {
+  path: string
+  existed: boolean
+  contents?: Buffer
+}
+
+async function snapshotPrivateFile(filePath: string): Promise<PrivateFileSnapshot> {
+  try {
+    return { path: filePath, existed: true, contents: await readFile(filePath) }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return { path: filePath, existed: false }
+    }
+    throw error
+  }
+}
+
+async function restorePrivateFile(snapshot: PrivateFileSnapshot): Promise<void> {
+  if (!snapshot.existed) {
+    await rm(snapshot.path, { force: true })
+    return
+  }
+  await atomicWritePrivateFile(snapshot.path, snapshot.contents ?? Buffer.alloc(0))
+}
+
+async function stripClaudeOauthAccount(env: NodeJS.ProcessEnv): Promise<void> {
+  const stateFile = resolveClaudeGlobalStateFile(env)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(stateFile, 'utf8')) as unknown
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return
+    }
+    throw new Error('Global Claude account state has invalid JSON')
+  }
+  if (!isObject(parsed) || !Object.prototype.hasOwnProperty.call(parsed, 'oauthAccount')) {
+    return
+  }
+  delete parsed.oauthAccount
+  await atomicWritePrivateFile(stateFile, `${JSON.stringify(parsed, null, 2)}\n`)
+}
+
+async function assertNoClaudeSettingsAuthOverride(env: NodeJS.ProcessEnv): Promise<void> {
+  const settingsFile = path.join(resolveClaudeGlobalConfigDir(env), 'settings.json')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(settingsFile, 'utf8')) as unknown
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return
+    }
+    throw new Error('Global Claude settings file has invalid JSON')
+  }
+  const settingsEnv = isObject(parsed) && isObject(parsed.env) ? parsed.env : undefined
+  const shadowingKey = CLAUDE_GLOBAL_AUTH_OVERRIDE_KEYS.find((key) => (
+    settingsEnv && asTrimmedString(settingsEnv[key])
+  ))
+  if (shadowingKey) {
+    throw new Error(`Global Claude settings override ${shadowingKey}; remove it before OAuth activation`)
+  }
+}
+
+async function withClaudeGlobalSwitchLock<T>(
+  env: NodeJS.ProcessEnv,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const configDir = resolveClaudeGlobalConfigDir(env)
+  await mkdir(configDir, { recursive: true, mode: 0o700 })
+  const lockDir = path.join(configDir, '.herd-global-switch.lock')
+  const deadline = Date.now() + CLAUDE_GLOBAL_LOCK_TIMEOUT_MS
+  while (true) {
+    try {
+      await mkdir(lockDir, { mode: 0o700 })
+      try {
+        await atomicWritePrivateFile(
+          path.join(lockDir, 'owner.json'),
+          `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`,
+        )
+      } catch (error) {
+        await rm(lockDir, { recursive: true, force: true })
+        throw error
+      }
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error
+      }
+      const lockStat = await stat(lockDir).catch(() => null)
+      if (lockStat && Date.now() - lockStat.mtimeMs > CLAUDE_GLOBAL_LOCK_STALE_MS) {
+        await rm(lockDir, { recursive: true, force: true })
+        continue
+      }
+      if (Date.now() >= deadline) {
+        throw new Error('Timed out waiting for the global Claude credential switch lock')
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+    }
+  }
+  try {
+    return await operation()
+  } finally {
+    await rm(lockDir, { recursive: true, force: true })
+  }
+}
+
+function hashClaudeOauth(value: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+async function readClaudeCredentialRecord(
+  filePath: string,
+): Promise<{ record: Record<string, unknown>; oauth: Record<string, unknown> }> {
+  const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown
+  if (!isObject(parsed) || !isObject(parsed.claudeAiOauth)) {
+    throw new Error('missing Claude OAuth data')
+  }
+  return { record: parsed, oauth: parsed.claudeAiOauth }
+}
+
+function validClaudeOauth(value: Record<string, unknown>): boolean {
+  const accessToken = asTrimmedString(value.accessToken)
+  const refreshToken = asTrimmedString(value.refreshToken)
+  const expiresAt = typeof value.expiresAt === 'number'
+    ? value.expiresAt
+    : Number.parseInt(asTrimmedString(value.expiresAt) ?? '', 10)
+  return Boolean(
+    accessToken
+    && refreshToken
+    && Number.isFinite(expiresAt)
+    && expiresAt > 0,
+  )
+}
+
+async function hasValidClaudeLoginAuth(filePath: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(filePath)
+    if (!fileStat.isFile() || fileStat.size <= 0 || fileStat.size > 1024 * 1024) {
+      return false
+    }
+    const parsed = await readClaudeCredentialRecord(filePath)
+    return validClaudeOauth(parsed.oauth)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR' || error instanceof SyntaxError) {
+      return false
+    }
+    if (error instanceof Error && error.message === 'missing Claude OAuth data') {
+      return false
+    }
+    throw error
+  }
+}
+
+async function writeClaudeCredentialRecord(
+  targetDir: string,
+  record: Record<string, unknown>,
+): Promise<void> {
+  await mkdir(targetDir, { recursive: true, mode: 0o700 })
+  await chmod(targetDir, 0o700)
+  const target = path.join(targetDir, '.credentials.json')
+  const contents = JSON.stringify(record, null, 2) + '\n'
+  await atomicWritePrivateFile(target, contents)
+}
+
+async function synchronizeClaudeGlobalRefreshToPool(
+  credential: CredentialPoolCredentialInternalView,
+  installedOauthHash: string,
+  env: NodeJS.ProcessEnv,
+  resolveAccountId: ClaudeAccountIdentityResolver,
+): Promise<{
+  oauthHash: string
+  accountId?: string
+  synchronized: boolean
+  missingGlobalAuth?: boolean
+  staleGlobalAuth?: boolean
+}> {
+  const globalFile = path.join(resolveClaudeGlobalConfigDir(env), '.credentials.json')
+  let globalCredential: Awaited<ReturnType<typeof readClaudeCredentialRecord>>
+  try {
+    globalCredential = await readClaudeCredentialRecord(globalFile)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return { oauthHash: installedOauthHash, synchronized: false, missingGlobalAuth: true }
+    }
+    if (error instanceof Error && error.message === 'missing Claude OAuth data') {
+      return { oauthHash: installedOauthHash, synchronized: false, missingGlobalAuth: true }
+    }
+    throw new Error('Global Claude credential file has invalid JSON')
+  }
+  const globalOauthHash = hashClaudeOauth(globalCredential.oauth)
+  const poolFile = path.join(credential.absoluteDir, '.credentials.json')
+  let poolCredential: Awaited<ReturnType<typeof readClaudeCredentialRecord>>
+  try {
+    poolCredential = await readClaudeCredentialRecord(poolFile)
+  } catch {
+    throw new Error('Claude credential pool "' + credential.label + '" has invalid login auth')
+  }
+  if (!validClaudeOauth(globalCredential.oauth) || !validClaudeOauth(poolCredential.oauth)) {
+    throw new Error('Global Claude credential lineage contains invalid login auth')
+  }
+  const poolOauthHash = hashClaudeOauth(poolCredential.oauth)
+  if (globalOauthHash === poolOauthHash) {
+    return {
+      oauthHash: globalOauthHash,
+      ...(credential.accountId ? { accountId: credential.accountId } : {}),
+      synchronized: false,
+    }
+  }
+  const globalAccessToken = asTrimmedString(globalCredential.oauth.accessToken)
+  const globalRefreshToken = asTrimmedString(globalCredential.oauth.refreshToken)
+  const poolAccessToken = asTrimmedString(poolCredential.oauth.accessToken)
+  const poolRefreshToken = asTrimmedString(poolCredential.oauth.refreshToken)
+  const sharesExactToken = Boolean(
+    (globalAccessToken && globalAccessToken === poolAccessToken)
+    || (globalRefreshToken && globalRefreshToken === poolRefreshToken),
+  )
+  const resolvedPoolAccountId = poolAccessToken
+    ? await resolveAccountId(poolAccessToken)
+    : undefined
+  const poolAccountId = resolvedPoolAccountId
+    ?? (poolOauthHash === installedOauthHash ? credential.accountId : undefined)
+  const resolvedGlobalAccountId = !sharesExactToken && globalAccessToken
+    ? await resolveAccountId(globalAccessToken)
+    : undefined
+  const globalAccountId = sharesExactToken
+    ? poolAccountId
+    : resolvedGlobalAccountId
+      ?? (globalOauthHash === installedOauthHash ? credential.accountId : undefined)
+  if (!sharesExactToken && (!poolAccountId || !globalAccountId || poolAccountId !== globalAccountId)) {
+    throw new ClaudeForeignGlobalLoginError(
+      'Global Claude login differs from the configured active account; re-authenticate the active pool credential before switching',
+    )
+  }
+  const globalExpiresAt = Number(globalCredential.oauth.expiresAt)
+  const poolExpiresAt = Number(poolCredential.oauth.expiresAt)
+  if (!(globalExpiresAt > poolExpiresAt)) {
+    return {
+      oauthHash: installedOauthHash,
+      ...(poolAccountId ? { accountId: poolAccountId } : {}),
+      synchronized: false,
+      staleGlobalAuth: true,
+    }
+  }
+  await writeClaudeCredentialRecord(credential.absoluteDir, {
+    ...poolCredential.record,
+    claudeAiOauth: globalCredential.oauth,
+  })
+  return {
+    oauthHash: globalOauthHash,
+    ...(poolAccountId ? { accountId: poolAccountId } : {}),
+    synchronized: true,
+  }
+}
+
+interface ClaudeGlobalActivationRollback {
+  credentialFile: PrivateFileSnapshot
+  stateFile: PrivateFileSnapshot
+}
+
+export class ClaudeGlobalCredentialStateError extends Error {
+  readonly fatal = true
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'ClaudeGlobalCredentialStateError'
+  }
+}
+
+export class ClaudeGlobalAuthValidationError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'ClaudeGlobalAuthValidationError'
+  }
+}
+
+function assertClaudeGlobalAuthValidation(
+  credential: Pick<CredentialPoolCredentialInternalView, 'email'>,
+  validation: ClaudeGlobalAuthStatus,
+): void {
+  if (
+    !validation.loggedIn
+    || (
+      validation.authMethod
+      && !['claude.ai', 'oauth'].includes(validation.authMethod.toLowerCase())
+    )
+    || (
+      credential.email
+      && validation.email
+      && credential.email.toLowerCase() !== validation.email.toLowerCase()
+    )
+  ) {
+    throw new Error('Claude global authentication validation did not confirm the selected account')
+  }
+}
+
+async function rollbackClaudeGlobalActivation(
+  rollback: ClaudeGlobalActivationRollback,
+): Promise<void> {
+  await restorePrivateFile(rollback.credentialFile)
+  await restorePrivateFile(rollback.stateFile)
+}
+
+async function activateClaudeGlobalCredential(
+  credential: CredentialPoolCredentialInternalView,
+  env: NodeJS.ProcessEnv,
+  validateGlobalAuth?: ClaudeGlobalAuthValidator,
+): Promise<{
+  targetDir: string
+  oauthHash: string
+  rollback: ClaudeGlobalActivationRollback
+  validation?: ClaudeGlobalAuthStatus
+}> {
+  const source = path.join(credential.absoluteDir, '.credentials.json')
+  if (!(await hasValidClaudeLoginAuth(source))) {
+    throw new Error(`Claude credential pool "${credential.label}" is missing login auth`)
+  }
+
+  let sourceOauth: Record<string, unknown>
+  try {
+    const parsed = await readClaudeCredentialRecord(source)
+    sourceOauth = parsed.oauth
+  } catch {
+    throw new Error('Claude credential pool "' + credential.label + '" has invalid login auth')
+  }
+  const targetDir = resolveClaudeGlobalConfigDir(env)
+  const target = path.join(targetDir, '.credentials.json')
+  const stateFile = resolveClaudeGlobalStateFile(env)
+  let targetRecord: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(await readFile(target, 'utf8')) as unknown
+    if (isObject(parsed)) {
+      targetRecord = parsed
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      if (error instanceof SyntaxError) {
+        throw new Error('Global Claude credential file has invalid JSON')
+      }
+      throw error
+    }
+  }
+  await assertNoClaudeSettingsAuthOverride(env)
+  const rollback: ClaudeGlobalActivationRollback = {
+    credentialFile: await snapshotPrivateFile(target),
+    stateFile: await snapshotPrivateFile(stateFile),
+  }
+  try {
+    await writeClaudeCredentialRecord(targetDir, {
+      ...targetRecord,
+      claudeAiOauth: sourceOauth,
+    })
+    await stripClaudeOauthAccount(env)
+    let validation: ClaudeGlobalAuthStatus | undefined
+    if (validateGlobalAuth) {
+      try {
+        validation = await validateGlobalAuth(env)
+      } catch (error) {
+        throw new ClaudeGlobalAuthValidationError(
+          'Claude global authentication validation failed',
+          { cause: error },
+        )
+      }
+      try {
+        assertClaudeGlobalAuthValidation(credential, validation)
+      } catch (error) {
+        throw new ClaudeGlobalAuthValidationError(
+          'Claude global authentication validation did not confirm the selected account',
+          { cause: error },
+        )
+      }
+    }
+    return {
+      targetDir,
+      oauthHash: hashClaudeOauth(sourceOauth),
+      rollback,
+      ...(validation ? { validation } : {}),
+    }
+  } catch (error) {
+    try {
+      await rollbackClaudeGlobalActivation(rollback)
+    } catch (rollbackError) {
+      throw new ClaudeGlobalCredentialStateError(
+        'Global Claude activation failed and the previous auth state could not be restored',
+        { cause: rollbackError },
+      )
+    }
+    throw error
+  }
+}
+
 export function buildCredentialPoolLoginCommand(
   provider: CredentialPoolProvider,
   absoluteDir: string,
@@ -1139,7 +2175,7 @@ export function buildClaudeCredentialPoolRemoteTokenCommand(absoluteDir: string)
   return {
     command: 'claude',
     args: ['setup-token'],
-    env: { CLAUDE_CONFIG_DIR: absoluteDir },
+    env: credentialPoolEnv('claude', absoluteDir),
     display: `CLAUDE_CONFIG_DIR=${quotedDir} claude setup-token`,
   }
 }
@@ -1169,9 +2205,14 @@ export async function resolveReadyHostManagedPoolCredential(args: {
   }
   const provider = args.provider
   const pool = await args.store.listPoolCredentials(provider)
-  const credential = pool.credentials.find((candidate) => (
+  const active = pool.credentials.find((candidate) => (
     candidate.id === pool.active && isReadyPoolCredentialForHost(provider, candidate, args.host)
-  )) ?? pool.credentials.find((candidate) => isReadyPoolCredentialForHost(provider, candidate, args.host))
+  ))
+  const credential = provider === 'claude' && args.host === 'local'
+    ? active
+    : active ?? pool.credentials.find((candidate) => (
+        isReadyPoolCredentialForHost(provider, candidate, args.host)
+      ))
   return credential ? { ready: true, credentialId: credential.id } : { ready: false }
 }
 
@@ -1243,6 +2284,8 @@ async function credentialPoolSpawnEnv(args: {
   host: string
   store: ProviderAuthStore
   credential: CredentialPoolCredentialInternalView
+  credentialPoolMode: CredentialPoolRuntimeMode
+  activateCredential: boolean
   env: NodeJS.ProcessEnv
 }): Promise<NodeJS.ProcessEnv> {
   if (args.host !== 'local') {
@@ -1305,6 +2348,18 @@ async function credentialPoolSpawnEnv(args: {
     await args.store.upsertSnapshot(snapshot)
     throw new ProviderAuthRequiredError(args.provider, snapshot, snapshot.detail)
   }
+  if (args.credentialPoolMode === 'global-continuity') {
+    if (args.activateCredential) {
+      await activateClaudeGlobalCredential(args.credential, args.env)
+    }
+    return {
+      CLAUDE_CONFIG_DIR: undefined,
+      ANTHROPIC_API_KEY: undefined,
+      ANTHROPIC_AUTH_TOKEN: undefined,
+      ANTHROPIC_BASE_URL: undefined,
+      CLAUDE_CODE_OAUTH_TOKEN: undefined,
+    }
+  }
   return poolEnv
 }
 
@@ -1327,7 +2382,7 @@ export async function readCredentialPoolCredentialReadiness(
   remoteToken?: string,
 ): Promise<CredentialPoolCredentialReadiness> {
   const local = provider === 'claude'
-    ? (await hasNonEmptyFile(path.join(absoluteDir, '.credentials.json')) ? 'ready' : 'auth_required')
+    ? (await hasValidClaudeLoginAuth(path.join(absoluteDir, '.credentials.json')) ? 'ready' : 'auth_required')
     : (await hasNonEmptyFile(path.join(absoluteDir, 'auth.json')) ? 'ready' : 'auth_required')
   const readyLocal = local === 'ready'
   const token = asTrimmedString(remoteToken)
@@ -1634,6 +2689,7 @@ export async function prepareProviderSpawnAuth(args: {
   env?: NodeJS.ProcessEnv
   codexHome?: string
   credentialPoolId?: string
+  credentialPoolMode?: CredentialPoolRuntimeMode
   fetchImpl?: typeof fetch
   nowMs?: number
   mode?: 'spawn' | 'probe'
@@ -1647,10 +2703,19 @@ export async function prepareProviderSpawnAuth(args: {
     ? normalizeCodexHome(args.codexHome)
     : undefined
   const baseEnv = codexHome ? { ...env, CODEX_HOME: codexHome } : env
-  const requestedPoolCredential = isCredentialPoolProvider(args.provider) && args.credentialPoolId
-    ? await args.store.getPoolCredentialForSpawn(args.provider, args.credentialPoolId)
+  const localClaude = args.provider === 'claude' && host === 'local'
+  const isolatedLocalClaude = localClaude && (
+    args.credentialPoolMode === 'isolated-runtime'
+    || (mode === 'probe' && Boolean(args.credentialPoolId))
+  )
+  const localClaudeUsesGlobalCredential = localClaude && !isolatedLocalClaude
+  const requestedCredentialPoolId = localClaudeUsesGlobalCredential
+    ? undefined
+    : args.credentialPoolId
+  const requestedPoolCredential = isCredentialPoolProvider(args.provider) && requestedCredentialPoolId
+    ? await args.store.getPoolCredentialForSpawn(args.provider, requestedCredentialPoolId)
     : null
-  if (isCredentialPoolProvider(args.provider) && args.credentialPoolId && !requestedPoolCredential) {
+  if (isCredentialPoolProvider(args.provider) && requestedCredentialPoolId && !requestedPoolCredential) {
     const snapshot = buildSnapshot(
       args.provider,
       args.scopeId,
@@ -1704,6 +2769,7 @@ export async function prepareProviderSpawnAuth(args: {
         snapshot,
         env: { CODEX_HOME: codexHome, ...loginEnv },
         ...(requestedPoolCredential ? { credentialPoolId: requestedPoolCredential.id } : {}),
+        ...(requestedPoolCredential ? { credentialPoolMode: 'isolated-runtime' } : {}),
       }
     }
     if (requestedPoolCredential) {
@@ -1722,6 +2788,11 @@ export async function prepareProviderSpawnAuth(args: {
 
   if (isCredentialPoolProvider(args.provider) && !codexHome) {
     const poolProvider = args.provider
+    const credentialPoolMode = localClaudeUsesGlobalCredential
+      ? 'global-continuity'
+      : isolatedLocalClaude
+        ? 'isolated-runtime'
+        : args.credentialPoolMode ?? resolveCredentialPoolRuntimeMode(poolProvider, host)
     const pool = await args.store.listPoolCredentialsForSpawn(poolProvider)
     const requestedReady = requestedPoolCredential
       ? isReadyPoolCredentialForHost(poolProvider, requestedPoolCredential, host)
@@ -1737,9 +2808,15 @@ export async function prepareProviderSpawnAuth(args: {
     }
     const usePool = Boolean(requestedPoolCredential) || !isRemoteClaudePoolWithoutTokens(poolProvider, pool, host)
     if (usePool) {
-      const fallbackCredential = pool.credentials.find((candidate) => candidate.id === pool.active && isReadyPoolCredentialForHost(poolProvider, candidate, host))
-        ?? pool.credentials.find((candidate) => isReadyPoolCredentialForHost(poolProvider, candidate, host))
-        ?? null
+      const activeCredential = pool.credentials.find((candidate) => (
+        candidate.id === pool.active
+        && isReadyPoolCredentialForHost(poolProvider, candidate, host)
+      ))
+      const fallbackCredential = localClaudeUsesGlobalCredential
+        ? activeCredential ?? null
+        : activeCredential
+          ?? pool.credentials.find((candidate) => isReadyPoolCredentialForHost(poolProvider, candidate, host))
+          ?? null
       const credential = requestedPoolCredential
         ? requestedPoolCredential
         : fallbackCredential
@@ -1771,10 +2848,14 @@ export async function prepareProviderSpawnAuth(args: {
           host,
           store: args.store,
           credential,
+          credentialPoolMode,
+          activateCredential: mode !== 'probe' && !localClaudeUsesGlobalCredential,
           env,
         })
-        if (mode !== 'probe' && host === 'local') {
-          await args.store.markPoolCredentialUsed(poolProvider, credential.id)
+        if (mode !== 'probe' && host === 'local' && !localClaudeUsesGlobalCredential) {
+          await args.store.markPoolCredentialUsed(poolProvider, credential.id, {
+            setActive: !(poolProvider === 'claude' && credentialPoolMode === 'isolated-runtime'),
+          })
         }
         const snapshot = buildSnapshot(
           args.provider,
@@ -1795,6 +2876,7 @@ export async function prepareProviderSpawnAuth(args: {
           snapshot,
           env: spawnEnv,
           credentialPoolId: credential.id,
+          credentialPoolMode,
         }
       }
     }

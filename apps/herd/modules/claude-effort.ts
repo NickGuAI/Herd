@@ -1,4 +1,4 @@
-export const CLAUDE_EFFORT_LEVELS = ['low', 'medium', 'high', 'max'] as const
+export const CLAUDE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number]
 

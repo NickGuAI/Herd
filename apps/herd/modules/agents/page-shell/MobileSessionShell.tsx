@@ -25,8 +25,9 @@ import { useProviderRegistry } from '@/hooks/use-providers'
 import { cn, formatCost } from '@/lib/utils'
 import { ConfirmModal } from '@modules/components/ConfirmModal'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
-import type { AgentType, ProviderModelOption, ProviderRegistryEntry, SessionQueueSnapshot } from '@/types'
+import type { AgentType, ProviderRegistryEntry, SessionQueueSnapshot } from '@/types'
 import type { PendingApproval } from '@/hooks/use-approvals'
+import type { AgentEffortLevel } from '@modules/agents/effort.js'
 import Transcript from '@modules/agents/components/Transcript'
 import ApprovalCard from '@modules/approvals/ApprovalCard'
 import {
@@ -36,7 +37,16 @@ import {
   type SessionComposerSubmitPayload,
 } from '@modules/agents/components/SessionComposer'
 import type { MsgItem } from '@modules/agents/messages/model'
-import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type { ClaudeAdaptiveThinkingMode } from '@modules/claude-adaptive-thinking.js'
+import { useConversationRuntimeSettings } from '@modules/conversation/hooks/use-conversation-runtime-settings'
+import {
+  canSelectConversationCredential,
+  CredentialPoolSelect,
+} from '@modules/conversation/components/CredentialPoolSelect'
+import type {
+  ConversationRecord,
+  ConversationRuntimeSettingsUpdate,
+} from '@modules/conversation/hooks/use-conversations'
 import type { WorkspacePendingFileAnnotation } from '@modules/workspace/use-workspace'
 import { StreamingDots } from './StreamingDots'
 import { SessionApprovalsButton } from './SessionApprovalsButton'
@@ -50,6 +60,7 @@ export interface WorkerBadge {
 
 export interface MobileSessionShellProps {
   sessionName: string
+  sessionHost?: string
   sessionLabel: string
   chatLabel?: string
   agentType?: AgentType
@@ -120,10 +131,9 @@ export interface MobileSessionShellProps {
   onStartConversation?: (conversationId: string) => void | Promise<void>
   onStopConversation?: (conversationId: string) => void | Promise<void>
   onRenameConversation?: (conversationId: string, name: string) => void | Promise<void>
-  onSwapConversationProvider?: (
+  onUpdateConversationRuntimeSettings?: (
     conversationId: string,
-    agentType: AgentType,
-    model: string | null,
+    settings: ConversationRuntimeSettingsUpdate,
   ) => void | Promise<void>
   onArchiveConversation?: (conversationId: string) => void | Promise<void>
   onRemoveConversation?: (conversationId: string) => void | Promise<void>
@@ -131,7 +141,7 @@ export interface MobileSessionShellProps {
   belowHeader?: ReactNode
 }
 
-type ConversationProviderOption = Pick<ProviderRegistryEntry, 'id' | 'label' | 'availableModels'>
+type ConversationProviderOption = ProviderRegistryEntry
 
 function hasConversationAction(
   conversation: ConversationRecord | null | undefined,
@@ -168,6 +178,7 @@ function resolveConversationLifecycleAction(
 
 export function MobileSessionShell({
   sessionName,
+  sessionHost,
   sessionLabel,
   chatLabel,
   agentType,
@@ -222,7 +233,7 @@ export function MobileSessionShell({
   onStartConversation,
   onStopConversation,
   onRenameConversation,
-  onSwapConversationProvider,
+  onUpdateConversationRuntimeSettings,
   onArchiveConversation,
   onRemoveConversation,
   headerAccessory,
@@ -238,8 +249,6 @@ export function MobileSessionShell({
   const [renameConversationOpen, setRenameConversationOpen] = useState(false)
   const [renameConversationDraft, setRenameConversationDraft] = useState('')
   const [conversationActionBusy, setConversationActionBusy] = useState<string | null>(null)
-  const [conversationProviderDraft, setConversationProviderDraft] = useState<AgentType | ''>('')
-  const [conversationModelDraft, setConversationModelDraft] = useState('')
   const shellRef = useRef<HTMLElement>(null)
   const composerRef = useRef<SessionComposerHandle>(null)
   const emptyStateActive = Boolean(emptyState) && !composerEnabled
@@ -266,26 +275,28 @@ export function MobileSessionShell({
     ? '\u2318K'
     : 'Ctrl+K'
   const workerCount = workers?.length ?? 0
-  const { data: providers = [] } = useProviderRegistry()
+  const {
+    data: providers = [],
+    refreshModels,
+    refreshingProviderId,
+  } = useProviderRegistry()
   const providerOptions: ConversationProviderOption[] = useMemo(
-    () => providers.length > 0
-      ? providers.map((provider) => ({
-        id: provider.id,
-        label: provider.label,
-        availableModels: provider.availableModels,
-      }))
-      : (conversation?.agentType
-        ? [{ id: conversation.agentType, label: conversation.agentType, availableModels: [] }]
-        : []),
+    () => providers,
     [conversation?.agentType, providers],
+  )
+  const runtimeSettings = useConversationRuntimeSettings(
+    conversation,
+    providerOptions,
+    sessionHost,
   )
   const conversationName = conversation?.name?.trim() || (conversation ? `chat ${conversation.id.slice(0, 8)}` : '')
   const lifecycleAction = resolveConversationLifecycleAction(conversation)
   const canResumeConversation = lifecycleAction === 'start' && hasConversationAction(conversation, 'resume')
   const canStartConversation = lifecycleAction === 'start'
   const canStopConversation = lifecycleAction === 'stop'
-  const canEditConversationProviderModel =
-    hasConversationAction(conversation, 'updateProvider') && Boolean(onSwapConversationProvider)
+  const canShowConversationRuntimeSettings = Boolean(
+    conversation?.runtimeSettings && onUpdateConversationRuntimeSettings,
+  )
   const conversationStartState = conversation?.runtimeState ?? conversation?.displayState?.runtimeState ?? null
   const conversationStartError = conversation?.runtimeError ?? conversation?.displayState?.runtimeError ?? null
   const conversationReady = composerEnabled && composerSendReady
@@ -314,22 +325,12 @@ export function MobileSessionShell({
     && !conversationFailedToStart
   )
   const startConversationLabel = canResumeConversation ? 'Resume chat' : 'Start chat'
-  const activeConversationProvider = providerOptions.find(
-    (provider) => provider.id === conversationProviderDraft,
-  ) ?? null
-  const availableConversationModels: readonly ProviderModelOption[] =
-    activeConversationProvider?.availableModels ?? []
-  const providerModelChanged = Boolean(conversationProviderDraft)
-    && (
-      conversationProviderDraft !== (conversation?.agentType ?? '')
-      || conversationModelDraft !== (conversation?.model ?? '')
-    )
   const showConversationDrawerActions = Boolean(
     conversation && (
       canStartConversation
       || canStopConversation
       || onRenameConversation
-      || canEditConversationProviderModel
+      || canShowConversationRuntimeSettings
       || (hasConversationAction(conversation, 'archive') && onArchiveConversation)
       || (hasConversationAction(conversation, 'delete') && onRemoveConversation)
     ),
@@ -339,19 +340,6 @@ export function MobileSessionShell({
     setConfirmRemoveConversationOpen(false)
   }, [conversation?.id])
 
-  useEffect(() => {
-    if (!conversation) {
-      setConversationProviderDraft('')
-      setConversationModelDraft('')
-      return
-    }
-    const nextProvider = conversation.agentType
-      && providerOptions.some((provider) => provider.id === conversation.agentType)
-      ? conversation.agentType
-      : providerOptions[0]?.id ?? conversation.agentType ?? ''
-    setConversationProviderDraft(nextProvider)
-    setConversationModelDraft(conversation.model ?? '')
-  }, [conversation?.agentType, conversation?.id, conversation?.model, providerOptions])
 
   const closeOverflowMenu = useCallback(() => {
     setShowConversationProviderMenu(false)
@@ -481,41 +469,29 @@ export function MobileSessionShell({
     renameConversationDraft,
   ])
 
-  const handleConversationProviderDraftChange = useCallback((provider: AgentType) => {
-    setConversationProviderDraft(provider)
-    const nextModels = providerOptions.find((option) => option.id === provider)?.availableModels ?? []
-    setConversationModelDraft((current) => (
-      current && nextModels.some((option) => option.id === current)
-        ? current
-        : ''
-    ))
-  }, [providerOptions])
-
-  const handleSaveConversationProviderModel = useCallback(async () => {
+  const handleSaveConversationRuntimeSettings = useCallback(async () => {
     if (
       !conversation
-      || !onSwapConversationProvider
-      || !conversationProviderDraft
-      || !providerModelChanged
+      || !onUpdateConversationRuntimeSettings
+      || !runtimeSettings.payload
+      || !runtimeSettings.canSave
     ) {
       return
     }
-    await handleConversationAction('provider-model', async () => {
-      await onSwapConversationProvider(
+    await handleConversationAction('runtime-settings', async () => {
+      await onUpdateConversationRuntimeSettings(
         conversation.id,
-        conversationProviderDraft,
-        conversationModelDraft || null,
+        runtimeSettings.payload!,
       )
       setShowConversationProviderMenu(false)
       setShowOverflowMenu(false)
     })
   }, [
     conversation,
-    conversationModelDraft,
-    conversationProviderDraft,
     handleConversationAction,
-    onSwapConversationProvider,
-    providerModelChanged,
+    onUpdateConversationRuntimeSettings,
+    runtimeSettings.canSave,
+    runtimeSettings.payload,
   ])
 
   const handleArchive = useCallback(async () => {
@@ -876,7 +852,7 @@ export function MobileSessionShell({
                       </button>
                     )}
 
-                    {canEditConversationProviderModel && conversation && (
+                    {canShowConversationRuntimeSettings && conversation && (
                       <>
                         <button
                           type="button"
@@ -885,7 +861,7 @@ export function MobileSessionShell({
                           onClick={() => setShowConversationProviderMenu((current) => !current)}
                           disabled={conversationActionBusy !== null}
                         >
-                          <span>Provider / model</span>
+                          <span>Runtime settings</span>
                           <span className="ml-auto">{showConversationProviderMenu ? '▾' : '▸'}</span>
                         </button>
                         {showConversationProviderMenu && (
@@ -897,41 +873,149 @@ export function MobileSessionShell({
                               <select
                                 className="w-full rounded-md border border-ink-border bg-washi-white px-2 py-2 text-xs normal-case tracking-normal text-sumi-black"
                                 data-testid="mobile-chat-provider-select"
-                                value={conversationProviderDraft}
-                                onChange={(event) =>
-                                  handleConversationProviderDraftChange(event.target.value as AgentType)}
-                                disabled={conversationActionBusy !== null}
+                                value={runtimeSettings.draft?.agentType ?? ''}
+                                onChange={(event) => runtimeSettings.setAgentType(event.target.value as AgentType)}
+                                disabled={conversationActionBusy !== null || !runtimeSettings.settings?.allowed}
                               >
-                                {providerOptions.map((provider) => (
+                                {runtimeSettings.providerOptions.map((provider) => (
                                   <option key={provider.id} value={provider.id}>{provider.label}</option>
                                 ))}
                               </select>
                             </label>
+                            {canSelectConversationCredential(
+                              runtimeSettings.draft?.agentType,
+                              runtimeSettings.targetHost,
+                            ) ? (
+                              <label className="grid gap-1 px-3 text-[10px] uppercase tracking-[0.08em] text-sumi-diluted">
+                                <span>Credential</span>
+                                <CredentialPoolSelect
+                                  provider={runtimeSettings.draft?.agentType}
+                                  host={runtimeSettings.targetHost}
+                                  value={runtimeSettings.selectedCredentialPoolId}
+                                  currentCredentialPoolId={runtimeSettings.currentCredentialPoolId}
+                                  onChange={runtimeSettings.setCredentialPoolId}
+                                  disabled={conversationActionBusy !== null || !runtimeSettings.settings?.allowed}
+                                  dataTestId="mobile-chat-credential-select"
+                                  className="w-full rounded-md border border-ink-border bg-washi-white px-2 py-2 text-xs normal-case tracking-normal text-sumi-black"
+                                />
+                              </label>
+                            ) : null}
                             <label className="grid gap-1 px-3 text-[10px] uppercase tracking-[0.08em] text-sumi-diluted">
                               <span>Model</span>
                               <select
                                 className="w-full rounded-md border border-ink-border bg-washi-white px-2 py-2 text-xs normal-case tracking-normal text-sumi-black"
                                 data-testid="mobile-chat-model-select"
-                                value={conversationModelDraft}
-                                onChange={(event) => setConversationModelDraft(event.target.value)}
-                                disabled={conversationActionBusy !== null}
+                                value={runtimeSettings.selectedModelValue}
+                                onChange={(event) => runtimeSettings.setModel(event.target.value || null)}
+                                disabled={conversationActionBusy !== null || !runtimeSettings.settings?.allowed}
                               >
                                 <option value="">Adapter default</option>
-                                {availableConversationModels.map((model) => (
+                                {runtimeSettings.modelOptions.map((model) => (
                                   <option key={model.id} value={model.id}>{model.label}</option>
                                 ))}
                               </select>
                             </label>
+                            {runtimeSettings.supportsEffort && (
+                              <label className="grid gap-1 px-3 text-[10px] uppercase tracking-[0.08em] text-sumi-diluted">
+                                <span>Effort</span>
+                                <select
+                                  className="w-full rounded-md border border-ink-border bg-washi-white px-2 py-2 text-xs normal-case tracking-normal text-sumi-black"
+                                  data-testid="mobile-chat-effort-select"
+                                  value={runtimeSettings.draft?.effort ?? ''}
+                                  onChange={(event) => runtimeSettings.setEffort(event.target.value as AgentEffortLevel)}
+                                  disabled={conversationActionBusy !== null || !runtimeSettings.settings?.allowed}
+                                >
+                                  {runtimeSettings.effortOptions.map((effort) => (
+                                    <option key={effort} value={effort}>{effort}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            )}
+                            {runtimeSettings.supportsAdaptiveThinking && (
+                              <label className="grid gap-1 px-3 text-[10px] uppercase tracking-[0.08em] text-sumi-diluted">
+                                <span>Adaptive thinking</span>
+                                <select
+                                  className="w-full rounded-md border border-ink-border bg-washi-white px-2 py-2 text-xs normal-case tracking-normal text-sumi-black"
+                                  data-testid="mobile-chat-adaptive-thinking-select"
+                                  value={runtimeSettings.draft?.adaptiveThinking ?? ''}
+                                  onChange={(event) => runtimeSettings.setAdaptiveThinking(
+                                    event.target.value as ClaudeAdaptiveThinkingMode,
+                                  )}
+                                  disabled={conversationActionBusy !== null || !runtimeSettings.settings?.allowed}
+                                >
+                                  {runtimeSettings.adaptiveThinkingOptions.map((mode) => (
+                                    <option key={mode} value={mode}>{mode}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            )}
+                            {runtimeSettings.supportsMaxThinkingTokens && runtimeSettings.maxThinkingTokensRange && (
+                              <label className="grid gap-1 px-3 text-[10px] uppercase tracking-[0.08em] text-sumi-diluted">
+                                <span>Max thinking tokens</span>
+                                <input
+                                  type="number"
+                                  className="w-full rounded-md border border-ink-border bg-washi-white px-2 py-2 text-xs normal-case tracking-normal text-sumi-black"
+                                  data-testid="mobile-chat-max-thinking-tokens-input"
+                                  min={runtimeSettings.maxThinkingTokensRange.min}
+                                  max={runtimeSettings.maxThinkingTokensRange.max}
+                                  value={runtimeSettings.draft?.maxThinkingTokens ?? ''}
+                                  onChange={(event) => runtimeSettings.setMaxThinkingTokens(event.currentTarget.valueAsNumber)}
+                                  disabled={conversationActionBusy !== null || !runtimeSettings.settings?.allowed}
+                                />
+                              </label>
+                            )}
+                            {runtimeSettings.modelDiscovery && (
+                              <div
+                                className="px-3 text-[10px] text-sumi-diluted"
+                                data-testid="mobile-chat-model-discovery-state"
+                              >
+                                Models: {runtimeSettings.modelDiscovery.freshness}
+                                {runtimeSettings.modelDiscovery.error
+                                  ? ` · ${runtimeSettings.modelDiscovery.error}`
+                                  : ''}
+                              </div>
+                            )}
+                            {runtimeSettings.settings?.disabledReason && (
+                              <div
+                                className="px-3 text-[10px] text-accent-vermillion"
+                                data-testid="mobile-chat-runtime-settings-disabled-reason"
+                              >
+                                {runtimeSettings.settings.disabledReason}
+                              </div>
+                            )}
+                            {runtimeSettings.draft && (
+                              <button
+                                type="button"
+                                className="mx-3 flex items-center justify-center rounded-md border border-ink-border px-3 py-2 text-xs text-sumi-black transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                                data-testid="mobile-chat-model-refresh-button"
+                                onClick={() => {
+                                  void refreshModels({
+                                    providerId: runtimeSettings.draft!.agentType,
+                                    ...(runtimeSettings.modelCredentialPoolId
+                                      ? { credentialPoolId: runtimeSettings.modelCredentialPoolId }
+                                      : {}),
+                                  })
+                                }}
+                                disabled={
+                                  conversationActionBusy !== null
+                                  || refreshingProviderId === runtimeSettings.draft.agentType
+                                }
+                              >
+                                {refreshingProviderId === runtimeSettings.draft.agentType
+                                  ? 'Refreshing…'
+                                  : 'Refresh models'}
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="mx-3 mb-1 flex items-center justify-center rounded-md bg-sumi-black px-3 py-2 text-xs text-washi-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                               data-testid="mobile-chat-provider-save-button"
                               onClick={() => {
-                                void handleSaveConversationProviderModel()
+                                void handleSaveConversationRuntimeSettings()
                               }}
-                              disabled={conversationActionBusy !== null || !providerModelChanged}
+                              disabled={conversationActionBusy !== null || !runtimeSettings.canSave}
                             >
-                              {conversationActionBusy === 'provider-model' ? 'Saving' : 'Save'}
+                              {conversationActionBusy === 'runtime-settings' ? 'Saving' : 'Save'}
                             </button>
                           </div>
                         )}
@@ -1114,6 +1198,7 @@ export function MobileSessionShell({
               <Transcript
                 messages={messages}
                 sessionId={sessionName}
+                sessionHost={conversation?.liveSession?.host ?? sessionHost}
                 onAnswer={onAnswer}
                 dark={theme === 'dark'}
                 className={usesOverlayChrome

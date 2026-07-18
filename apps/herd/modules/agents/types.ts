@@ -9,13 +9,14 @@ import type { ApiKeyStoreLike } from '../../server/api-keys/store.js'
 import type { HerdEvent, PlanApprovalDecision } from '../../src/types/herd-events.js'
 import type { TranscriptEnvelope } from '../../src/types/transcript-envelope.js'
 import type { ActionPolicyGate } from '../policies/action-policy-gate.js'
+import type { ApprovalBridgeTokenClaims } from '../policies/approval-bridge-token.js'
 import type { WorkspaceResolverCapability } from '../workspace/capability.js'
 import type { QueuedMessage, QueuedMessageImage, SessionMessageQueue } from './message-queue.js'
 import type {
   ClaudeAdaptiveThinkingMode,
 } from '../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '../claude-max-thinking-tokens.js'
+import type { AgentEffortLevel } from './effort.js'
 import type { QuestStore } from '../commanders/quest-store.js'
 import type { CommanderSessionStore } from '../commanders/store.js'
 import type { ConversationStore } from '../commanders/conversation-store.js'
@@ -24,8 +25,13 @@ import type { GeminiTurnState } from './event-normalizers/gemini.js'
 import type { OpenCodeTurnState } from './event-normalizers/opencode.js'
 import type { ProviderId } from './adapters/provider-registry-types.js'
 import type { ProviderSessionContext } from './providers/provider-session-context.js'
+import type { ProviderProcessTree } from './provider-process.js'
+import type { ClaudeQuotaReader } from './claude-credential-coordinator.js'
 import type {
+  ClaudeAccountIdentityResolver,
+  ClaudeGlobalAuthValidator,
   CredentialPoolProvider,
+  CredentialPoolRuntimeMode,
   ProviderAuthSnapshot,
   ProviderAuthStore,
   ProviderSpawnAuth,
@@ -44,13 +50,24 @@ export interface SessionCreator {
   id?: string
 }
 
+export type CredentialPoolRecoveryState =
+  | 'awaiting_safe_boundary'
+  | 'stopping_old_runtime'
+  | 'activating_credential'
+  | 'reloading_session'
+  | 'retry_scheduled'
+  | 'blocked'
+
 export interface CredentialPoolRecoveryRequest {
   provider: CredentialPoolProvider
   credentialPoolId?: string
   previousCredentialPoolId?: string
   clearResumeProviderContext: boolean
-  reason: 'manual_switch' | 'usage_limit'
+  reason: 'auth_required' | 'manual_switch' | 'quota_threshold' | 'usage_limit'
   requestedAt: string
+  state?: CredentialPoolRecoveryState
+  failureCode?: string
+  failureReason?: string
   resetAt?: string
   blockedUntil?: string
   interruptedMessage?: QueuedMessage
@@ -67,6 +84,7 @@ export interface AgentSessionCredentialPoolAttribution {
   provider: 'claude' | 'codex'
   id: string
   label: string
+  mode?: CredentialPoolRuntimeMode
 }
 
 export interface AgentSession {
@@ -83,7 +101,7 @@ export interface AgentSession {
   transportType?: SessionTransportType
   agentType?: AgentType
   mode?: ClaudePermissionMode
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   model?: string
@@ -106,6 +124,7 @@ export interface AgentSession {
   queuedMessageCount?: number
   credentialPoolId?: string
   credentialPool?: AgentSessionCredentialPoolAttribution
+  credentialPoolMode?: CredentialPoolRuntimeMode
 }
 
 export type WorldAgentStatus = 'active' | 'idle' | 'stale' | 'completed'
@@ -168,7 +187,7 @@ export interface PtySession {
   sessionType: SessionType
   creator: SessionCreator
   agentType: AgentType
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   cwd: string
@@ -284,6 +303,12 @@ export interface SessionSendPayload {
   userEventSubtype?: string
 }
 
+export type SessionSendIntent = 'interrupt' | 'queue'
+export type SessionSendDisposition = 'started' | 'interrupted' | 'queued'
+export type SessionSendResult =
+  | { ok: true; disposition: SessionSendDisposition }
+  | { ok: false; code: 'session_unavailable' | 'interrupt_unavailable' | 'credential_recovery_failed' | 'queue_rejected'; error: string; retryable: boolean }
+
 export interface StreamDispatchOptions {
   userEventSubtype?: string
   displayText?: string
@@ -316,7 +341,7 @@ export interface StreamSession {
   creator: SessionCreator
   conversationId?: string
   agentType: AgentType
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode: ClaudePermissionMode
@@ -333,6 +358,8 @@ export interface StreamSession {
   spawnedWorkers: string[]
   task?: string
   process: ChildProcess
+  processTree?: ProviderProcessTree
+  cleanupProcessResources?: () => void
   events: StreamJsonEvent[]
   nextEventSeq?: number
   clients: Set<WebSocket>
@@ -351,6 +378,7 @@ export interface StreamSession {
   providerContext: ProviderSessionContext
   providerAuthSnapshot?: ProviderAuthSnapshot
   credentialPoolId?: string
+  credentialPoolMode?: CredentialPoolRuntimeMode
   credentialPoolRecovery?: CredentialPoolRecoveryRequest
   gaiaOpsApiKeyExpiresAt?: string
   approvalBridgeNonce?: string
@@ -365,9 +393,12 @@ export interface StreamSession {
   codexLastIncomingAt?: string
   codexUnclassifiedIncomingCount: number
   codexPendingApprovals: Map<number, CodexPendingApprovalRequest>
+  codexDispatchInFlight?: boolean
   messageQueue: SessionMessageQueue
   currentQueuedMessage?: QueuedMessage
   pendingDirectSendMessages: QueuedMessage[]
+  /** Accepted live input for the active turn. This is recovery state, not queue state. */
+  activeTurnMessage?: QueuedMessage
   queuedMessageRetryTimer?: NodeJS.Timeout
   queuedMessageRetryMessageId?: string
   queuedMessageRetryDelayMs: number
@@ -393,7 +424,7 @@ export interface ExternalSession {
   sessionType: SessionType
   creator: SessionCreator
   agentType: AgentType
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   machine: string
@@ -446,7 +477,7 @@ export interface ExitedStreamSessionState {
   conversationId?: string
   agentType: AgentType
   model?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode: ClaudePermissionMode
@@ -458,6 +489,7 @@ export interface ExitedStreamSessionState {
   createdAt: string
   providerContext: ProviderSessionContext
   credentialPoolId?: string
+  credentialPoolMode?: CredentialPoolRuntimeMode
   credentialPoolRecovery?: CredentialPoolRecoveryRequest
   activeTurnId?: string
   resumedFrom?: string
@@ -466,6 +498,7 @@ export interface ExitedStreamSessionState {
   queuedMessages?: QueuedMessage[]
   currentQueuedMessage?: QueuedMessage
   pendingDirectSendMessages?: QueuedMessage[]
+  activeTurnMessage?: QueuedMessage
 }
 
 export interface StreamSessionCreateOptions {
@@ -473,7 +506,8 @@ export interface StreamSessionCreateOptions {
   systemPrompt?: string
   maxTurns?: number
   model?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
+  omitEffort?: boolean
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   createdAt?: string
@@ -485,9 +519,11 @@ export interface StreamSessionCreateOptions {
   conversationId?: string
   currentSkillInvocation?: ActiveSkillInvocation
   approvalBridgeNonce?: string
+  approvalBridgeCredential?: ConversationApprovalBridgeCredential
   daemonProcess?: PersistedDaemonProcess
   providerAuth?: ProviderSpawnAuth
   credentialPoolId?: string
+  credentialPoolMode?: CredentialPoolRuntimeMode
 }
 
 export interface CodexSessionCreateOptions {
@@ -497,6 +533,7 @@ export interface CodexSessionCreateOptions {
   spawnedWorkers?: string[]
   systemPrompt?: string
   model?: string
+  effort?: AgentEffortLevel
   resumedFrom?: string
   machine?: MachineConfig
   sessionType?: SessionType
@@ -569,7 +606,10 @@ export interface AgentsRouterOptions {
   getActionPolicyGate?: () => ActionPolicyGate | null
   getWorkspaceResolver?: () => WorkspaceResolverCapability | undefined
   commanderSessionStore?: Pick<CommanderSessionStore, 'get' | 'list'>
-  commanderConversationStore?: Pick<ConversationStore, 'get' | 'listByCommander'>
+  commanderConversationStore?: Pick<
+    ConversationStore,
+    'get' | 'listByCommander' | 'ensureApprovalBridgeCredential'
+  >
   buildCommanderSessionSeed?: (
     params: Omit<CommanderSessionSeedParams, 'memoryBasePath'>,
   ) => Promise<{ systemPrompt?: string; maxTurns?: number }>
@@ -579,6 +619,11 @@ export interface AgentsRouterOptions {
   commanderTranscriptAppender?: CommanderTranscriptAppender
   questStore?: QuestStore
   providerAuthStore?: ProviderAuthStore
+  claudeQuotaReader?: ClaudeQuotaReader
+  claudeQuotaPollIntervalMs?: number
+  claudeGlobalConfigDir?: string
+  claudeAccountIdentityResolver?: ClaudeAccountIdentityResolver
+  claudeGlobalAuthValidator?: ClaudeGlobalAuthValidator
 }
 
 export interface CommanderTranscriptAppendInput {
@@ -596,6 +641,7 @@ export interface AgentsRouterResult {
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void
   sessionsInterface: CommanderSessionsInterface
   approvalSessionsInterface: ApprovalSessionsInterface
+  machineCommandExecutor: import('./machine-command-executor.js').MachineCommandExecutor
 }
 
 export interface ActiveSkillInvocation {
@@ -643,17 +689,68 @@ export interface CodexApprovalQueueEvent {
   delivered?: boolean
 }
 
+/**
+ * Conversation-lifetime approval bridge credential resolved for a Claude
+ * launch. Every provider generation spawned for the same conversation mints
+ * a token from this same credential, so rotation never invalidates the
+ * approval path.
+ */
+export interface ConversationApprovalBridgeCredential {
+  conversationId: string
+  credentialId: string
+  epoch: number
+}
+
+/**
+ * Narrow projection of a conversation used by approval bridge validation.
+ * Kept module-local so the agents module does not depend on the full
+ * commanders Conversation shape.
+ */
+export interface ApprovalBridgeConversationState {
+  status: 'active' | 'idle' | 'archived'
+  /** Raw owning commander id used by action-policy scope resolution. */
+  commanderId?: string
+  approvalBridge?: {
+    credentialId: string
+    epoch: number
+  }
+}
+
+export type ApprovalBridgeCredentialInspection =
+  | { ok: true; conversationId?: string }
+  | {
+    ok: false
+    reason: 'session_not_live' | 'nonce_mismatch' | 'conversation_revoked' | 'credential_revoked'
+  }
+
 export interface ApprovalSessionsInterface {
   getSessionContext(name: string): ApprovalSessionContext | null
   findSessionContextByClaudeSessionId(sessionId: string): ApprovalSessionContext | null
   getLiveSession(name: string): StreamSession | null
   findLiveSessionByClaudeSessionId(sessionId: string): StreamSession | null
-  inspectApprovalBridgeCredential?(sessionName: string, nonce: string): {
-    ok: true
-  } | {
-    ok: false
-    reason: 'session_not_live' | 'nonce_mismatch'
-  }
+  findLiveSessionByConversationId?(conversationId: string): StreamSession | null
+  /**
+   * Resolve the policy snapshot for a conversation independently of provider
+   * liveness. The persisted runtime row is authoritative for cwd and active
+   * skill context during replacement/restart gaps.
+   */
+  resolveConversationPolicyContext?(
+    conversationId: string,
+  ): Promise<ApprovalSessionContext | null>
+  /**
+   * Validate a verified bridge token's claims. Conversation-scoped (v3)
+   * credentials are accepted whenever the conversation is known, non-revoked,
+   * and the credential id/epoch match — regardless of which provider process
+   * or generation presents them and regardless of whether a live provider
+   * session currently exists. Session-scoped (v2) credentials resolve their
+   * session name to a conversation when possible (live sessions first, then
+   * persisted session rows) and otherwise keep the legacy live-session nonce
+   * semantics.
+   */
+  inspectApprovalBridgeCredential?(
+    claims: ApprovalBridgeTokenClaims,
+  ): Promise<ApprovalBridgeCredentialInspection>
+  /** Legacy session-scoped check retained as the fallback for v2 claims. */
   validateApprovalBridgeCredential(sessionName: string, nonce: string): boolean
   listPendingCodexApprovals(): PendingCodexApprovalView[]
   resolvePendingCodexApproval(
@@ -680,6 +777,15 @@ export interface DispatchWorkerForCommanderResult {
   body: Record<string, unknown>
 }
 
+export interface TrustedWorkerLaunchSourceDefaults {
+  agentType: AgentType
+  model?: string
+  effort?: AgentEffortLevel
+  omitEffort?: boolean
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
+}
+
 export interface CommanderSessionsInterface {
   createCommanderSession(params: {
     name: string
@@ -688,12 +794,14 @@ export interface CommanderSessionsInterface {
     systemPrompt: string
     agentType: AgentType
     model?: string
-    effort?: ClaudeEffortLevel
+    effort?: AgentEffortLevel
+    omitEffort?: boolean
     adaptiveThinking?: ClaudeAdaptiveThinkingMode
     maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
     resumeProviderContext?: ProviderSessionContext
     credentialPoolId?: string
+    credentialPoolMode?: CredentialPoolRuntimeMode
     maxTurns?: number
     env?: NodeJS.ProcessEnv
     gaiaOpsApiKeyExpiresAt?: string
@@ -705,16 +813,29 @@ export interface CommanderSessionsInterface {
     systemPrompt: string
     agentType: AgentType
     model?: string
-    effort?: ClaudeEffortLevel
+    effort?: AgentEffortLevel
+    omitEffort?: boolean
     adaptiveThinking?: ClaudeAdaptiveThinkingMode
     maxThinkingTokens?: ClaudeMaxThinkingTokens
     cwd?: string
     resumeProviderContext?: ProviderSessionContext
     credentialPoolId?: string
+    credentialPoolMode?: CredentialPoolRuntimeMode
     maxTurns?: number
     env?: NodeJS.ProcessEnv
     gaiaOpsApiKeyExpiresAt?: string
+    requireIdleReplacement?: boolean
   }): Promise<StreamSession>
+  updateCommanderSessionRuntimeSettings?(
+    name: string,
+    settings: {
+      agentType: AgentType
+      model?: string | null
+      effort?: AgentEffortLevel
+      adaptiveThinking?: ClaudeAdaptiveThinkingMode
+      maxThinkingTokens?: ClaudeMaxThinkingTokens
+    },
+  ): StreamSession | undefined
   getCredentialRecoveryRequest?(sessionName: string): CredentialPoolRecoveryRequest | undefined
   clearCredentialRecoveryRequest?(sessionName: string): void
   getActiveCredentialPoolId?(provider: AgentType): Promise<string | undefined>
@@ -730,15 +851,17 @@ export interface CommanderSessionsInterface {
     commanderId: string
     abortSignal?: AbortSignal
     rawBody: unknown
+    /** Runtime settings copied from a server-owned source session, never request input. */
+    trustedSourceDefaults?: TrustedWorkerLaunchSourceDefaults
   }): Promise<DispatchWorkerForCommanderResult>
   sendToSession(
     name: string,
     payload: string | SessionSendPayload,
-    options?: {
-      queue?: boolean
+    options: {
+      intent: SessionSendIntent
       priority?: 'high' | 'normal' | 'low'
     },
-  ): Promise<boolean>
+  ): Promise<SessionSendResult>
   verifyWebSocketAccess?(req: IncomingMessage): Promise<boolean>
   recordSessionEvent?(name: string, event: StreamJsonEvent): boolean
   autoResolvePlanApproval?(
@@ -877,7 +1000,7 @@ export interface PersistedStreamSession {
   transportType?: SessionTransportType
   agentType: AgentType
   model?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode: ClaudePermissionMode
@@ -887,6 +1010,7 @@ export interface PersistedStreamSession {
   createdAt: string
   providerContext: ProviderSessionContext
   credentialPoolId?: string
+  credentialPoolMode?: CredentialPoolRuntimeMode
   credentialPoolRecovery?: CredentialPoolRecoveryRequest
   approvalBridgeNonce?: string
   activeTurnId?: string
@@ -901,6 +1025,7 @@ export interface PersistedStreamSession {
   queuedMessages?: QueuedMessage[]
   currentQueuedMessage?: QueuedMessage
   pendingDirectSendMessages?: QueuedMessage[]
+  activeTurnMessage?: QueuedMessage
 }
 
 export interface PersistedSessionsState {

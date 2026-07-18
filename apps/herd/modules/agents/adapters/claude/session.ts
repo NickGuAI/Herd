@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import {
   DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
   normalizeClaudeAdaptiveThinkingMode,
@@ -40,6 +43,33 @@ import {
   toCompletedSession,
   toExitBasedCompletedSession,
 } from '../../session/state.js'
+
+function createLocalPromptResource(prompt: string): {
+  directory: string
+  file: string
+  cleanup: () => void
+} {
+  const directory = mkdtempSync(path.join(tmpdir(), 'herd-claude-prompt-'))
+  const file = path.join(directory, 'prompt.md')
+  try {
+    writeFileSync(file, prompt, { encoding: 'utf8', mode: 0o600 })
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true })
+    throw error
+  }
+  let cleaned = false
+  return {
+    directory,
+    file,
+    cleanup: () => {
+      if (cleaned) {
+        return
+      }
+      cleaned = true
+      rmSync(directory, { recursive: true, force: true })
+    },
+  }
+}
 import {
   createClaudeProviderContext,
   ensureClaudeProviderContext,
@@ -63,6 +93,7 @@ import type {
   StreamSession,
   StreamSessionCreateOptions,
 } from '../../types.js'
+import { ownedLocalProcessGroup, ownedTransportProcessGroup } from '../../provider-process.js'
 import {
   buildClaudeApprovalSettingsJson,
   buildClaudeLocalLoginShellSpawn,
@@ -75,9 +106,19 @@ import {
 import {
   createApprovalBridgeNonce,
   createApprovalBridgeToken,
+  createConversationApprovalBridgeToken,
 } from '../../../policies/approval-bridge-token.js'
 
 export interface ClaudeStreamSessionDeps {
+  /**
+   * Resolve (creating on first use) the conversation-lifetime approval bridge
+   * credential for a conversation. When present and the launch carries a
+   * conversationId, the session's bridge token is conversation-scoped so
+   * provider replacement never mints an incompatible approval authority.
+   */
+  resolveConversationApprovalBridgeCredential?(
+    conversationId: string,
+  ): Promise<{ credentialId: string; epoch: number } | null>
   appendEvent(session: StreamSession, event: StreamJsonEvent): void
   broadcastEvent(session: StreamSession, event: StreamJsonEvent): void
   clearExitedSession(sessionName: string): void
@@ -87,13 +128,22 @@ export interface ClaudeStreamSessionDeps {
   schedulePersistedSessionsWrite(): void
   setCompletedSession(sessionName: string, session: CompletedSession): void | Promise<void>
   setExitedSession(sessionName: string, session: ExitedStreamSessionState): void
+  shouldPreserveSession?(session: StreamSession): boolean
   spawnImpl?: typeof spawn
   daemonRegistry?: Pick<MachineDaemonRegistry, 'attachProcess' | 'spawnProcess'>
   internalToken?: string
   approvalBridgeSigningSecret?: string
   writeToStdin(session: StreamSession, data: string): boolean
   writeTranscriptMeta(session: StreamSession): void
-  markProviderAuthRequired?(session: StreamSession, detail: string): Promise<unknown> | unknown
+  markProviderAuthRequired?(
+    session: StreamSession,
+    detail: string,
+    recovery?: {
+      interruptedMessage?: StreamSession['currentQueuedMessage']
+      interruptedTurnHadSideEffects?: boolean
+      interruptedTurnId?: string
+    },
+  ): Promise<unknown> | unknown
 }
 
 function buildPromptContent(
@@ -312,7 +362,9 @@ export function createClaudeStreamSession(
   deps.clearExitedSession(sessionName)
 
   const initializedAt = new Date().toISOString()
-  const effort = normalizeClaudeEffortLevel(options.effort, DEFAULT_CLAUDE_EFFORT_LEVEL)
+  const effort = options.omitEffort
+    ? undefined
+    : normalizeClaudeEffortLevel(options.effort, DEFAULT_CLAUDE_EFFORT_LEVEL)
   const adaptiveThinking = normalizeClaudeAdaptiveThinkingMode(
     options.adaptiveThinking,
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -328,12 +380,17 @@ export function createClaudeStreamSession(
   const promptAudit = appendSystemPrompt
     ? buildClaudePromptAudit(appendSystemPrompt)
     : undefined
+  const localPromptResource = !remote && !daemon && appendSystemPrompt
+    ? createLocalPromptResource(appendSystemPrompt)
+    : undefined
+  const localPromptFile = localPromptResource?.file
+  const cleanupProcessResources = localPromptResource?.cleanup
   const args = buildClaudeStreamArgs(
     mode,
     options.resumeSessionId,
-    undefined,
+    localPromptFile,
     options.maxTurns,
-    effort,
+    effort ?? null,
     settingsJson,
     options.model,
   )
@@ -351,7 +408,8 @@ export function createClaudeStreamSession(
     ),
     Boolean(options.providerAuth?.env?.CLAUDE_CODE_OAUTH_TOKEN),
   )
-  const remoteClaude = buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, appendSystemPrompt)
+  const shellManagedPrompt = localPromptFile ? undefined : appendSystemPrompt
+  const remoteClaude = buildClaudeShellInvocation(args, adaptiveThinking, maxThinkingTokens, shellManagedPrompt)
   const remoteStreamCmd = buildLoginShellCommand(
     remoteClaude,
     requestedCwd,
@@ -365,7 +423,8 @@ export function createClaudeStreamSession(
     requestedCwd,
     preparedLaunch.sourcedEnvFile,
     process.env.SHELL,
-    appendSystemPrompt,
+    shellManagedPrompt,
+    options.providerAuth?.credentialPoolMode === 'global-continuity',
   )
   // Remote Claude needs the EC2 approval daemon reachable on the remote machine
   // for every PreToolUse hook call. SSH does not propagate spawn env by default,
@@ -374,13 +433,31 @@ export function createClaudeStreamSession(
   // Token may be undefined when the local server has not minted one — we still
   // open the tunnel so the hook can reach the daemon (auth fails with a clear
   // 401, not a `fetch failed`). See the upstream session-launch issue.
-  const approvalBridgeNonce = options.approvalBridgeNonce?.trim() || createApprovalBridgeNonce()
+  // Conversation-backed sessions mint a conversation-scoped (v3) credential:
+  // the token is owned by the conversation, so every launch/replacement for
+  // the same conversation produces an equivalent token and old provider
+  // processes keep passing approval checks after any rotation. Sessions with
+  // no conversation credential keep the legacy session-scoped nonce token.
+  const approvalBridgeCredential = options.approvalBridgeCredential
+  const approvalBridgeNonce = approvalBridgeCredential
+    ? undefined
+    : options.approvalBridgeNonce?.trim() || createApprovalBridgeNonce()
   const approvalBridgeToken = deps.approvalBridgeSigningSecret
-    ? createApprovalBridgeToken({
-        signingSecret: deps.approvalBridgeSigningSecret,
-        sessionName,
-        nonce: approvalBridgeNonce,
-      })
+    ? approvalBridgeCredential
+      ? createConversationApprovalBridgeToken({
+          signingSecret: deps.approvalBridgeSigningSecret,
+          conversationId: approvalBridgeCredential.conversationId,
+          credentialId: approvalBridgeCredential.credentialId,
+          epoch: approvalBridgeCredential.epoch,
+          sessionName,
+        })
+      : approvalBridgeNonce
+        ? createApprovalBridgeToken({
+            signingSecret: deps.approvalBridgeSigningSecret,
+            sessionName,
+            nonce: approvalBridgeNonce,
+          })
+        : undefined
     : undefined
   const approvalBaseUrl = resolveClaudeApprovalBaseUrl(process.env)
   const approvalPort = resolveClaudeApprovalPort(process.env)
@@ -428,11 +505,19 @@ export function createClaudeStreamSession(
       ) ?? (() => {
         throw new Error(`Daemon machine "${machine.id}" is not connected`)
       })()
-    : spawnImpl(spawnCommand, spawnArgs, {
-        cwd: spawnCwd,
-        env: spawnEnv,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
+    : (() => {
+        try {
+          return spawnImpl(spawnCommand, spawnArgs, {
+            cwd: spawnCwd,
+            env: spawnEnv,
+            detached: true,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          })
+        } catch (error) {
+          cleanupProcessResources?.()
+          throw error
+        }
+      })()
 
   const session: StreamSession = {
     kind: 'stream',
@@ -452,6 +537,12 @@ export function createClaudeStreamSession(
     spawnedWorkers: options.spawnedWorkers ? [...options.spawnedWorkers] : [],
     task: task.length > 0 ? task : undefined,
     process: childProcess,
+    processTree: daemon
+      ? { ownership: 'daemon-process-group' }
+      : remote
+        ? ownedTransportProcessGroup(childProcess)
+        : ownedLocalProcessGroup(childProcess),
+    cleanupProcessResources,
     events: [],
     clients: new Set(),
     createdAt: options.createdAt ?? initializedAt,
@@ -464,7 +555,7 @@ export function createClaudeStreamSession(
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
     stdoutBuffer: '',
     stdinDraining: false,
-    lastTurnCompleted: true,
+    lastTurnCompleted: task.length === 0,
     conversationEntryCount: 0,
     autoRotatePending: false,
     codexPendingApprovals: new Map(),
@@ -478,11 +569,13 @@ export function createClaudeStreamSession(
     providerContext: createClaudeProviderContext({
       sessionId: options.resumeSessionId,
       effort,
+      ...(options.omitEffort ? { omitEffort: true } : {}),
       adaptiveThinking,
       maxThinkingTokens,
     }),
     providerAuthSnapshot: options.providerAuth?.snapshot,
     credentialPoolId: options.providerAuth?.credentialPoolId,
+    credentialPoolMode: options.providerAuth?.credentialPoolMode,
     activeTurnId: undefined,
     adapter: createClaudeSessionAdapter(deps),
     resumedFrom: options.resumedFrom,
@@ -633,6 +726,10 @@ export function createClaudeStreamSession(
       )
     }
 
+    if (deps.shouldPreserveSession?.(session)) {
+      deps.schedulePersistedSessionsWrite()
+      return
+    }
     closeSessionClients()
     deps.setExitedSession(sessionName, snapshotExitedStreamSession(session))
     deps.deleteLiveSession(sessionName)
@@ -689,6 +786,7 @@ export function createClaudeStreamSession(
       return
     }
     if (isProviderAuthRequiredText(text)) {
+      const interruptedMessage = session.activeTurnMessage ?? session.currentQueuedMessage
       const authErrorEvent = createClaudeProviderErrorEnvelope(
         text,
         { detail: `stderr: ${text}`, text },
@@ -697,7 +795,11 @@ export function createClaudeStreamSession(
       ) as StreamJsonEvent
       deps.appendEvent(session, authErrorEvent)
       deps.broadcastEvent(session, authErrorEvent)
-      void deps.markProviderAuthRequired?.(session, text)
+      void deps.markProviderAuthRequired?.(session, text, {
+        ...(interruptedMessage ? { interruptedMessage } : {}),
+        interruptedTurnHadSideEffects: true,
+        ...(interruptedMessage ? { interruptedTurnId: interruptedMessage.id } : {}),
+      })
     }
   })
 
@@ -729,7 +831,13 @@ export function createClaudeStreamSession(
     }
     const exitEnvelope = createClaudeProviderActivityEnvelope(
       'Claude process exited',
-      { exitCode, signal: signalText, stderr: stderrSummary, detail: exitEvent.text },
+      {
+        lifecycleBoundary: 'runtime.end',
+        exitCode,
+        signal: signalText,
+        stderr: stderrSummary,
+        detail: exitEvent.text,
+      },
       readClaudeSessionId(session),
     ) as StreamJsonEvent
     deps.appendEvent(session, exitEnvelope)
@@ -748,6 +856,7 @@ export function createClaudeStreamSession(
   // idempotent — if the stdout 'end' handler already drained, the buffer
   // is empty and this is a no-op.
   cpEmitter.on('close', () => {
+    cleanupProcessResources?.()
     if (deps.getActiveSession(sessionName) !== session) {
       return
     }
@@ -759,6 +868,7 @@ export function createClaudeStreamSession(
   })
 
   cpEmitter.on('error', (error: Error) => {
+    cleanupProcessResources?.()
     if (deps.getActiveSession(sessionName) !== session) {
       return
     }

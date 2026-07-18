@@ -7,9 +7,10 @@ import {
 } from '@/hooks/use-providers'
 import type { AgentType } from '@/types'
 import {
-  CLAUDE_EFFORT_LEVELS,
-  type ClaudeEffortLevel,
-} from '../../claude-effort.js'
+  getDefaultAgentEffortForModel,
+  getAgentEffortLevelsForModel,
+  type AgentEffortLevel,
+} from '../../agents/effort.js'
 import type { CommanderCreateInput } from '../hooks/useCommander'
 import { CommanderMdPreview } from './CommanderMdPreview'
 import {
@@ -49,11 +50,16 @@ export function CreateCommanderForm({
   const [displayName, setDisplayName] = useState('')
   const [agentType, setAgentType] = useState<AgentType>('')
   const [model, setModel] = useState<string | null>(null)
-  const [effort, setEffort] = useState<ClaudeEffortLevel>(getProviderControlDefaults(null).effort)
+  const [effort, setEffort] = useState<AgentEffortLevel>(getProviderControlDefaults(null).effort)
   const { data: providers = [], defaultProviderId } = useProviderRegistry()
   const defaultAgentType = resolveDefaultProviderId(providers, defaultProviderId)
   const currentProvider = findProviderEntry(providers, agentType)
   const availableModels = resolveProviderModelOptions(providers, agentType)
+  const activeModel = availableModels.find((option) => option.id === model)
+    ?? (model === null ? availableModels.find((option) => option.default) ?? availableModels[0] : undefined)
+  const effortOptions = getAgentEffortLevelsForModel(agentType, activeModel)
+  const supportsEffort = currentProvider?.uiCapabilities.supportsEffort === true
+    && effortOptions.length > 0
 
   // Working directory
   const [cwd, setCwd] = useState('')
@@ -96,8 +102,11 @@ export function CreateCommanderForm({
     if (!currentProvider) {
       return
     }
-    setEffort(getProviderControlDefaults(currentProvider).effort)
-  }, [currentProvider])
+    setEffort(
+      getDefaultAgentEffortForModel(agentType, activeModel)
+      ?? getProviderControlDefaults(currentProvider).effort,
+    )
+  }, [activeModel, agentType, currentProvider])
 
   useEffect(() => {
     if (model && !availableModels.some((option) => option.id === model)) {
@@ -158,7 +167,11 @@ export function CreateCommanderForm({
         displayName: displayName.trim() || undefined,
         agentType,
         model,
-        effort,
+        ...(supportsEffort
+          ? { effort: effortOptions.includes(effort)
+              ? effort
+              : getDefaultAgentEffortForModel(agentType, activeModel) }
+          : {}),
         cwd: trimmedCwd,
         identityOperatingStyle: trimmedIdentityOperatingStyle,
         avatarSeed: avatarSeed.trim() || undefined,
@@ -231,6 +244,32 @@ export function CreateCommanderForm({
         }
       : undefined
 
+  function handleAgentTypeChange(nextAgentType: AgentType): void {
+    const nextProvider = findProviderEntry(providers, nextAgentType)
+    const nextModels = resolveProviderModelOptions(providers, nextAgentType)
+    const nextModel = nextModels.find((option) => option.default) ?? nextModels[0]
+    setAgentType(nextAgentType)
+    setModel(null)
+    setEffort(
+      getDefaultAgentEffortForModel(nextAgentType, nextModel)
+      ?? getProviderControlDefaults(nextProvider).effort,
+    )
+  }
+
+  function handleModelChange(nextModelId: string | null): void {
+    const nextModel = nextModelId
+      ? availableModels.find((option) => option.id === nextModelId)
+      : availableModels.find((option) => option.default) ?? availableModels[0]
+    setModel(nextModelId)
+    const nextDefaultEffort = getDefaultAgentEffortForModel(agentType, nextModel)
+    if (nextDefaultEffort) {
+      setEffort((current) => {
+        const nextLevels = getAgentEffortLevelsForModel(agentType, nextModel)
+        return nextLevels.includes(current) ? current : nextDefaultEffort
+      })
+    }
+  }
+
   return (
     <form
       onSubmit={(event) => void handleSubmit(event)}
@@ -262,8 +301,9 @@ export function CreateCommanderForm({
         <label className="block">
           <span className={`${LABEL_CLASS} mb-1 block`}>Agent type</span>
           <select
+            data-testid="create-commander-provider-select"
             value={agentType}
-            onChange={(event) => setAgentType(event.target.value)}
+            onChange={(event) => handleAgentTypeChange(event.target.value)}
             required
             className={INPUT_CLASS}
           >
@@ -282,21 +322,23 @@ export function CreateCommanderForm({
           providers={providers}
           agentType={agentType}
           value={model}
-          onChange={setModel}
+          onChange={handleModelChange}
           label="Model"
           labelClassName={`${LABEL_CLASS} mb-1 block`}
           className={INPUT_CLASS}
+          dataTestId="create-commander-model-select"
         />
 
-        {currentProvider?.uiCapabilities.supportsEffort ? (
+        {supportsEffort ? (
           <label className="block">
-            <span className={`${LABEL_CLASS} mb-1 block`}>Claude effort</span>
+            <span className={`${LABEL_CLASS} mb-1 block`}>Effort</span>
             <select
+              data-testid="create-commander-effort-select"
               value={effort}
-              onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
+              onChange={(event) => setEffort(event.target.value as AgentEffortLevel)}
               className={INPUT_CLASS}
             >
-              {CLAUDE_EFFORT_LEVELS.map((level) => (
+              {effortOptions.map((level) => (
                 <option key={level} value={level}>{level}</option>
               ))}
             </select>
@@ -437,7 +479,7 @@ export function CreateCommanderForm({
             cwd={cwd || undefined}
             identityOperatingStyle={identityOperatingStyle || undefined}
             agentType={agentType}
-            effort={effort}
+            effort={supportsEffort ? effort : undefined}
             heartbeatIntervalMs={Number.isFinite(parsedHeartbeatMs) ? parsedHeartbeatMs : undefined}
             heartbeatMessage={messageTemplate || undefined}
             fatPinInterval={parsedFatPin && parsedFatPin >= 1 ? parsedFatPin : undefined}

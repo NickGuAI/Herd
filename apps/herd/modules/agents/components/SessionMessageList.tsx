@@ -14,10 +14,46 @@ import {
 } from './session-message-list/blocks'
 import { groupMessages } from './session-message-list/render-items'
 
+function getCredentialRecoveryResolvedErrorIds(messages: readonly MsgItem[]): Set<string> {
+  const pendingUsageLimitErrorsByProvider = new Map<string, string[]>()
+  const resolvedErrorIds = new Set<string>()
+  const visit = (items: readonly MsgItem[]) => {
+    for (const message of items) {
+      const provider = message.transcript?.source?.provider
+      if (
+        message.kind === 'error'
+        && (
+          message.providerError?.classification === 'usage_limit'
+          || message.providerError?.classification === 'auth_required'
+        )
+        && provider
+      ) {
+        const pending = pendingUsageLimitErrorsByProvider.get(provider) ?? []
+        pending.push(message.id)
+        pendingUsageLimitErrorsByProvider.set(provider, pending)
+      }
+      if (message.transcript?.providerEventType === 'credential_pool_recovery') {
+        if (provider) {
+          for (const messageId of pendingUsageLimitErrorsByProvider.get(provider) ?? []) {
+            resolvedErrorIds.add(messageId)
+          }
+          pendingUsageLimitErrorsByProvider.set(provider, [])
+        }
+      }
+      if (message.children) {
+        visit(message.children)
+      }
+    }
+  }
+  visit(messages)
+  return resolvedErrorIds
+}
+
 export interface SessionMessageListProps {
   messages: MsgItem[]
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   sessionName?: string
+  sessionHost?: string
   emptyLabel?: string
   agentAvatarUrl?: string | null
   agentAccentColor?: string | null
@@ -28,6 +64,7 @@ export function SessionMessageList({
   messages,
   onAnswer,
   sessionName,
+  sessionHost,
   emptyLabel = 'No messages yet.',
   agentAvatarUrl,
   agentAccentColor,
@@ -41,6 +78,8 @@ export function SessionMessageList({
     )
   }
 
+  const credentialRecoveryResolvedErrorIds = getCredentialRecoveryResolvedErrorIds(messages)
+
   return (
     <div className="session-message-list space-y-2">
       <RunningAgentsPanel messages={messages} />
@@ -52,6 +91,8 @@ export function SessionMessageList({
               messages={item.messages}
               onAnswer={onAnswer}
               sessionName={sessionName}
+              sessionHost={sessionHost}
+              credentialRecoveryResolvedErrorIds={credentialRecoveryResolvedErrorIds}
             />
           )
         }
@@ -85,13 +126,29 @@ export function SessionMessageList({
               />
             )
           case 'tool':
-            return <ToolBlock key={message.id} msg={message} onAnswer={onAnswer} sessionName={sessionName} />
+            return (
+              <ToolBlock
+                key={message.id}
+                msg={message}
+                onAnswer={onAnswer}
+                sessionName={sessionName}
+                sessionHost={sessionHost}
+              />
+            )
           case 'ask':
             return <AskUserQuestionBlock key={message.id} msg={message} onAnswer={onAnswer} />
           case 'provider':
             return <ProviderActivityBlock key={message.id} msg={message} />
           case 'error':
-            return <ProviderErrorBlock key={message.id} msg={message} sessionName={sessionName} />
+            return (
+              <ProviderErrorBlock
+                key={message.id}
+                msg={message}
+                sessionName={sessionName}
+                sessionHost={sessionHost}
+                credentialRecoveryResolved={credentialRecoveryResolvedErrorIds.has(message.id)}
+              />
+            )
           default:
             return null
         }

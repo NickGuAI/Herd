@@ -1,4 +1,3 @@
-import { COMMANDER_SESSION_NAME_PREFIX } from '../constants.js'
 import {
   getCodexApprovalActionId,
   getCodexApprovalActionLabel,
@@ -43,15 +42,18 @@ export function createCodexApprovalQueueRuntime(
   deps: CodexApprovalQueueRuntimeDeps,
 ): CodexApprovalQueueRuntime {
   function getApprovalCommanderScopeId(session: StreamSession): string | undefined {
-    if (session.sessionType === 'commander') {
-      return session.name
-    }
     if (session.creator.kind === 'commander' && session.creator.id) {
-      return `${COMMANDER_SESSION_NAME_PREFIX}${session.creator.id}`
+      return session.creator.id.trim() || undefined
+    }
+    if (session.sessionType === 'commander') {
+      return undefined
     }
     const parentSession = session.spawnedBy ? deps.sessions.get(session.spawnedBy) : undefined
     if (parentSession?.kind === 'stream' && parentSession.sessionType === 'commander') {
-      return session.spawnedBy
+      if (parentSession.creator.kind === 'commander' && parentSession.creator.id?.trim()) {
+        return parentSession.creator.id.trim()
+      }
+      return undefined
     }
     return undefined
   }

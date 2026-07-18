@@ -42,6 +42,7 @@ export function createAgentsRuntime(context: ModuleRuntimeContext): ModuleRouteR
   capabilities.provide('agents.sessions-interface', 'agents', agents.sessionsInterface)
   capabilities.provide('agents.approval-sessions-interface', 'agents', agents.approvalSessionsInterface)
   capabilities.provide('agents.session-websocket', 'agents', agents.handleUpgrade)
+  capabilities.provide('agents.machine-command-executor', 'agents', agents.machineCommandExecutor)
   capabilities.provide('agents.runtime', 'agents', agents)
 
   return {

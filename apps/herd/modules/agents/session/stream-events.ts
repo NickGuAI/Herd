@@ -65,6 +65,15 @@ interface StreamEventProviderRuntime {
       interruptedTurnId?: string
     },
   ): void
+  handleAuthRequiredSignal(
+    session: StreamSession,
+    detail: string,
+    options?: {
+      interruptedMessage?: StreamSession['currentQueuedMessage']
+      interruptedTurnHadSideEffects?: boolean
+      interruptedTurnId?: string
+    },
+  ): void
 }
 
 interface StreamEventApprovalRuntime {
@@ -97,6 +106,11 @@ export function createStreamEventAppender(
   }
 
   function currentTurnHadSideEffects(events: readonly StreamJsonEvent[], turnBoundaryIndex: number): boolean {
+    if (!isTranscriptTurnStartRecord(events[turnBoundaryIndex]!)) {
+      // If the current turn boundary was truncated or never observed, replay is
+      // not provably side-effect free. Prefer a guarded continuation.
+      return true
+    }
     return events.slice(turnBoundaryIndex).some((candidate) => {
       if (!isTranscriptEnvelope(candidate)) {
         return false
@@ -135,6 +149,35 @@ export function createStreamEventAppender(
     return null
   }
 
+  function findCurrentTurnAuthRequired(
+    events: readonly StreamJsonEvent[],
+    turnBoundaryIndex: number,
+  ): string | null {
+    for (let index = events.length - 1; index >= turnBoundaryIndex; index -= 1) {
+      const candidate = events[index]!
+      if (!isTranscriptEnvelope(candidate)) {
+        continue
+      }
+      if (candidate.ev.type === 'provider.error' && candidate.ev.classification === 'auth_required') {
+        return candidate.ev.message || 'Claude authentication is required'
+      }
+      if (candidate.ev.type === 'turn.end') {
+        const errorText = [
+          unknownToErrorText(candidate.ev.error),
+          unknownToErrorText(candidate.ev.result),
+        ].filter(Boolean).join('\n')
+        const code = unknownToErrorCode(candidate.ev.error) ?? unknownToErrorCode(candidate.ev.result)
+        if (
+          Boolean(errorText || code)
+          && extractProviderLimitDetails(errorText, code, { referenceTime: candidate.time }).classification === 'auth_required'
+        ) {
+          return errorText || code || 'Claude authentication is required'
+        }
+      }
+    }
+    return null
+  }
+
   return function appendStreamEvent(session: StreamSession, event: StreamJsonEvent): void {
     const nextSeq = session.nextEventSeq ?? getNextStreamEventSeq(session.events)
     session.nextEventSeq = nextSeq + 1
@@ -147,7 +190,7 @@ export function createStreamEventAppender(
 
     const provider = getProvider(session.agentType)
     const usesRuntimeWatchdog = Boolean(provider?.runtimeWatchdog)
-    const persistsResumeFromEvents = Boolean(provider?.uiCapabilities.supportsEffort)
+    const persistsResumeFromEvents = session.agentType === 'claude'
     if (isTranscriptTurnStartRecord(sequencedEvent)) {
       const wasCompleted = session.lastTurnCompleted
       const isCompletedOneShot =
@@ -177,7 +220,10 @@ export function createStreamEventAppender(
       const wasCompleted = session.lastTurnCompleted
       const turnBoundaryIndex = findCurrentTurnBoundaryIndex(session.events)
       const usageLimit = findCurrentTurnUsageLimit(session.events, turnBoundaryIndex)
-      const interruptedMessage = usageLimit ? session.currentQueuedMessage : undefined
+      const authRequired = findCurrentTurnAuthRequired(session.events, turnBoundaryIndex)
+      const interruptedMessage = usageLimit || authRequired
+        ? session.activeTurnMessage ?? session.currentQueuedMessage
+        : undefined
       session.lastTurnCompleted = true
       session.completedTurnAt = new Date().toISOString()
       session.finalResultEvent = event
@@ -208,6 +254,19 @@ export function createStreamEventAppender(
             ? { interruptedTurnId: sequencedEvent.turnId }
             : {}),
         })
+      }
+      if (authRequired && session.credentialPoolId) {
+        deps.getProviderRuntime().handleAuthRequiredSignal(session, authRequired, {
+          ...(interruptedMessage ? { interruptedMessage } : {}),
+          interruptedTurnHadSideEffects: currentTurnHadSideEffects(session.events, turnBoundaryIndex),
+          ...(isTranscriptEnvelope(sequencedEvent) && sequencedEvent.turnId
+            ? { interruptedTurnId: sequencedEvent.turnId }
+            : {}),
+        })
+      }
+      if (session.activeTurnMessage) {
+        session.activeTurnMessage = undefined
+        deps.schedulePersistedSessionsWrite()
       }
       if (session.currentQueuedMessage) {
         session.currentQueuedMessage = undefined

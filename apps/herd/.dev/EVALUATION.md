@@ -139,7 +139,7 @@ Current source head: `f4bb405e3 (HEAD -> dev, origin/dev) Fix Herd runtime resto
 - `apps/herd/modules/agents/session/__tests__/sqlite-runtime-store.test.ts`
 - `apps/herd/server/db/schema.ts`
 - `operations/scripts/launch_herd.sh`
-- `operations/deploy/ec2/check-herd-split-shell.sh`
+- `operations/deploy/ec2/smoke-test.sh`
 - `operations/logs/server/herd/latest/launch.log`
 
 ## Commands Run
@@ -153,13 +153,13 @@ rg -n "restorePersistedSessionsReady|readSqlitePersistedSessionsState|runtime_st
 rg -n "Failed to restore persisted session|Unexpected end of JSON input|bubblewrap|ERROR|unhandled|uncaught|crash|restart" operations/logs/server/herd/latest/launch.log
 pnpm --filter herd run docs:check
 rg -n <deleted 2026-06-23 channel learning filename patterns> apps/herd/.dev .claude/rules/herd.md apps/herd/docs
-bash operations/deploy/ec2/check-herd-split-shell.sh --domain herd.gehirn.ai --service-port 20009 --shell-port 20001
+bash operations/deploy/ec2/smoke-test.sh
 curl -fsS -w '\nstatus=%{http_code} total=%{time_total}\n' https://herd.gehirn.ai/api/health
 git status --short --branch
 ```
 
 Result: docs guardrail passed. The superseded channel learning filenames have
-no remaining references. Split-shell topology passed. Public health returned
+no remaining references. Direct-ALB topology passed. Public health returned
 `200` on version `f4bb405e3`.
 
 ## Review Roles
@@ -168,10 +168,10 @@ no remaining references. Split-shell topology passed. Public health returned
   persistence helpers, SQLite runtime store, and runtime-session map.
 - verification/test reviewer: performed in the main thread against
   `VERIFY.md`, the runtime-session Vitest bundle, `docs:check`, and production
-  health/split-shell probes.
+  health/direct-listener probes.
 - release/install/ops reviewer: performed in the main thread against
   `operations/scripts/launch_herd.sh`,
-  `operations/deploy/ec2/check-herd-split-shell.sh`, and the active launch log.
+  `operations/deploy/ec2/smoke-test.sh`, and the active launch log.
 - contrarian reviewer: performed in the main thread. The refresh removed
   duplicate dated channel incident learnings only after confirming the durable
   guidance is already consolidated in `playbooks/channel-impacting-change.md`,

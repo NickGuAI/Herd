@@ -1,9 +1,19 @@
 # Commercial Licensing
 
-Herd is publicly available under [LICENSE](./LICENSE), which uses the PolyForm Noncommercial 1.0.0 license.
+Herd is open-source software available under the
+[GNU Affero General Public License version 3](./LICENSE), identified by SPDX as
+`AGPL-3.0-only`.
 
-That public license allows personal and other noncommercial uses. If your use case is commercial, revenue-generating, internal business use, customer-facing, or otherwise not clearly permitted under the public license, you must obtain a separate commercial license from the licensor before using Herd for that purpose.
+The AGPL permits commercial use. No license purchase is required to use,
+modify, host, or distribute Herd commercially when you comply with the AGPL,
+including its source-sharing requirements for modified versions used over a
+network.
 
-Until a dedicated sales channel is published, contact the GitHub repository owner for commercial licensing inquiries.
+A separate paid commercial agreement is available for proprietary or other non-AGPL
+use by organizations that want to embed, modify, host, or redistribute Herd.
+Until a dedicated sales channel is published, contact the GitHub repository
+owner for commercial licensing inquiries.
 
-This file is informational only and does not grant any rights beyond a separate written commercial agreement.
+This summary is informational only. The AGPL text governs use under the
+open-source license, and no proprietary rights are granted without a separate
+written commercial agreement.

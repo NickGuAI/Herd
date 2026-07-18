@@ -5,13 +5,21 @@ import { combinedAuth } from '../../../server/middleware/combined-auth.js'
 import {
   resolveProviderDefaults,
   type ProviderAdapter,
+  type ProviderModelDiscoveryContext,
+  type ProviderModelsResponse,
   type ProviderRegistryEntry,
 } from './provider-adapter.js'
 import {
+  getProvider,
   listProviders,
   resolveAutomationDefaultProviderId as resolveRegisteredAutomationDefaultProviderId,
   resolveDefaultProviderId as resolveRegisteredDefaultProviderId,
 } from './registry.js'
+import {
+  ProviderModelRefreshRateLimitError,
+  refreshProviderModels,
+  resolveProviderModels,
+} from './model-discovery.js'
 
 export interface ProviderRegistryRouterOptions {
   apiKeyStore?: ApiKeyStoreLike
@@ -20,6 +28,10 @@ export interface ProviderRegistryRouterOptions {
   auth0ClientId?: string
   verifyAuth0Token?: (token: string) => Promise<AuthUser>
   internalToken?: string
+  resolveModelDiscoveryContext?: (
+    provider: ProviderAdapter,
+    credentialPoolId?: string,
+  ) => Promise<ProviderModelDiscoveryContext>
 }
 
 function providerSupportedTransports(
@@ -30,8 +42,43 @@ function providerSupportedTransports(
     : ['stream', 'pty']
 }
 
-function toRegistryEntry(provider: ProviderAdapter): ProviderRegistryEntry {
-  const availableModels = Array.isArray(provider.availableModels) ? provider.availableModels : []
+async function resolveDiscoveryContext(
+  provider: ProviderAdapter,
+  credentialPoolId: string | undefined,
+  options: ProviderRegistryRouterOptions,
+): Promise<ProviderModelDiscoveryContext> {
+  if (!options.resolveModelDiscoveryContext || !provider.modelDiscovery) {
+    return credentialPoolId ? { credentialPoolId } : {}
+  }
+  try {
+    return await options.resolveModelDiscoveryContext(provider, credentialPoolId)
+  } catch {
+    return {
+      ...(credentialPoolId ? { credentialPoolId } : {}),
+      unavailableReason: `${provider.label} credentials are unavailable for model discovery`,
+    }
+  }
+}
+
+async function resolveModels(
+  provider: ProviderAdapter,
+  credentialPoolId: string | undefined,
+  options: ProviderRegistryRouterOptions,
+  forceRefresh = false,
+) {
+  const context = await resolveDiscoveryContext(provider, credentialPoolId, options)
+  return forceRefresh
+    ? await refreshProviderModels(provider, context)
+    : await resolveProviderModels(provider, context, {
+        skipDiscovery: !options.resolveModelDiscoveryContext,
+      })
+}
+
+async function toRegistryEntry(
+  provider: ProviderAdapter,
+  options: ProviderRegistryRouterOptions,
+): Promise<ProviderRegistryEntry> {
+  const resolvedModels = await resolveModels(provider, undefined, options)
   return {
     id: provider.id,
     label: provider.label,
@@ -46,9 +93,12 @@ function toRegistryEntry(provider: ProviderAdapter): ProviderRegistryEntry {
         ? { infoBanner: { ...provider.uiCapabilities.infoBanner } }
         : {}),
     },
-    availableModels: availableModels as ProviderRegistryEntry['availableModels'],
+    availableModels: resolvedModels.models,
+    modelCatalogScope: provider.modelDiscovery?.catalogScope ?? 'credential',
+    modelDiscovery: resolvedModels.discovery,
+    supportsCustomModels: resolvedModels.supportsCustomModels,
     supportedTransports: providerSupportedTransports(provider),
-    defaults: resolveProviderDefaults(provider),
+    defaults: resolveProviderDefaults(provider, resolvedModels.models),
     disabledReason: null,
     ...(provider.machineAuth
       ? {
@@ -68,6 +118,36 @@ function toRegistryEntry(provider: ProviderAdapter): ProviderRegistryEntry {
   }
 }
 
+function toModelsResponse(
+  provider: ProviderAdapter,
+  resolved: Awaited<ReturnType<typeof resolveModels>>,
+): ProviderModelsResponse {
+  return {
+    providerId: provider.id,
+    availableModels: resolved.models,
+    modelCatalogScope: provider.modelDiscovery?.catalogScope ?? 'credential',
+    modelDiscovery: resolved.discovery,
+    supportsCustomModels: resolved.supportsCustomModels,
+  }
+}
+
+function parseCredentialPoolId(raw: unknown): { ok: true; value?: string } | { ok: false } {
+  if (raw === undefined || raw === null || raw === '') {
+    return { ok: true }
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false }
+  }
+  const value = raw.trim()
+  return value.length > 0 && value.length <= 128
+    ? { ok: true, value }
+    : { ok: false }
+}
+
+function parseRouteProviderId(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null
+}
+
 export function createProviderRegistryRouter(
   options: ProviderRegistryRouterOptions = {},
 ): Router {
@@ -81,14 +161,65 @@ export function createProviderRegistryRouter(
     verifyToken: options.verifyAuth0Token,
     internalToken: options.internalToken,
   })
+  const requireWriteAccess = combinedAuth({
+    apiKeyStore: options.apiKeyStore,
+    requiredApiKeyScopes: ['agents:write'],
+    domain: options.auth0Domain,
+    audience: options.auth0Audience,
+    clientId: options.auth0ClientId,
+    verifyToken: options.verifyAuth0Token,
+    internalToken: options.internalToken,
+  })
 
-  router.get('/providers', requireReadAccess, (_req, res) => {
-    const providers = listProviders().map(toRegistryEntry)
+  router.get('/providers', requireReadAccess, async (_req, res) => {
+    const providers = await Promise.all(listProviders().map(async (provider) => (
+      await toRegistryEntry(provider, options)
+    )))
     res.json({
       defaultProviderId: resolveRegisteredDefaultProviderId(),
       automationDefaultProviderId: resolveRegisteredAutomationDefaultProviderId(),
       providers,
     })
+  })
+
+  router.get('/providers/:providerId/models', requireReadAccess, async (req, res) => {
+    const providerId = parseRouteProviderId(req.params.providerId)
+    const provider = providerId ? getProvider(providerId) : undefined
+    if (!provider) {
+      res.status(404).json({ error: `Unknown provider "${providerId ?? ''}"` })
+      return
+    }
+    const credentialPoolId = parseCredentialPoolId(req.query.credentialPoolId)
+    if (!credentialPoolId.ok) {
+      res.status(400).json({ error: 'credentialPoolId must be a non-empty string of at most 128 characters' })
+      return
+    }
+    const resolved = await resolveModels(provider, credentialPoolId.value, options)
+    res.json(toModelsResponse(provider, resolved))
+  })
+
+  router.post('/providers/:providerId/models/refresh', requireWriteAccess, async (req, res) => {
+    const providerId = parseRouteProviderId(req.params.providerId)
+    const provider = providerId ? getProvider(providerId) : undefined
+    if (!provider) {
+      res.status(404).json({ error: `Unknown provider "${providerId ?? ''}"` })
+      return
+    }
+    const credentialPoolId = parseCredentialPoolId(req.body?.credentialPoolId)
+    if (!credentialPoolId.ok) {
+      res.status(400).json({ error: 'credentialPoolId must be a non-empty string of at most 128 characters' })
+      return
+    }
+    try {
+      const resolved = await resolveModels(provider, credentialPoolId.value, options, true)
+      res.json(toModelsResponse(provider, resolved))
+    } catch (error) {
+      if (error instanceof ProviderModelRefreshRateLimitError) {
+        res.status(429).json({ error: error.message, retryAt: error.retryAt })
+        return
+      }
+      throw error
+    }
   })
 
   return router

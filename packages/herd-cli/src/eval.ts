@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path'
 import { formatStoredApiKeyUnauthorizedMessage } from './api-key-recovery.js'
 import { type HerdConfig, normalizeEndpoint, readHerdConfig } from './config.js'
 import { fetchJson as fetchJsonStrict } from './http-json.js'
@@ -13,7 +14,7 @@ export interface EvalCliDependencies {
   stderr?: Writable
 }
 
-type RunnerMode = 'subscription-host-cli' | 'subscription-sbx' | 'api-key' | 'proxy-experimental'
+type RunnerMode = 'herd-orchestrated' | 'subscription-host-cli' | 'subscription-sbx' | 'api-key' | 'proxy-experimental'
 type EvalProfile = 'smoke' | 'full' | 'release-gate'
 
 interface DoctorOptions {
@@ -24,6 +25,7 @@ interface DoctorOptions {
 interface BootstrapOptions {
   host: string
   model: string
+  adapterRoot: string
 }
 
 interface RunOptions {
@@ -32,11 +34,13 @@ interface RunOptions {
   commanderId: string
   profile: EvalProfile
   runner: RunnerMode
+  adapterRoot: string
+  adapterModule: string
   host?: string
-  cwd?: string
 }
 
 const RUNNER_MODES: readonly RunnerMode[] = [
+  'herd-orchestrated',
   'subscription-host-cli',
   'subscription-sbx',
   'api-key',
@@ -44,17 +48,17 @@ const RUNNER_MODES: readonly RunnerMode[] = [
 ]
 
 const EVAL_PROFILES: readonly EvalProfile[] = ['smoke', 'full', 'release-gate']
-const BENCHMARK_ADAPTER_ROOT = '/home/builder/App/benchmarks/herd'
 
 function printUsage(stdout: Writable): void {
   stdout.write('Usage:\n')
-  stdout.write('  herd eval doctor [--bench <bench>] [--runner subscription-host-cli|subscription-sbx|api-key|proxy-experimental]\n')
-  stdout.write('  herd eval commander bootstrap --host <machine-id> --model <model-id>\n')
+  stdout.write('  herd eval doctor [--bench <bench>] [--runner herd-orchestrated|subscription-host-cli|subscription-sbx|api-key|proxy-experimental]\n')
+  stdout.write('  herd eval commander bootstrap --host <machine-id> --model <model-id> --adapter-root <absolute-path>\n')
   stdout.write('  herd eval list\n')
-  stdout.write('  herd eval run <bench> --trials <n> --commander <id> --profile smoke|full|release-gate --runner <runner-mode> [--host <machine-id>] [--cwd <path>]\n')
+  stdout.write('  herd eval run <bench> --trials <n> --commander <id> --profile smoke|full|release-gate --runner <runner-mode> --adapter-root <absolute-path> --adapter-module <python.module> [--host <machine-id>]\n')
   stdout.write('  herd eval status <run-id>\n')
   stdout.write('  herd eval report <run-id>\n')
   stdout.write('  herd eval submit <run-id>\n')
+  stdout.write('\nBenchmark adapters are external inputs and are not bundled with Herd. Supply their absolute root with `--adapter-root`.\n')
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -64,6 +68,21 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function parseNonEmpty(value: string | undefined): string | null {
   const trimmed = value?.trim() ?? ''
   return trimmed.length > 0 ? trimmed : null
+}
+
+function parseAbsolutePath(value: string | undefined): string | null {
+  const parsed = parseNonEmpty(value)
+  // Adapter roots belong to the target machine. Host-platform normalization
+  // can rewrite a valid remote path (for example /opt/... on a Windows CLI),
+  // so validation must preserve the operator-supplied absolute path verbatim.
+  return parsed && isAbsolute(parsed) ? parsed : null
+}
+
+function parsePythonModule(value: string | undefined): string | null {
+  const parsed = parseNonEmpty(value)
+  return parsed && /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u.test(parsed)
+    ? parsed
+    : null
 }
 
 function parseRunnerMode(value: string | undefined): RunnerMode | null {
@@ -205,6 +224,7 @@ function parseDoctorOptions(args: readonly string[]): DoctorOptions | null {
 function parseBootstrapOptions(args: readonly string[]): BootstrapOptions | null {
   let host: string | null = null
   let model: string | null = null
+  let adapterRoot: string | null = null
 
   for (let index = 0; index < args.length;) {
     const flag = args[index]
@@ -224,10 +244,17 @@ function parseBootstrapOptions(args: readonly string[]): BootstrapOptions | null
       continue
     }
 
+    if (flag === '--adapter-root') {
+      adapterRoot = parseAbsolutePath(value ?? undefined)
+      if (!adapterRoot) return null
+      index += 2
+      continue
+    }
+
     return null
   }
 
-  return host && model ? { host, model } : null
+  return host && model && adapterRoot ? { host, model, adapterRoot } : null
 }
 
 function parseRunOptions(args: readonly string[]): RunOptions | null {
@@ -240,8 +267,9 @@ function parseRunOptions(args: readonly string[]): RunOptions | null {
   let commanderId: string | null = null
   let profile: EvalProfile | null = null
   let runner: RunnerMode | null = null
+  let adapterRoot: string | null = null
+  let adapterModule: string | null = null
   let host: string | null = null
-  let cwd: string | null = null
 
   for (let index = 1; index < args.length;) {
     const flag = args[index]
@@ -282,9 +310,16 @@ function parseRunOptions(args: readonly string[]): RunOptions | null {
       continue
     }
 
-    if (flag === '--cwd') {
-      if (!value || !value.startsWith('/')) return null
-      cwd = value
+    if (flag === '--adapter-root') {
+      adapterRoot = parseAbsolutePath(value ?? undefined)
+      if (!adapterRoot) return null
+      index += 2
+      continue
+    }
+
+    if (flag === '--adapter-module') {
+      adapterModule = parsePythonModule(value ?? undefined)
+      if (!adapterModule) return null
       index += 2
       continue
     }
@@ -292,7 +327,7 @@ function parseRunOptions(args: readonly string[]): RunOptions | null {
     return null
   }
 
-  if (trials === null || !commanderId || !profile || !runner) {
+  if (trials === null || !commanderId || !profile || !runner || !adapterRoot || !adapterModule) {
     return null
   }
 
@@ -302,8 +337,9 @@ function parseRunOptions(args: readonly string[]): RunOptions | null {
     commanderId,
     profile,
     runner,
+    adapterRoot,
+    adapterModule,
     host: host ?? undefined,
-    cwd: cwd ?? undefined,
   }
 }
 
@@ -349,7 +385,7 @@ function createBenchmarkCommanderPayload(options: BootstrapOptions): Record<stri
     agentType: 'codex',
     host: options.host,
     model: options.model,
-    cwd: BENCHMARK_ADAPTER_ROOT,
+    cwd: options.adapterRoot,
     persona: 'Evaluation commander who runs reproducible agent benchmarks, selects safe runner/auth modes, dispatches benchmark workers, records telemetry, and reports score deltas without modifying product code.',
     heartbeat: {
       intervalMs: 1800000,
@@ -373,42 +409,23 @@ function sanitizeSessionPart(value: string): string {
   return sanitized || 'bench'
 }
 
-function adapterPackageForBench(bench: string): string {
-  const normalized = bench.trim().toLowerCase()
-  if (normalized === 'terminal-bench' || normalized === 'terminal_bench') return 'herd_terminal_bench'
-  if (normalized === 'hal-reliability' || normalized === 'hal_reliability') return 'herd_hal_reliability'
-  if (normalized === 'tau-bench' || normalized === 'tau_bench') return 'herd_tau_bench'
-  if (normalized === 'marble') return 'herd_marble'
-  if (normalized === 'locomo') return 'herd_locomo'
-  return `herd_${sanitizeSessionPart(bench).replace(/-/gu, '_')}`
-}
-
-function adapterDirectoryForBench(bench: string): string {
-  const normalized = bench.trim().toLowerCase()
-  if (normalized === 'terminal-bench' || normalized === 'terminal_bench') return 'terminal_bench'
-  if (normalized === 'hal-reliability' || normalized === 'hal_reliability') return 'hal_reliability'
-  if (normalized === 'tau-bench' || normalized === 'tau_bench') return 'tau_bench'
-  if (normalized === 'marble') return 'marble'
-  if (normalized === 'locomo') return 'locomo'
-  return sanitizeSessionPart(bench).replace(/-/gu, '_')
-}
-
-function adapterPathForBench(bench: string): string {
-  return `${BENCHMARK_ADAPTER_ROOT}/${adapterDirectoryForBench(bench)}`
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'"'"'`)}'`
 }
 
 function buildEvalRunTask(options: RunOptions, sessionName: string): string {
-  const adapterPackage = adapterPackageForBench(options.bench)
-  const adapterPath = adapterPathForBench(options.bench)
   const smokeFlag = options.profile === 'smoke' ? ' --smoke' : ''
   const adapterCommand = [
-    `PYTHONPATH=${BENCHMARK_ADAPTER_ROOT}:${adapterPath}`,
+    `PYTHONPATH=${shellQuote(options.adapterRoot)}`,
+    `HERD_EVAL_COMMANDER_ID=${shellQuote(options.commanderId)}`,
     'python3',
-    `-m ${adapterPackage}.runner`,
-    `--run-id ${sessionName}`,
-    `--profile ${options.profile}`,
-    `--trials ${options.trials}`,
-    `--runner-mode ${options.runner}`,
+    `-m ${shellQuote(options.adapterModule)}`,
+    `--run-id ${shellQuote(sessionName)}`,
+    `--bench-id ${shellQuote(options.bench)}`,
+    `--profile ${shellQuote(options.profile)}`,
+    `--trials ${shellQuote(String(options.trials))}`,
+    `--runner-mode ${shellQuote(options.runner)}`,
+    `--commander-id ${shellQuote(options.commanderId)}`,
     '--eval-root ~/.herd/eval',
     smokeFlag.trim(),
   ].filter((part) => part.length > 0).join(' ')
@@ -417,11 +434,15 @@ function buildEvalRunTask(options: RunOptions, sessionName: string): string {
     'Run a Herd benchmark through the stable eval CLI surface.',
     '',
     'Required steps:',
-    `1. Run: herd eval doctor --bench ${options.bench} --runner ${options.runner}`,
-    '2. If doctor passes, execute the adapter directly; do not run `herd eval run` inside this worker.',
+    `1. Run: herd eval doctor --bench ${shellQuote(options.bench)} --runner ${shellQuote(options.runner)}`,
+    '2. This dispatched worker session is the first permitted adapter-code execution boundary. If doctor passes, execute the adapter directly exactly once; do not run `herd eval run` inside this worker.',
     `3. Adapter command: ${adapterCommand}`,
-    '4. Store normalized manifests under the configured Herd eval result root.',
-    '5. Report the run ID, score summary, failures, runtime, and artifact paths.',
+    '4. If the adapter command exits non-zero, including an import or dependency failure, stop immediately, report the failure and stderr, and do not record or submit a successful result.',
+    '5. Store normalized manifests under the configured Herd eval result root.',
+    '6. Report the run ID, score summary, failures, runtime, and artifact paths.',
+    options.runner === 'herd-orchestrated'
+      ? '7. Orchestrated rule: the supplied adapter must enter through the Herd orchestration boundary; direct Codex/Claude adapters are executor baselines only.'
+      : '7. Baseline rule: this direct executor path must not be reported as a Herd-orchestrated score.',
     '',
     'Do not copy, mount, print, or persist raw OAuth credential files or provider credential file paths.',
   ].join('\n')
@@ -506,9 +527,10 @@ async function runRun(
   stderr: Writable,
 ): Promise<number> {
   const sessionName = `eval-${sanitizeSessionPart(options.bench)}-${Date.now()}`
+  const commanderPath = `/api/commanders/${encodeURIComponent(options.commanderId)}`
   const result = await fetchJson(
     fetchImpl,
-    buildApiUrl(config.endpoint, `/api/commanders/${encodeURIComponent(options.commanderId)}/workers`),
+    buildApiUrl(config.endpoint, `${commanderPath}/workers`),
     {
       method: 'POST',
       headers: buildAuthHeaders(config, true),
@@ -516,7 +538,11 @@ async function runRun(
         name: sessionName,
         agentType: 'codex',
         host: options.host,
-        cwd: options.cwd ?? BENCHMARK_ADAPTER_ROOT,
+        cwd: options.adapterRoot,
+        evalAdapter: {
+          adapterRoot: options.adapterRoot,
+          adapterModule: options.adapterModule,
+        },
         task: buildEvalRunTask(options, sessionName),
       }),
     },

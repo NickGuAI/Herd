@@ -1,23 +1,28 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Plus } from 'lucide-react'
 import type { AgentType, ProviderRegistryEntry } from '@/types'
-import { getProviderControlDefaults } from '@/hooks/use-providers'
+import { getProviderControlDefaults, useProviderModels } from '@/hooks/use-providers'
+import {
+  getDefaultAgentEffortForModel,
+  getAgentEffortLevelsForModel,
+  type AgentEffortLevel,
+} from '@modules/agents/effort.js'
 import {
   CLAUDE_ADAPTIVE_THINKING_MODES,
   type ClaudeAdaptiveThinkingMode,
 } from '@modules/claude-adaptive-thinking.js'
 import {
-  CLAUDE_EFFORT_LEVELS,
-  type ClaudeEffortLevel,
-} from '@modules/claude-effort.js'
-import {
   MAX_CLAUDE_MAX_THINKING_TOKENS,
   MIN_CLAUDE_MAX_THINKING_TOKENS,
   type ClaudeMaxThinkingTokens,
 } from '@modules/claude-max-thinking-tokens.js'
+import {
+  canSelectConversationCredential,
+  CredentialPoolSelect,
+} from './CredentialPoolSelect'
 
 export interface CreateConversationReasoningConfig {
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -34,16 +39,19 @@ function resolveInitialAgentType(
 
 export function CreateConversationPanel({
   commanderName,
+  commanderHost,
   onCreateChat,
   createChatPending = false,
   defaultAgentType,
   providerOptions = [],
 }: {
   commanderName: string
+  commanderHost?: string | null
   onCreateChat?: (
     agentType: AgentType,
     model: string | null,
     reasoningConfig: CreateConversationReasoningConfig,
+    credentialPoolId?: string,
   ) => void | Promise<void>
   createChatPending?: boolean
   defaultAgentType?: AgentType
@@ -57,8 +65,9 @@ export function CreateConversationPanel({
     () => resolveInitialAgentType(providerOptions, defaultAgentType),
   )
   const [model, setModel] = useState<string | null>(null)
+  const [credentialPoolId, setCredentialPoolId] = useState<string | null>(null)
   const initialProviderControls = getProviderControlDefaults(null)
-  const [effort, setEffort] = useState<ClaudeEffortLevel>(initialProviderControls.effort)
+  const [effort, setEffort] = useState<AgentEffortLevel>(initialProviderControls.effort)
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
     initialProviderControls.adaptiveThinking,
   )
@@ -70,9 +79,30 @@ export function CreateConversationPanel({
     () => providerOptions.find((provider) => provider.id === agentType) ?? null,
     [agentType, providerOptions],
   )
-  const availableModels = activeProvider?.availableModels ?? []
+  const credentialSelectionAllowed = canSelectConversationCredential(agentType, commanderHost)
+  const selectedCredentialPoolId = credentialSelectionAllowed ? credentialPoolId : null
+  const modelCredentialPoolId = activeProvider?.modelCatalogScope === 'provider'
+    ? undefined
+    : selectedCredentialPoolId ?? undefined
+  const providerModels = useProviderModels(agentType, modelCredentialPoolId)
+  const availableModels = providerModels.data?.availableModels ?? activeProvider?.availableModels ?? []
+  const modelDiscovery = providerModels.data?.modelDiscovery ?? activeProvider?.modelDiscovery ?? null
   const capabilities = activeProvider?.uiCapabilities
-  const disabled = !onCreateChat || createChatPending || !agentType
+  const activeModel = availableModels.find((option) => option.id === model)
+    ?? (model === null
+      ? availableModels.find((option) => option.default)
+        ?? null
+      : null)
+  const effortOptions = useMemo(() => {
+    return agentType ? getAgentEffortLevelsForModel(agentType, activeModel) : []
+  }, [activeModel, agentType])
+  const supportsEffort = capabilities?.supportsEffort === true && effortOptions.length > 0
+  const supportsAdaptiveThinking = capabilities?.supportsAdaptiveThinking === true
+    && activeModel?.supportsAdaptiveThinking !== false
+  const disabled = !onCreateChat
+    || createChatPending
+    || !agentType
+    || Boolean(selectedCredentialPoolId && providerModels.isFetching)
 
   useEffect(() => {
     const defaultAgentTypeChanged = previousDefaultAgentTypeRef.current !== defaultAgentType
@@ -99,19 +129,33 @@ export function CreateConversationPanel({
   }, [availableModels, model])
 
   useEffect(() => {
+    setCredentialPoolId(null)
+  }, [agentType])
+
+  useEffect(() => {
     const defaults = getProviderControlDefaults(activeProvider)
-    setEffort(defaults.effort)
+    const modelDefaultEffort = activeModel?.defaultEffort as AgentEffortLevel | undefined
+    setEffort(
+      modelDefaultEffort && effortOptions.includes(modelDefaultEffort)
+        ? modelDefaultEffort
+        : effortOptions.includes(defaults.effort)
+          ? defaults.effort
+          : effortOptions[0] ?? defaults.effort,
+    )
     setAdaptiveThinking(defaults.adaptiveThinking)
     setMaxThinkingTokens(String(defaults.maxThinkingTokens))
     setReasoningError(null)
-  }, [activeProvider])
+  }, [activeModel, activeProvider, effortOptions])
 
   function buildReasoningConfig(): CreateConversationReasoningConfig | null {
+    const submittedEffort = effortOptions.includes(effort)
+      ? effort
+      : getDefaultAgentEffortForModel(agentType ?? '', activeModel)
     if (!capabilities?.supportsMaxThinkingTokens) {
       setReasoningError(null)
       return {
-        ...(capabilities?.supportsEffort ? { effort } : {}),
-        ...(capabilities?.supportsAdaptiveThinking ? { adaptiveThinking } : {}),
+        ...(supportsEffort && submittedEffort ? { effort: submittedEffort } : {}),
+        ...(supportsAdaptiveThinking ? { adaptiveThinking } : {}),
       }
     }
 
@@ -129,8 +173,8 @@ export function CreateConversationPanel({
 
     setReasoningError(null)
     return {
-      ...(capabilities?.supportsEffort ? { effort } : {}),
-      ...(capabilities?.supportsAdaptiveThinking ? { adaptiveThinking } : {}),
+      ...(supportsEffort && submittedEffort ? { effort: submittedEffort } : {}),
+      ...(supportsAdaptiveThinking ? { adaptiveThinking } : {}),
       maxThinkingTokens: parsedMaxThinkingTokens,
     }
   }
@@ -138,7 +182,14 @@ export function CreateConversationPanel({
   function handleAgentTypeChange(nextAgentType: AgentType): void {
     userSelectedAgentTypeRef.current = true
     setAgentType(nextAgentType)
-    const nextModels = providerOptions.find((provider) => provider.id === nextAgentType)?.availableModels ?? []
+    setCredentialPoolId(null)
+    const nextProvider = providerOptions.find((provider) => provider.id === nextAgentType) ?? null
+    const nextModels = nextProvider?.availableModels ?? []
+    const nextDefaults = getProviderControlDefaults(nextProvider)
+    const nextDefaultModel = nextModels.find((option) => option.default) ?? nextModels[0]
+    setEffort(getDefaultAgentEffortForModel(nextAgentType, nextDefaultModel) ?? nextDefaults.effort)
+    setAdaptiveThinking(nextDefaults.adaptiveThinking)
+    setMaxThinkingTokens(String(nextDefaults.maxThinkingTokens))
     if (model && !nextModels.some((option) => option.id === model)) {
       setModel(null)
     }
@@ -146,6 +197,20 @@ export function CreateConversationPanel({
 
   function handleAgentTypeSelectEvent(event: ChangeEvent<HTMLSelectElement>): void {
     handleAgentTypeChange(event.currentTarget.value as AgentType)
+  }
+
+  function handleModelChange(nextModelId: string | null): void {
+    const nextModel = nextModelId
+      ? availableModels.find((option) => option.id === nextModelId)
+      : availableModels.find((option) => option.default) ?? availableModels[0]
+    setModel(nextModelId)
+    const nextDefaultEffort = getDefaultAgentEffortForModel(agentType ?? '', nextModel)
+    if (nextDefaultEffort) {
+      setEffort((current) => {
+        const nextLevels = getAgentEffortLevelsForModel(agentType ?? '', nextModel)
+        return nextLevels.includes(current) ? current : nextDefaultEffort
+      })
+    }
   }
 
   return (
@@ -223,6 +288,42 @@ export function CreateConversationPanel({
               ))}
             </select>
           </label>
+          {credentialSelectionAllowed ? (
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '0 12px',
+                border: '1px solid var(--hv-border-hair)',
+                borderRadius: '2px 10px 2px 10px',
+                background: 'var(--hv-bg-raised)',
+                fontSize: 11,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: 'var(--hv-fg-subtle)',
+              }}
+            >
+              <span>Credential</span>
+              <CredentialPoolSelect
+                provider={agentType}
+                host={commanderHost}
+                value={selectedCredentialPoolId}
+                onChange={setCredentialPoolId}
+                disabled={!onCreateChat || createChatPending}
+                dataTestId="create-chat-credential-select"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--hv-fg)',
+                  fontSize: 13,
+                  padding: '8px 4px',
+                  cursor: !onCreateChat || createChatPending ? 'not-allowed' : 'pointer',
+                  maxWidth: 280,
+                }}
+              />
+            </label>
+          ) : null}
           <label
             style={{
               display: 'inline-flex',
@@ -243,7 +344,7 @@ export function CreateConversationPanel({
               className="font-body"
               data-testid="create-chat-model-select"
               value={model ?? ''}
-              onChange={(event) => setModel(event.target.value || null)}
+              onChange={(event) => handleModelChange(event.target.value || null)}
               disabled={disabled}
               style={{
                 background: 'transparent',
@@ -269,7 +370,17 @@ export function CreateConversationPanel({
               if (agentType) {
                 const reasoningConfig = buildReasoningConfig()
                 if (reasoningConfig) {
-                  void onCreateChat?.(agentType, model, reasoningConfig)
+                  void onCreateChat?.(
+                    agentType,
+                    model,
+                    reasoningConfig,
+                    credentialSelectionAllowed
+                      ? selectedCredentialPoolId
+                        ?? (activeProvider?.modelCatalogScope === 'credential'
+                          ? modelDiscovery?.credentialPoolId
+                          : undefined)
+                      : undefined,
+                  )
                 }
               }
             }}
@@ -311,7 +422,7 @@ export function CreateConversationPanel({
               maxWidth: 640,
             }}
           >
-            {capabilities?.supportsEffort ? (
+            {supportsEffort ? (
               <label
                 style={{
                   display: 'inline-flex',
@@ -332,7 +443,7 @@ export function CreateConversationPanel({
                   className="font-body"
                   data-testid="create-chat-effort-select"
                   value={effort}
-                  onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
+                  onChange={(event) => setEffort(event.target.value as AgentEffortLevel)}
                   disabled={disabled}
                   style={{
                     background: 'transparent',
@@ -343,13 +454,13 @@ export function CreateConversationPanel({
                     cursor: disabled ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  {CLAUDE_EFFORT_LEVELS.map((level) => (
+                  {effortOptions.map((level) => (
                     <option key={level} value={level}>{level}</option>
                   ))}
                 </select>
               </label>
             ) : null}
-            {capabilities?.supportsAdaptiveThinking ? (
+            {supportsAdaptiveThinking ? (
               <label
                 style={{
                   display: 'inline-flex',

@@ -52,6 +52,7 @@ import {
   ensureCodexProviderContext,
 } from '../providers/provider-session-context.js'
 import { getProvider } from '../providers/registry.js'
+import { ProviderAuthRequiredError } from '../provider-auth.js'
 import { isTranscriptEnvelope } from '../../../src/types/transcript-envelope.js'
 
 export interface PersistedSessionsWriteDeps {
@@ -255,8 +256,12 @@ function buildRecoveryProviderContext(entry: PersistedStreamSession): StreamSess
 
   if (entry.agentType === 'claude') {
     const context = asClaudeProviderContext(entry.providerContext)
+    const omitEffort = context?.omitEffort === true
     return createClaudeProviderContext({
-      effort: context?.effort ?? entry.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      effort: omitEffort
+        ? undefined
+        : context?.effort ?? entry.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      ...(omitEffort ? { omitEffort: true } : {}),
       adaptiveThinking: context?.adaptiveThinking ?? entry.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
       maxThinkingTokens: context?.maxThinkingTokens ?? entry.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     })
@@ -296,6 +301,19 @@ function buildPendingCredentialRecoverySession(
 
   const turnState = readRestoredTurnState(events)
   const lastEvent = events.at(-1)
+  const recovery: NonNullable<PersistedStreamSession['credentialPoolRecovery']> = {
+    ...entry.credentialPoolRecovery,
+    ...((entry.activeTurnMessage ?? entry.currentQueuedMessage) && !entry.credentialPoolRecovery.interruptedMessage
+      ? { interruptedMessage: entry.activeTurnMessage ?? entry.currentQueuedMessage }
+      : {}),
+    ...((entry.activeTurnMessage ?? entry.currentQueuedMessage)
+      && entry.credentialPoolRecovery.interruptedTurnHadSideEffects === undefined
+      ? { interruptedTurnHadSideEffects: true }
+      : {}),
+    ...(entry.activeTurnId && !entry.credentialPoolRecovery.interruptedTurnId
+      ? { interruptedTurnId: entry.activeTurnId }
+      : {}),
+  }
   return {
     kind: 'stream',
     name: entry.name,
@@ -320,11 +338,14 @@ function buildPendingCredentialRecoverySession(
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
     stdoutBuffer: '',
     stdinDraining: false,
-    lastTurnCompleted: turnState.lastTurnCompleted,
+    // This is a process-free recovery placeholder. No provider event can end
+    // an interrupted turn, so replacement owns the next safe transition.
+    lastTurnCompleted: true,
     ...(turnState.completedTurnAt ? { completedTurnAt: turnState.completedTurnAt } : {}),
     providerContext: buildRecoveryProviderContext(entry),
     ...(entry.credentialPoolId ? { credentialPoolId: entry.credentialPoolId } : {}),
-    credentialPoolRecovery: entry.credentialPoolRecovery,
+    ...(entry.credentialPoolMode ? { credentialPoolMode: entry.credentialPoolMode } : {}),
+    credentialPoolRecovery: recovery,
     ...(entry.approvalBridgeNonce ? { approvalBridgeNonce: entry.approvalBridgeNonce } : {}),
     ...(turnState.lastTurnCompleted ? {} : { activeTurnId: entry.activeTurnId }),
     ...(entry.resumedFrom ? { resumedFrom: entry.resumedFrom } : {}),
@@ -392,7 +413,7 @@ export async function restorePersistedSessions(
           providerContext: entry.providerContext,
           credentialPoolRecovery: entry.credentialPoolRecovery,
           activeTurnId: entry.activeTurnId,
-          effort: supportsEffort
+          effort: supportsEffort && asClaudeProviderContext(entry.providerContext)?.omitEffort !== true
             ? entry.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL
             : undefined,
           adaptiveThinking: supportsAdaptiveThinking
@@ -463,8 +484,44 @@ export async function restorePersistedSessions(
       remainingLiveSlots -= 1
 
       try {
-        const session = buildPendingCredentialRecoverySession(entry, events)
-          ?? await deps.restoreProviderSession(entry, machine)
+        let session = buildPendingCredentialRecoverySession(entry, events)
+        if (!session) {
+          try {
+            session = await deps.restoreProviderSession(entry, machine)
+          } catch (error) {
+            const recoverableLocalClaude = error instanceof ProviderAuthRequiredError
+              && entry.agentType === 'claude'
+              && !entry.host
+              && (!entry.credentialPoolMode || entry.credentialPoolMode === 'global-continuity')
+            if (!recoverableLocalClaude) {
+              throw error
+            }
+            const recoveryEntry: PersistedStreamSession = {
+              ...entry,
+              credentialPoolMode: 'global-continuity',
+              credentialPoolRecovery: {
+                provider: 'claude',
+                ...(entry.credentialPoolId
+                  ? { previousCredentialPoolId: entry.credentialPoolId }
+                  : {}),
+                clearResumeProviderContext: false,
+                reason: 'quota_threshold',
+                requestedAt: new Date().toISOString(),
+                ...((entry.activeTurnMessage ?? entry.currentQueuedMessage)
+                  ? { interruptedMessage: entry.activeTurnMessage ?? entry.currentQueuedMessage }
+                  : {}),
+                ...((entry.activeTurnMessage ?? entry.currentQueuedMessage)
+                  ? { interruptedTurnHadSideEffects: true }
+                  : {}),
+                ...(entry.activeTurnId ? { interruptedTurnId: entry.activeTurnId } : {}),
+              },
+            }
+            session = buildPendingCredentialRecoverySession(recoveryEntry, events)
+            if (!session) {
+              throw error
+            }
+          }
+        }
 
         applyRestoredReplayState(session, events, deps.applyUsageEvent, entry.conversationEntryCount)
         session.messageQueue = new SessionMessageQueue(
@@ -472,11 +529,12 @@ export async function restorePersistedSessions(
           entry.queuedMessages ?? [],
         )
         session.currentQueuedMessage = entry.currentQueuedMessage
+        session.activeTurnMessage = entry.activeTurnMessage
         session.pendingDirectSendMessages = entry.pendingDirectSendMessages
           ? [...entry.pendingDirectSendMessages]
           : []
-        session.credentialPoolRecovery = entry.credentialPoolRecovery
-        session.activeTurnId = entry.credentialPoolRecovery?.clearResumeProviderContext
+        session.credentialPoolRecovery = session.credentialPoolRecovery ?? entry.credentialPoolRecovery
+        session.activeTurnId = session.credentialPoolRecovery?.clearResumeProviderContext
           ? undefined
           : entry.activeTurnId
         if (entry.agentType === 'codex' && session.activeTurnId) {

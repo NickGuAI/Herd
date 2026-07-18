@@ -469,84 +469,56 @@ export function createSessionQueueRuntime(deps: SessionQueueRuntimeDeps) {
     displayText?: string,
     clientSendId?: string,
     userEventSubtype?: string,
-  ): Promise<{ ok: true; queued: boolean; message: QueuedMessage } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; disposition: 'started' | 'interrupted'; message: QueuedMessage }
+    | { ok: false; code?: 'credential_recovery_failed'; error: string; retryable: boolean }
+  > {
+    if (session.credentialPoolRecovery) {
+      const failureReason = session.credentialPoolRecovery.failureReason
+      return {
+        ok: false,
+        ...(session.credentialPoolRecovery.failureCode ? { code: 'credential_recovery_failed' as const } : {}),
+        error: failureReason
+          ? `Conversation credential recovery is blocked: ${failureReason}`
+          : 'Conversation runtime is recovering provider credentials',
+        retryable: !session.credentialPoolRecovery.failureCode,
+      }
+    }
+
     const liveSession = await deps.awaitAutoRotationIfNeeded(session.name)
     if (!liveSession || liveSession.kind !== 'stream') {
-      return { ok: false, error: 'Stream session unavailable' }
+      return { ok: false, error: 'Stream session unavailable', retryable: false }
     }
 
     const message = createQueuedMessage(text, 'high', images, displayText, clientSendId, userEventSubtype)
     if (liveSession.credentialPoolRecovery) {
-      if (getQueuedBacklogCount(liveSession) >= liveSession.messageQueue.maxSize) {
-        return { ok: false, error: `Queue is full (max ${liveSession.messageQueue.maxSize} messages)` }
-      }
-      liveSession.pendingDirectSendMessages.unshift(message)
-      broadcastQueueUpdate(liveSession)
-      deps.schedulePersistedSessionsWrite()
-      if (liveSession.credentialPoolRecovery.credentialPoolId) {
-        scheduleQueuedMessageDrain(liveSession, { force: true })
-      }
-      return { ok: true, queued: true, message }
-    }
-
-    if (
-      liveSession.lastTurnCompleted &&
-      !liveSession.currentQueuedMessage &&
-      liveSession.pendingDirectSendMessages.length === 0
-    ) {
-      liveSession.currentQueuedMessage = message
-      broadcastQueueUpdate(liveSession)
-      deps.schedulePersistedSessionsWrite()
-      const result = await attemptSendPromptToStreamSession(liveSession, message, {
-        userEventSubtype: userEventSubtype ?? QUEUED_MESSAGE_USER_EVENT_SUBTYPE,
-      })
-      if (result.ok) {
-        clearQueuedMessageRetry(liveSession)
-        resetQueuedMessageRetryDelay(liveSession)
-        broadcastQueueUpdate(liveSession)
-        deps.schedulePersistedSessionsWrite()
-        return { ok: true, queued: false, message }
-      }
-      liveSession.currentQueuedMessage = undefined
-      broadcastQueueUpdate(liveSession)
-      deps.schedulePersistedSessionsWrite()
-      if (!result.retryable) {
-        return { ok: false, error: result.reason }
+      const failureReason = liveSession.credentialPoolRecovery.failureReason
+      return {
+        ok: false,
+        ...(liveSession.credentialPoolRecovery.failureCode ? { code: 'credential_recovery_failed' as const } : {}),
+        error: failureReason
+          ? `Conversation credential recovery is blocked: ${failureReason}`
+          : 'Conversation runtime is recovering provider credentials',
+        retryable: !liveSession.credentialPoolRecovery.failureCode,
       }
     }
 
-    if (
-      !liveSession.lastTurnCompleted &&
-      (
-        liveSession.pendingDirectSendMessages.length === 0
-        || Boolean(getProvider(liveSession.agentType)?.runtimeWatchdog)
-      )
-    ) {
-      const result = await attemptSendPromptToStreamSession(liveSession, message, {
-        userEventSubtype: userEventSubtype ?? QUEUED_MESSAGE_USER_EVENT_SUBTYPE,
-      })
-      if (result.ok) {
-        clearQueuedMessageRetry(liveSession)
-        resetQueuedMessageRetryDelay(liveSession)
-        return { ok: true, queued: false, message }
+    const disposition = liveSession.lastTurnCompleted ? 'started' : 'interrupted'
+    const previousActiveTurnMessage = liveSession.activeTurnMessage
+    liveSession.activeTurnMessage = message
+    const result = await attemptSendPromptToStreamSession(liveSession, message, {
+      userEventSubtype,
+    })
+    if (!result.ok) {
+      if (liveSession.activeTurnMessage?.id === message.id) {
+        liveSession.activeTurnMessage = previousActiveTurnMessage
       }
-      if (!result.retryable) {
-        return { ok: false, error: result.reason }
-      }
+      return { ok: false, error: result.reason, retryable: result.retryable }
     }
-
-    if (getQueuedBacklogCount(liveSession) >= liveSession.messageQueue.maxSize) {
-      return { ok: false, error: `Queue is full (max ${liveSession.messageQueue.maxSize} messages)` }
-    }
-
-    liveSession.pendingDirectSendMessages.unshift(message)
-    broadcastQueueUpdate(liveSession)
+    clearQueuedMessageRetry(liveSession)
+    resetQueuedMessageRetryDelay(liveSession)
     deps.schedulePersistedSessionsWrite()
-    scheduleQueuedMessageDrain(
-      liveSession,
-      liveSession.lastTurnCompleted ? { force: true } : undefined,
-    )
-    return { ok: true, queued: true, message }
+    return { ok: true, disposition, message }
   }
 
   function applyRestoredQueueState(

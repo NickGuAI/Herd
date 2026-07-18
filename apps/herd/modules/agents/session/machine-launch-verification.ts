@@ -288,7 +288,7 @@ export function createMachineLaunchVerifier(deps: MachineLaunchVerifierDeps) {
           },
           schedulePersistedSessionsWrite: () => deps.getPersistenceHelpers().schedulePersistedSessionsWrite(),
           sessions: deps.sessions,
-          teardownProviderSession: (...args) => deps.getProviderRuntime().teardownProviderSession(...args),
+          teardownProviderSession: (...args) => deps.getProviderRuntime().teardownProviderSession(...args).then(() => undefined),
         },
         {
           agentType: parsedAgentType,

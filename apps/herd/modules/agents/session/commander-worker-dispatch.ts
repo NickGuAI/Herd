@@ -10,6 +10,7 @@ import type {
   ClaudePermissionMode,
   MachineConfig,
   StreamSession,
+  TrustedWorkerLaunchSourceDefaults,
 } from '../types.js'
 
 type ProviderStreamSessionOptions = Omit<
@@ -48,10 +49,12 @@ export function createCommanderWorkerDispatcher(deps: CommanderWorkerDispatcherD
     commanderId,
     abortSignal,
     rawBody,
+    trustedSourceDefaults,
   }: {
     commanderId: string
     abortSignal?: AbortSignal
     rawBody: unknown
+    trustedSourceDefaults?: TrustedWorkerLaunchSourceDefaults
   }): Promise<{ status: number; body: Record<string, unknown> }> {
     const parsed = parseWorkerLaunchRequest({
       allowedBodyKeys: COMMANDER_WORKER_LAUNCH_BODY_KEYS,
@@ -61,6 +64,7 @@ export function createCommanderWorkerDispatcher(deps: CommanderWorkerDispatcherD
       rawBody,
       requireName: true,
       routeLabel: '/api/commanders/:id/workers',
+      sourceDefaults: trustedSourceDefaults,
     })
     if (!parsed.ok) {
       return { status: parsed.status, body: parsed.body }

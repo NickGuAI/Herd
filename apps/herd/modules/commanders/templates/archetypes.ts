@@ -61,7 +61,6 @@ export const COMMANDER_ARCHETYPES: CommanderArchetype[] = [
     description: 'Benchmark-only evaluation runs against the Herd benchmark adapters workspace.',
     defaultDisplayName: 'Benchmark Commander',
     defaultAgentType: 'codex',
-    defaultCwd: '/home/builder/App/benchmarks/herd',
     defaultIdentityOperatingStyle:
       'Benchmark-only commander. Run benchmark tasks exactly as assigned, keep scope limited to benchmark execution and reporting, and avoid taking on unrelated product or operations work.',
     defaultHeartbeatMinutes: 30,

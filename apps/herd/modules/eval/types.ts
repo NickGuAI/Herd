@@ -1,5 +1,7 @@
 export const EVAL_BENCHES = [
   'terminal-bench',
+  'terminal-bench-2',
+  'terminal-bench-2-1',
   'locomo',
   'marble',
   'hal-reliability',
@@ -9,6 +11,7 @@ export const EVAL_BENCHES = [
 export const EVAL_PROFILES = ['smoke', 'full', 'release-gate'] as const
 
 export const EVAL_RUNNER_MODES = [
+  'herd-orchestrated',
   'subscription-host-cli',
   'subscription-sbx',
   'api-key',
@@ -36,6 +39,7 @@ export interface EvalTelemetryMetadata {
   task_id?: string
   turn?: number
   runner_mode: EvalRunnerMode
+  submitted_agent?: string
 }
 
 export interface EvalRunConfig {
@@ -44,7 +48,7 @@ export interface EvalRunConfig {
   source: string
   profile: EvalProfile
   runnerMode: EvalRunnerMode
-  authMode: 'subscription' | 'api-key' | 'proxy-experimental'
+  authMode: 'herd-orchestrated' | 'subscription' | 'api-key' | 'proxy-experimental'
   commanderId?: string
   model?: string
   provider?: string
@@ -53,6 +57,12 @@ export interface EvalRunConfig {
   datasetVersion?: string
   adapterVersion?: string
   environmentHash?: string
+  submittedAgent?: string
+  entryAdapter?: string
+  enteredThroughHerdOrchestratedAdapter?: boolean
+  internalStack?: string[]
+  trajectoryManifestPath?: string
+  harborCommand?: string
   createdAt: string
 }
 
@@ -111,6 +121,12 @@ export interface EvalRunManifest {
   telemetryMetadata: EvalTelemetryMetadata
   leaderboard: EvalLeaderboardState
   summaryMarkdown?: string
+  submittedAgent?: string
+  entryAdapter?: string
+  enteredThroughHerdOrchestratedAdapter?: boolean
+  internalStack?: string[]
+  trajectoryManifestPath?: string
+  harborCommand?: string
 }
 
 export interface EvalRunManifestFilters {

@@ -26,9 +26,10 @@ proxy or load balancer.
 
 ## Caddy Example
 
-This follows the same reverse-proxy shape as the deployment Caddyfile used by
-the release lane: Caddy terminates TLS, serves static web assets, and proxies
-API, WebSocket, telemetry, and installer traffic to the local Herd service.
+This is an optional shape for self-managed deployments: Caddy terminates TLS,
+serves static web assets, and proxies API, WebSocket, telemetry, and installer
+traffic to the local Herd service. The enterprise EC2 release lane instead
+terminates TLS at the ALB and forwards directly to Herd on port `20001`.
 
 ```caddyfile
 herd.example.com {

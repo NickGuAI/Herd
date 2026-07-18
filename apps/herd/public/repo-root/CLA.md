@@ -12,9 +12,10 @@ irrevocable license to use, reproduce, modify, prepare derivative works of,
 publicly display, publicly perform, and distribute your contribution as part of
 Herd.
 
-You also grant the maintainers the right to make your contribution available
-under Herd's current license terms, including PolyForm Noncommercial 1.0.0, and
-under separate commercial license agreements.
+You also authorize the maintainers to make your contribution available as part
+of Herd under the GNU Affero General Public License version 3
+(`AGPL-3.0-only`) and under separate commercial license agreements, including
+proprietary terms.
 
 ## Patent License
 

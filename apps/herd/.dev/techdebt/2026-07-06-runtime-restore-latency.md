@@ -88,10 +88,9 @@ after:  readSqlitePersistedSessionsState = 793ms, RSS = 146MB, heapUsed = 46MB
    Herd, where `events` appears either as the only key or as the final key.
    A future cleanup should use a safer structured rewrite or one-time
    compaction tool rather than more string projection cases.
-4. `operations/scripts/launch_herd.sh` prints the split-shell checker
-   command but does not enforce it. During the incident, live Caddy drift was
-   caught by `operations/deploy/ec2/check-herd-split-shell.sh`; consider making
-   that check part of the production relaunch gate.
+4. Resolved 2026-07-10: production now owns the ALB target port `20001`
+   directly, and the EC2 smoke test verifies API and document routes without a
+   Caddy split-shell dependency.
 5. Current launch logs still include Codex sidecar bubblewrap configuration
    warnings. They do not block the restore-latency fix, but they add noise to
    restart review and should be handled separately.

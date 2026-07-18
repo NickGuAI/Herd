@@ -6,7 +6,31 @@ continues to be the GitHub release body; this file ships in the public artifact.
 
 ## Unreleased
 
-- Nothing yet.
+- No unreleased changes.
+
+## v0.0.8-beta — 2026-07-18
+
+- Relicensed the current public release line under GNU AGPLv3
+  (`AGPL-3.0-only`). No license purchase is required for AGPL-compliant
+  commercial use; a separate paid commercial agreement is available for
+  proprietary or other non-AGPL use. Earlier tagged releases retain the terms
+  shipped with those releases.
+- Unified the Codex model catalogue across conversations and credentials.
+  Supported Codex models expose `low`, `medium`, `high`, and `max` effort;
+  `ultra` is available only for `gpt-5.6-sol`.
+- Made benchmark adapters explicit external inputs. Adapter-backed bootstrap
+  and run commands require an absolute `--adapter-root`; run also requires a
+  validated `--adapter-module`, and the canonical runner is
+  `herd-orchestrated`.
+- Improved provider credential selection and recovery, including Claude OAuth
+  continuity, credential-pool readiness, quota refresh behavior, and resumable
+  conversations after authentication recovery.
+- Preserved queued and in-flight conversation send intent across runtime
+  transitions, and carried approval-policy context through worker handoffs.
+- Grouped sub-agent transcript activity for a clearer operator view.
+- Simplified the enterprise EC2 lane so the production Node server serves the
+  UI, API, and WebSockets directly on ALB target port `20001`; removed the Caddy
+  split shell and reserved `20009` for the loopback development API.
 
 ## v0.0.7-beta — 2026-07-06
 

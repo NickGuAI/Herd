@@ -40,8 +40,11 @@ state/actions to UI, API, and CLI consumers.
   oversized legacy `events` payloads before JSON parsing and bounds future
   embedded replay events in
   `apps/herd/modules/agents/session/sqlite-runtime-store.ts`.
-- Credential-pool ids and native provider resume ids; native resume ids are
-  credential-pool local and must be cleared when a replacement crosses pools.
+- Credential-pool ids are runtime attribution for local Claude, not selection
+  authority. `CredentialPoolState.active` owns the one global local-Claude
+  account; coordinated hot-swap preserves native resume context across account
+  changes. Codex and remote/isolated runtime homes still clear native resume
+  context when replacement crosses homes.
 - Schema migrations in `schema_migrations`.
 - Session transcript files under the agents data directory.
 
@@ -68,7 +71,7 @@ state/actions to UI, API, and CLI consumers.
 - Providers: provide resume context and runtime teardown behavior.
 - Install/release/CLI: readiness and migration commands must stay aligned.
 - Commanders/memory: prior-conversation bootstrap is the fallback continuity
-  mechanism after pool-local native resume context is cleared.
+  mechanism after isolated runtime resume context is cleared or unavailable.
 
 ## Restart Restore Path
 

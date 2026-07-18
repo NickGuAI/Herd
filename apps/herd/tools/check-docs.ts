@@ -340,6 +340,12 @@ function publicReadmePath(): string {
     : path.join(appRoot, 'public', 'repo-root', 'README.md')
 }
 
+function publicRootFilePath(fileName: string): string {
+  return publicReleaseDocsOnly
+    ? path.join(repoRoot, fileName)
+    : path.join(appRoot, 'public', 'repo-root', fileName)
+}
+
 function checkPublicReadmeDocsLinks(): void {
   checkPublicRootMarkdownLinks(publicReadmePath())
   checkPublicRootMarkdownLinks(publicSecurityPolicyPath())
@@ -396,8 +402,9 @@ function checkSecurityPolicy(): void {
     'bootstrap key',
     'Agent Execution',
     'Approval Gating',
-    'source-available',
-    'PolyForm',
+    'open-source',
+    'GNU Affero General Public License',
+    'AGPL-3.0-only',
   ]) {
     assertContains(security, required, 'public SECURITY.md')
   }
@@ -764,6 +771,8 @@ function checkForbiddenRoots(): void {
     path.join(appRoot, 'server'),
     path.join(appRoot, 'modules'),
     path.join(appRoot, 'ios'),
+    path.join(appRoot, 'public', 'repo-root'),
+    path.join(repoRoot, 'packages', 'herd-cli', 'src', 'eval.ts'),
     path.join(repoRoot, '.github', 'workflows'),
   ]
 
@@ -793,6 +802,23 @@ function checkForbiddenRoots(): void {
         fail(`${relative(filePath)} contains ${label}`)
       }
     }
+
+    const isTestFixture = filePath.includes(`${path.sep}__tests__${path.sep}`)
+      || /[.]test[.][cm]?[jt]sx?$/u.test(filePath)
+    const isEvalRuntime = filePath.includes(`${path.sep}modules${path.sep}eval${path.sep}`)
+      || filePath === path.join(repoRoot, 'packages', 'herd-cli', 'src', 'eval.ts')
+    const legacyEvalProductName = ['Herd', 'Ath', 'ena'].join('')
+    const legacyEvalSlug = ['herd-', 'ath', 'ena'].join('')
+    const legacyEvalRole = ['ath', 'ena'].join('')
+    const containsLegacyEvalIdentity = source.includes(legacyEvalProductName)
+      || source.includes(legacyEvalSlug)
+      || (isEvalRuntime && new RegExp(`\\b${legacyEvalRole}\\b`, 'u').test(source))
+    if (!isTestFixture && containsLegacyEvalIdentity) {
+      fail(`${relative(filePath)} contains contiguous legacy eval identity`)
+    }
+    if (!isTestFixture && /\/home\/(?:builder|builder)\/App\/benchmarks/u.test(source)) {
+      fail(`${relative(filePath)} contains host-specific benchmark root`)
+    }
   }
 }
 
@@ -809,6 +835,13 @@ function checkNamingPolicy(): void {
     ...requiredPublicDocs.map((doc) => path.join(docsRoot, doc)),
     publicReadmePath(),
     publicSecurityPolicyPath(),
+    ...[
+      'CHANGELOG.md',
+      'CLA.md',
+      'COMMERCIAL-LICENSE.md',
+      'CONTRIBUTING.md',
+      'RELEASE_NOTES.md',
+    ].map(publicRootFilePath),
   ]
 
   const deprecatedPublicName = ['Ham', 'murabi'].join('')
@@ -818,7 +851,11 @@ function checkNamingPolicy(): void {
     deprecatedPublicName.toUpperCase(),
     `X-${deprecatedPublicName}`,
   ].map(escapeRegExp).join('|'), 'u')
-  const forbiddenSourceLabeling = /\bopen source\b/iu
+  const staleLicensePatterns = [
+    { pattern: /\bsource-available\b/iu, label: 'stale source-available wording' },
+    { pattern: /PolyForm/iu, label: 'stale PolyForm wording' },
+    { pattern: /\bnoncommercial\b/iu, label: 'stale noncommercial-only wording' },
+  ]
 
   for (const filePath of files) {
     if (!existsSync(filePath)) {
@@ -829,11 +866,18 @@ function checkNamingPolicy(): void {
       if (forbiddenPublicBranding.test(line)) {
         fail(`${relative(filePath)}:${index + 1} contains deprecated public product wording`)
       }
-      if (forbiddenSourceLabeling.test(line)) {
-        fail(`${relative(filePath)}:${index + 1} says open source; public docs must say source-available`)
+      for (const { pattern, label } of staleLicensePatterns) {
+        if (pattern.test(line)) {
+          fail(`${relative(filePath)}:${index + 1} contains ${label}`)
+        }
       }
     })
   }
+
+  assertContains(readText(publicReadmePath()), 'AGPL-3.0-only', 'public README license contract')
+  assertContains(readText(publicReadmePath()), 'commercial purposes', 'public README commercial-use contract')
+  assertContains(readText(publicReadmePath()), 'No license purchase is required', 'public README no-purchase contract')
+  assertContains(readText(publicReadmePath()), 'separate paid commercial agreement', 'public README paid-alternative contract')
 
   assertContains(
     readText(path.join(appRoot, 'src', 'App.tsx')),

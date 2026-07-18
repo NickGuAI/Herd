@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '')
   const appVersion = pkg.version ?? '0.0.0'
   const buildCommit = env.LAUNCH_COMMIT || env.VITE_BUILD_COMMIT || ''
+  const devApiPort = process.env.PORT || '20009'
 
   return {
     plugins: [react()],
@@ -30,7 +31,7 @@ export default defineConfig(({ mode }) => {
       port: 5200,
       proxy: {
         '/api': {
-          target: 'http://localhost:20001',
+          target: `http://localhost:${devApiPort}`,
           changeOrigin: true,
           ws: true,
         },

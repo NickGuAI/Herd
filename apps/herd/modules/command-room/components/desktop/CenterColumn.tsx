@@ -111,6 +111,7 @@ export interface CenterColumnProps {
     agentType: AgentType,
     model: string | null,
     reasoningConfig: CreateConversationReasoningConfig,
+    credentialPoolId?: string,
   ) => void | Promise<void>
   createChatPending?: boolean
   defaultCreateAgentType?: AgentType
@@ -376,6 +377,7 @@ export function CenterColumn({
       return (
         <CreateConversationPanel
           commanderName={commander.name}
+          commanderHost={commander.host}
           onCreateChat={onCreateChat}
           createChatPending={createChatPending}
           defaultAgentType={defaultCreateAgentType ?? commander.agentType}
@@ -406,6 +408,7 @@ export function CenterColumn({
         onAnswer={onAnswer}
         agentAvatarUrl={commander.avatarUrl}
         sessionId={composerSessionName}
+        sessionHost={activeChatSession?.host ?? commander.host}
         hasOlderMessages={hasOlderMessages}
         loadingOlderMessages={loadingOlderMessages}
         onLoadOlderMessages={onLoadOlderMessages}

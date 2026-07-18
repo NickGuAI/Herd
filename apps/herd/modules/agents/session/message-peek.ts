@@ -13,6 +13,7 @@ export interface SessionMessagePeekEntry {
   kind?: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'image' | 'warning'
   tool?: string
   preview: string
+  text?: string
 }
 
 export interface SessionMessagePeekResponse {
@@ -26,6 +27,7 @@ interface ExtractSessionMessagePeekOptions {
   last: number
   role: SessionMessagePeekRoleFilter
   includeToolUse: boolean
+  fullText: boolean
   fallbackTimestamp: string
 }
 
@@ -264,6 +266,7 @@ function buildToolUseEntry(
   rawBlock: ToolUseLike,
   type: SessionMessagePeekEntry['type'],
   ts: string,
+  fullText = false,
 ): SessionMessagePeekEntry | null {
   const toolName = typeof rawBlock.name === 'string' ? rawBlock.name.trim() : ''
   if (toolName.length === 0) {
@@ -281,6 +284,7 @@ function buildToolUseEntry(
     kind: 'tool_use',
     tool: toolName,
     preview: truncatePreview(preview),
+    ...(fullText ? { text: preview } : {}),
   }
 }
 
@@ -290,10 +294,12 @@ function buildToolResultEntry(
   ts: string,
   toolNamesById: Map<string, string>,
   fallbackResult?: unknown,
+  fullText = false,
 ): SessionMessagePeekEntry | null {
   const toolUseId = typeof rawBlock.tool_use_id === 'string' ? rawBlock.tool_use_id.trim() : ''
   const previewSource = rawBlock.content ?? fallbackResult
-  const preview = truncatePreview(stringifyPreview(previewSource))
+  const text = stringifyPreview(previewSource)
+  const preview = truncatePreview(text)
 
   if (preview.length === 0 && toolUseId.length === 0) {
     return null
@@ -305,47 +311,51 @@ function buildToolResultEntry(
     kind: 'tool_result',
     tool: toolUseId.length > 0 ? toolNamesById.get(toolUseId) : undefined,
     preview,
+    ...(fullText ? { text } : {}),
   }
 }
 
 function extractContentBlockStartEntry(
   event: Extract<StreamJsonEvent, { type: 'content_block_start' }>,
   ts: string,
+  fullText = false,
 ): SessionMessagePeekEntry | null {
   const block = event.content_block
   if (block.type === 'tool_use') {
-    return buildToolUseEntry(block, 'content_block_start', ts)
+    return buildToolUseEntry(block, 'content_block_start', ts, fullText)
   }
 
   if (block.type === 'thinking') {
-    const preview = truncatePreview(
-      typeof block.thinking === 'string' && block.thinking.trim().length > 0
-        ? block.thinking
-        : (typeof block.text === 'string' && block.text.trim().length > 0 ? block.text : 'thinking'),
-    )
+    const text = typeof block.thinking === 'string' && block.thinking.trim().length > 0
+      ? block.thinking
+      : (typeof block.text === 'string' && block.text.trim().length > 0 ? block.text : 'thinking')
     return {
       ts,
       type: 'content_block_start',
       kind: 'thinking',
-      preview,
+      preview: truncatePreview(text),
+      ...(fullText ? { text } : {}),
     }
   }
 
   if (block.type === 'image') {
+    const text = imageBlockPreview(block)
     return {
       ts,
       type: 'content_block_start',
       kind: 'image',
-      preview: truncatePreview(imageBlockPreview(block)),
+      preview: truncatePreview(text),
+      ...(fullText ? { text } : {}),
     }
   }
 
-  const preview = truncatePreview(typeof block.text === 'string' && block.text.trim().length > 0 ? block.text : 'text')
+  const text = typeof block.text === 'string' && block.text.trim().length > 0 ? block.text : 'text'
   return {
     ts,
     type: 'content_block_start',
     kind: 'text',
-    preview,
+    preview: truncatePreview(text),
+    ...(fullText ? { text } : {}),
   }
 }
 
@@ -355,25 +365,30 @@ function collectAssistantEntries(
   entries: SessionMessagePeekEntry[],
   role: SessionMessagePeekRoleFilter,
   includeToolUse: boolean,
+  fullText: boolean,
   toolNamesById: Map<string, string>,
 ): void {
   for (const block of event.message.content) {
     if (block.type === 'text') {
+      const text = block.text ?? ''
       pushEntry(entries, {
         ts,
         type: 'assistant',
         kind: 'text',
-        preview: truncatePreview(block.text ?? ''),
+        preview: truncatePreview(text),
+        ...(fullText ? { text } : {}),
       }, role, includeToolUse)
       continue
     }
 
     if (block.type === 'thinking') {
+      const text = block.thinking ?? block.text ?? ''
       pushEntry(entries, {
         ts,
         type: 'assistant',
         kind: 'thinking',
-        preview: truncatePreview(block.thinking ?? block.text ?? ''),
+        preview: truncatePreview(text),
+        ...(fullText ? { text } : {}),
       }, role, includeToolUse)
       continue
     }
@@ -384,16 +399,18 @@ function collectAssistantEntries(
       if (toolId.length > 0 && toolName.length > 0) {
         toolNamesById.set(toolId, toolName)
       }
-      pushEntry(entries, buildToolUseEntry(block, 'assistant', ts), role, includeToolUse)
+      pushEntry(entries, buildToolUseEntry(block, 'assistant', ts, fullText), role, includeToolUse)
       continue
     }
 
     if (block.type === 'image') {
+      const text = imageBlockPreview(block)
       pushEntry(entries, {
         ts,
         type: 'assistant',
         kind: 'image',
-        preview: truncatePreview(imageBlockPreview(block)),
+        preview: truncatePreview(text),
+        ...(fullText ? { text } : {}),
       }, role, includeToolUse)
     }
   }
@@ -405,6 +422,7 @@ function collectUserEntries(
   entries: SessionMessagePeekEntry[],
   role: SessionMessagePeekRoleFilter,
   includeToolUse: boolean,
+  fullText: boolean,
   toolNamesById: Map<string, string>,
 ): void {
   const content = event.message.content
@@ -414,17 +432,20 @@ function collectUserEntries(
       type: 'user',
       kind: 'text',
       preview: truncatePreview(content),
+      ...(fullText ? { text: content } : {}),
     }, role, includeToolUse)
     return
   }
 
   for (const block of content) {
     if (block.type === 'text') {
+      const text = block.text ?? ''
       pushEntry(entries, {
         ts,
         type: 'user',
         kind: 'text',
-        preview: truncatePreview(block.text ?? ''),
+        preview: truncatePreview(text),
+        ...(fullText ? { text } : {}),
       }, role, includeToolUse)
       continue
     }
@@ -432,7 +453,7 @@ function collectUserEntries(
     if (block.type === 'tool_result') {
       pushEntry(
         entries,
-        buildToolResultEntry(block, 'user', ts, toolNamesById, event.tool_use_result),
+        buildToolResultEntry(block, 'user', ts, toolNamesById, event.tool_use_result, fullText),
         role,
         includeToolUse,
       )
@@ -446,6 +467,7 @@ function collectTranscriptEnvelopeEntry(
   entries: SessionMessagePeekEntry[],
   role: SessionMessagePeekRoleFilter,
   includeToolUse: boolean,
+  fullText: boolean,
   toolNamesById: Map<string, string>,
   transcriptMessageRoles: Map<string, TranscriptMessageRole>,
   transcriptTextEntries: TranscriptTextEntryTracker,
@@ -463,6 +485,7 @@ function collectTranscriptEnvelopeEntry(
       type: transcriptEntryType(messageRole),
       kind: 'text',
       preview: truncatePreview(ev.text),
+      ...(fullText ? { text: ev.text } : {}),
     } satisfies SessionMessagePeekEntry
     const key = transcriptTextEntryKey(envelope, messageRole)
     if (isAuthoritativeCodexCompletedText(envelope)) {
@@ -487,6 +510,7 @@ function collectTranscriptEnvelopeEntry(
       type: transcriptEntryType(messageRole),
       kind: 'image',
       preview: truncatePreview(imageBlockPreview(ev.image)),
+      ...(fullText ? { text: imageBlockPreview(ev.image) } : {}),
     }, role, includeToolUse)
     return
   }
@@ -497,6 +521,7 @@ function collectTranscriptEnvelopeEntry(
       type: 'assistant',
       kind: 'thinking',
       preview: truncatePreview(ev.text),
+      ...(fullText ? { text: ev.text } : {}),
     }, role, includeToolUse)
     return
   }
@@ -509,7 +534,7 @@ function collectTranscriptEnvelopeEntry(
     }
     pushEntry(
       entries,
-      buildToolUseEntry({ id: toolId, name: toolName, input: ev.input }, 'assistant', ts),
+      buildToolUseEntry({ id: toolId, name: toolName, input: ev.input }, 'assistant', ts, fullText),
       role,
       includeToolUse,
     )
@@ -522,7 +547,7 @@ function collectTranscriptEnvelopeEntry(
       buildToolResultEntry({
         tool_use_id: ev.toolCallId,
         content: ev.output ?? ev.patch ?? ev.data,
-      }, 'user', ts, toolNamesById),
+      }, 'user', ts, toolNamesById, undefined, fullText),
       role,
       includeToolUse,
     )
@@ -536,7 +561,7 @@ function collectTranscriptEnvelopeEntry(
         tool_use_id: ev.toolCallId,
         content: ev.result ?? ev.error,
         is_error: ev.status === 'error' || ev.status === 'failed',
-      }, 'user', ts, toolNamesById),
+      }, 'user', ts, toolNamesById, undefined, fullText),
       role,
       includeToolUse,
     )
@@ -554,6 +579,7 @@ function collectTranscriptEnvelopeEntry(
       type: 'system',
       kind: 'text',
       preview,
+      ...(fullText ? { text: ev.detail ?? ev.title ?? stringifyPreview(ev.data) } : {}),
     }, role, includeToolUse)
   }
 }
@@ -582,6 +608,7 @@ export function extractSessionMessagePeek(
         entries,
         options.role,
         options.includeToolUse,
+        options.fullText,
         toolNamesById,
         transcriptMessageRoles,
         transcriptTextEntries,
@@ -590,27 +617,34 @@ export function extractSessionMessagePeek(
     }
 
     if (event.type === 'assistant') {
-      collectAssistantEntries(event, ts, entries, options.role, options.includeToolUse, toolNamesById)
+      collectAssistantEntries(event, ts, entries, options.role, options.includeToolUse, options.fullText, toolNamesById)
       continue
     }
 
     if (event.type === 'user') {
-      collectUserEntries(event, ts, entries, options.role, options.includeToolUse, toolNamesById)
+      collectUserEntries(event, ts, entries, options.role, options.includeToolUse, options.fullText, toolNamesById)
       continue
     }
 
     if (event.type === 'system') {
-      const preview = truncatePreview(event.text ?? '')
+      const text = event.text ?? ''
+      const preview = truncatePreview(text)
       const kind = typeof event.subtype === 'string'
         && ['warning', 'warn', 'error'].includes(event.subtype.trim().toLowerCase())
         ? 'warning'
         : 'text'
-      pushEntry(entries, { ts, type: 'system', kind, preview }, options.role, options.includeToolUse)
+      pushEntry(entries, {
+        ts,
+        type: 'system',
+        kind,
+        preview,
+        ...(options.fullText ? { text } : {}),
+      }, options.role, options.includeToolUse)
       continue
     }
 
     if (event.type === 'content_block_start') {
-      pushEntry(entries, extractContentBlockStartEntry(event, ts), options.role, options.includeToolUse)
+      pushEntry(entries, extractContentBlockStartEntry(event, ts, options.fullText), options.role, options.includeToolUse)
       continue
     }
 
@@ -620,14 +654,14 @@ export function extractSessionMessagePeek(
       if (toolId.length > 0 && toolName.length > 0) {
         toolNamesById.set(toolId, toolName)
       }
-      pushEntry(entries, buildToolUseEntry(event, event.type, ts), options.role, options.includeToolUse)
+      pushEntry(entries, buildToolUseEntry(event, event.type, ts, options.fullText), options.role, options.includeToolUse)
       continue
     }
 
     if (event.type === 'tool_result') {
       pushEntry(
         entries,
-        buildToolResultEntry(event, event.type, ts, toolNamesById),
+        buildToolResultEntry(event, event.type, ts, toolNamesById, undefined, options.fullText),
         options.role,
         options.includeToolUse,
       )

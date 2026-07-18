@@ -60,6 +60,21 @@ export function getStableMessageIdentity(message: MsgItem): string | null {
     transcript.subagentId,
   ]
 
+  if (message.kind === 'tool' && message.toolName === 'Agent' && transcript.task) {
+    // The Agent tool-use id is the container identity shared by the Agent card
+    // and later task lifecycle events. The provider task id is a fallback for
+    // task-only events that have no tool association.
+    const taskId = transcript.task.toolUseId ?? transcript.subagentId ?? transcript.task.taskId
+    if (hasValue(taskId)) {
+      return identityFromParts(message.kind, [
+        source?.provider,
+        source?.backend,
+        'task',
+        taskId,
+      ])
+    }
+  }
+
   if (message.kind === 'tool' || message.kind === 'ask') {
     return identityFromParts(message.kind, [
       ...sourceScope,

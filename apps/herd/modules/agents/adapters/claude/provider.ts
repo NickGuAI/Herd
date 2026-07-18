@@ -25,12 +25,17 @@ import type {
   PersistedStreamSession,
   StreamJsonEvent,
   StreamSession,
+  StreamSessionCreateOptions,
 } from '../../types.js'
 import { getDaemonProcessMetadata } from '../../daemon/registry.js'
 import { claudeMachineProvider } from './machine-adapter.js'
 import { claudeApprovalAdapter } from './approval-adapter.js'
 import { availableModels } from './models.js'
+import { discoverClaudeModels } from './model-discovery.js'
 import { createClaudeSessionAdapter, createClaudeStreamSession } from './session.js'
+import { getCachedProviderModelsForValidation } from '../../providers/model-discovery.js'
+import { signalProviderProcess } from '../../provider-process.js'
+import { getAgentModelEffortCapability } from '../../effort.js'
 
 function extractClaudeSessionId(event: StreamJsonEvent | undefined): string | undefined {
   if (!event) {
@@ -72,7 +77,7 @@ function snapshotClaudeSession(session: StreamSession): PersistedStreamSession |
     conversationId: session.conversationId,
     agentType: session.agentType,
     model: session.model,
-    effort: context?.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+    effort: session.effort,
     adaptiveThinking: context?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
     maxThinkingTokens: context?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     mode: session.mode,
@@ -84,11 +89,13 @@ function snapshotClaudeSession(session: StreamSession): PersistedStreamSession |
     createdAt: session.createdAt,
     providerContext: createClaudeProviderContext({
       ...(sessionId ? { sessionId } : {}),
-      effort: context?.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+      effort: session.effort,
+      ...(context?.omitEffort ? { omitEffort: true } : {}),
       adaptiveThinking: context?.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
       maxThinkingTokens: context?.maxThinkingTokens ?? DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
     }),
     credentialPoolId: session.credentialPoolId,
+    credentialPoolMode: session.credentialPoolMode,
     credentialPoolRecovery: session.credentialPoolRecovery,
     approvalBridgeNonce: session.approvalBridgeNonce,
     spawnedBy: session.spawnedBy,
@@ -102,6 +109,7 @@ function snapshotClaudeSession(session: StreamSession): PersistedStreamSession |
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }
 
@@ -130,10 +138,12 @@ function snapshotExitedClaudeSession(session: StreamSession): ExitedStreamSessio
     providerContext: createClaudeProviderContext({
       sessionId: context.sessionId,
       effort: context.effort,
+      ...(context.omitEffort ? { omitEffort: true } : {}),
       adaptiveThinking: context.adaptiveThinking,
       maxThinkingTokens: context.maxThinkingTokens,
     }),
     credentialPoolId: session.credentialPoolId,
+    credentialPoolMode: session.credentialPoolMode,
     credentialPoolRecovery: session.credentialPoolRecovery,
     resumedFrom: session.resumedFrom,
     conversationEntryCount: session.conversationEntryCount,
@@ -141,6 +151,7 @@ function snapshotExitedClaudeSession(session: StreamSession): ExitedStreamSessio
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }
 
@@ -156,6 +167,10 @@ export const claudeProvider: ProviderAdapter = registerProvider({
     supportsMessageImages: true,
   },
   availableModels,
+  modelDiscovery: {
+    discover: discoverClaudeModels,
+    includeUnmatchedCuratedModels: true,
+  },
   defaults: {
     effort: DEFAULT_CLAUDE_EFFORT_LEVEL,
     adaptiveThinking: DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -184,7 +199,51 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       MAX_THINKING_TOKENS: String(DEFAULT_CLAUDE_MAX_THINKING_TOKENS),
     }
   },
-  create(options: ProviderCreateOptions, deps: ProviderAdapterDeps) {
+  async create(options: ProviderCreateOptions, deps: ProviderAdapterDeps) {
+    const resumeContext = asClaudeProviderContext(options.resumeProviderContext)
+    const resumeSessionId = options.resumeSessionId ?? resumeContext?.sessionId
+    // Resolve the conversation-lifetime approval bridge credential before
+    // spawning so every launch/replacement path for the same conversation
+    // reuses one credential. Resolution failures fall back to the legacy
+    // session-scoped token instead of blocking the launch — approval-path
+    // bookkeeping must never take a running conversation down.
+    const conversationId = options.conversationId?.trim()
+    let approvalBridgeCredential: StreamSessionCreateOptions['approvalBridgeCredential']
+    if (conversationId && deps.resolveConversationApprovalBridgeCredential) {
+      try {
+        const resolved = await deps.resolveConversationApprovalBridgeCredential(conversationId)
+        if (resolved) {
+          approvalBridgeCredential = {
+            conversationId,
+            credentialId: resolved.credentialId,
+            epoch: resolved.epoch,
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `[agents] Failed to resolve conversation approval bridge credential for "${conversationId}"; `
+          + `falling back to a session-scoped bridge token: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }
+    }
+    const modelOptions = getCachedProviderModelsForValidation(claudeProvider, {
+      credentialPoolId: options.providerAuth?.credentialPoolId ?? options.credentialPoolId,
+      accountId: options.providerAuth?.snapshot.accountId
+        ?? options.providerAuth?.snapshot.accountEmail,
+    }).models
+    const requestedModel = options.model
+    const selectedModel = requestedModel
+      ? modelOptions.find((model) => (
+          model.id === requestedModel
+          || model.resolvedModel === requestedModel
+          || model.aliases?.includes(requestedModel) === true
+        ))
+      : modelOptions.find((model) => model.default)
+    const omitEffort = options.omitEffort === true
+      || (resumeContext?.omitEffort === true && options.effort === undefined)
+      || !getAgentModelEffortCapability('claude', selectedModel).supportsEffort
     return createClaudeStreamSession(
       options.sessionName,
       options.mode,
@@ -192,11 +251,12 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       options.cwd,
       options.machine,
       {
-        resumeSessionId: options.resumeSessionId,
+        resumeSessionId,
         systemPrompt: options.systemPrompt,
         maxTurns: options.maxTurns,
         model: options.model,
         effort: options.effort,
+        omitEffort,
         adaptiveThinking: options.adaptiveThinking,
         maxThinkingTokens: options.maxThinkingTokens,
         createdAt: options.createdAt,
@@ -208,6 +268,7 @@ export const claudeProvider: ProviderAdapter = registerProvider({
         conversationId: options.conversationId,
         currentSkillInvocation: options.currentSkillInvocation,
         approvalBridgeNonce: options.approvalBridgeNonce,
+        approvalBridgeCredential,
         daemonProcess: options.daemonProcess,
         providerAuth: options.providerAuth,
       },
@@ -233,6 +294,7 @@ export const claudeProvider: ProviderAdapter = registerProvider({
       conversationId: entry.conversationId,
       currentSkillInvocation: entry.currentSkillInvocation,
       effort: context?.effort,
+      omitEffort: context?.omitEffort,
       adaptiveThinking: context?.adaptiveThinking,
       maxThinkingTokens: context?.maxThinkingTokens,
       daemonProcess: entry.daemonProcess,
@@ -259,10 +321,6 @@ export const claudeProvider: ProviderAdapter = registerProvider({
     return this.getResumeId(session, event)
   },
   teardown(session) {
-    try {
-      session.process.kill('SIGTERM')
-    } catch {
-      // Best effort only.
-    }
+    signalProviderProcess(session.process, session.processTree, 'SIGTERM')
   },
 })

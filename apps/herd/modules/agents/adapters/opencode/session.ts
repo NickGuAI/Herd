@@ -393,6 +393,7 @@ export async function createOpenCodeAcpSession(
     }),
     providerAuthSnapshot: options.providerAuth?.snapshot,
     credentialPoolId: options.providerAuth?.credentialPoolId,
+    credentialPoolMode: options.providerAuth?.credentialPoolMode,
     adapter: createOpenCodeSessionAdapter(deps),
     resumedFrom: options.resumedFrom,
     opencodePendingSystemPrompt: buildOpenCodeSystemPrompt(options.systemPrompt, options.maxTurns),

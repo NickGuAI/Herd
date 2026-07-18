@@ -6,11 +6,7 @@ import {
   normalizeClaudeAdaptiveThinkingMode,
   type ClaudeAdaptiveThinkingMode,
 } from '../claude-adaptive-thinking.js'
-import {
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
-  normalizeClaudeEffortLevel,
-  type ClaudeEffortLevel,
-} from '../claude-effort.js'
+import { normalizeAgentEffort, type AgentEffortLevel } from '../agents/effort.js'
 import {
   DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   normalizeClaudeMaxThinkingTokens,
@@ -100,7 +96,7 @@ export interface CommanderSession {
   created: string
   agentType?: AgentType
   model?: string | null
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   providerContext?: ProviderSessionContext
@@ -356,7 +352,7 @@ function parseCommanderSession(
   const model = raw.model === null
     ? null
     : (typeof raw.model === 'string' && raw.model.trim().length > 0 ? raw.model.trim() : undefined)
-  const effort = normalizeClaudeEffortLevel(raw.effort, DEFAULT_CLAUDE_EFFORT_LEVEL)
+  const effort = normalizeAgentEffort(agentType, raw.effort)
   const adaptiveThinking = normalizeClaudeAdaptiveThinkingMode(
     raw.adaptiveThinking,
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -366,7 +362,7 @@ function parseCommanderSession(
     DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   )
   const providerContext = parseCanonicalProviderContext(raw.providerContext, {
-    effort,
+    ...(effort ? { effort } : {}),
     adaptiveThinking,
     maxThinkingTokens,
   }) ?? undefined

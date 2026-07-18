@@ -7,7 +7,7 @@ import type {
 } from '@/types'
 import { useProviderRegistry } from '@/hooks/use-providers'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { AgentEffortLevel } from '../effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import { AgentControlsSection } from './new-session-form/AgentControlsSection'
 import { MachineSection } from './new-session-form/MachineSection'
@@ -24,14 +24,15 @@ export interface NewSessionFormProps {
   setCwd: (value: string) => void
   task: string
   setTask: (value: string) => void
-  effort: ClaudeEffortLevel
-  setEffort: (value: ClaudeEffortLevel) => void
+  effort: AgentEffortLevel
+  setEffort: (value: AgentEffortLevel) => void
   adaptiveThinking: ClaudeAdaptiveThinkingMode
   setAdaptiveThinking: (value: ClaudeAdaptiveThinkingMode) => void
   maxThinkingTokens: ClaudeMaxThinkingTokens
   setMaxThinkingTokens: (value: ClaudeMaxThinkingTokens) => void
   agentType: AgentType
   setAgentType: (value: AgentType) => void
+  model?: string | null
   transportType: Exclude<SessionTransportType, 'external'>
   setTransportType: (value: Exclude<SessionTransportType, 'external'>) => void
   machines: Machine[]
@@ -75,6 +76,7 @@ function NewSessionFormComponent({
   setMaxThinkingTokens,
   agentType,
   setAgentType,
+  model,
   transportType,
   setTransportType,
   machines,
@@ -109,11 +111,14 @@ function NewSessionFormComponent({
   const providers = registeredProviders.filter((provider) =>
     !agentOptions || agentOptions.includes(provider.id),
   )
+  const currentProvider = providers.find((provider) => provider.id === agentType) ?? null
+  const effectiveModel = model ?? resumeSource?.model ?? currentProvider?.defaults?.model ?? null
   const providerReady = providers.some((provider) => provider.id === agentType)
 
   useNewSessionConstraints({
     providers,
     agentType,
+    model: effectiveModel,
     setAgentType,
     transportType,
     setTransportType,
@@ -134,6 +139,7 @@ function NewSessionFormComponent({
         transportType={transportType}
         setTransportType={setTransportType}
         resumeLocked={resumeLocked}
+        model={effectiveModel}
         effort={effort}
         setEffort={setEffort}
         adaptiveThinking={adaptiveThinking}

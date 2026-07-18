@@ -4,7 +4,16 @@ import path from 'node:path'
 
 const root = process.cwd()
 const docsRoot = path.join(root, 'docs')
-const targets = [path.join(root, 'README.md')]
+const requiredRootMarkdown = [
+  'README.md',
+  'CHANGELOG.md',
+  'CLA.md',
+  'COMMERCIAL-LICENSE.md',
+  'CONTRIBUTING.md',
+  'RELEASE_NOTES.md',
+  'SECURITY.md',
+]
+const targets = requiredRootMarkdown.map((fileName) => path.join(root, fileName))
 
 function collectMarkdown(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -35,9 +44,11 @@ function linkTargetExists(sourceFile, href) {
   return existsSync(candidate)
 }
 
-if (!existsSync(path.join(root, 'README.md'))) {
-  console.error('README.md is required')
-  process.exit(1)
+for (const fileName of requiredRootMarkdown) {
+  if (!existsSync(path.join(root, fileName))) {
+    console.error(`${fileName} is required`)
+    process.exit(1)
+  }
 }
 if (!existsSync(docsRoot)) {
   console.error('docs/ is required')

@@ -3,6 +3,8 @@ import type { ApiKeyStoreLike, ApiKeyScope } from './api-keys/store.js'
 import type { ProviderSecretsStoreLike } from './api-keys/provider-secrets-store.js'
 import type { AgentsRouterResult } from '../modules/agents/routes.js'
 import type { CommanderSessionsInterface, ApprovalSessionsInterface } from '../modules/agents/types.js'
+import type { MachineCommandExecutor } from '../modules/agents/machine-command-executor.js'
+import type { EvalAdapterPreflight } from '../modules/eval/adapter-preflight.js'
 import type { AutomationExecutor } from '../modules/automations/executor.js'
 import type { AutomationQuestEventBus } from '../modules/automations/quest-event-bus.js'
 import type { AutomationScheduler } from '../modules/automations/scheduler.js'
@@ -46,7 +48,10 @@ export interface HerdRuntimeCapabilities {
   'agents.sessions-interface': CommanderSessionsInterface
   'agents.approval-sessions-interface': ApprovalSessionsInterface
   'agents.session-websocket': AgentsRouterResult['handleUpgrade']
+  'agents.machine-command-executor': MachineCommandExecutor
   'agents.runtime': AgentsRouterResult
+
+  'eval.adapter-preflight': EvalAdapterPreflight
 
   'policies.store': PolicyStore
   'policies.action-gate': ActionPolicyGate

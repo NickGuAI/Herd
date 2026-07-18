@@ -18,7 +18,9 @@ import type {
 import { codexMachineProvider } from './machine-adapter.js'
 import { codexApprovalAdapter } from './approval-adapter.js'
 import { clearCodexTurnWatchdog } from './helpers.js'
+import { DEFAULT_CODEX_EFFORT_LEVEL } from '../../effort.js'
 import { availableModels } from './models.js'
+import { discoverCodexModels } from './model-discovery.js'
 import {
   createCodexSessionAdapter,
   createCodexAppServerSession,
@@ -41,6 +43,7 @@ function snapshotCodexSession(
     conversationId: session.conversationId,
     agentType: session.agentType,
     model: session.model,
+    effort: session.effort,
     mode: session.mode,
     cwd: session.cwd,
     host: session.host,
@@ -51,8 +54,10 @@ function snapshotCodexSession(
     providerContext: createCodexProviderContext({
       threadId: context.threadId,
       codexHome: context.codexHome,
+      effort: session.effort,
     }),
     credentialPoolId: session.credentialPoolId,
+    credentialPoolMode: session.credentialPoolMode,
     credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     spawnedBy: session.spawnedBy,
@@ -65,6 +70,7 @@ function snapshotCodexSession(
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }
 
@@ -78,6 +84,7 @@ function snapshotExitedCodexSession(session: StreamSession): ExitedStreamSession
     conversationId: session.conversationId,
     agentType: session.agentType,
     model: session.model,
+    effort: session.effort,
     mode: session.mode,
     cwd: session.cwd,
     host: session.host,
@@ -90,8 +97,10 @@ function snapshotExitedCodexSession(session: StreamSession): ExitedStreamSession
     providerContext: createCodexProviderContext({
       threadId: context.threadId,
       codexHome: context.codexHome,
+      effort: session.effort,
     }),
     credentialPoolId: session.credentialPoolId,
+    credentialPoolMode: session.credentialPoolMode,
     credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     resumedFrom: session.resumedFrom,
@@ -100,6 +109,7 @@ function snapshotExitedCodexSession(session: StreamSession): ExitedStreamSession
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }
 
@@ -115,9 +125,17 @@ export const codexProvider: ProviderAdapter = registerProvider({
     supportsMessageImages: true,
   },
   availableModels,
+  modelDiscovery: {
+    discover: discoverCodexModels,
+    catalogScope: 'provider',
+    includeUnmatchedCuratedModels: true,
+  },
+  defaults: {
+    effort: DEFAULT_CODEX_EFFORT_LEVEL,
+  },
   machineAuth: codexMachineProvider,
   uiCapabilities: {
-    supportsEffort: false,
+    supportsEffort: true,
     supportsAdaptiveThinking: false,
     supportsMaxThinkingTokens: false,
     supportsSkills: false,
@@ -165,6 +183,7 @@ export const codexProvider: ProviderAdapter = registerProvider({
         resumeSessionId: options.resumeSessionId,
         systemPrompt: options.systemPrompt,
         model: options.model,
+        effort: options.effort ?? DEFAULT_CODEX_EFFORT_LEVEL,
         createdAt: options.createdAt,
         spawnedBy: options.spawnedBy,
         spawnedWorkers: options.spawnedWorkers,
@@ -190,6 +209,7 @@ export const codexProvider: ProviderAdapter = registerProvider({
       resumeSessionId: context?.threadId,
       systemPrompt: undefined,
       model: entry.model,
+      effort: entry.effort,
       createdAt: entry.createdAt,
       spawnedBy: entry.spawnedBy,
       spawnedWorkers: entry.spawnedWorkers,

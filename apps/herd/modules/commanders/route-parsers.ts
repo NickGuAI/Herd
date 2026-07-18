@@ -1,6 +1,5 @@
 import type { Request } from 'express'
 import { parseProviderId, resolveDefaultProviderId } from '../agents/providers/registry.js'
-import { parseOptionalClaudeEffort, type ClaudeEffortLevel } from '../claude-effort.js'
 import {
   DEFAULT_COMMANDER_CONTEXT_MODE,
   parseCommanderCostCapUsd,
@@ -504,12 +503,6 @@ export function parseOptionalCommanderAgentType(
     return undefined
   }
   return parseProviderId(raw)
-}
-
-export function parseOptionalCommanderEffort(
-  raw: unknown,
-): ClaudeEffortLevel | undefined | null {
-  return parseOptionalClaudeEffort(raw)
 }
 
 export function parseIssueNumber(raw: unknown): number | null {

@@ -393,6 +393,7 @@ export async function createGeminiAcpSession(
     }),
     providerAuthSnapshot: options.providerAuth?.snapshot,
     credentialPoolId: options.providerAuth?.credentialPoolId,
+    credentialPoolMode: options.providerAuth?.credentialPoolMode,
     adapter: createGeminiSessionAdapter(deps),
     resumedFrom: options.resumedFrom,
     geminiPendingSystemPrompt: buildGeminiSystemPrompt(options.systemPrompt, options.maxTurns),

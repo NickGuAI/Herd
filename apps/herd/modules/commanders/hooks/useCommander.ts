@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJson, fetchVoid } from '../../../src/lib/api'
 import type { AgentType } from '@/types'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { AgentEffortLevel } from '../../agents/effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type { CommanderPortraitStyleId } from '../portrait-styles'
 
@@ -48,7 +48,7 @@ export interface CommanderSession {
   created: string
   agentType?: CommanderAgentType
   model?: string | null
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   cwd?: string
@@ -106,7 +106,7 @@ export interface CommanderCreateInput {
   displayName?: string
   agentType?: CommanderAgentType
   model?: string | null
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   cwd?: string
   identityOperatingStyle?: string
   avatarSeed?: string
@@ -125,7 +125,7 @@ export interface CommanderCreateInput {
 export interface CommanderProfileUpdateInput {
   commanderId: string
   speakingTone?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   portraitStyleId?: CommanderPortraitStyleId
 }
 

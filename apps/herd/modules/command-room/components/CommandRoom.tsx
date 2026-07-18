@@ -58,8 +58,8 @@ import type {
 } from '@/types'
 import { AddWorkerWizard } from '@modules/agents/components/AddWorkerWizard'
 import { NewSessionForm } from '@modules/agents/components/NewSessionForm'
+import type { AgentEffortLevel } from '@modules/agents/effort.js'
 import type { ClaudeAdaptiveThinkingMode } from '@modules/claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '@modules/claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '@modules/claude-max-thinking-tokens.js'
 import {
   formatError,
@@ -105,6 +105,7 @@ import {
   useUpdateConversation,
   type ConversationAction,
   type ConversationRecord,
+  type ConversationRuntimeSettingsUpdate,
 } from '@modules/conversation/hooks/use-conversations'
 import type { CreateConversationReasoningConfig } from '@modules/conversation/components/CreateConversationPanel'
 import { CreateCommanderWizard } from '@modules/commanders/components/CreateCommanderWizard'
@@ -606,7 +607,7 @@ function CommandRoomContent() {
   const [sessionName, setSessionName] = useState('')
   const [sessionCwd, setSessionCwd] = useState('')
   const [sessionTask, setSessionTask] = useState('')
-  const [sessionEffort, setSessionEffort] = useState<ClaudeEffortLevel>(initialProviderControls.effort)
+  const [sessionEffort, setSessionEffort] = useState<AgentEffortLevel>(initialProviderControls.effort)
   const [sessionAdaptiveThinking, setSessionAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
     initialProviderControls.adaptiveThinking,
   )
@@ -2355,6 +2356,7 @@ function CommandRoomContent() {
     agentType?: AgentType,
     model?: string | null,
     reasoningConfig: CreateConversationReasoningConfig = {},
+    credentialPoolId?: string,
   ) => {
     setSessionActionError(null)
 
@@ -2364,6 +2366,7 @@ function CommandRoomContent() {
         surface: 'ui',
         ...(agentType ? { agentType } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(credentialPoolId ? { credentialPoolId } : {}),
         ...(reasoningConfig.effort !== undefined ? { effort: reasoningConfig.effort } : {}),
         ...(reasoningConfig.adaptiveThinking !== undefined
           ? { adaptiveThinking: reasoningConfig.adaptiveThinking }
@@ -2451,22 +2454,20 @@ function CommandRoomContent() {
     }
   }, [updateConversation])
 
-  const handleSwapConversationProvider = useCallback(async (
+  const handleUpdateConversationRuntimeSettings = useCallback(async (
     conversationId: string,
-    agentType: AgentType,
-    model: string | null,
+    settings: ConversationRuntimeSettingsUpdate,
   ) => {
     setSessionActionError(null)
 
     try {
       const updated = await updateConversation.mutateAsync({
         conversationId,
-        agentType,
-        model,
+        ...settings,
       })
       handleSelectConversationId(updated.id, updated.commanderId)
     } catch (error) {
-      setSessionActionError(formatError(error, 'Failed to update conversation provider/model'))
+      setSessionActionError(formatError(error, 'Failed to update conversation runtime settings'))
       throw error
     }
   }, [handleSelectConversationId, updateConversation])
@@ -2781,8 +2782,8 @@ function CommandRoomContent() {
         onStartConversation={(conversationId) => { void handleStartConversation(conversationId) }}
         onStopConversation={(conversationId) => { void handleStopConversation(conversationId) }}
         onRenameConversation={(conversationId, name) => { void handleRenameConversation(conversationId, name) }}
-        onSwapConversationProvider={(conversationId, agentType, model) => {
-          void handleSwapConversationProvider(conversationId, agentType, model)
+        onUpdateConversationRuntimeSettings={(conversationId, settings) => {
+          void handleUpdateConversationRuntimeSettings(conversationId, settings)
         }}
         onArchiveConversation={(conversationId) => { void handleArchiveConversation(conversationId) }}
         onRemoveConversation={(conversationId) => { void handleRemoveConversation(conversationId) }}
@@ -2820,7 +2821,7 @@ function CommandRoomContent() {
           onStartConversation={handleStartConversation}
           onStopConversation={handleStopConversation}
           onRenameConversation={handleRenameConversation}
-          onSwapConversationProvider={handleSwapConversationProvider}
+          onUpdateConversationRuntimeSettings={handleUpdateConversationRuntimeSettings}
           onArchiveConversation={handleArchiveConversation}
           onRemoveConversation={handleRemoveConversation}
           commanders={sessionCommanders}
@@ -2874,8 +2875,19 @@ function CommandRoomContent() {
               )
             : undefined}
           onCreateChat={!isGlobalScope && selectedCommanderId
-            ? (agentType: AgentType, model: string | null, reasoningConfig: CreateConversationReasoningConfig) => {
-                void handleCreateChatForCommander(selectedCommanderId, agentType, model, reasoningConfig)
+            ? (
+                agentType: AgentType,
+                model: string | null,
+                reasoningConfig: CreateConversationReasoningConfig,
+                credentialPoolId?: string,
+              ) => {
+                void handleCreateChatForCommander(
+                  selectedCommanderId,
+                  agentType,
+                  model,
+                  reasoningConfig,
+                  credentialPoolId,
+                )
               }
             : undefined}
           createChatPending={createConversation.isPending}

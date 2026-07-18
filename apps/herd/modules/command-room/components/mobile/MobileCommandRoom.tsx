@@ -26,7 +26,10 @@ import {
   normalizeCommandRoomRouteMetadata,
   type CommandRoomRouteMetadata,
 } from '@modules/command-room/route-metadata'
-import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type {
+  ConversationRecord,
+  ConversationRuntimeSettingsUpdate,
+} from '@modules/conversation/hooks/use-conversations'
 import type { CreateConversationReasoningConfig } from '@modules/conversation/components/CreateConversationPanel'
 import type { ChatSession } from '@modules/command-room/components/desktop/SessionsColumn'
 import type { Commander, Worker } from '@modules/command-room/components/desktop/SessionRow'
@@ -127,15 +130,15 @@ export interface MobileCommandRoomProps {
     agentType: AgentType,
     model: string | null,
     reasoningConfig: CreateConversationReasoningConfig,
+    credentialPoolId?: string,
   ) => Promise<ConversationRecord | null> | ConversationRecord | null
   requestedNewChatCommanderId?: string | null
   onStartConversation?: (conversationId: string) => void | Promise<void>
   onStopConversation?: (conversationId: string) => void | Promise<void>
   onRenameConversation?: (conversationId: string, name: string) => void | Promise<void>
-  onSwapConversationProvider?: (
+  onUpdateConversationRuntimeSettings?: (
     conversationId: string,
-    agentType: AgentType,
-    model: string | null,
+    settings: ConversationRuntimeSettingsUpdate,
   ) => void | Promise<void>
   onArchiveConversation?: (conversationId: string) => void | Promise<void>
   onRemoveConversation?: (conversationId: string) => void | Promise<void>
@@ -194,7 +197,7 @@ export function MobileCommandRoom({
   onStartConversation,
   onStopConversation,
   onRenameConversation,
-  onSwapConversationProvider,
+  onUpdateConversationRuntimeSettings,
   onArchiveConversation,
   onRemoveConversation,
   commandRoomRouteMetadata,
@@ -459,8 +462,14 @@ export function MobileCommandRoom({
             onOpenWorkspaceFile={handleOpenWorkspaceFileFromChat}
             onSelectConversationId={handleSelectConversationId}
             onCreateConversation={onCreateConversation
-              ? (agentType, model, reasoningConfig) =>
-                  onCreateConversation(chatCommander.id, agentType, model, reasoningConfig) ?? null
+              ? (agentType, model, reasoningConfig, credentialPoolId) =>
+                  onCreateConversation(
+                    chatCommander.id,
+                    agentType,
+                    model,
+                    reasoningConfig,
+                    credentialPoolId,
+                  ) ?? null
               : undefined}
             onRequestCreateConversation={onCreateChatForCommander
               ? () => onCreateChatForCommander(chatCommander.id)
@@ -468,7 +477,7 @@ export function MobileCommandRoom({
             onStartConversation={onStartConversation}
             onStopConversation={onStopConversation}
             onRenameConversation={onRenameConversation}
-            onSwapConversationProvider={onSwapConversationProvider}
+            onUpdateConversationRuntimeSettings={onUpdateConversationRuntimeSettings}
             onArchiveConversation={onArchiveConversation}
             onRemoveConversation={onRemoveConversation}
             onStopCommander={selectedCommanderRunning ? onStopCommander : undefined}

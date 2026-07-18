@@ -6,17 +6,21 @@ import type {
 } from '@/types'
 import { getProviderControlDefaults } from '@/hooks/use-providers'
 import type { ClaudeAdaptiveThinkingMode } from '../../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../../claude-effort.js'
+import {
+  getAgentEffortLevelsForModel,
+  type AgentEffortLevel,
+} from '../../effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../../claude-max-thinking-tokens.js'
 
 interface UseNewSessionConstraintsOptions {
   providers: readonly ProviderRegistryEntry[]
   agentType: AgentType
+  model?: string | null
   setAgentType: (value: AgentType) => void
   transportType: Exclude<SessionTransportType, 'external'>
   setTransportType: (value: Exclude<SessionTransportType, 'external'>) => void
-  effort: ClaudeEffortLevel
-  setEffort: (value: ClaudeEffortLevel) => void
+  effort: AgentEffortLevel
+  setEffort: (value: AgentEffortLevel) => void
   adaptiveThinking: ClaudeAdaptiveThinkingMode
   setAdaptiveThinking: (value: ClaudeAdaptiveThinkingMode) => void
   maxThinkingTokens: ClaudeMaxThinkingTokens
@@ -53,13 +57,25 @@ export function getForcedTransportType(
 export function getNormalizedEffort(
   providers: readonly ProviderRegistryEntry[],
   agentType: AgentType,
-  effort: ClaudeEffortLevel,
-): ClaudeEffortLevel | null {
+  model: string | null | undefined,
+  effort: AgentEffortLevel,
+): AgentEffortLevel | null {
   const provider = findProvider(providers, agentType)
   const defaultEffort = getProviderControlDefaults(provider).effort
-  return !provider?.uiCapabilities.supportsEffort && effort !== defaultEffort
-    ? defaultEffort
-    : null
+  if (!provider?.uiCapabilities.supportsEffort) {
+    return effort !== defaultEffort ? defaultEffort : null
+  }
+  const effectiveModel = model ?? provider.defaults?.model ?? null
+  const modelOption = provider.availableModels?.find((option) => option.id === effectiveModel)
+  const effortOptions = getAgentEffortLevelsForModel(agentType, modelOption)
+  if (effortOptions.includes(effort)) {
+    return null
+  }
+  const modelDefaultEffort = modelOption?.defaultEffort as AgentEffortLevel | undefined
+  if (modelDefaultEffort && effortOptions.includes(modelDefaultEffort)) {
+    return modelDefaultEffort
+  }
+  return effortOptions.includes(defaultEffort) ? defaultEffort : effortOptions[0] ?? defaultEffort
 }
 
 export function getNormalizedAdaptiveThinking(
@@ -89,6 +105,7 @@ export function getNormalizedMaxThinkingTokens(
 export function useNewSessionConstraints({
   providers,
   agentType,
+  model,
   setAgentType,
   transportType,
   setTransportType,
@@ -114,11 +131,11 @@ export function useNewSessionConstraints({
   }, [providers, agentType, setTransportType, transportType])
 
   useEffect(() => {
-    const nextEffort = getNormalizedEffort(providers, agentType, effort)
+    const nextEffort = getNormalizedEffort(providers, agentType, model, effort)
     if (nextEffort) {
       setEffort(nextEffort)
     }
-  }, [providers, agentType, effort, setEffort])
+  }, [providers, agentType, effort, model, setEffort])
 
   useEffect(() => {
     const nextAdaptiveThinking = getNormalizedAdaptiveThinking(providers, agentType, adaptiveThinking)

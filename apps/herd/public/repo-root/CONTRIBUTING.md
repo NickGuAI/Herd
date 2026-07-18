@@ -1,8 +1,9 @@
 # Contributing To Herd
 
-Herd accepts scoped community pull requests under the project license model:
-PolyForm Noncommercial for noncommercial use, with separate commercial
-licensing available from the maintainers.
+Herd accepts scoped community pull requests under GNU AGPLv3
+(`AGPL-3.0-only`). The required Contributor License Agreement also lets the
+maintainers offer accepted contributions under separate commercial agreements
+for proprietary or other non-AGPL use.
 
 For discussion, support, and community questions, use the Pioneering Minds AI
 community at https://pioneeringminds.ai. GitHub Discussions are intentionally

@@ -1,11 +1,16 @@
 import { useEffect, useMemo } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { fetchJson } from '@/lib/api'
-import type { AgentSession, AgentType } from '@/types'
+import type {
+  AgentSession,
+  AgentType,
+  ProviderModelDiscoveryState,
+  ProviderModelOption,
+} from '@/types'
+import type { AgentEffortLevel } from '@modules/agents/effort.js'
 import type { MsgItem } from '@modules/agents/messages/model'
 import type { CommanderCurrentTask } from '@modules/commanders/hooks/useCommander'
 import type { ClaudeAdaptiveThinkingMode } from '@modules/claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '@modules/claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '@modules/claude-max-thinking-tokens.js'
 import type {
   Conversation as ConversationContract,
@@ -38,6 +43,7 @@ export interface ConversationRecord extends Omit<ConversationContract, 'currentT
   displayState?: ConversationDisplayState
   sendTarget?: ConversationSendTarget | null
   allowedActions?: ConversationAllowedActions
+  runtimeSettings?: ConversationRuntimeSettings
   initialMessagePage?: ConversationMessagesPage
 }
 
@@ -61,6 +67,36 @@ export type ConversationAllowedActions = Record<ConversationAction, boolean>
 export interface ConversationCapabilityState {
   supported: boolean
   reason: string | null
+}
+
+export interface ConversationRuntimeSettingsValues {
+  agentType: AgentType
+  model: string | null
+  effort: AgentEffortLevel | null
+  adaptiveThinking: ClaudeAdaptiveThinkingMode | null
+  maxThinkingTokens: number | null
+}
+
+export interface ConversationRuntimeSettings {
+  current: ConversationRuntimeSettingsValues
+  supported: {
+    agentType: true
+    model: true
+    effort: boolean
+    adaptiveThinking: boolean
+    maxThinkingTokens: boolean
+  }
+  options: {
+    agentType: AgentType[]
+    model: ProviderModelOption[]
+    effort: AgentEffortLevel[]
+    adaptiveThinking: ClaudeAdaptiveThinkingMode[]
+    maxThinkingTokens: { min: number; max: number } | null
+  }
+  modelDiscovery: ProviderModelDiscoveryState
+  supportsCustomModels: boolean
+  allowed: boolean
+  disabledReason: string | null
 }
 
 export interface ConversationSendTarget {
@@ -109,7 +145,8 @@ export interface CreateConversationInput {
   currentTask?: CommanderCurrentTask | null
   agentType?: AgentType
   model?: string | null
-  effort?: ClaudeEffortLevel
+  credentialPoolId?: string
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -118,7 +155,7 @@ export interface StartConversationInput {
   conversationId: string
   agentType?: AgentType
   model?: string | null
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   cwd?: string
@@ -134,8 +171,22 @@ export interface UpdateConversationInput {
   name?: string
   agentType?: AgentType
   model?: string | null
+  credentialPoolId?: string
+  effort?: AgentEffortLevel
+  adaptiveThinking?: ClaudeAdaptiveThinkingMode
+  maxThinkingTokens?: ClaudeMaxThinkingTokens
   status?: ConversationStatus
 }
+
+export type ConversationRuntimeSettingsUpdate = Pick<
+  UpdateConversationInput,
+  | 'agentType'
+  | 'model'
+  | 'credentialPoolId'
+  | 'effort'
+  | 'adaptiveThinking'
+  | 'maxThinkingTokens'
+>
 
 export interface DeleteConversationInput {
   conversationId: string
@@ -145,6 +196,7 @@ export interface DeleteConversationInput {
 interface ConversationMessageResponse {
   accepted: boolean
   createdSession: boolean
+  disposition: 'started' | 'interrupted' | 'queued' | 'duplicate'
   conversation: ConversationRecord
   messagePage?: ConversationMessagesPage
 }
@@ -457,6 +509,9 @@ async function postCreateConversation(
         ...(input.currentTask !== undefined ? { currentTask: input.currentTask } : {}),
         ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.credentialPoolId !== undefined
+          ? { credentialPoolId: input.credentialPoolId }
+          : {}),
         ...(input.effort !== undefined ? { effort: input.effort } : {}),
         ...(input.adaptiveThinking !== undefined
           ? { adaptiveThinking: input.adaptiveThinking }
@@ -512,6 +567,20 @@ async function postStopConversation(
 async function patchConversation(
   input: UpdateConversationInput,
 ): Promise<ConversationRecord> {
+  const runtimeSettings = {
+    ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.credentialPoolId !== undefined
+      ? { credentialPoolId: input.credentialPoolId }
+      : {}),
+    ...(input.effort !== undefined ? { effort: input.effort } : {}),
+    ...(input.adaptiveThinking !== undefined
+      ? { adaptiveThinking: input.adaptiveThinking }
+      : {}),
+    ...(input.maxThinkingTokens !== undefined
+      ? { maxThinkingTokens: input.maxThinkingTokens }
+      : {}),
+  }
   return fetchJson<ConversationRecord>(
     `/api/conversations/${encodeURIComponent(input.conversationId)}`,
     {
@@ -521,8 +590,7 @@ async function patchConversation(
       },
       body: JSON.stringify({
         ...(input.name !== undefined ? { name: input.name } : {}),
-        ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
-        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(Object.keys(runtimeSettings).length > 0 ? { runtimeSettings } : {}),
         ...(input.status !== undefined ? { status: input.status } : {}),
       }),
     },

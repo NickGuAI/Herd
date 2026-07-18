@@ -1,7 +1,7 @@
 import type { ProviderApprovalAdapter } from '../../policies/provider-approval-adapter.js'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
+import type { AgentEffortLevel } from '../effort.js'
 import type { ClaudeStreamSessionDeps } from '../adapters/claude/session.js'
 import type { CodexSessionDeps } from '../adapters/codex/session.js'
 import type { GeminiSessionDeps } from '../adapters/gemini/session.js'
@@ -26,7 +26,7 @@ import type {
   MachineProviderAdapter,
 } from './machine-provider-adapter-core.js'
 import type { ProviderSessionContext } from './provider-session-context.js'
-import type { ProviderSpawnAuth } from '../provider-auth.js'
+import type { CredentialPoolRuntimeMode, ProviderSpawnAuth } from '../provider-auth.js'
 
 export interface ProviderPermissionModeOption {
   value: ClaudePermissionMode
@@ -75,13 +75,66 @@ export interface ProviderModelOption {
   label: string
   description?: string
   default?: boolean
+  aliases?: string[]
+  hidden?: boolean
+  deprecated?: boolean
+  runtimeCompatible?: boolean
+  resolvedModel?: string
+  supportsEffort?: boolean
+  supportedEffortLevels?: string[]
+  defaultEffort?: string
+  supportsAdaptiveThinking?: boolean
+}
+
+export interface ProviderModelDiscoveryContext {
+  credentialPoolId?: string
+  accountId?: string
+  providerAuth?: ProviderSpawnAuth
+  signal?: AbortSignal
+  /** Internal preflight failure. Never include secrets or credential paths. */
+  unavailableReason?: string
+}
+
+export interface ProviderModelDiscoveryResult {
+  models: ProviderModelOption[]
+  accountId?: string
+}
+
+export interface ProviderModelDiscoveryAdapter {
+  discover(context: ProviderModelDiscoveryContext): Promise<ProviderModelDiscoveryResult>
+  /** Whether one catalogue is shared provider-wide or varies by credential/account. */
+  catalogScope?: 'provider' | 'credential'
+  /** Advanced custom model ids are rejected unless the adapter explicitly opts in. */
+  allowCustomModels?: boolean
+  /** Keep visible runtime-compatible curated entries that discovery omits. */
+  includeUnmatchedCuratedModels?: boolean
+}
+
+export type ProviderModelDiscoverySource = 'dynamic' | 'stale-cache' | 'static-fallback'
+export type ProviderModelDiscoveryFreshness = 'fresh' | 'stale' | 'fallback'
+
+export interface ProviderModelDiscoveryMetadata {
+  source: ProviderModelDiscoverySource
+  freshness: ProviderModelDiscoveryFreshness
+  fetchedAt: string | null
+  expiresAt: string | null
+  refreshAllowedAt: string | null
+  error: string | null
+  credentialPoolId: string | null
+  accountId: string | null
+}
+
+export interface ResolvedProviderModels {
+  models: ProviderModelOption[]
+  discovery: ProviderModelDiscoveryMetadata
+  supportsCustomModels: boolean
 }
 
 export interface ProviderDefaults {
   transportType: Exclude<SessionTransportType, 'external'>
   permissionMode: ClaudePermissionMode
   model: string | null
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -93,6 +146,9 @@ export interface ProviderRegistryEntry {
   capabilities: ProviderCapabilities
   uiCapabilities: ProviderUiCapabilities
   availableModels: ProviderModelOption[]
+  modelCatalogScope: 'provider' | 'credential'
+  modelDiscovery: ProviderModelDiscoveryMetadata
+  supportsCustomModels: boolean
   supportedTransports: Exclude<SessionTransportType, 'external'>[]
   defaults: ProviderDefaults
   disabledReason: string | null
@@ -103,6 +159,14 @@ export interface ProviderRegistryResponse {
   providers: ProviderRegistryEntry[]
   defaultProviderId: AgentType
   automationDefaultProviderId: AgentType
+}
+
+export interface ProviderModelsResponse {
+  providerId: AgentType
+  availableModels: ProviderModelOption[]
+  modelCatalogScope: 'provider' | 'credential'
+  modelDiscovery: ProviderModelDiscoveryMetadata
+  supportsCustomModels: boolean
 }
 
 export type ProviderAdapterDeps =
@@ -126,7 +190,8 @@ export interface ProviderCreateOptions {
   systemPrompt?: string
   maxTurns?: number
   model?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
+  omitEffort?: boolean
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   createdAt?: string
@@ -142,11 +207,23 @@ export interface ProviderCreateOptions {
   resumeProviderContext?: ProviderSessionContext
   providerAuth?: ProviderSpawnAuth
   credentialPoolId?: string
+  credentialPoolMode?: CredentialPoolRuntimeMode
   env?: NodeJS.ProcessEnv
 }
 
 export interface ProviderTeardownOptions {
   archive?: boolean
+  preserveForReplacement?: boolean
+}
+
+export interface ProviderTeardownResult {
+  verified: boolean
+  phase: 'not-verified' | 'sigterm' | 'sigkill'
+  elapsedMs: number
+  pid?: number
+  processGroupId?: number
+  ownership: NonNullable<StreamSession['processTree']>['ownership'] | 'untracked'
+  survivingPids: number[]
 }
 
 export interface ProviderAdapter {
@@ -157,12 +234,13 @@ export interface ProviderAdapter {
   readonly capabilities: ProviderCapabilities
   readonly uiCapabilities: ProviderUiCapabilities
   readonly availableModels: readonly ProviderModelOption[]
+  readonly modelDiscovery?: ProviderModelDiscoveryAdapter
   readonly defaults?: Partial<ProviderDefaults>
   readonly machineAuth?: MachineProviderAdapter
   /** Provider-specific PTY env overrides. Route-managed env still wins. */
   preparePtyEnv?(args: {
     mode: ClaudePermissionMode
-    effort?: ClaudeEffortLevel
+    effort?: AgentEffortLevel
   }): Record<string, string>
   /**
    * Optional runtime watchdog hook for long-lived stream transports.
@@ -189,8 +267,11 @@ export interface ProviderAdapter {
   shutdownFleet?(sessions: Iterable<StreamSession>, reason?: string): Promise<void> | void
 }
 
-export function resolveProviderDefaults(provider: ProviderAdapter): ProviderDefaults {
-  const availableModels = Array.isArray(provider.availableModels) ? provider.availableModels : []
+export function resolveProviderDefaults(
+  provider: ProviderAdapter,
+  resolvedModels: readonly ProviderModelOption[] = provider.availableModels,
+): ProviderDefaults {
+  const availableModels = Array.isArray(resolvedModels) ? resolvedModels : []
   const configured = provider.defaults ?? {}
   const hasConfiguredModel = Object.prototype.hasOwnProperty.call(configured, 'model')
 

@@ -8,7 +8,7 @@ import {
 import { useSkills } from '@/hooks/use-skills'
 import type { AgentType, Machine, SessionTransportType } from '@/types'
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
+import type { AgentEffortLevel } from '../../agents/effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import type { CreateAutomationTaskInput } from '../../automations/hooks/useAutomations'
 import { detectBrowserTimezone, TIMEZONE_OPTIONS } from '../../automations/timezones'
@@ -60,7 +60,7 @@ export function CreateAutomationTaskForm({
   const [agentType, setAgentType] = useState<AgentType>('')
   const [transportType, setTransportType] =
     useState<Exclude<SessionTransportType, 'external'>>(initialProviderControls.transportType)
-  const [effort, setEffort] = useState<ClaudeEffortLevel>(initialProviderControls.effort)
+  const [effort, setEffort] = useState<AgentEffortLevel>(initialProviderControls.effort)
   const [adaptiveThinking, setAdaptiveThinking] = useState<ClaudeAdaptiveThinkingMode>(
     initialProviderControls.adaptiveThinking,
   )
@@ -162,6 +162,7 @@ export function CreateAutomationTaskForm({
         setMaxThinkingTokens={setMaxThinkingTokens}
         agentType={agentType}
         setAgentType={setAgentType}
+        model={model}
         transportType={transportType}
         setTransportType={setTransportType}
         machines={machines}

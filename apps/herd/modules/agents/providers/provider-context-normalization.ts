@@ -1,12 +1,12 @@
 import type { ClaudeAdaptiveThinkingMode } from '../../claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../claude-max-thinking-tokens.js'
 import {
   isClaudeAdaptiveThinkingMode,
 } from '../../claude-adaptive-thinking.js'
 import {
-  isClaudeEffortLevel,
-} from '../../claude-effort.js'
+  normalizeAgentEffort,
+  type AgentEffortLevel,
+} from '../effort.js'
 import {
   isClaudeMaxThinkingTokens,
 } from '../../claude-max-thinking-tokens.js'
@@ -19,7 +19,7 @@ import type { ProviderSessionContext } from './provider-session-context.js'
 export type ProviderContext = ProviderSessionContext
 
 type ProviderContextParseOptions = {
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -42,14 +42,12 @@ function asOptionalString(value: unknown): string | undefined {
     : undefined
 }
 
-function readClaudeEffort(
+function readProviderEffort(
+  providerId: string,
   value: unknown,
-  fallback?: ClaudeEffortLevel,
-): ClaudeEffortLevel | undefined {
-  if (isClaudeEffortLevel(value)) {
-    return value
-  }
-  return fallback
+  fallback?: AgentEffortLevel,
+): AgentEffortLevel | undefined {
+  return normalizeAgentEffort(providerId, value, fallback)
 }
 
 function readClaudeAdaptiveThinking(
@@ -127,8 +125,8 @@ function buildCanonicalProviderContext(
     }
   }
 
-  if (provider.uiCapabilities.supportsEffort) {
-    const effort = readClaudeEffort(raw.effort, options.effort)
+  if (provider.uiCapabilities.supportsEffort && raw.omitEffort !== true) {
+    const effort = readProviderEffort(providerId, raw.effort, options.effort)
     if (effort) {
       next.effort = effort
     }

@@ -2,6 +2,7 @@ import type { AskQuestion } from '@/types'
 import type {
   ProviderErrorClassification,
   TranscriptEnvelopeSource,
+  TranscriptTaskMetadata,
 } from '../../../src/types/transcript-envelope.js'
 
 export const MAX_CLIENT_MESSAGES = 500
@@ -17,6 +18,7 @@ export interface TranscriptMessageMeta {
   itemId?: string
   parentId?: string
   subagentId?: string
+  task?: TranscriptTaskMetadata
   seq?: number
   providerEventType?: string
   providerEventId?: string
@@ -61,6 +63,7 @@ export interface MsgItem {
   toolInput?: string
   toolOutput?: string
   subagentDescription?: string
+  isTaskPlaceholder?: boolean
   oldString?: string
   newString?: string
   askQuestions?: AskQuestion[]

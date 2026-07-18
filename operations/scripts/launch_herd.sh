@@ -18,10 +18,11 @@ ensure_hermetic_launch_env "$@"
 
 
 APP_DIR="$MONOREPO_DIR/apps/herd"
-PUBLIC_SHELL_PORT=20001
-PUBLIC_SHELL_DOMAIN="herd.gehirn.ai"
-PRIVATE_API_PORT=20009
-PRIVATE_BIND_HOST="127.0.0.1"
+PRODUCTION_PORT=20001
+PRODUCTION_DOMAIN="herd.gehirn.ai"
+PRODUCTION_BIND_HOST="0.0.0.0"
+DEVELOPMENT_API_PORT=20009
+DEVELOPMENT_BIND_HOST="127.0.0.1"
 PORT=""
 PORT_EXPLICIT=0
 SESSION_NAME="server-herd"
@@ -33,11 +34,11 @@ print_usage() {
 Usage: launch_herd.sh [--dev] [--port <port>] [--session-name <name>]
 
   --dev                  Run the tmux-managed dev server (pnpm run dev)
-  --port <port>          Override listener port (dev default: 20001, prod default: 20009)
+  --port <port>          Override listener port (dev default: 20009, prod default: 20001)
   --session-name <name>  Override tmux session name
   -h, --help             Show this help
 
-Production mode launches the private API runtime for the split-shell deployment.
+Production mode serves the UI and API directly to the ALB on port 20001.
 EOF
 }
 
@@ -87,25 +88,24 @@ fi
 
 if [ "$PORT_EXPLICIT" -eq 0 ]; then
     if [ "$MODE" = "dev" ]; then
-        PORT="$PUBLIC_SHELL_PORT"
+        PORT="$DEVELOPMENT_API_PORT"
     else
-        PORT="$PRIVATE_API_PORT"
+        PORT="$PRODUCTION_PORT"
     fi
 fi
 
 [[ "$PORT" =~ ^[0-9]+$ ]] || fail "Invalid port: $PORT"
 [ "$PORT" -gt 0 ] || fail "Invalid port: $PORT"
-if [ "$MODE" = "prod" ] && [ "$PORT" -eq "$PUBLIC_SHELL_PORT" ]; then
-    fail "Refusing to run the Herd API on public shell port $PUBLIC_SHELL_PORT. Use a private port behind Caddy, e.g. --port $PRIVATE_API_PORT."
-fi
 
 RUN_COMMAND="pnpm run start"
 RUN_LABEL="production"
 NODE_ENV_VALUE="production"
+BIND_HOST="$PRODUCTION_BIND_HOST"
 if [ "$MODE" = "dev" ]; then
     RUN_COMMAND="pnpm run dev"
     RUN_LABEL="dev"
     NODE_ENV_VALUE="development"
+    BIND_HOST="$DEVELOPMENT_BIND_HOST"
 fi
 
 port_listener_pids() {
@@ -318,11 +318,7 @@ echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}Launching Herd (${RUN_LABEL})...${NC}"
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-if [ "$MODE" = "prod" ]; then
-    launch_tmux_service "$SESSION_NAME" "$PORT" "1" "1" "$PRIVATE_BIND_HOST"
-else
-    launch_tmux_service "$SESSION_NAME" "$PORT" "1" "1"
-fi
+launch_tmux_service "$SESSION_NAME" "$PORT" "1" "1" "$BIND_HOST"
 
 # Wait for health after the new listener starts.
 wait_for_service_health "$PORT" "$SESSION_NAME"
@@ -345,8 +341,8 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null && $HEALTH_READY; then
     echo -e "${CYAN}║          SERVICE INFORMATION           ║${NC}"
     echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
     if [ "$MODE" = "prod" ]; then
-        echo -e "${CYAN}║${NC} API:       ${GREEN}http://127.0.0.1:$PORT/api/health${NC} ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC} Shell:     ${GREEN}https://$PUBLIC_SHELL_DOMAIN/healthz${NC} ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC} Local:     ${GREEN}http://127.0.0.1:$PORT/api/health${NC} ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC} Public:    ${GREEN}https://$PRODUCTION_DOMAIN${NC} ${CYAN}║${NC}"
     else
         echo -e "${CYAN}║${NC} Local:     ${GREEN}http://localhost:$PORT${NC}       ${CYAN}║${NC}"
         echo -e "${CYAN}║${NC} Health:    ${GREEN}/api/health${NC}                 ${CYAN}║${NC}"
@@ -356,9 +352,6 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null && $HEALTH_READY; then
     echo -e "${CYAN}║${NC} Launched:  ${YELLOW}$LAUNCH_TIME${NC}  ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC} Logs:      ${YELLOW}$LAUNCH_LOG_DIR${NC}  ${CYAN}║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
-    if [ "$MODE" = "prod" ]; then
-        echo -e "${YELLOW}Run split-shell check:${NC} ${BLUE}bash $MONOREPO_DIR/operations/deploy/ec2/check-herd-split-shell.sh --domain $PUBLIC_SHELL_DOMAIN --service-port $PORT --shell-port $PUBLIC_SHELL_PORT${NC}"
-    fi
     echo -e "\n${YELLOW}Commands:${NC}"
     echo -e "  ${GREEN}▸${NC} Attach:  ${BLUE}tmux attach -t $SESSION_NAME${NC}"
     echo -e "  ${GREEN}▸${NC} Tail:    ${BLUE}tail -f $LAUNCH_LOG_FILE${NC}"

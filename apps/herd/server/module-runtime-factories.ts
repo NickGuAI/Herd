@@ -16,7 +16,7 @@ import {
   createCommandersRuntime,
 } from '../modules/commanders/runtime.js'
 import { createConversationRuntime } from '../modules/conversation/runtime.js'
-import { createEvalRuntime } from '../modules/eval/runtime.js'
+import { createEvalFoundation, createEvalRuntime } from '../modules/eval/runtime.js'
 import { createModuleGraphRuntime } from '../modules/module-graph/runtime.js'
 import { createOnboardingRuntime } from '../modules/onboarding/runtime.js'
 import { createOperatorsRuntime } from '../modules/operators/runtime.js'
@@ -55,6 +55,7 @@ const RUNTIME_SETUP_FACTORIES: readonly ScopedRuntimeFactory[] = [
   { moduleId: 'operators', factory: createOperatorsRuntime },
   { moduleId: 'policies', factory: createPoliciesFoundation },
   { moduleId: 'agents', factory: createAgentsRuntime },
+  { moduleId: 'eval', factory: createEvalFoundation },
   { moduleId: 'providers', factory: createProviderRegistryRuntime },
   { moduleId: 'automations', factory: createAutomationsFoundation },
   { moduleId: 'policies', factory: createPoliciesRuntime },

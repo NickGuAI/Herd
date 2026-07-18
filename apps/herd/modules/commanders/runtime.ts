@@ -61,6 +61,7 @@ export function createCommandersRuntime(context: ModuleRuntimeContext): ModuleRo
     channelBindingStore: capabilities.consume('channels.bindings', 'commanders'),
     actionPolicyGate: capabilities.consume('policies.action-gate', 'commanders'),
     getWorkspaceResolver: () => capabilities.consume('workspace.resolver', 'commanders'),
+    evalAdapterPreflight: capabilities.consume('eval.adapter-preflight', 'commanders'),
     questStore: capabilities.consume('commanders.quest-store', 'commanders'),
     heartbeatBasePath: commanderDataDir,
     memoryBasePath: commanderDataDir,

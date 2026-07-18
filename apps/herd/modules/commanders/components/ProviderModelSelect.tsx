@@ -15,6 +15,7 @@ export function ProviderModelSelect({
   label = 'Model',
   labelClassName = 'section-title block mb-2',
   className = 'w-full rounded-lg border border-ink-border bg-washi-white px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:border-ink-border-hover',
+  dataTestId,
 }: {
   providers: readonly ProviderRegistryEntry[]
   agentType: AgentType
@@ -23,6 +24,7 @@ export function ProviderModelSelect({
   label?: string
   labelClassName?: string
   className?: string
+  dataTestId?: string
 }) {
   const options = resolveProviderModelOptions(providers, agentType)
 
@@ -30,6 +32,7 @@ export function ProviderModelSelect({
     <label className="block">
       <span className={labelClassName}>{label}</span>
       <select
+        data-testid={dataTestId}
         value={value ?? ''}
         onChange={(event) => onChange(event.target.value || null)}
         className={className}

@@ -6,6 +6,8 @@ declare global {
       user?: AuthUser
       authMode?: 'auth0' | 'api-key'
       approvalBridgeSessionName?: string
+      approvalBridgeConversationId?: string
+      approvalBridgeTokenVersion?: 2 | 3
     }
   }
 }

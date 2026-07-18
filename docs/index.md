@@ -21,8 +21,8 @@ Use these docs in this order when you are setting up or operating the product.
    for worker execution.
 4. [Hardening](operate/hardening.md): put Herd behind TLS, keep the raw app
    port private, and rotate credentials.
-5. [Enterprise EC2](operate/enterprise-ec2.md): run the split-shell systemd and
-   Caddy deployment path.
+5. [Enterprise EC2](operate/enterprise-ec2.md): run the direct-ALB systemd
+   deployment path on port `20001`.
 6. [Troubleshooting](troubleshoot.md): recover from missing CLIs, stale API
    keys, unavailable machines, and docs/install drift.
 7. [llms.txt](llms.txt): compact agent-readable map of the public docs.

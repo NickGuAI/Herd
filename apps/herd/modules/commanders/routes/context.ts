@@ -190,7 +190,7 @@ export async function sendQueuedInternalUserMessage(
   sessionName: string,
   message: string,
   options: {
-    queue?: boolean
+    intent: 'interrupt' | 'queue'
     priority?: 'high' | 'normal' | 'low'
     userEventSubtype?: string
   },
@@ -200,10 +200,10 @@ export async function sendQueuedInternalUserMessage(
     ? { text: message, userEventSubtype }
     : message
   const sent = await sessionsInterface.sendToSession(sessionName, payload, sendOptions)
-  if (sent) {
+  if (sent.ok) {
     queueInternalUserMessage(runtime, message)
   }
-  return sent
+  return sent.ok
 }
 
 export function resolveEffectiveHeartbeat(
@@ -878,10 +878,10 @@ export function buildCommandersContext(
         }
         const sessionName = activeSession.sessionName
         const sent = await sessionsInterface.sendToSession(sessionName, merged, {
-          queue: true,
+          intent: 'queue',
           priority: 'normal',
         })
-        if (!sent) {
+        if (!sent.ok) {
           if (
             runtimes.get(commanderId) === runtime
             && sessionsInterface.getSession(sessionName)
@@ -1157,7 +1157,7 @@ export function buildCommandersContext(
       }
 
       const sent = await sendQueuedInternalUserMessage(runtime, sessionsInterface, sessionName, heartbeatMessage, {
-        queue: true,
+        intent: 'queue',
         priority: 'low',
         userEventSubtype: HEARTBEAT_USER_EVENT_SUBTYPE,
       })
@@ -1348,8 +1348,8 @@ export function buildCommandersContext(
     }
     const sessionName = activeSession.sessionName
     if (input.mode === 'followup') {
-      const sent = await sessionsInterface.sendToSession(sessionName, input.message)
-      if (!sent) {
+      const sent = await sessionsInterface.sendToSession(sessionName, input.message, { intent: 'interrupt' })
+      if (!sent.ok) {
         return {
           ok: false,
           status: 409,
@@ -1493,6 +1493,7 @@ export function buildCommandersContext(
     requireChannelIngestAccess,
     requireWorkerDispatchAccess,
     getWorkspaceResolver: options.getWorkspaceResolver,
+    evalAdapterPreflight: options.evalAdapterPreflight,
     heartbeatManager,
     runtimes,
     activeCommanderSessions,

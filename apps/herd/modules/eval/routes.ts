@@ -90,6 +90,9 @@ function parseFilters(query: Record<string, unknown>): EvalRunManifestFilters | 
 }
 
 function authModeForRunnerMode(runnerMode: EvalRunConfig['runnerMode']): EvalRunConfig['authMode'] {
+  if (runnerMode === 'herd-orchestrated') {
+    return 'herd-orchestrated'
+  }
   if (runnerMode === 'api-key') {
     return 'api-key'
   }
@@ -129,6 +132,50 @@ function parseTaskResults(value: unknown): EvalTaskResult[] {
   })
 }
 
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => entry.trim())
+    : []
+}
+
+function validateSubmittedAgentBoundary(input: {
+  runnerMode: EvalRunConfig['runnerMode']
+  submittedAgent?: string
+  entryAdapter?: string
+  enteredThroughHerdOrchestratedAdapter?: boolean
+  commanderId?: string
+  trajectoryManifestPath?: string
+}): string | null {
+  if (input.runnerMode !== 'herd-orchestrated') {
+    if (input.submittedAgent && input.submittedAgent !== 'executor-baseline') {
+      return `submittedAgent ${input.submittedAgent} requires runnerMode herd-orchestrated`
+    }
+    return null
+  }
+
+  if (input.submittedAgent !== 'herd-orchestrated') {
+    return 'runnerMode herd-orchestrated requires submittedAgent herd-orchestrated'
+  }
+  if (input.enteredThroughHerdOrchestratedAdapter !== true) {
+    return 'runnerMode herd-orchestrated requires enteredThroughHerdOrchestratedAdapter=true'
+  }
+  if (!input.entryAdapter?.endsWith(':HerdOrchestratedHarborAgent')) {
+    return 'runnerMode herd-orchestrated requires a HerdOrchestratedHarborAgent entryAdapter'
+  }
+  if (!input.commanderId) {
+    return 'runnerMode herd-orchestrated requires commanderId'
+  }
+  if (!input.trajectoryManifestPath) {
+    return 'runnerMode herd-orchestrated requires trajectoryManifestPath'
+  }
+  return null
+}
+
 function parseRunWriteBody(
   body: unknown,
   now: Date,
@@ -142,13 +189,13 @@ function parseRunWriteBody(
   const rawRunId = asString(body.runId) ?? `eval-${now.getTime()}`
   const runId = normalizeEvalRunId(rawRunId)
   if (!bench) {
-    return { ok: false, error: 'bench must be one of: terminal-bench, locomo, marble, hal-reliability, tau-bench' }
+    return { ok: false, error: 'bench must be one of: terminal-bench, terminal-bench-2, terminal-bench-2-1, locomo, marble, hal-reliability, tau-bench' }
   }
   if (!runId) {
     return { ok: false, error: 'runId must be a safe slug using letters, numbers, dot, underscore, or dash' }
   }
   if (!runnerMode) {
-    return { ok: false, error: 'runnerMode must be subscription-host-cli, subscription-sbx, api-key, or proxy-experimental' }
+    return { ok: false, error: 'runnerMode must be herd-orchestrated, subscription-host-cli, subscription-sbx, api-key, or proxy-experimental' }
   }
   if (!profile) {
     return { ok: false, error: 'profile must be smoke, full, or release-gate' }
@@ -176,6 +223,23 @@ function parseRunWriteBody(
     tasks: parseTaskResults(resultBody.tasks),
     completedAt: asString(resultBody.completedAt),
   }
+  const submittedAgent = asString(body.submittedAgent)
+  const entryAdapter = asString(body.entryAdapter)
+  const enteredThroughHerdOrchestratedAdapter = asBoolean(body.enteredThroughHerdOrchestratedAdapter)
+  const commanderId = asString(body.commanderId)
+  const trajectoryManifestPath = asString(body.trajectoryManifestPath)
+  const boundaryError = validateSubmittedAgentBoundary({
+    runnerMode,
+    submittedAgent,
+    entryAdapter,
+    enteredThroughHerdOrchestratedAdapter,
+    commanderId,
+    trajectoryManifestPath,
+  })
+  if (boundaryError) {
+    return { ok: false, error: boundaryError }
+  }
+
   const config: EvalRunConfig = {
     runId,
     bench,
@@ -183,7 +247,7 @@ function parseRunWriteBody(
     profile,
     runnerMode,
     authMode: authModeForRunnerMode(runnerMode),
-    commanderId: asString(body.commanderId),
+    commanderId,
     model: asString(body.model),
     provider: asString(body.provider),
     host: asString(body.host),
@@ -191,6 +255,12 @@ function parseRunWriteBody(
     datasetVersion: asString(body.datasetVersion),
     adapterVersion: asString(body.adapterVersion),
     environmentHash: asString(body.environmentHash),
+    submittedAgent,
+    entryAdapter,
+    enteredThroughHerdOrchestratedAdapter,
+    internalStack: asStringArray(body.internalStack),
+    trajectoryManifestPath,
+    harborCommand: asString(body.harborCommand),
     createdAt: asString(body.createdAt) ?? now.toISOString(),
   }
 

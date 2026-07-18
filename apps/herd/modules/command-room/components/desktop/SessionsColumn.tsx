@@ -18,12 +18,22 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Play, Square } from 'lucide-react'
 import { useFontScale } from '@/hooks/use-font-scale'
-import { useProviderRegistry } from '@/hooks/use-providers'
+import { getProviderLabel, getProviderModelLabel, useProviderRegistry } from '@/hooks/use-providers'
 import { Icon, STATE_COLOR } from '@modules/components/hervald'
-import type { AgentSession, AgentType, ProviderModelOption, ProviderRegistryEntry } from '@/types'
+import type { AgentSession, AgentType, ProviderRegistryEntry } from '@/types'
+import type { AgentEffortLevel } from '@modules/agents/effort.js'
 import { SessionCard } from '@modules/agents/page-shell/SessionCard'
 import { ModalFormContainer } from '@modules/components/ModalFormContainer'
-import type { ConversationRecord } from '@modules/conversation/hooks/use-conversations'
+import type { ClaudeAdaptiveThinkingMode } from '@modules/claude-adaptive-thinking.js'
+import { useConversationRuntimeSettings } from '@modules/conversation/hooks/use-conversation-runtime-settings'
+import {
+  canSelectConversationCredential,
+  CredentialPoolSelect,
+} from '@modules/conversation/components/CredentialPoolSelect'
+import type {
+  ConversationRecord,
+  ConversationRuntimeSettingsUpdate,
+} from '@modules/conversation/hooks/use-conversations'
 import { ColumnHeader } from './ColumnHeader'
 import { SessionRow } from './SessionRow'
 import type { Commander, Worker, Approval } from './SessionRow'
@@ -51,7 +61,10 @@ interface SessionsColumnProps {
   onStartConversation?: (id: string) => void
   onStopConversation?: (id: string) => void | Promise<void>
   onRenameConversation?: (id: string, name: string) => void | Promise<void>
-  onSwapConversationProvider?: (id: string, agentType: AgentType, model: string | null) => void | Promise<void>
+  onUpdateConversationRuntimeSettings?: (
+    id: string,
+    settings: ConversationRuntimeSettingsUpdate,
+  ) => void | Promise<void>
   onArchiveConversation?: (id: string) => void | Promise<void>
   onRemoveConversation?: (id: string) => void | Promise<void>
   commanders: Commander[]
@@ -138,7 +151,7 @@ const modalPrimaryButtonStyle: React.CSSProperties = {
 }
 
 type SectionKey = 'workers' | 'automation'
-type ConversationProviderOption = Pick<ProviderRegistryEntry, 'id' | 'label' | 'availableModels'>
+type ConversationProviderOption = ProviderRegistryEntry
 
 const chatSettingsLabelStyle: React.CSSProperties = {
   display: 'grid',
@@ -442,9 +455,20 @@ function formatConversationLabel(conversation: ConversationRecord): string {
   return name || `chat ${conversation.id.slice(0, 8)}`
 }
 
-function formatConversationMeta(conversation: ConversationRecord): string {
-  const provider = conversation.agentType ?? 'unassigned'
-  const providerMeta = conversation.model ? `${provider}:${conversation.model}` : provider
+function formatConversationMeta(
+  conversation: ConversationRecord,
+  providerOptions: ReadonlyArray<ConversationProviderOption>,
+): string {
+  const provider = conversation.liveSession?.agentType ?? conversation.agentType ?? null
+  const providerEntry = providerOptions.find((option) => option.id === provider) ?? null
+  const model = conversation.liveSession
+    ? conversation.liveSession.model
+      ?? providerEntry?.defaults?.model
+      ?? providerEntry?.availableModels?.find((option) => option.default)?.id
+    : conversation.model
+  const providerLabel = provider ? getProviderLabel(providerOptions, provider) : 'Unassigned'
+  const modelLabel = getProviderModelLabel(providerOptions, provider, model)
+  const providerMeta = modelLabel ? `${modelLabel} · ${providerLabel}` : providerLabel
   const taskTitle = conversation.currentTask?.title?.trim()
   if (taskTitle) {
     return `${providerMeta} · ${taskTitle}`
@@ -482,13 +506,19 @@ function resolveConversationLifecycleAction(conversation: ConversationRecord): '
 
 interface ConversationChatRowProps {
   conversation: ConversationRecord
+  commanderHost?: string | null
   selected: boolean
   approvalCount?: number
   onSelect?: (id: string) => void
   onStart?: (id: string) => void
   onStop?: (id: string) => void | Promise<void>
   onRename?: (id: string, name: string) => void | Promise<void>
-  onSwapProvider?: (id: string, agentType: AgentType, model: string | null) => void | Promise<void>
+  onUpdateRuntimeSettings?: (
+    id: string,
+    settings: ConversationRuntimeSettingsUpdate,
+  ) => void | Promise<void>
+  onRefreshModels?: (providerId: AgentType, credentialPoolId?: string) => void | Promise<void>
+  refreshingProviderId?: AgentType | null
   onArchive?: (id: string) => void | Promise<void>
   onRemove?: (id: string) => void | Promise<void>
   providerOptions?: ReadonlyArray<ConversationProviderOption>
@@ -725,13 +755,16 @@ function CommanderTeamDropdown({
  */
 function ConversationChatRow({
   conversation,
+  commanderHost,
   selected,
   approvalCount = 0,
   onSelect,
   onStart,
   onStop,
   onRename,
-  onSwapProvider,
+  onUpdateRuntimeSettings,
+  onRefreshModels,
+  refreshingProviderId = null,
   onArchive,
   onRemove,
   providerOptions = [],
@@ -746,13 +779,16 @@ function ConversationChatRow({
         ? 'start'
         : null
     : null
-  const canEditProviderModel = hasConversationAction(conversation, 'updateProvider') && Boolean(onSwapProvider)
+  const runtimeSettings = useConversationRuntimeSettings(
+    conversation,
+    providerOptions,
+    commanderHost,
+  )
+  const canShowRuntimeSettings = Boolean(conversation.runtimeSettings && onUpdateRuntimeSettings)
   const conversationName = typeof conversation.name === 'string' ? conversation.name : ''
   const conversationLabel = formatConversationLabel(conversation)
   const [menuOpen, setMenuOpen] = useState(false)
   const [providerMenuOpen, setProviderMenuOpen] = useState(false)
-  const [providerDraft, setProviderDraft] = useState<AgentType | ''>('')
-  const [modelDraft, setModelDraft] = useState('')
   const [providerBusy, setProviderBusy] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameDraft, setRenameDraft] = useState(conversationName)
@@ -764,34 +800,10 @@ function ConversationChatRow({
     setRenameDraft(conversationName)
   }, [conversationName])
 
-  const activeProvider = providerOptions.find((provider) => provider.id === providerDraft) ?? null
-  const availableModels: readonly ProviderModelOption[] = activeProvider?.availableModels ?? []
-  const currentProvider = conversation.agentType ?? ''
-  const currentModel = conversation.model ?? ''
-  const providerModelChanged = Boolean(providerDraft)
-    && (providerDraft !== currentProvider || modelDraft !== currentModel)
   const canArchive = hasConversationAction(conversation, 'archive')
   const canRemove = hasConversationAction(conversation, 'delete')
-  const hasActions = Boolean(onRename || canEditProviderModel || (canArchive && onArchive) || (canRemove && onRemove))
-
-  useEffect(() => {
-    const nextProvider = conversation.agentType
-      && providerOptions.some((provider) => provider.id === conversation.agentType)
-      ? conversation.agentType
-      : providerOptions[0]?.id ?? conversation.agentType ?? ''
-    setProviderDraft(nextProvider)
-    setModelDraft(conversation.model ?? '')
-  }, [conversation.agentType, conversation.id, conversation.model, providerOptions])
-
-  function handleProviderDraftChange(nextProvider: AgentType): void {
-    setProviderDraft(nextProvider)
-    const nextModels = providerOptions.find((provider) => provider.id === nextProvider)?.availableModels ?? []
-    setModelDraft((current) => (
-      current && nextModels.some((option) => option.id === current)
-        ? current
-        : ''
-    ))
-  }
+  const hasActions = Boolean(onRename || canShowRuntimeSettings || (canArchive && onArchive) || (canRemove && onRemove))
+  const conversationMeta = formatConversationMeta(conversation, providerOptions)
 
   async function handleRenameSubmit(): Promise<void> {
     if (!onRename) {
@@ -807,13 +819,13 @@ function ConversationChatRow({
     }
   }
 
-  async function handleSaveProviderModel(): Promise<void> {
-    if (!onSwapProvider || !providerDraft || !providerModelChanged) {
+  async function handleSaveRuntimeSettings(): Promise<void> {
+    if (!onUpdateRuntimeSettings || !runtimeSettings.payload || !runtimeSettings.canSave) {
       return
     }
     setProviderBusy(true)
     try {
-      await onSwapProvider(conversation.id, providerDraft, modelDraft || null)
+      await onUpdateRuntimeSettings(conversation.id, runtimeSettings.payload)
       setProviderMenuOpen(false)
       setMenuOpen(false)
     } finally {
@@ -917,6 +929,8 @@ function ConversationChatRow({
             </span>
             <span
               className="font-body"
+              data-testid="commander-chat-row-meta"
+              title={conversationMeta}
               style={{
                 display: 'block',
                 marginTop: 2,
@@ -929,7 +943,7 @@ function ConversationChatRow({
                 textTransform: 'uppercase',
               }}
             >
-              {formatConversationMeta(conversation)}
+              {conversationMeta}
             </span>
           </span>
         </button>
@@ -1088,7 +1102,7 @@ function ConversationChatRow({
                     </button>
                   )}
 
-                  {canEditProviderModel && (
+                  {canShowRuntimeSettings && (
                     <>
                       <button
                         type="button"
@@ -1096,7 +1110,7 @@ function ConversationChatRow({
                         onClick={() => setProviderMenuOpen((current) => !current)}
                         style={menuItemStyle}
                       >
-                        <span>Provider / model</span>
+                        <span>Runtime settings</span>
                         <span style={{ marginLeft: 'auto' }}>{providerMenuOpen ? '▾' : '▸'}</span>
                       </button>
                       {providerMenuOpen && (
@@ -1114,46 +1128,148 @@ function ConversationChatRow({
                             <span>Provider</span>
                             <select
                               data-testid="commander-chat-provider-select"
-                              value={providerDraft}
-                              onChange={(event) => handleProviderDraftChange(event.target.value as AgentType)}
-                              disabled={providerBusy}
+                              value={runtimeSettings.draft?.agentType ?? ''}
+                              onChange={(event) => runtimeSettings.setAgentType(event.target.value as AgentType)}
+                              disabled={providerBusy || !runtimeSettings.settings?.allowed}
                               style={chatSettingsSelectStyle}
                             >
-                              {providerOptions.map((provider) => (
+                              {runtimeSettings.providerOptions.map((provider) => (
                                 <option key={provider.id} value={provider.id}>{provider.label}</option>
                               ))}
                             </select>
                           </label>
+                          {canSelectConversationCredential(
+                            runtimeSettings.draft?.agentType,
+                            runtimeSettings.targetHost,
+                          ) ? (
+                            <label style={chatSettingsLabelStyle}>
+                              <span>Credential</span>
+                              <CredentialPoolSelect
+                                provider={runtimeSettings.draft?.agentType}
+                                host={runtimeSettings.targetHost}
+                                value={runtimeSettings.selectedCredentialPoolId}
+                                currentCredentialPoolId={runtimeSettings.currentCredentialPoolId}
+                                onChange={runtimeSettings.setCredentialPoolId}
+                                disabled={providerBusy || !runtimeSettings.settings?.allowed}
+                                dataTestId="commander-chat-credential-select"
+                                style={chatSettingsSelectStyle}
+                              />
+                            </label>
+                          ) : null}
                           <label style={chatSettingsLabelStyle}>
                             <span>Model</span>
                             <select
                               data-testid="commander-chat-model-select"
-                              value={modelDraft}
-                              onChange={(event) => setModelDraft(event.target.value)}
-                              disabled={providerBusy}
+                              value={runtimeSettings.selectedModelValue}
+                              onChange={(event) => runtimeSettings.setModel(event.target.value || null)}
+                              disabled={providerBusy || !runtimeSettings.settings?.allowed}
                               style={chatSettingsSelectStyle}
                             >
                               <option value="">Adapter default</option>
-                              {availableModels.map((option) => (
+                              {runtimeSettings.modelOptions.map((option) => (
                                 <option key={option.id} value={option.id}>{option.label}</option>
                               ))}
                             </select>
                           </label>
+                          {runtimeSettings.supportsEffort && (
+                            <label style={chatSettingsLabelStyle}>
+                              <span>Effort</span>
+                              <select
+                                data-testid="commander-chat-effort-select"
+                                value={runtimeSettings.draft?.effort ?? ''}
+                                onChange={(event) => runtimeSettings.setEffort(event.target.value as AgentEffortLevel)}
+                                disabled={providerBusy || !runtimeSettings.settings?.allowed}
+                                style={chatSettingsSelectStyle}
+                              >
+                                {runtimeSettings.effortOptions.map((effort) => (
+                                  <option key={effort} value={effort}>{effort}</option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+                          {runtimeSettings.supportsAdaptiveThinking && (
+                            <label style={chatSettingsLabelStyle}>
+                              <span>Adaptive thinking</span>
+                              <select
+                                data-testid="commander-chat-adaptive-thinking-select"
+                                value={runtimeSettings.draft?.adaptiveThinking ?? ''}
+                                onChange={(event) => runtimeSettings.setAdaptiveThinking(
+                                  event.target.value as ClaudeAdaptiveThinkingMode,
+                                )}
+                                disabled={providerBusy || !runtimeSettings.settings?.allowed}
+                                style={chatSettingsSelectStyle}
+                              >
+                                {runtimeSettings.adaptiveThinkingOptions.map((mode) => (
+                                  <option key={mode} value={mode}>{mode}</option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+                          {runtimeSettings.supportsMaxThinkingTokens && runtimeSettings.maxThinkingTokensRange && (
+                            <label style={chatSettingsLabelStyle}>
+                              <span>Max thinking tokens</span>
+                              <input
+                                type="number"
+                                data-testid="commander-chat-max-thinking-tokens-input"
+                                min={runtimeSettings.maxThinkingTokensRange.min}
+                                max={runtimeSettings.maxThinkingTokensRange.max}
+                                value={runtimeSettings.draft?.maxThinkingTokens ?? ''}
+                                onChange={(event) => runtimeSettings.setMaxThinkingTokens(event.currentTarget.valueAsNumber)}
+                                disabled={providerBusy || !runtimeSettings.settings?.allowed}
+                                style={chatSettingsSelectStyle}
+                              />
+                            </label>
+                          )}
+                          {runtimeSettings.modelDiscovery && (
+                            <div
+                              data-testid="commander-chat-model-discovery-state"
+                              style={{ color: 'var(--hv-fg-subtle)', fontSize: 10 }}
+                            >
+                              Models: {runtimeSettings.modelDiscovery.freshness}
+                              {runtimeSettings.modelDiscovery.error
+                                ? ` · ${runtimeSettings.modelDiscovery.error}`
+                                : ''}
+                            </div>
+                          )}
+                          {runtimeSettings.settings?.disabledReason && (
+                            <div
+                              data-testid="commander-chat-runtime-settings-disabled-reason"
+                              style={{ color: 'var(--hv-accent-warning)', fontSize: 10 }}
+                            >
+                              {runtimeSettings.settings.disabledReason}
+                            </div>
+                          )}
+                          {onRefreshModels && runtimeSettings.draft && (
+                            <button
+                              type="button"
+                              data-testid="commander-chat-model-refresh-button"
+                              onClick={() => {
+                                void onRefreshModels(
+                                  runtimeSettings.draft!.agentType,
+                                  runtimeSettings.modelCredentialPoolId,
+                                )
+                              }}
+                              disabled={providerBusy || refreshingProviderId === runtimeSettings.draft.agentType}
+                              style={{ ...menuItemStyle, justifyContent: 'center' }}
+                            >
+                              {refreshingProviderId === runtimeSettings.draft.agentType ? 'Refreshing…' : 'Refresh models'}
+                            </button>
+                          )}
                           <button
                             type="button"
                             data-testid="commander-chat-provider-save-button"
                             onClick={() => {
-                              void handleSaveProviderModel()
+                              void handleSaveRuntimeSettings()
                             }}
-                            disabled={providerBusy || !providerModelChanged}
+                            disabled={providerBusy || !runtimeSettings.canSave}
                             style={{
                               ...menuItemStyle,
                               justifyContent: 'center',
                               border: '1px solid var(--hv-border-hair)',
                               background: 'var(--sumi-black)',
                               color: 'var(--washi-white)',
-                              cursor: providerBusy || !providerModelChanged ? 'not-allowed' : 'pointer',
-                              opacity: providerBusy || !providerModelChanged ? 0.5 : 1,
+                              cursor: providerBusy || !runtimeSettings.canSave ? 'not-allowed' : 'pointer',
+                              opacity: providerBusy || !runtimeSettings.canSave ? 0.5 : 1,
                             }}
                           >
                             {providerBusy ? 'Saving' : 'Save'}
@@ -1305,7 +1421,7 @@ export function SessionsColumn({
   onStartConversation,
   onStopConversation,
   onRenameConversation,
-  onSwapConversationProvider,
+  onUpdateConversationRuntimeSettings,
   onArchiveConversation,
   onRemoveConversation,
   commanders,
@@ -1319,15 +1435,12 @@ export function SessionsColumn({
   onKillSession,
   onResumeSession,
 }: SessionsColumnProps) {
-  const { data: providers = [] } = useProviderRegistry()
-  const providerOptions = useMemo(
-    () => providers.map((provider) => ({
-      id: provider.id,
-      label: provider.label,
-      availableModels: provider.availableModels,
-    })),
-    [providers],
-  )
+  const {
+    data: providers = [],
+    refreshModels,
+    refreshingProviderId,
+  } = useProviderRegistry()
+  const providerOptions = providers
   const commanderCount = commanders.filter((commander) => !commander.isVirtual).length
 
   const [collapsed, setCollapsed] = useState<Record<SectionKey, boolean>>(readCollapsedState)
@@ -1472,6 +1585,7 @@ export function SessionsColumn({
                       <ConversationChatRow
                         key={conversation.id}
                         conversation={conversation}
+                        commanderHost={c.host}
                         selected={selectedChatId === conversation.id}
                         approvalCount={
                           approvals.filter((approval) => approvalMatchesConversationRow(approval, conversation)).length
@@ -1480,7 +1594,12 @@ export function SessionsColumn({
                         onStart={onStartConversation}
                         onStop={onStopConversation}
                         onRename={onRenameConversation}
-                        onSwapProvider={onSwapConversationProvider}
+                        onUpdateRuntimeSettings={onUpdateConversationRuntimeSettings}
+                        onRefreshModels={(providerId, credentialPoolId) => refreshModels({
+                          providerId,
+                          ...(credentialPoolId ? { credentialPoolId } : {}),
+                        })}
+                        refreshingProviderId={refreshingProviderId}
                         onArchive={onArchiveConversation}
                         onRemove={onRemoveConversation}
                         providerOptions={providerOptions}

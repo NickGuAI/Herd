@@ -11,6 +11,7 @@ interface ChatPaneProps {
   onAnswer: (toolId: string, answers: Record<string, string[]>) => void
   agentAvatarUrl?: string | null
   sessionId?: string
+  sessionHost?: string
   hasOlderMessages?: boolean
   loadingOlderMessages?: boolean
   onLoadOlderMessages?: () => void
@@ -46,6 +47,7 @@ export function ChatPane({
   onAnswer,
   agentAvatarUrl,
   sessionId = 'hervald-chat',
+  sessionHost,
   hasOlderMessages = false,
   loadingOlderMessages = false,
   onLoadOlderMessages,
@@ -87,6 +89,7 @@ export function ChatPane({
       <Transcript
         messages={messages}
         sessionId={sessionId}
+        sessionHost={sessionHost}
         onAnswer={onAnswer}
         agentAvatarUrl={agentAvatarUrl ?? undefined}
         className="hervald-chat-transcript"

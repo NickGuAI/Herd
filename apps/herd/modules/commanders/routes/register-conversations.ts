@@ -4,13 +4,26 @@ import type { Request, Response } from 'express'
 import { parseMessageImagesForRequest } from '../../agents/message-images.js'
 import { sanitizeTranscriptFileKey } from '../../agents/session/persistence.js'
 import {
-  parseClaudeEffort,
   parseClaudeAdaptiveThinking,
   parseClaudeMaxThinkingTokens,
 } from '../../agents/session/input.js'
 import { deleteSessionTranscript } from '../../agents/transcript-store.js'
 import { getProvider, parseProviderId, resolveDefaultProviderId } from '../../agents/providers/registry.js'
-import { createProviderContextForAgentType } from '../../agents/providers/provider-session-context.js'
+import {
+  resolveProviderDefaults,
+  type ProviderModelOption,
+} from '../../agents/providers/provider-adapter.js'
+import { getCachedProviderModelsForValidation } from '../../agents/providers/model-discovery.js'
+import {
+  getAgentEffortLevels,
+  getAgentEffortLevelsForModel,
+  parseOptionalAgentEffort,
+  parseStoredAgentEffort,
+} from '../../agents/effort.js'
+import {
+  asClaudeProviderContext,
+  createProviderContextForAgentType,
+} from '../../agents/providers/provider-session-context.js'
 import { validateModelForAgentType } from '../../agents/providers/validate-model.js'
 import {
   applyWorkspaceContextToText,
@@ -40,10 +53,11 @@ import {
   getLiveConversationSession,
   startConversationSession,
   stopConversationSession,
-  swapConversationProvider,
+  updateConversationRuntimeSettings,
   type ConversationSpawnOptions,
   updateCommanderDerivedState,
   buildConversationSessionName,
+  canConversationSelectCredentialPool,
 } from './conversation-runtime.js'
 import {
   buildConversationSummaryDTO,
@@ -66,6 +80,21 @@ const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const DEFAULT_CONVERSATION_MESSAGES_LIMIT = 50
 const MAX_CONVERSATION_MESSAGES_LIMIT = 100
 const CONVERSATION_BOOTSTRAP_FAST_PATH_MS = 25
+
+function findProviderModelOption(
+  models: readonly ProviderModelOption[],
+  model: string | null | undefined,
+): ProviderModelOption | undefined {
+  const id = model?.trim()
+  if (!id) {
+    return models.find((option) => option.default)
+  }
+  return models.find((option) => (
+    option.id === id
+    || option.resolvedModel === id
+    || option.aliases?.includes(id) === true
+  ))
+}
 
 export interface CommanderConversationBootstrapProjection {
   commanderId: string
@@ -190,6 +219,21 @@ function parseConversationModel(
   return { ok: true, value: trimmed.length > 0 ? trimmed : null }
 }
 
+function parseConversationCredentialPoolId(
+  raw: unknown,
+): { ok: true; value?: string } | { ok: false } {
+  if (raw === undefined) {
+    return { ok: true }
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false }
+  }
+  const value = raw.trim()
+  return value.length > 0 && value.length <= 128
+    ? { ok: true, value }
+    : { ok: false }
+}
+
 function requestActorKind(req: import('express').Request): Conversation['createdByKind'] {
   if (req.authMode === 'auth0') {
     return 'human'
@@ -233,12 +277,13 @@ function requestAbortSignal(req: Request, res: Response): AbortSignal {
   return controller.signal
 }
 
-function withLiveSession(
+async function withLiveSession(
   context: CommanderRoutesContext,
   conversation: Conversation,
   canonicalOrder = 0,
-): ConversationSummaryDTO {
-  return buildConversationSummaryDTO(context, conversation, canonicalOrder)
+): Promise<ConversationSummaryDTO> {
+  const commander = await context.sessionStore.get(conversation.commanderId)
+  return buildConversationSummaryDTO(context, conversation, canonicalOrder, commander)
 }
 
 async function withInitialMessagePage(
@@ -247,7 +292,7 @@ async function withInitialMessagePage(
   canonicalOrder = 0,
 ): Promise<ConversationSummaryDTO> {
   return {
-    ...withLiveSession(context, conversation, canonicalOrder),
+    ...await withLiveSession(context, conversation, canonicalOrder),
     initialMessagePage: await getConversationMessagesPage(context, conversation, {
       limit: DEFAULT_CONVERSATION_MESSAGES_LIMIT,
     }),
@@ -699,35 +744,136 @@ export function registerConversationRoutes(
       res.status(400).json({ error: 'model must be a string or null when provided' })
       return
     }
+    const requestedCredentialPoolId = parseConversationCredentialPoolId(
+      req.body?.credentialPoolId,
+    )
+    if (!requestedCredentialPoolId.ok) {
+      res.status(400).json({
+        error: 'credentialPoolId must be a non-empty string of at most 128 characters',
+      })
+      return
+    }
     const selectedAgentType = requestedAgentType ?? commander.agentType ?? resolveDefaultProviderId()
-    const modelValidation = validateModelForAgentType(selectedAgentType, requestedModel.value ?? null)
+    if (
+      requestedCredentialPoolId.value
+      && !canConversationSelectCredentialPool(selectedAgentType, commander.host)
+    ) {
+      res.status(400).json({
+        error: 'credentialPoolId is not supported for local Claude conversations; select the global Claude credential in Settings',
+      })
+      return
+    }
+    const selectedProvider = getProvider(selectedAgentType)
+    if (!selectedProvider) {
+      res.status(400).json({ error: `Unknown provider: ${selectedAgentType}` })
+      return
+    }
+    const modelDiscoveryContext = requestedCredentialPoolId.value
+      ? { credentialPoolId: requestedCredentialPoolId.value }
+      : {}
+    const createModels = getCachedProviderModelsForValidation(
+      selectedProvider,
+      modelDiscoveryContext,
+    )
+    const selectedDefaults = resolveProviderDefaults(selectedProvider, createModels.models)
+    const commanderAgentType = commander.agentType ?? resolveDefaultProviderId()
+    const sameCommanderProvider = commanderAgentType === selectedAgentType
+    const inheritedCommanderModel = sameCommanderProvider && commander.model
+      ? commander.model
+      : undefined
+    const selectedModelValue = requestedModel.value === undefined
+      ? inheritedCommanderModel ?? selectedDefaults.model
+      : requestedModel.value ?? selectedDefaults.model
+    const inheritedModelIsAvailable = !inheritedCommanderModel
+      || Boolean(findProviderModelOption(createModels.models, inheritedCommanderModel))
+      || createModels.supportsCustomModels
+    const effectiveSelectedModel = requestedModel.value === undefined && !inheritedModelIsAvailable
+      ? selectedDefaults.model
+      : selectedModelValue
+    const modelValidation = validateModelForAgentType(
+      selectedAgentType,
+      effectiveSelectedModel,
+      modelDiscoveryContext,
+    )
     if (!modelValidation.ok) {
       res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
       return
     }
-    const selectedProvider = getProvider(selectedAgentType)
+    const selectedModel = findProviderModelOption(
+      createModels.models,
+      effectiveSelectedModel,
+    )
+    const selectedEffortLevels = getAgentEffortLevelsForModel(
+      selectedAgentType,
+      selectedModel,
+    )
+    const selectedModelSupportsEffort = selectedProvider.uiCapabilities.supportsEffort
+      && selectedEffortLevels.length > 0
+    const selectedModelSupportsAdaptiveThinking = selectedProvider.uiCapabilities.supportsAdaptiveThinking
+      && selectedModel?.supportsAdaptiveThinking !== false
 
-    const parsedEffort = parseClaudeEffort(req.body?.effort)
+    const parsedEffort = parseOptionalAgentEffort(selectedAgentType, req.body?.effort)
     if (req.body?.effort !== undefined && parsedEffort === null) {
-      res.status(400).json({ error: 'Invalid effort. Expected one of: low, medium, high, max' })
+      res.status(400).json({
+        error: `Invalid effort for provider "${selectedAgentType}". Expected one of: ${getAgentEffortLevels(selectedAgentType).join(', ')}`,
+      })
       return
     }
-    if (req.body?.effort !== undefined && !selectedProvider?.uiCapabilities.supportsEffort) {
-      res.status(400).json({ error: `Provider "${selectedAgentType}" does not support effort` })
+    if (req.body?.effort !== undefined && !selectedModelSupportsEffort) {
+      res.status(400).json({ error: `Model "${selectedModel?.label ?? selectedAgentType}" does not support effort` })
       return
     }
-    const effort = parsedEffort ?? undefined
+    if (parsedEffort && selectedEffortLevels.length > 0 && !selectedEffortLevels.includes(parsedEffort)) {
+      res.status(400).json({
+        error: `Invalid effort for model "${selectedModel?.label ?? selectedAgentType}". Expected one of: ${selectedEffortLevels.join(', ')}`,
+      })
+      return
+    }
+    const hasEffortField = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'effort')
+    const modelDefaultEffort = parseOptionalAgentEffort(selectedAgentType, selectedModel?.defaultEffort)
+    const providerDefaultEffort = parseOptionalAgentEffort(selectedAgentType, selectedDefaults.effort)
+    const defaultEffort = modelDefaultEffort && selectedEffortLevels.includes(modelDefaultEffort)
+      ? modelDefaultEffort
+      : providerDefaultEffort && selectedEffortLevels.includes(providerDefaultEffort)
+        ? providerDefaultEffort
+        : parseOptionalAgentEffort(selectedAgentType, selectedEffortLevels[0]) ?? undefined
+    const commanderProviderContext = sameCommanderProvider
+      ? commander.providerContext as { effort?: unknown; adaptiveThinking?: unknown; maxThinkingTokens?: unknown } | undefined
+      : undefined
+    const commanderEffort = parseStoredAgentEffort(
+      selectedAgentType,
+      commander.effort ?? commanderProviderContext?.effort,
+    )
+    const effort = selectedModelSupportsEffort
+      ? hasEffortField
+        ? parsedEffort ?? defaultEffort
+        : commanderEffort && selectedEffortLevels.includes(commanderEffort)
+          ? commanderEffort
+          : defaultEffort
+      : undefined
 
     const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(req.body?.adaptiveThinking)
     if (req.body?.adaptiveThinking !== undefined && parsedAdaptiveThinking === null) {
       res.status(400).json({ error: 'Invalid adaptiveThinking. Expected one of: enabled, disabled' })
       return
     }
-    if (req.body?.adaptiveThinking !== undefined && !selectedProvider?.uiCapabilities.supportsAdaptiveThinking) {
-      res.status(400).json({ error: `Provider "${selectedAgentType}" does not support adaptiveThinking` })
+    if (req.body?.adaptiveThinking !== undefined && !selectedModelSupportsAdaptiveThinking) {
+      res.status(400).json({ error: `Model "${selectedModel?.label ?? selectedAgentType}" does not support adaptiveThinking` })
       return
     }
-    const adaptiveThinking = parsedAdaptiveThinking ?? undefined
+    const hasAdaptiveThinkingField = Object.prototype.hasOwnProperty.call(
+      req.body ?? {},
+      'adaptiveThinking',
+    )
+    const commanderAdaptiveThinking = sameCommanderProvider
+      ? commander.adaptiveThinking
+        ?? (commanderProviderContext?.adaptiveThinking as typeof parsedAdaptiveThinking)
+      : undefined
+    const adaptiveThinking = selectedModelSupportsAdaptiveThinking
+      ? hasAdaptiveThinkingField
+        ? parsedAdaptiveThinking ?? selectedDefaults.adaptiveThinking
+        : commanderAdaptiveThinking ?? selectedDefaults.adaptiveThinking
+      : undefined
 
     const parsedMaxThinkingTokens = parseClaudeMaxThinkingTokens(req.body?.maxThinkingTokens)
     if (req.body?.maxThinkingTokens !== undefined && parsedMaxThinkingTokens === null) {
@@ -738,19 +884,28 @@ export function registerConversationRoutes(
       res.status(400).json({ error: `Provider "${selectedAgentType}" does not support maxThinkingTokens` })
       return
     }
-    const maxThinkingTokens = parsedMaxThinkingTokens ?? undefined
-
-    const providerContext = (
-      effort !== undefined ||
-      adaptiveThinking !== undefined ||
-      maxThinkingTokens !== undefined
+    const hasMaxThinkingTokensField = Object.prototype.hasOwnProperty.call(
+      req.body ?? {},
+      'maxThinkingTokens',
     )
-      ? createProviderContextForAgentType(selectedAgentType, {
-          effort,
-          adaptiveThinking,
-          maxThinkingTokens,
-        })
+    const commanderMaxThinkingTokens = sameCommanderProvider
+      ? commander.maxThinkingTokens
+        ?? (typeof commanderProviderContext?.maxThinkingTokens === 'number'
+          ? commanderProviderContext.maxThinkingTokens
+          : undefined)
       : undefined
+    const maxThinkingTokens = selectedProvider.uiCapabilities.supportsMaxThinkingTokens
+      ? hasMaxThinkingTokensField
+        ? parsedMaxThinkingTokens ?? selectedDefaults.maxThinkingTokens
+        : commanderMaxThinkingTokens ?? selectedDefaults.maxThinkingTokens
+      : undefined
+
+    const providerContext = createProviderContextForAgentType(selectedAgentType, {
+      effort,
+      omitEffort: selectedAgentType === 'claude' && !selectedModelSupportsEffort,
+      adaptiveThinking,
+      maxThinkingTokens,
+    })
 
     const nowIso = context.now().toISOString()
     const created = await context.conversationStore.create({
@@ -758,12 +913,14 @@ export function registerConversationRoutes(
       commanderId: commander.id,
       surface,
       ...(channelMeta ? { channelMeta } : {}),
-      ...(
-        requestedAgentType || requestedModel.value !== undefined || providerContext
-          ? { agentType: selectedAgentType }
-          : {}
-      ),
-      ...(requestedModel.value !== undefined ? { model: requestedModel.value } : {}),
+      agentType: selectedAgentType,
+      model: effectiveSelectedModel,
+      ...(requestedCredentialPoolId.value
+        ? { credentialPoolId: requestedCredentialPoolId.value }
+        : {}),
+      ...(effort !== undefined ? { effort } : {}),
+      ...(adaptiveThinking !== undefined ? { adaptiveThinking } : {}),
+      ...(maxThinkingTokens !== undefined ? { maxThinkingTokens } : {}),
       ...(providerContext ? { providerContext } : {}),
       status: 'idle',
       currentTask: null,
@@ -779,7 +936,7 @@ export function registerConversationRoutes(
       lastMessageAt: nowIso,
     })
 
-    res.status(201).json(withLiveSession(context, created))
+    res.status(201).json(await withLiveSession(context, created))
   })
 
   conversationRouter.patch('/:convId', context.requireWorkerDispatchAccess, async (req, res) => {
@@ -795,6 +952,49 @@ export function registerConversationRoutes(
       return
     }
 
+    const requestBody = isObject(req.body) ? req.body : {}
+    const rawRuntimeSettings = requestBody.runtimeSettings
+    if (rawRuntimeSettings !== undefined && !isObject(rawRuntimeSettings)) {
+      res.status(400).json({ error: 'runtimeSettings must be an object when provided' })
+      return
+    }
+    const runtimeSettingsBody = isObject(rawRuntimeSettings) ? rawRuntimeSettings : {}
+    const hasOwn = (record: Record<string, unknown>, key: string) => (
+      Object.prototype.hasOwnProperty.call(record, key)
+    )
+    const readRuntimeField = (key: string): { provided: boolean; value: unknown } => {
+      if (hasOwn(runtimeSettingsBody, key)) {
+        return { provided: true, value: runtimeSettingsBody[key] }
+      }
+      if (hasOwn(requestBody, key)) {
+        return { provided: true, value: requestBody[key] }
+      }
+      return { provided: false, value: undefined }
+    }
+
+    const agentTypeField = readRuntimeField('agentType')
+    const providerField = readRuntimeField('provider')
+    if (
+      agentTypeField.provided
+      && providerField.provided
+      && agentTypeField.value !== providerField.value
+    ) {
+      res.status(400).json({ error: 'runtimeSettings.agentType and runtimeSettings.provider must match' })
+      return
+    }
+    const runtimeAgentTypeField = agentTypeField.provided ? agentTypeField : providerField
+    const modelField = readRuntimeField('model')
+    const credentialPoolIdField = readRuntimeField('credentialPoolId')
+    const effortField = readRuntimeField('effort')
+    const adaptiveThinkingField = readRuntimeField('adaptiveThinking')
+    const maxThinkingTokensField = readRuntimeField('maxThinkingTokens')
+    const hasRuntimeSettingsUpdate = runtimeAgentTypeField.provided
+      || modelField.provided
+      || credentialPoolIdField.provided
+      || effortField.provided
+      || adaptiveThinkingField.provided
+      || maxThinkingTokensField.provided
+
     const requestedName = req.body?.name === undefined
       ? undefined
       : parseConversationName(req.body?.name)
@@ -803,17 +1003,26 @@ export function registerConversationRoutes(
       return
     }
 
-    const requestedAgentType = req.body?.agentType === undefined
+    const requestedAgentType = !runtimeAgentTypeField.provided
       ? undefined
-      : parseConversationAgentType(req.body?.agentType)
-    if (req.body?.agentType !== undefined && !requestedAgentType) {
+      : parseConversationAgentType(runtimeAgentTypeField.value)
+    if (runtimeAgentTypeField.provided && !requestedAgentType) {
       res.status(400).json({ error: 'Invalid agentType. Expected a supported provider.' })
       return
     }
 
-    const requestedModel = parseConversationModel(req.body?.model)
+    const requestedModel = parseConversationModel(modelField.provided ? modelField.value : undefined)
     if (!requestedModel.ok) {
       res.status(400).json({ error: 'model must be a string or null when provided' })
+      return
+    }
+    const requestedCredentialPoolId = credentialPoolIdField.provided
+      ? parseConversationCredentialPoolId(credentialPoolIdField.value)
+      : { ok: true as const, value: undefined }
+    if (!requestedCredentialPoolId.ok) {
+      res.status(400).json({
+        error: 'credentialPoolId must be a non-empty string of at most 128 characters',
+      })
       return
     }
 
@@ -827,11 +1036,10 @@ export function registerConversationRoutes(
 
     if (
       requestedName === undefined
-      && requestedAgentType === undefined
-      && requestedModel.value === undefined
+      && !hasRuntimeSettingsUpdate
       && requestedStatus === undefined
     ) {
-      res.status(400).json({ error: 'At least one of name, agentType, model, or status is required' })
+      res.status(400).json({ error: 'At least one of name, runtimeSettings, agentType, model, or status is required' })
       return
     }
 
@@ -848,39 +1056,193 @@ export function registerConversationRoutes(
     }
 
     const commander = await context.sessionStore.get(conversation.commanderId)
-    const nextAgentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? resolveDefaultProviderId()
-    const providerChanged = Boolean(requestedAgentType && requestedAgentType !== conversation.agentType)
+    const currentAgentType = conversation.agentType ?? commander?.agentType ?? resolveDefaultProviderId()
+    const nextAgentType = requestedAgentType ?? currentAgentType
+    const providerChanged = nextAgentType !== currentAgentType
+    const nextProvider = getProvider(nextAgentType)
+    if (!nextProvider) {
+      res.status(400).json({ error: `Unknown provider: ${nextAgentType}` })
+      return
+    }
+    const liveSession = getLiveConversationSession(context, conversation)
+    const credentialSelectionAllowed = canConversationSelectCredentialPool(
+      nextAgentType,
+      liveSession?.host ?? commander?.host,
+    )
+    if (credentialPoolIdField.provided && !credentialSelectionAllowed) {
+      res.status(400).json({
+        error: 'credentialPoolId is not supported for local Claude conversations; select the global Claude credential in Settings',
+      })
+      return
+    }
+    const currentCredentialPoolId = credentialSelectionAllowed
+      ? liveSession?.agentType === nextAgentType
+        ? liveSession.credentialPoolId
+        : conversation.agentType === nextAgentType
+          ? conversation.credentialPoolId
+          : undefined
+      : undefined
+    const credentialPoolId = requestedCredentialPoolId.value
+      ?? (providerChanged
+        ? undefined
+        : currentCredentialPoolId)
+    const credentialPoolChanged = providerChanged
+      || credentialPoolId !== currentCredentialPoolId
+    const modelAccountId = !credentialPoolChanged && liveSession?.agentType === nextAgentType
+      ? liveSession.providerAuthSnapshot?.accountId ?? liveSession.providerAuthSnapshot?.accountEmail
+      : undefined
+    const resolvedModels = getCachedProviderModelsForValidation(nextProvider, {
+      credentialPoolId,
+      ...(modelAccountId ? { accountId: modelAccountId } : {}),
+    })
+    const providerDefaults = resolveProviderDefaults(nextProvider, resolvedModels.models)
     const nextModel = requestedModel.value !== undefined
       ? requestedModel.value
       : providerChanged
         ? null
         : conversation.model ?? null
-    if (providerChanged || requestedModel.value !== undefined) {
-      const modelValidation = validateModelForAgentType(nextAgentType, nextModel)
+    const usesTrustedStoredModel = !providerChanged
+      && !credentialPoolChanged
+      && typeof conversation.model === 'string'
+      && nextModel === conversation.model
+      && (!modelField.provided || requestedModel.value === conversation.model)
+    if ((providerChanged || modelField.provided || credentialPoolChanged) && !usesTrustedStoredModel) {
+      const modelValidation = validateModelForAgentType(nextAgentType, nextModel, {
+        credentialPoolId,
+        ...(modelAccountId ? { accountId: modelAccountId } : {}),
+      })
       if (!modelValidation.ok) {
         res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
         return
       }
     }
-    if (
-      (requestedAgentType !== undefined || requestedModel.value !== undefined)
-      && (
-        conversation.status === 'active'
-        || getLiveConversationSession(context, conversation)
-        || getConversationRuntimeOverlay(conversation.id)?.state === 'starting'
-      )
-    ) {
-      res.status(409).json({
-        error: `Conversation "${conversation.id}" is active; stop it before changing provider or model`,
+    const effectiveNextModel = nextModel ?? providerDefaults.model
+    const modelOption = findProviderModelOption(resolvedModels.models, effectiveNextModel)
+    const supportedEffortLevels = getAgentEffortLevelsForModel(nextAgentType, modelOption)
+    const storedModelOmitsEffort = usesTrustedStoredModel
+      && asClaudeProviderContext(conversation.providerContext)?.omitEffort === true
+    const modelSupportsEffort = nextProvider.uiCapabilities.supportsEffort
+      && !storedModelOmitsEffort
+      && supportedEffortLevels.length > 0
+    const modelSupportsAdaptiveThinking = nextProvider.uiCapabilities.supportsAdaptiveThinking
+      && modelOption?.supportsAdaptiveThinking !== false
+    const currentModel = liveSession?.model ?? conversation.model ?? providerDefaults.model
+    const modelChanged = providerChanged
+      || effectiveNextModel !== currentModel
+      || credentialPoolChanged
+
+    const parsedEffort = effortField.provided
+      ? parseOptionalAgentEffort(nextAgentType, effortField.value)
+      : undefined
+    if (effortField.provided && parsedEffort === null) {
+      res.status(400).json({
+        error: `Invalid effort for provider "${nextAgentType}". Expected one of: ${getAgentEffortLevels(nextAgentType).join(', ')}`,
+      })
+      return
+    }
+    if (effortField.provided && !modelSupportsEffort) {
+      res.status(400).json({
+        error: modelOption || storedModelOmitsEffort
+          ? `Model "${modelOption?.label ?? effectiveNextModel}" does not support effort`
+          : `Provider "${nextAgentType}" does not support effort`,
+      })
+      return
+    }
+    if (parsedEffort && !supportedEffortLevels.includes(parsedEffort)) {
+      res.status(400).json({
+        error: `Invalid effort for model "${modelOption?.label ?? effectiveNextModel ?? nextAgentType}". Expected one of: ${supportedEffortLevels.join(', ')}`,
       })
       return
     }
 
+    const parsedAdaptiveThinking = adaptiveThinkingField.provided
+      ? parseClaudeAdaptiveThinking(adaptiveThinkingField.value)
+      : undefined
+    if (adaptiveThinkingField.provided && parsedAdaptiveThinking === null) {
+      res.status(400).json({ error: 'Invalid adaptiveThinking. Expected one of: enabled, disabled' })
+      return
+    }
+    if (adaptiveThinkingField.provided && !modelSupportsAdaptiveThinking) {
+      res.status(400).json({
+        error: modelOption
+          ? `Model "${modelOption.label}" does not support adaptiveThinking`
+          : `Provider "${nextAgentType}" does not support adaptiveThinking`,
+      })
+      return
+    }
+
+    const parsedMaxThinkingTokens = maxThinkingTokensField.provided
+      ? parseClaudeMaxThinkingTokens(maxThinkingTokensField.value)
+      : undefined
+    if (maxThinkingTokensField.provided && parsedMaxThinkingTokens === null) {
+      res.status(400).json({ error: 'Invalid maxThinkingTokens. Expected integer 1024..256000' })
+      return
+    }
+    if (maxThinkingTokensField.provided && !nextProvider.uiCapabilities.supportsMaxThinkingTokens) {
+      res.status(400).json({ error: `Provider "${nextAgentType}" does not support maxThinkingTokens` })
+      return
+    }
+
+    const storedProviderContext = conversation.providerContext as {
+      effort?: unknown
+      adaptiveThinking?: unknown
+      maxThinkingTokens?: unknown
+    } | undefined
+    const currentEffort = liveSession?.effort
+      ?? conversation.effort
+      ?? parseStoredAgentEffort(nextAgentType, storedProviderContext?.effort)
+      ?? undefined
+    const modelDefaultEffort = parseOptionalAgentEffort(nextAgentType, modelOption?.defaultEffort)
+    const providerDefaultEffort = parseOptionalAgentEffort(nextAgentType, providerDefaults.effort)
+    const defaultEffort = (
+      modelDefaultEffort && supportedEffortLevels.includes(modelDefaultEffort)
+        ? modelDefaultEffort
+        : providerDefaultEffort && supportedEffortLevels.includes(providerDefaultEffort)
+          ? providerDefaultEffort
+          : parseOptionalAgentEffort(nextAgentType, supportedEffortLevels[0]) ?? undefined
+    )
+    const nextEffort = modelSupportsEffort
+      ? effortField.provided
+        ? parsedEffort ?? defaultEffort
+        : providerChanged || modelChanged
+          ? defaultEffort
+          : currentEffort && supportedEffortLevels.includes(currentEffort)
+            ? currentEffort
+            : defaultEffort
+      : undefined
+    const nextAdaptiveThinking = modelSupportsAdaptiveThinking
+      ? adaptiveThinkingField.provided
+        ? parsedAdaptiveThinking ?? providerDefaults.adaptiveThinking
+        : providerChanged || modelChanged
+          ? providerDefaults.adaptiveThinking
+          : liveSession?.adaptiveThinking
+            ?? conversation.adaptiveThinking
+            ?? (storedProviderContext?.adaptiveThinking as typeof parsedAdaptiveThinking)
+            ?? providerDefaults.adaptiveThinking
+      : undefined
+    const nextMaxThinkingTokens = nextProvider.uiCapabilities.supportsMaxThinkingTokens
+      ? maxThinkingTokensField.provided
+        ? parsedMaxThinkingTokens ?? providerDefaults.maxThinkingTokens
+        : providerChanged
+          ? providerDefaults.maxThinkingTokens
+          : liveSession?.maxThinkingTokens
+            ?? conversation.maxThinkingTokens
+            ?? (typeof storedProviderContext?.maxThinkingTokens === 'number'
+              ? storedProviderContext.maxThinkingTokens
+              : undefined)
+            ?? providerDefaults.maxThinkingTokens
+      : undefined
+
     let updated = conversation
-    if (providerChanged || requestedModel.value !== undefined) {
+    if (hasRuntimeSettingsUpdate) {
       try {
-        updated = await swapConversationProvider(context, updated, nextAgentType, {
-          model: nextModel,
+        updated = await updateConversationRuntimeSettings(context, updated, {
+          agentType: nextAgentType,
+          ...(modelField.provided || providerChanged ? { model: effectiveNextModel } : {}),
+          credentialPoolId,
+          effort: nextEffort,
+          adaptiveThinking: nextAdaptiveThinking,
+          maxThinkingTokens: nextMaxThinkingTokens,
         })
       } catch (error) {
         if (error instanceof ConversationProviderSwapConflictError) {
@@ -907,7 +1269,7 @@ export function registerConversationRoutes(
       })) ?? updated
     }
 
-    res.json(withLiveSession(context, updated))
+    res.json(await withLiveSession(context, updated))
   })
 
   conversationRouter.get('/:convId', context.requireReadAccess, async (req, res) => {
@@ -923,7 +1285,7 @@ export function registerConversationRoutes(
       return
     }
 
-    res.json(withLiveSession(context, conversation))
+    res.json(await withLiveSession(context, conversation))
   })
 
   conversationRouter.get('/:convId/messages', context.requireReadAccess, async (req, res) => {
@@ -991,27 +1353,11 @@ export function registerConversationRoutes(
       res.status(400).json({ error: 'model must be a string or null when provided' })
       return
     }
-    if (requestedAgentType) {
-      const modelValidation = validateModelForAgentType(requestedAgentType, requestedModel.value ?? null)
-      if (!modelValidation.ok) {
-        res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
-        return
-      }
-    }
-
-    const parsedEffort = parseClaudeEffort(body.effort)
-    if (body.effort !== undefined && parsedEffort === null) {
-      res.status(400).json({ error: 'Invalid effort. Expected one of: low, medium, high, max' })
-      return
-    }
-    const effort = parsedEffort ?? undefined
-
     const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(body.adaptiveThinking)
     if (body.adaptiveThinking !== undefined && parsedAdaptiveThinking === null) {
       res.status(400).json({ error: 'Invalid adaptiveThinking. Expected one of: enabled, disabled' })
       return
     }
-    const adaptiveThinking = parsedAdaptiveThinking ?? undefined
 
     const parsedMaxThinkingTokens = parseClaudeMaxThinkingTokens(body.maxThinkingTokens)
     if (body.maxThinkingTokens !== undefined && parsedMaxThinkingTokens === null) {
@@ -1028,7 +1374,7 @@ export function registerConversationRoutes(
       }
       if (getConversationRuntimeOverlay(conversation.id)?.state === 'starting') {
         res.status(202).json({
-          conversation: withLiveSession(context, conversation),
+          conversation: await withLiveSession(context, conversation),
         })
         return
       }
@@ -1079,32 +1425,119 @@ export function registerConversationRoutes(
       const commander = await context.sessionStore.get(conversation.commanderId)
       const agentType = requestedAgentType ?? conversation.agentType ?? commander?.agentType ?? resolveDefaultProviderId()
       const provider = getProvider(agentType)
-      if (effort !== undefined && !provider?.uiCapabilities.supportsEffort) {
-        res.status(400).json({ error: `Provider "${agentType}" does not support effort` })
+      if (!provider) {
+        res.status(400).json({ error: `Unknown provider: ${agentType}` })
         return
       }
-      if (adaptiveThinking !== undefined && !provider?.uiCapabilities.supportsAdaptiveThinking) {
-        res.status(400).json({ error: `Provider "${agentType}" does not support adaptiveThinking` })
+      const credentialPoolId = canConversationSelectCredentialPool(
+        agentType,
+        liveSession?.host ?? commander?.host,
+      )
+        ? liveSession?.agentType === agentType
+          ? liveSession.credentialPoolId
+          : conversation.agentType === agentType
+            ? conversation.credentialPoolId
+            : undefined
+        : undefined
+      const modelAccountId = liveSession?.agentType === agentType
+        ? liveSession.providerAuthSnapshot?.accountId ?? liveSession.providerAuthSnapshot?.accountEmail
+        : undefined
+      const modelContext = {
+        credentialPoolId,
+        ...(modelAccountId ? { accountId: modelAccountId } : {}),
+      }
+      const resolvedModels = getCachedProviderModelsForValidation(provider, modelContext)
+      const providerDefaults = resolveProviderDefaults(provider, resolvedModels.models)
+      const commanderAgentType = commander?.agentType ?? resolveDefaultProviderId()
+      const hasStoredConversationModel = conversation.agentType === agentType
+        && Object.prototype.hasOwnProperty.call(conversation, 'model')
+        && conversation.model !== undefined
+      const selectedModelValue = requestedModel.value !== undefined
+        ? requestedModel.value ?? providerDefaults.model
+        : hasStoredConversationModel
+          ? conversation.model ?? providerDefaults.model
+          : commanderAgentType === agentType
+            ? commander?.model ?? providerDefaults.model
+            : providerDefaults.model
+      const usesTrustedStoredModel = hasStoredConversationModel
+        && typeof conversation.model === 'string'
+        && selectedModelValue === conversation.model
+        && (requestedModel.value === undefined || requestedModel.value === conversation.model)
+      const modelValidation = usesTrustedStoredModel
+        ? { ok: true as const }
+        : validateModelForAgentType(agentType, selectedModelValue, modelContext)
+      if (!modelValidation.ok) {
+        res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
         return
       }
-      if (maxThinkingTokens !== undefined && !provider?.uiCapabilities.supportsMaxThinkingTokens) {
+      const modelOption = findProviderModelOption(resolvedModels.models, selectedModelValue)
+      const supportedEffortLevels = getAgentEffortLevelsForModel(agentType, modelOption)
+      const storedModelOmitsEffort = usesTrustedStoredModel
+        && asClaudeProviderContext(conversation.providerContext)?.omitEffort === true
+      const modelSupportsEffort = provider.uiCapabilities.supportsEffort
+        && !storedModelOmitsEffort
+        && supportedEffortLevels.length > 0
+      const modelSupportsAdaptiveThinking = provider.uiCapabilities.supportsAdaptiveThinking
+        && modelOption?.supportsAdaptiveThinking !== false
+      const hasEffortField = Object.prototype.hasOwnProperty.call(body, 'effort')
+      const parsedEffort = parseOptionalAgentEffort(agentType, body.effort)
+      if (hasEffortField && parsedEffort === null) {
+        res.status(400).json({
+          error: `Invalid effort for provider "${agentType}". Expected one of: ${getAgentEffortLevels(agentType).join(', ')}`,
+        })
+        return
+      }
+      if (parsedEffort && !modelSupportsEffort) {
+        res.status(400).json({
+          error: modelOption || storedModelOmitsEffort
+            ? `Model "${modelOption?.label ?? selectedModelValue}" does not support effort`
+            : `Provider "${agentType}" does not support effort`,
+        })
+        return
+      }
+      if (parsedEffort && !supportedEffortLevels.includes(parsedEffort)) {
+        res.status(400).json({
+          error: `Invalid effort for model "${modelOption?.label ?? selectedModelValue ?? agentType}". Expected one of: ${supportedEffortLevels.join(', ')}`,
+        })
+        return
+      }
+      const modelDefaultEffort = parseOptionalAgentEffort(agentType, modelOption?.defaultEffort)
+      const providerDefaultEffort = parseOptionalAgentEffort(agentType, providerDefaults.effort)
+      const defaultEffort = modelDefaultEffort && supportedEffortLevels.includes(modelDefaultEffort)
+        ? modelDefaultEffort
+        : providerDefaultEffort && supportedEffortLevels.includes(providerDefaultEffort)
+          ? providerDefaultEffort
+          : parseOptionalAgentEffort(agentType, supportedEffortLevels[0]) ?? undefined
+      const effort = modelSupportsEffort ? parsedEffort ?? defaultEffort : undefined
+
+      const hasAdaptiveThinkingField = Object.prototype.hasOwnProperty.call(body, 'adaptiveThinking')
+      if (parsedAdaptiveThinking && !modelSupportsAdaptiveThinking) {
+        res.status(400).json({
+          error: modelOption
+            ? `Model "${modelOption.label}" does not support adaptiveThinking`
+            : `Provider "${agentType}" does not support adaptiveThinking`,
+        })
+        return
+      }
+      const adaptiveThinking = modelSupportsAdaptiveThinking
+        ? parsedAdaptiveThinking ?? providerDefaults.adaptiveThinking
+        : undefined
+
+      const hasMaxThinkingTokensField = Object.prototype.hasOwnProperty.call(body, 'maxThinkingTokens')
+      if (maxThinkingTokens !== undefined && !provider.uiCapabilities.supportsMaxThinkingTokens) {
         res.status(400).json({ error: `Provider "${agentType}" does not support maxThinkingTokens` })
         return
       }
-      if (!requestedAgentType) {
-        const modelValidation = validateModelForAgentType(agentType, requestedModel.value ?? null)
-        if (!modelValidation.ok) {
-          res.status(400).json({ error: modelValidation.error, validIds: modelValidation.validIds })
-          return
-        }
-      }
+      const effectiveMaxThinkingTokens = provider.uiCapabilities.supportsMaxThinkingTokens
+        ? maxThinkingTokens ?? providerDefaults.maxThinkingTokens
+        : undefined
 
       const spawnOptions: ConversationSpawnOptions = {
         ...(requestedAgentType ? { agentType: requestedAgentType } : {}),
-        ...(requestedModel.value !== undefined ? { model: requestedModel.value } : {}),
-        ...(effort !== undefined ? { effort } : {}),
-        ...(adaptiveThinking !== undefined ? { adaptiveThinking } : {}),
-        ...(maxThinkingTokens !== undefined ? { maxThinkingTokens } : {}),
+        ...(requestedModel.value !== undefined ? { model: selectedModelValue } : {}),
+        ...(hasEffortField ? { effort } : {}),
+        ...(hasAdaptiveThinkingField ? { adaptiveThinking } : {}),
+        ...(hasMaxThinkingTokensField ? { maxThinkingTokens: effectiveMaxThinkingTokens } : {}),
       }
 
       const launch = launchConversationBootstrap(
@@ -1117,7 +1550,7 @@ export function registerConversationRoutes(
       if (!fastResult) {
         const latest = await context.conversationStore.get(conversation.id)
         res.status(202).json({
-          conversation: withLiveSession(context, latest ?? conversation),
+          conversation: await withLiveSession(context, latest ?? conversation),
         })
         return
       }
@@ -1127,7 +1560,7 @@ export function registerConversationRoutes(
       }
 
       res.status(200).json({
-        conversation: withLiveSession(context, fastResult.conversation),
+        conversation: await withLiveSession(context, fastResult.conversation),
       })
     } catch (error) {
       res.status(503).json({ error: errorMessage(error) })
@@ -1210,14 +1643,19 @@ export function registerConversationRoutes(
       conversation,
       { message: messageWithContext, displayMessage: message, images, clientSendId },
       {
-        ...(queue ? { queue: true, priority: 'normal' as const } : {}),
+        intent: queue ? 'queue' : 'interrupt',
+        ...(queue ? { priority: 'normal' as const } : {}),
         ...(dispatchChannelReplies ? { dispatchChannelReplies: true } : {}),
         ...(shouldAutoStartIdleTextSend ? { autoStartIdle: true, autoStartSeedPrompt: false } : {}),
         abortSignal: requestAbortSignal(req, res),
       },
     )
     if (!delivered.ok) {
-      res.status(delivered.status).json({ error: delivered.error })
+      res.status(delivered.status).json({
+        error: delivered.error,
+        ...(delivered.code ? { code: delivered.code } : {}),
+        ...(delivered.retryable !== undefined ? { retryable: delivered.retryable } : {}),
+      })
       return
     }
     let messagePage: Awaited<ReturnType<typeof getConversationMessagesPage>> | undefined
@@ -1231,8 +1669,9 @@ export function registerConversationRoutes(
     }
     res.json({
       accepted: true,
+      disposition: delivered.disposition,
       createdSession: delivered.createdSession,
-      conversation: withLiveSession(context, delivered.conversation),
+      conversation: await withLiveSession(context, delivered.conversation),
       ...(delivered.operationId ? { operationId: delivered.operationId } : {}),
       ...(messagePage ? { messagePage } : {}),
     })
@@ -1267,21 +1706,21 @@ export function registerConversationRoutes(
           getConversationRuntimeOverlay(conversation.id)?.state === 'starting'
           && requestConversationBootstrapCancel(conversation.id, context.now().toISOString(), 'idle')
         ) {
-          res.status(202).json(withLiveSession(context, conversation))
+          res.status(202).json(await withLiveSession(context, conversation))
           return
         }
         const updated = await stopConversationSession(context, conversation, 'idle')
-        res.json(withLiveSession(context, updated ?? conversation))
+        res.json(await withLiveSession(context, updated ?? conversation))
         return
       }
 
       if (action === 'archive') {
-        res.json(withLiveSession(context, await archiveConversation(context, conversation)))
+        res.json(await withLiveSession(context, await archiveConversation(context, conversation)))
         return
       }
 
       if (getConversationRuntimeOverlay(conversation.id)?.state === 'starting') {
-        res.status(202).json(withLiveSession(context, conversation))
+        res.status(202).json(await withLiveSession(context, conversation))
         return
       }
 
@@ -1306,7 +1745,7 @@ export function registerConversationRoutes(
           )
         }
         fireImmediateResumeHeartbeat(context, conversation)
-        res.json(withLiveSession(context, updated ?? conversation))
+        res.json(await withLiveSession(context, updated ?? conversation))
         return
       }
 
@@ -1320,7 +1759,7 @@ export function registerConversationRoutes(
       const fastResult = await awaitBootstrapFastPath(launch.completion)
       if (!fastResult) {
         const latest = await context.conversationStore.get(conversation.id)
-        res.status(202).json(withLiveSession(context, latest ?? conversation))
+        res.status(202).json(await withLiveSession(context, latest ?? conversation))
         return
       }
       if (!fastResult.ok) {
@@ -1328,7 +1767,7 @@ export function registerConversationRoutes(
         return
       }
 
-      res.json(withLiveSession(context, fastResult.conversation))
+      res.json(await withLiveSession(context, fastResult.conversation))
     }
 
   conversationRouter.post('/:convId/pause', context.requireWorkerDispatchAccess, handleStatusAction('pause'))
@@ -1364,6 +1803,6 @@ export function registerConversationRoutes(
       return
     }
 
-    res.json(withLiveSession(context, await archiveConversation(context, conversation)))
+    res.json(await withLiveSession(context, await archiveConversation(context, conversation)))
   })
 }

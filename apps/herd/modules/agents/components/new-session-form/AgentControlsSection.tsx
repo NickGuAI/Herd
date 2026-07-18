@@ -8,9 +8,9 @@ import {
   type ClaudeAdaptiveThinkingMode,
 } from '../../../claude-adaptive-thinking.js'
 import {
-  CLAUDE_EFFORT_LEVELS,
-  type ClaudeEffortLevel,
-} from '../../../claude-effort.js'
+  getAgentModelEffortCapability,
+  type AgentEffortLevel,
+} from '../../effort.js'
 import {
   MAX_CLAUDE_MAX_THINKING_TOKENS,
   MIN_CLAUDE_MAX_THINKING_TOKENS,
@@ -24,8 +24,9 @@ interface AgentControlsSectionProps {
   transportType: Exclude<SessionTransportType, 'external'>
   setTransportType: (value: Exclude<SessionTransportType, 'external'>) => void
   resumeLocked: boolean
-  effort: ClaudeEffortLevel
-  setEffort: (value: ClaudeEffortLevel) => void
+  model?: string | null
+  effort: AgentEffortLevel
+  setEffort: (value: AgentEffortLevel) => void
   adaptiveThinking: ClaudeAdaptiveThinkingMode
   setAdaptiveThinking: (value: ClaudeAdaptiveThinkingMode) => void
   maxThinkingTokens: ClaudeMaxThinkingTokens
@@ -39,6 +40,7 @@ export function AgentControlsSection({
   transportType,
   setTransportType,
   resumeLocked,
+  model,
   effort,
   setEffort,
   adaptiveThinking,
@@ -48,6 +50,10 @@ export function AgentControlsSection({
 }: AgentControlsSectionProps) {
   const currentProvider = providers.find((provider) => provider.id === agentType) ?? null
   const providerDefaults = getProviderControlDefaults(currentProvider)
+  const effectiveModel = model ?? currentProvider?.defaults?.model ?? null
+  const modelOption = currentProvider?.availableModels?.find((option) => option.id === effectiveModel)
+  const modelEffortCapability = getAgentModelEffortCapability(agentType, modelOption)
+  const effortOptions = modelEffortCapability.supportedEffortLevels
   const sessionTypeOptions = currentProvider?.uiCapabilities.forcedTransport === 'stream'
     ? [{ value: 'stream', label: 'Stream', description: 'ACP chat UI, supports resume' }]
     : [
@@ -130,71 +136,72 @@ export function AgentControlsSection({
         </div>
       </div>
 
-      {currentProvider?.uiCapabilities.supportsEffort ? (
-        <>
-          <div>
-            <label className="section-title block mb-2">Claude Effort</label>
-            <select
-              value={effort}
-              onChange={(event) => setEffort(event.target.value as ClaudeEffortLevel)}
-              disabled={resumeLocked}
-              className={cn(
-                'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
-                resumeLocked && 'cursor-not-allowed opacity-60',
-              )}
-            >
-              {CLAUDE_EFFORT_LEVELS.map((level) => (
-                <option key={level} value={level}>{level}</option>
-              ))}
-            </select>
-            <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
-              Default is `{providerDefaults.effort}`. Resume reuses the selected session’s Claude effort.
-            </p>
-          </div>
+      {currentProvider?.uiCapabilities.supportsEffort && modelEffortCapability.supportsEffort ? (
+        <div>
+          <label className="section-title block mb-2">{currentProvider.label} Effort</label>
+          <select
+            value={effort}
+            onChange={(event) => setEffort(event.target.value as AgentEffortLevel)}
+            disabled={resumeLocked}
+            className={cn(
+              'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
+              resumeLocked && 'cursor-not-allowed opacity-60',
+            )}
+          >
+            {effortOptions.map((level) => (
+              <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
+            Default is `{providerDefaults.effort}`. Resume reuses the selected session’s effort.
+          </p>
+        </div>
+      ) : null}
 
-          <div>
-            <label className="section-title block mb-2">Adaptive Thinking</label>
-            <select
-              value={adaptiveThinking}
-              onChange={(event) => setAdaptiveThinking(event.target.value as ClaudeAdaptiveThinkingMode)}
-              disabled={resumeLocked}
-              className={cn(
-                'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
-                resumeLocked && 'cursor-not-allowed opacity-60',
-              )}
-            >
-              {CLAUDE_ADAPTIVE_THINKING_MODES.map((entry) => (
-                <option key={entry} value={entry}>{entry}</option>
-              ))}
-            </select>
-            <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
-              Default is `{providerDefaults.adaptiveThinking}` for fixed `MAX_THINKING_TOKENS`; enable only when the smaller adaptive budget is wanted.
-            </p>
-          </div>
+      {currentProvider?.uiCapabilities.supportsAdaptiveThinking
+        && modelOption?.supportsAdaptiveThinking !== false ? (
+        <div>
+          <label className="section-title block mb-2">Adaptive Thinking</label>
+          <select
+            value={adaptiveThinking}
+            onChange={(event) => setAdaptiveThinking(event.target.value as ClaudeAdaptiveThinkingMode)}
+            disabled={resumeLocked}
+            className={cn(
+              'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
+              resumeLocked && 'cursor-not-allowed opacity-60',
+            )}
+          >
+            {CLAUDE_ADAPTIVE_THINKING_MODES.map((entry) => (
+              <option key={entry} value={entry}>{entry}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
+            Default is `{providerDefaults.adaptiveThinking}` for fixed `MAX_THINKING_TOKENS`; enable only when the smaller adaptive budget is wanted.
+          </p>
+        </div>
+      ) : null}
 
-          {currentProvider?.uiCapabilities.supportsMaxThinkingTokens ? (
-            <div>
-              <label className="section-title block mb-2">Max Thinking Tokens</label>
-              <input
-                type="number"
-                min={MIN_CLAUDE_MAX_THINKING_TOKENS}
-                max={MAX_CLAUDE_MAX_THINKING_TOKENS}
-                step={1}
-                required
-                value={maxThinkingTokens}
-                onChange={(event) => setMaxThinkingTokens(Number(event.target.value))}
-                disabled={resumeLocked}
-                className={cn(
-                  'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
-                  resumeLocked && 'cursor-not-allowed opacity-60',
-                )}
-              />
-              <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
-                Default is `{providerDefaults.maxThinkingTokens}`. Valid range is 1024-256000.
-              </p>
-            </div>
-          ) : null}
-        </>
+      {currentProvider?.uiCapabilities.supportsMaxThinkingTokens ? (
+        <div>
+          <label className="section-title block mb-2">Max Thinking Tokens</label>
+          <input
+            type="number"
+            min={MIN_CLAUDE_MAX_THINKING_TOKENS}
+            max={MAX_CLAUDE_MAX_THINKING_TOKENS}
+            step={1}
+            required
+            value={maxThinkingTokens}
+            onChange={(event) => setMaxThinkingTokens(Number(event.target.value))}
+            disabled={resumeLocked}
+            className={cn(
+              'w-full px-3 py-2 rounded-lg border border-[color:var(--hv-border-hair)] bg-[var(--hv-bg-raised)] text-[16px] md:text-sm focus:outline-none focus:border-[color:var(--hv-border-soft)]',
+              resumeLocked && 'cursor-not-allowed opacity-60',
+            )}
+          />
+          <p className="mt-1 text-whisper text-[color:var(--hv-fg-faint)]">
+            Default is `{providerDefaults.maxThinkingTokens}`. Valid range is 1024-256000.
+          </p>
+        </div>
       ) : null}
     </>
   )

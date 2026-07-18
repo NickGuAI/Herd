@@ -3,17 +3,12 @@ import {
   type ClaudeAdaptiveThinkingMode,
 } from '../claude-adaptive-thinking.js'
 import {
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
-  type ClaudeEffortLevel,
-} from '../claude-effort.js'
-import {
   DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   type ClaudeMaxThinkingTokens,
 } from '../claude-max-thinking-tokens.js'
 import {
   parseActiveSkillInvocation,
   parseClaudeAdaptiveThinking,
-  parseClaudeEffort,
   parseClaudeMaxThinkingTokens,
   parseOptionalClaudePermissionMode,
   parseCwd,
@@ -25,13 +20,25 @@ import {
 } from './session/input.js'
 import { ProviderAuthRequiredError } from './provider-auth.js'
 import {
+  getAgentEffortLevels,
+  getAgentModelEffortCapability,
+  getDefaultAgentEffort,
+  parseOptionalAgentEffort,
+  parseStoredAgentEffort,
+  type AgentEffortLevel,
+} from './effort.js'
+import {
   providerSupportsPermissionMode,
   resolveProviderDefaults,
   unsupportedProviderPermissionModeError,
   type ProviderCreateOptions,
 } from './providers/provider-adapter.js'
 import { getProvider, resolveProviderIdForRequest } from './providers/registry.js'
-import { validateModelForAgentType } from './providers/validate-model.js'
+import { getCachedProviderModelsForValidation } from './providers/model-discovery.js'
+import {
+  findProviderModelOption,
+  validateModelForAgentType,
+} from './providers/validate-model.js'
 import type {
   ActiveSkillInvocation,
   AgentType,
@@ -64,7 +71,8 @@ interface WorkerLaunchSourceDefaults {
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   currentSkillInvocation?: ActiveSkillInvocation
   cwd?: string
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
+  omitEffort?: boolean
   host?: string
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode?: ClaudePermissionMode
@@ -91,7 +99,8 @@ export interface ParsedWorkerLaunchRequest {
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   creator: SessionCreator
   currentSkillInvocation?: ActiveSkillInvocation
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
+  omitEffort?: boolean
   fallbackCwd?: string
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   mode: ClaudePermissionMode
@@ -219,15 +228,6 @@ export function parseWorkerLaunchRequest(
     return { ok: false, status: 400, body: { error: 'Invalid session name' } }
   }
 
-  const parsedEffort = parseClaudeEffort(body.effort)
-  if (parsedEffort === null) {
-    return {
-      ok: false,
-      status: 400,
-      body: { error: 'Invalid effort. Expected one of: low, medium, high, max' },
-    }
-  }
-
   const parsedAdaptiveThinking = parseClaudeAdaptiveThinking(body.adaptiveThinking)
   if (parsedAdaptiveThinking === null) {
     return {
@@ -316,6 +316,16 @@ export function parseWorkerLaunchRequest(
       body: { error: `Provider ${agentType} cannot dispatch worker sessions` },
     }
   }
+  const parsedEffort = parseOptionalAgentEffort(agentType, body.effort)
+  if (parsedEffort === null) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: `Invalid effort for ${agentType}. Expected one of: ${getAgentEffortLevels(agentType).join(', ')}`,
+      },
+    }
+  }
   const mode = parsedPermissionMode ?? options.mode ?? options.sourceDefaults?.mode ?? 'default'
   if (!providerSupportsPermissionMode(provider, mode)) {
     return {
@@ -326,7 +336,13 @@ export function parseWorkerLaunchRequest(
   }
 
   const effectiveModel = model ?? options.sourceDefaults?.model
-  const modelValidation = validateModelForAgentType(agentType, effectiveModel ?? null)
+  const usesTrustedSourceModel = options.sourceDefaults?.agentType === agentType
+    && effectiveModel !== undefined
+    && effectiveModel === options.sourceDefaults.model
+    && (model === undefined || model === options.sourceDefaults.model)
+  const modelValidation = usesTrustedSourceModel
+    ? { ok: true as const }
+    : validateModelForAgentType(agentType, effectiveModel ?? null)
   if (!modelValidation.ok) {
     return {
       ok: false,
@@ -335,15 +351,43 @@ export function parseWorkerLaunchRequest(
     }
   }
 
+  const resolvedModels = getCachedProviderModelsForValidation(provider)
+  const modelOption = findProviderModelOption(resolvedModels.models, effectiveModel)
+  const modelEffortCapability = getAgentModelEffortCapability(agentType, modelOption)
+  const supportedEffortLevels = modelEffortCapability.supportedEffortLevels
   const providerDefaults = resolveProviderDefaults(provider)
-  const effort = provider.uiCapabilities.supportsEffort
+  const inheritedEffort = parseStoredAgentEffort(agentType, options.sourceDefaults?.effort)
+  const sourceModelOmitsEffort = usesTrustedSourceModel
+    && options.sourceDefaults?.omitEffort === true
+  const modelOmitsEffort = provider.uiCapabilities.supportsEffort
+    && !modelEffortCapability.supportsEffort
+  if ((sourceModelOmitsEffort || modelOmitsEffort) && parsedEffort) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: `Model "${modelOption?.label ?? effectiveModel ?? agentType}" does not support effort`,
+      },
+    }
+  }
+  const omitEffort = (sourceModelOmitsEffort || modelOmitsEffort) && parsedEffort === undefined
+  const effort = provider.uiCapabilities.supportsEffort && !omitEffort
     ? (
       parsedEffort
-      ?? options.sourceDefaults?.effort
+      ?? (inheritedEffort ?? undefined)
       ?? providerDefaults.effort
-      ?? DEFAULT_CLAUDE_EFFORT_LEVEL
+      ?? getDefaultAgentEffort(agentType)
     )
     : undefined
+  if (effort && !supportedEffortLevels.includes(effort)) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: `Invalid effort for model "${modelOption?.label ?? effectiveModel ?? agentType}". Expected one of: ${supportedEffortLevels.join(', ')}`,
+      },
+    }
+  }
   const adaptiveThinking = provider.uiCapabilities.supportsAdaptiveThinking
     ? (
       parsedAdaptiveThinking
@@ -383,6 +427,7 @@ export function parseWorkerLaunchRequest(
             : {}
         )),
       ...(effort !== undefined ? { effort } : {}),
+      ...(omitEffort ? { omitEffort: true } : {}),
       ...(options.fallbackCwd !== undefined ? { fallbackCwd: options.fallbackCwd } : {}),
       ...(maxThinkingTokens !== undefined ? { maxThinkingTokens } : {}),
       ...(effectiveModel !== undefined ? { model: effectiveModel } : {}),
@@ -451,6 +496,7 @@ export async function launchProviderWorkerSession(
           ? { currentSkillInvocation: request.currentSkillInvocation }
           : {}),
         ...(request.effort !== undefined ? { effort: request.effort } : {}),
+        ...(request.omitEffort ? { omitEffort: true } : {}),
         ...(request.maxThinkingTokens !== undefined ? { maxThinkingTokens: request.maxThinkingTokens } : {}),
         ...(request.model !== undefined ? { model: request.model } : {}),
         ...(request.spawnedBy ? { spawnedBy: request.spawnedBy } : {}),

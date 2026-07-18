@@ -50,6 +50,7 @@ function snapshotGeminiSession(session: StreamSession): PersistedStreamSession |
       sessionId: context.sessionId,
     }),
     credentialPoolId: session.credentialPoolId,
+    credentialPoolMode: session.credentialPoolMode,
     credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     spawnedBy: session.spawnedBy,
@@ -62,6 +63,7 @@ function snapshotGeminiSession(session: StreamSession): PersistedStreamSession |
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }
 
@@ -88,6 +90,7 @@ function snapshotExitedGeminiSession(session: StreamSession): ExitedStreamSessio
       sessionId: context.sessionId,
     }),
     credentialPoolId: session.credentialPoolId,
+    credentialPoolMode: session.credentialPoolMode,
     credentialPoolRecovery: session.credentialPoolRecovery,
     activeTurnId: session.activeTurnId,
     resumedFrom: session.resumedFrom,
@@ -96,6 +99,7 @@ function snapshotExitedGeminiSession(session: StreamSession): ExitedStreamSessio
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }
 

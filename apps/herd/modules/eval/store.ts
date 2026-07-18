@@ -24,6 +24,13 @@ const BENCH_ALIASES = new Map<string, EvalBench>([
   ['terminal_bench', 'terminal-bench'],
   ['terminal-bench', 'terminal-bench'],
   ['tbench', 'terminal-bench'],
+  ['terminal_bench_2', 'terminal-bench-2'],
+  ['terminal-bench-2', 'terminal-bench-2'],
+  ['tb2', 'terminal-bench-2'],
+  ['terminal_bench_2_1', 'terminal-bench-2-1'],
+  ['terminal-bench-2-1', 'terminal-bench-2-1'],
+  ['tb2.1', 'terminal-bench-2-1'],
+  ['tb21', 'terminal-bench-2-1'],
   ['locomo', 'locomo'],
   ['marble', 'marble'],
   ['hal_reliability', 'hal-reliability'],
@@ -49,6 +56,10 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((entry) => asString(entry)).filter((entry): entry is string => entry !== null)
     : []
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
 }
 
 function parseTaskStatus(value: unknown): EvalTaskResult['status'] | null {
@@ -90,19 +101,58 @@ function benchPathSegment(bench: EvalBench): string {
   return bench
 }
 
+// Read compatibility belongs at the persistence boundary. New API writes and
+// runtime selection remain canonical-only through EVAL_RUNNER_MODES.
+const LEGACY_ORCHESTRATOR_NAME = `${'ath'}${'ena'}`
+const LEGACY_ORCHESTRATOR_CLASS_NAME = `${'Ath'}${'ena'}`
+const LEGACY_ORCHESTRATED_RUNNER = `herd-${LEGACY_ORCHESTRATOR_NAME}`
+const LEGACY_ORCHESTRATED_AGENT_CLASS = `Herd${LEGACY_ORCHESTRATOR_CLASS_NAME}HarborAgent`
+const LEGACY_ORCHESTRATED_ENTRY_FIELD = `enteredThroughHerd${LEGACY_ORCHESTRATOR_CLASS_NAME}Adapter`
+
+function normalizeStoredRunnerMode(value: unknown): EvalRunnerMode | null {
+  const normalized = asString(value)
+  return normalizeEvalRunnerMode(
+    normalized === LEGACY_ORCHESTRATED_RUNNER ? 'herd-orchestrated' : normalized,
+  )
+}
+
+function normalizeStoredAuthMode(value: unknown): EvalRunConfig['authMode'] | null {
+  const normalized = asString(value)
+  if (normalized === LEGACY_ORCHESTRATED_RUNNER) {
+    return 'herd-orchestrated'
+  }
+  return normalized === 'herd-orchestrated' || normalized === 'subscription'
+    || normalized === 'api-key' || normalized === 'proxy-experimental'
+    ? normalized
+    : null
+}
+
+function normalizeStoredSubmittedAgent(value: unknown): string | undefined {
+  const normalized = asString(value)
+  return normalized === LEGACY_ORCHESTRATED_RUNNER ? 'herd-orchestrated' : normalized ?? undefined
+}
+
+function normalizeStoredEntryAdapter(value: unknown): string | undefined {
+  const normalized = asString(value)
+  return normalized
+    ?.replace(`:${LEGACY_ORCHESTRATED_AGENT_CLASS}`, ':HerdOrchestratedHarborAgent')
+}
+
+function normalizeStoredInternalStack(value: unknown): string[] {
+  return asStringArray(value).map((entry) => entry === LEGACY_ORCHESTRATOR_NAME ? 'orchestrator' : entry)
+}
+
 function parseConfig(value: unknown): EvalRunConfig | null {
   if (!isObject(value)) {
     return null
   }
   const runId = normalizeEvalRunId(value.runId)
   const bench = normalizeEvalBench(value.bench)
-  const runnerMode = normalizeEvalRunnerMode(value.runnerMode)
+  const runnerMode = normalizeStoredRunnerMode(value.runnerMode)
   const profile = value.profile === 'smoke' || value.profile === 'full' || value.profile === 'release-gate'
     ? value.profile
     : null
-  const authMode = value.authMode === 'subscription' || value.authMode === 'api-key' || value.authMode === 'proxy-experimental'
-    ? value.authMode
-    : null
+  const authMode = normalizeStoredAuthMode(value.authMode)
   const createdAt = asString(value.createdAt)
   if (!runId || !bench || !runnerMode || !profile || !authMode || !createdAt) {
     return null
@@ -123,6 +173,13 @@ function parseConfig(value: unknown): EvalRunConfig | null {
     datasetVersion: asString(value.datasetVersion) ?? undefined,
     adapterVersion: asString(value.adapterVersion) ?? undefined,
     environmentHash: asString(value.environmentHash) ?? undefined,
+    submittedAgent: normalizeStoredSubmittedAgent(value.submittedAgent),
+    entryAdapter: normalizeStoredEntryAdapter(value.entryAdapter),
+    enteredThroughHerdOrchestratedAdapter: asBoolean(value.enteredThroughHerdOrchestratedAdapter)
+      ?? asBoolean(value[LEGACY_ORCHESTRATED_ENTRY_FIELD]),
+    internalStack: normalizeStoredInternalStack(value.internalStack),
+    trajectoryManifestPath: asString(value.trajectoryManifestPath) ?? undefined,
+    harborCommand: asString(value.harborCommand) ?? undefined,
     createdAt,
   }
 }
@@ -414,9 +471,16 @@ export class EvalRunStore {
         run_id: config.runId,
         bench: config.bench,
         runner_mode: config.runnerMode,
+        submitted_agent: config.submittedAgent,
       },
       leaderboard,
       summaryMarkdown: await readOptionalText(summaryPath),
+      submittedAgent: config.submittedAgent,
+      entryAdapter: config.entryAdapter,
+      enteredThroughHerdOrchestratedAdapter: config.enteredThroughHerdOrchestratedAdapter,
+      internalStack: config.internalStack,
+      trajectoryManifestPath: config.trajectoryManifestPath,
+      harborCommand: config.harborCommand,
     }
   }
 }

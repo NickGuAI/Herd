@@ -11,10 +11,9 @@ import {
   type ClaudeAdaptiveThinkingMode,
 } from '../../claude-adaptive-thinking.js'
 import {
-  DEFAULT_CLAUDE_EFFORT_LEVEL,
-  normalizeClaudeEffortLevel,
-  type ClaudeEffortLevel,
-} from '../../claude-effort.js'
+  normalizeAgentEffort,
+  type AgentEffortLevel,
+} from '../effort.js'
 import {
   DEFAULT_CLAUDE_MAX_THINKING_TOKENS,
   normalizeClaudeMaxThinkingTokens,
@@ -207,7 +206,10 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
   const provider = parsedProvider === 'claude' || parsedProvider === 'codex'
     ? parsedProvider
     : undefined
-  const reason = recovery.reason === 'manual_switch' || recovery.reason === 'usage_limit'
+  const reason = recovery.reason === 'auth_required'
+    || recovery.reason === 'manual_switch'
+    || recovery.reason === 'quota_threshold'
+    || recovery.reason === 'usage_limit'
     ? recovery.reason
     : undefined
   const requestedAt = typeof recovery.requestedAt === 'string' && recovery.requestedAt.trim().length > 0
@@ -227,6 +229,12 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
   const resetAt = typeof recovery.resetAt === 'string' && recovery.resetAt.trim().length > 0
     ? recovery.resetAt.trim()
     : undefined
+  const failureCode = typeof recovery.failureCode === 'string' && recovery.failureCode.trim().length > 0
+    ? recovery.failureCode.trim()
+    : undefined
+  const failureReason = typeof recovery.failureReason === 'string' && recovery.failureReason.trim().length > 0
+    ? recovery.failureReason.trim()
+    : undefined
   const blockedUntil = typeof recovery.blockedUntil === 'string' && recovery.blockedUntil.trim().length > 0
     ? recovery.blockedUntil.trim()
     : undefined
@@ -234,6 +242,18 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
     ? recovery.interruptedTurnId.trim()
     : undefined
   const interruptedMessage = parseQueuedMessage(recovery.interruptedMessage)
+  const state = recovery.state === 'awaiting_safe_boundary'
+    || recovery.state === 'stopping_old_runtime'
+    || recovery.state === 'activating_credential'
+    || recovery.state === 'reloading_session'
+    || recovery.state === 'retry_scheduled'
+    || recovery.state === 'blocked'
+    ? recovery.state
+    : blockedUntil
+      ? 'blocked'
+      : credentialPoolId
+        ? 'reloading_session'
+        : 'awaiting_safe_boundary'
   return {
     provider,
     ...(credentialPoolId ? { credentialPoolId } : {}),
@@ -241,6 +261,9 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
     clearResumeProviderContext: recovery.clearResumeProviderContext !== false,
     reason,
     requestedAt,
+    state,
+    ...(failureCode ? { failureCode } : {}),
+    ...(failureReason ? { failureReason } : {}),
     ...(resetAt ? { resetAt } : {}),
     ...(blockedUntil ? { blockedUntil } : {}),
     ...(interruptedMessage ? { interruptedMessage } : {}),
@@ -251,9 +274,15 @@ function parseCredentialPoolRecoveryRequest(value: unknown): CredentialPoolRecov
   }
 }
 
+function parseCredentialPoolRuntimeMode(value: unknown): PersistedStreamSession['credentialPoolMode'] {
+  return value === 'global-continuity' || value === 'isolated-runtime'
+    ? value
+    : undefined
+}
+
 function parsePersistedProviderContext(
   entry: Record<string, unknown>,
-  effort?: ClaudeEffortLevel,
+  effort?: AgentEffortLevel,
   adaptiveThinking?: ClaudeAdaptiveThinkingMode,
   maxThinkingTokens?: ClaudeMaxThinkingTokens,
 ): ProviderSessionContext | null {
@@ -323,7 +352,9 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     return null
   }
 
-  const effort = normalizeClaudeEffortLevel(entry.effort, DEFAULT_CLAUDE_EFFORT_LEVEL)
+  const omitEffort = agentType === 'claude'
+    && asObject(entry.providerContext)?.omitEffort === true
+  const effort = omitEffort ? undefined : normalizeAgentEffort(agentType, entry.effort)
   const adaptiveThinking = normalizeClaudeAdaptiveThinkingMode(
     entry.adaptiveThinking,
     DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -369,12 +400,14 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
       ?? parsedQueuedMessages?.filter((message) => message.priority === 'high')
   )?.filter((message) => message.priority === 'high')
   const currentQueuedMessage = parseQueuedMessage(entry.currentQueuedMessage)
+  const activeTurnMessage = parseQueuedMessage(entry.activeTurnMessage)
   const activeTurnId = typeof entry.activeTurnId === 'string' && entry.activeTurnId.trim().length > 0
     ? entry.activeTurnId.trim()
     : undefined
   const credentialPoolId = typeof entry.credentialPoolId === 'string' && entry.credentialPoolId.trim().length > 0
     ? entry.credentialPoolId.trim()
     : undefined
+  const credentialPoolMode = parseCredentialPoolRuntimeMode(entry.credentialPoolMode)
   const credentialPoolRecovery = parseCredentialPoolRecoveryRequest(entry.credentialPoolRecovery)
   const approvalBridgeNonce = typeof entry.approvalBridgeNonce === 'string'
     && entry.approvalBridgeNonce.trim().length > 0
@@ -411,6 +444,7 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     createdAt,
     providerContext,
     credentialPoolId,
+    credentialPoolMode,
     credentialPoolRecovery,
     approvalBridgeNonce,
     activeTurnId,
@@ -425,6 +459,7 @@ export function parsePersistedStreamSessionEntry(value: unknown): PersistedStrea
     queuedMessages,
     currentQueuedMessage: currentQueuedMessage ?? undefined,
     pendingDirectSendMessages,
+    activeTurnMessage: activeTurnMessage ?? undefined,
   }
 }
 
@@ -643,10 +678,15 @@ export function mergePersistedSessionWithTranscriptMeta(
   }
 
   const agentType = parseProviderId(meta.agentType) ?? entry.agentType
-  const effort = normalizeClaudeEffortLevel(
-    meta.effort,
-    entry.effort ?? DEFAULT_CLAUDE_EFFORT_LEVEL,
+  const metaProviderContextRecord = asObject(meta.providerContext)
+  const entryProviderContextRecord = asObject(entry.providerContext)
+  const omitEffort = agentType === 'claude' && (
+    metaProviderContextRecord?.omitEffort === true
+    || entryProviderContextRecord?.omitEffort === true
   )
+  const effort = omitEffort
+    ? undefined
+    : normalizeAgentEffort(agentType, meta.effort, entry.effort)
   const adaptiveThinking = normalizeClaudeAdaptiveThinkingMode(
     meta.adaptiveThinking,
     entry.adaptiveThinking ?? DEFAULT_CLAUDE_ADAPTIVE_THINKING_MODE,
@@ -685,9 +725,15 @@ export function mergePersistedSessionWithTranscriptMeta(
     supportsAdaptiveThinking ? adaptiveThinking : undefined,
     supportsMaxThinkingTokens ? maxThinkingTokens : undefined,
   )
-  const providerContext = metaProviderContext ?? entryProviderContext
+  let providerContext = metaProviderContext ?? entryProviderContext
   if (!providerContext) {
     return entry
+  }
+  if (omitEffort) {
+    const withoutEffort = { ...providerContext } as Record<string, unknown>
+    delete withoutEffort.effort
+    withoutEffort.omitEffort = true
+    providerContext = withoutEffort as unknown as ProviderSessionContext
   }
 
   return {
@@ -1226,6 +1272,7 @@ export function liveSessionToApiPayload(
   if (Array.isArray(session.spawnedWorkers)) payload.spawnedWorkers = [...session.spawnedWorkers]
   if (session.resumedFrom) payload.resumedFrom = session.resumedFrom
   if (session.credentialPoolId) payload.credentialPoolId = session.credentialPoolId
+  if (session.credentialPoolMode) payload.credentialPoolMode = session.credentialPoolMode
 
   return payload
 }
@@ -1381,6 +1428,7 @@ export function snapshotExitedStreamSession(session: StreamSession): ExitedStrea
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
     credentialPoolRecovery: session.credentialPoolRecovery,
   }
 }
@@ -1412,6 +1460,7 @@ export function snapshotDeletedResumableStreamSession(session: StreamSession): E
     createdAt: persisted.createdAt,
     providerContext: persisted.providerContext,
     credentialPoolId: persisted.credentialPoolId,
+    credentialPoolMode: persisted.credentialPoolMode,
     credentialPoolRecovery: persisted.credentialPoolRecovery,
     activeTurnId: persisted.activeTurnId,
     resumedFrom: persisted.resumedFrom,
@@ -1420,6 +1469,7 @@ export function snapshotDeletedResumableStreamSession(session: StreamSession): E
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }
 
@@ -1448,6 +1498,7 @@ export function buildPersistedEntryFromExitedSession(
       maxThinkingTokens: exited.maxThinkingTokens,
     }) ?? exited.providerContext,
     credentialPoolId: exited.credentialPoolId,
+    credentialPoolMode: exited.credentialPoolMode,
     credentialPoolRecovery: exited.credentialPoolRecovery,
     activeTurnId: exited.activeTurnId,
     spawnedBy: exited.spawnedBy,
@@ -1460,6 +1511,7 @@ export function buildPersistedEntryFromExitedSession(
     queuedMessages: exited.queuedMessages ? [...exited.queuedMessages] : [],
     currentQueuedMessage: exited.currentQueuedMessage,
     pendingDirectSendMessages: exited.pendingDirectSendMessages ? [...exited.pendingDirectSendMessages] : [],
+    activeTurnMessage: exited.activeTurnMessage,
   }
 }
 
@@ -1472,6 +1524,7 @@ export function buildPersistedEntryFromLiveStreamSession(
     return {
       ...providerSnapshot,
       name: sessionName,
+      activeTurnMessage: session.activeTurnMessage,
     }
   }
 
@@ -1496,6 +1549,7 @@ export function buildPersistedEntryFromLiveStreamSession(
       maxThinkingTokens: session.maxThinkingTokens,
     }) ?? session.providerContext,
     credentialPoolId: session.credentialPoolId,
+    credentialPoolMode: session.credentialPoolMode,
     credentialPoolRecovery: session.credentialPoolRecovery,
     approvalBridgeNonce: session.approvalBridgeNonce,
     activeTurnId: session.activeTurnId,
@@ -1509,5 +1563,6 @@ export function buildPersistedEntryFromLiveStreamSession(
     queuedMessages: session.messageQueue.list(),
     currentQueuedMessage: session.currentQueuedMessage,
     pendingDirectSendMessages: [...session.pendingDirectSendMessages],
+    activeTurnMessage: session.activeTurnMessage,
   }
 }

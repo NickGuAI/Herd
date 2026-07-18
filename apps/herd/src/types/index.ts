@@ -1,8 +1,8 @@
 import type { HerdEvent } from './herd-events.js'
 import type { TranscriptEnvelope } from './transcript-envelope.js'
 import type { ClaudeAdaptiveThinkingMode } from '../../modules/claude-adaptive-thinking.js'
-import type { ClaudeEffortLevel } from '../../modules/claude-effort.js'
 import type { ClaudeMaxThinkingTokens } from '../../modules/claude-max-thinking-tokens.js'
+import type { AgentEffortLevel } from '../../modules/agents/effort.js'
 import type { HerdUiSurface } from './module-manifest.js'
 export type { HerdEvent, HerdEventSource } from './herd-events.js'
 export type {
@@ -90,13 +90,33 @@ export interface ProviderModelOption {
   label: string
   description?: string
   default?: boolean
+  aliases?: string[]
+  hidden?: boolean
+  deprecated?: boolean
+  runtimeCompatible?: boolean
+  resolvedModel?: string
+  supportsEffort?: boolean
+  supportedEffortLevels?: string[]
+  defaultEffort?: string
+  supportsAdaptiveThinking?: boolean
+}
+
+export interface ProviderModelDiscoveryState {
+  source: 'dynamic' | 'stale-cache' | 'static-fallback'
+  freshness: 'fresh' | 'stale' | 'fallback'
+  fetchedAt: string | null
+  expiresAt: string | null
+  refreshAllowedAt: string | null
+  error: string | null
+  credentialPoolId: string | null
+  accountId: string | null
 }
 
 export interface ProviderDefaults {
   transportType: Exclude<SessionTransportType, 'external'>
   permissionMode: ClaudePermissionMode
   model: string | null
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
 }
@@ -111,7 +131,16 @@ export interface ProviderRegistryEntry {
   supportedTransports: Exclude<SessionTransportType, 'external'>[]
   defaults: ProviderDefaults
   disabledReason: string | null
+  modelDiscovery?: ProviderModelDiscoveryState
+  supportsCustomModels?: boolean
   machineAuth?: ProviderMachineAuthDescriptor
+}
+
+export interface ProviderModelsResponse {
+  providerId: ProviderId
+  availableModels: ProviderModelOption[]
+  modelDiscovery: ProviderModelDiscoveryState
+  supportsCustomModels: boolean
 }
 
 export interface ProviderRegistryResponse {
@@ -176,7 +205,7 @@ export interface AgentSession {
   transportType?: SessionTransportType
   agentType?: AgentType
   mode?: ClaudePermissionMode
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   model?: string
@@ -419,7 +448,7 @@ export interface CreateSessionInput {
   transportType?: Exclude<SessionTransportType, 'external'>
   sessionType?: SessionType
   agentType?: AgentType
-  effort?: ClaudeEffortLevel
+  effort?: AgentEffortLevel
   adaptiveThinking?: ClaudeAdaptiveThinkingMode
   maxThinkingTokens?: ClaudeMaxThinkingTokens
   machineId?: string

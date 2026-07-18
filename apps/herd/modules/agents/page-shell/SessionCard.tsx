@@ -4,6 +4,7 @@ import {
   findProviderEntry,
   getProviderControlDefaults,
   getProviderLabel,
+  getProviderModelLabel,
   useProviderRegistry,
 } from '@/hooks/use-providers'
 import { timeAgo, cn } from '@/lib/utils'
@@ -58,6 +59,14 @@ export function SessionCard({
   const rawAgentType = typeof session.agentType === 'string' ? session.agentType : null
   const currentProvider = findProviderEntry(providers, rawAgentType)
   const agentLabel = rawAgentType ? getProviderLabel(providers, rawAgentType as AgentType) : null
+  const effectiveModel = session.model
+    ?? currentProvider?.defaults?.model
+    ?? currentProvider?.availableModels?.find((model) => model.default)?.id
+  const modelLabel = getProviderModelLabel(
+    providers,
+    rawAgentType as AgentType | null,
+    effectiveModel,
+  )
   const agentBadge = rawAgentType && rawAgentType !== 'claude'
     ? agentLabel
     : null
@@ -83,6 +92,7 @@ export function SessionCard({
     ?? (workerOrchestrationComplete && !isCommander ? 'completed' : null)
   const rowStatusClass = ROW_STATUS_DOT_CLASS[sessionStatus ?? 'idle'] ?? ROW_STATUS_DOT_CLASS.idle
   const rowMeta = [
+    modelLabel,
     agentLabel,
     rowHostLabel,
     credentialLabel ? `credential ${credentialLabel}` : null,
@@ -386,6 +396,11 @@ export function SessionCard({
             )}
             {agentBadge && (
               <span className="badge-sumi text-[10px] bg-accent-indigo/10 text-accent-indigo">{agentBadge}</span>
+            )}
+            {modelLabel && (
+              <span className="badge-sumi bg-ink-wash text-sumi-gray text-[10px]">
+                {modelLabel}
+              </span>
             )}
             {isRemote && (
               <span className="badge-sumi bg-ink-wash text-sumi-gray text-[10px]">

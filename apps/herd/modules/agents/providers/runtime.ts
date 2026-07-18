@@ -1,4 +1,5 @@
 import { createProviderRegistryRouter } from './http-router.js'
+import { resolveProviderModelDiscoveryContext } from './model-discovery-context.js'
 import type {
   ModuleRouteRegistration,
   ModuleRuntimeContext,
@@ -6,7 +7,6 @@ import type {
 
 export function createProviderRegistryRuntime(context: ModuleRuntimeContext): ModuleRouteRegistration {
   const { internalToken, options } = context
-
   return {
     name: 'providers',
     label: 'Provider Registry',
@@ -18,6 +18,9 @@ export function createProviderRegistryRuntime(context: ModuleRuntimeContext): Mo
       auth0Audience: options.auth0Audience,
       auth0ClientId: options.auth0ClientId,
       internalToken,
+      async resolveModelDiscoveryContext(provider, credentialPoolId) {
+        return await resolveProviderModelDiscoveryContext(provider, credentialPoolId)
+      },
     }),
   }
 }
