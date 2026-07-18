@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { HerdStorageOwnership } from '../src/types/module-manifest.js'
+import { findForbiddenRootReferenceLabels } from './forbidden-root-references.js'
 
 const toolDir = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(toolDir, '..')
@@ -776,31 +777,10 @@ function checkForbiddenRoots(): void {
     path.join(repoRoot, '.github', 'workflows'),
   ]
 
-  const forbiddenPatterns = [
-    {
-      pattern: /apps\/herd\/(?:scripts|migrations|agents)/u,
-      label: 'retired app root path',
-    },
-    {
-      pattern: /agents\/terminal_bench/u,
-      label: 'retired app-root Terminal Bench path',
-    },
-    {
-      pattern: /from\s+['"][^'"]*migrations/u,
-      label: 'migration import',
-    },
-    {
-      pattern: /\.\/scripts\//u,
-      label: 'app scripts path dependency',
-    },
-  ]
-
   for (const filePath of scanTargets.flatMap((target) => walkFiles(target))) {
     const source = readText(filePath)
-    for (const { pattern, label } of forbiddenPatterns) {
-      if (pattern.test(source)) {
-        fail(`${relative(filePath)} contains ${label}`)
-      }
+    for (const label of findForbiddenRootReferenceLabels({ appRoot, filePath, source })) {
+      fail(`${relative(filePath)} contains ${label}`)
     }
 
     const isTestFixture = filePath.includes(`${path.sep}__tests__${path.sep}`)

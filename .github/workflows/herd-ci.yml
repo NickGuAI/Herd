@@ -31,6 +31,9 @@ jobs:
       - name: Build Herd
         run: pnpm --filter herd build
 
+      - name: Check app docs contract
+        run: pnpm --filter herd run docs:check
+
       - name: Check docs links
         run: node scripts/check-doc-links.mjs
 
